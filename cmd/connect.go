@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -29,7 +30,9 @@ func newConnectAddCmd() *cobra.Command {
 		Args:  output.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			jsonMode, _ := cmd.Flags().GetBool("json")
-			name, value := args[0], args[1]
+			// Trimmed: a stray space/newline makes url.Parse reject an
+			// otherwise-valid nostr+walletconnect:// URI outright.
+			name, value := args[0], strings.TrimSpace(args[1])
 
 			s, err := config.Load()
 			if err != nil {

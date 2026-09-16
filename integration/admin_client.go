@@ -86,17 +86,27 @@ type adminCreateAppRequest struct {
 	Kind          string   `json:"kind"`
 
 	// cash_hub-only fields — required (must be positive) when Kind is
-	// "cash_hub" (see lokihub's apps.CreateCashHub).
-	CashPerWalletMaxMloki int `json:"cashPerWalletMaxMloki,omitempty"`
-	CashMaxExpSecs        int `json:"cashMaxExpSecs,omitempty"`
+	// "cash_hub" (see lokihub's apps.CreateCashHub). CashRedeemFeePpm is the
+	// default per-million cash_redeem fee (0 = free) a freshly-minted
+	// wallet's slices inherit — see lokihub's api.CreateAppRequest and
+	// NIP-CASH §The Redeem Fee.
+	CashPerWalletMaxMloki int   `json:"cashPerWalletMaxMloki,omitempty"`
+	CashMaxExpSecs        int   `json:"cashMaxExpSecs,omitempty"`
+	CashRedeemFeePpm      int   `json:"cashRedeemFeePpm,omitempty"`
+	CashMinTransferMloki  int64 `json:"cashMinTransferMloki,omitempty"`
 
 	// circle_hub-only fields (Kind == "circle_hub") — CircleIdentityName/
 	// CirclePolicy create a brand-new CircleIdentity; this suite always
 	// uses "allowlist" (no synthetic Nostr follow-graph needed).
+	// CircleFeesPpm is the circle's own forwarding fee (0 = none, and never
+	// omitted-as-default the way the other fields here are, since 0 is
+	// itself a meaningful, deliberately-chosen value for most fixtures).
 	CircleIdentityName      string `json:"circleIdentityName,omitempty"`
 	CirclePolicy            string `json:"circlePolicy,omitempty"`
 	CircleMaxExpSecs        int    `json:"circleMaxExpSecs,omitempty"`
 	CirclePerWalletMaxMloki int    `json:"circlePerWalletMaxMloki,omitempty"`
+	CircleFeesPpm           int    `json:"circleFeesPpm,omitempty"`
+	CircleMinBudgetRenewal  string `json:"circleMinBudgetRenewal,omitempty"`
 }
 
 // adminCreateAppResponse mirrors lokihub's api.CreateAppResponse, including

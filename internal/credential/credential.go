@@ -7,12 +7,14 @@
 package credential
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
 
 	"github.com/ohstr/nmilat/nip01"
+	"github.com/ohstr/nmilat/nip19"
 	"github.com/ohstr/nmilat/nipIC"
 	"github.com/ohstr/nmilat/nipcash"
 	"github.com/ohstr/nmilat/nipcw"
@@ -65,34 +67,175 @@ func ParseCircle(s string) (nipcw.Credential, error) {
 	return nipcw.BySigning(rest), nil
 }
 
-// ParseTarget parses a cash_transfer --to target string — one of:
+// ResolvedTarget carries a parsed cash_transfer/consolidate target
+// alongside a human-readable summary of what, if anything, ParseTarget
+// resolved on the way to it.
+type ResolvedTarget struct {
+	Target nipcash.Target
+	// Input is exactly what the user typed.
+	Input string
+	// Resolved is "" when Input already *is* the canonical form (hex,
+	// npub, the verbose prefixed forms — a deterministic local decode with
+	// nothing new to reveal); populated whenever something was looked up
+	// or decoded into a value the human should see before trusting it
+	// (e.g. a NIP-05 lookup, or the resolved connection target below).
+	Resolved string
+}
+
+// NeedsIAError is returned by ParseTarget for a syntactically valid
+// nconnection1... string. nconnection deliberately never carries an
+// Identity Authority — that's a local, sender-side trust decision per
+// NIP-CASH, not something the shareable connection string should encode
+// (see docs/ux-review.md's Part 1) — so resolving one all the way to a
+// Target needs one more piece of information this package, being a pure
+// parser with no I/O of its own, can't obtain by itself. A caller with a
+// terminal should ask the human for an IA identity and finish resolution
+// via ResolveConnectionTarget; a non-interactive caller should surface
+// this as a usage error naming its --ia escape hatch.
+type NeedsIAError struct {
+	Input    string
+	Key      nipIC.ConnectionKey
+	Platform nipIC.WebIdentity
+}
+
+func (e *NeedsIAError) Error() string {
+	platform := string(e.Platform)
+	if platform == "" {
+		platform = "this connection"
+	}
+	return fmt.Sprintf("this nconnection doesn't specify who to trust as Identity Authority for %s — pass --ia <identity> (hex pubkey or NIP-05) or use the verbose connection:<platform>:<external-id>:<ia-pubkey> form instead", platform)
+}
+
+// resolveIdentityString sniffs s as a hex pubkey, npub1..., or NIP-05
+// identifier — the one shared sniffer behind both ParseTarget's own
+// --to/--as auto-detection and IA-identity resolution (the nconnection
+// wizard prompt / --ia flag), so both stay byte-identical in what they
+// accept and no divergent second sniffer needs to exist.
+func resolveIdentityString(s string) (hexPubkey string, viaNIP05 bool, err error) {
+	if isHexPubkey(s) {
+		return strings.ToLower(s), false, nil
+	}
+	if strings.HasPrefix(s, "npub1") {
+		hexPub, err := nip19.DecodePublicKey(s)
+		if err != nil {
+			return "", false, fmt.Errorf("not a valid npub: %w", err)
+		}
+		return hexPub, false, nil
+	}
+	if looksLikeNIP05(s) {
+		hexPub, err := resolveNIP05(s)
+		if err != nil {
+			return "", false, fmt.Errorf("resolving %s via NIP-05: %w", s, err)
+		}
+		return hexPub, true, nil
+	}
+	return "", false, fmt.Errorf("must be a hex pubkey, npub1..., or a NIP-05 identifier (name@domain)")
+}
+
+// ParseTarget parses a cash_transfer --to target string. The common case
+// needs no prefix at all — a bare 64-hex pubkey, an npub1... (nip19), a
+// NIP-05 identifier (name@domain, resolved live — the one form below that
+// isn't a local decode), or an nconnection1... are all sniffed by shape
+// before falling back to the explicit, scripted/advanced forms:
 //
 //	pubkey:<hex>
 //	connection:<platform>:<external-id>:<ia-pubkey>
 //	bearer-target
-func ParseTarget(s string) (nipcash.Target, error) {
+//
+// The prefixed forms keep working exactly as before — this is additive
+// sniffing in front of the existing parser, not a replacement of it.
+func ParseTarget(s string) (ResolvedTarget, error) {
 	if s == "bearer-target" {
-		return nipcash.NewBearerTarget(), nil
+		target := nipcash.NewBearerTarget()
+		// The wire request only ever carries a one-way commitment of this
+		// secret (NIP-CASH §Bearer Slices: "the caller supplies the
+		// commitment themselves") — the secret itself exists nowhere else
+		// once this call returns. Losing it here is equivalent to losing
+		// the funds, same as any other bearer note, so it MUST be
+		// surfaced via Resolved rather than silently discarded — the
+		// caller shows it before/alongside committing, exactly like any
+		// other value this field carries.
+		secret := target.Secret()
+		return ResolvedTarget{
+			Target:   target,
+			Input:    s,
+			Resolved: fmt.Sprintf("a fresh bearer secret was generated — write it down now, it is never shown again: %s", secret),
+		}, nil
+	}
+	if isHexPubkey(s) || strings.HasPrefix(s, "npub1") || looksLikeNIP05(s) {
+		hexPub, viaNIP05, err := resolveIdentityString(s)
+		if err != nil {
+			return ResolvedTarget{}, err
+		}
+		rt := ResolvedTarget{Target: nipcash.Pubkey(hexPub), Input: s}
+		if viaNIP05 {
+			rt.Resolved = fmt.Sprintf("pubkey %s", hexPub)
+		}
+		return rt, nil
+	}
+	if strings.HasPrefix(s, nipIC.NConnectionPrefix+"1") {
+		key, _, platform, err := nipIC.DecodeNConnection(s)
+		if err != nil {
+			return ResolvedTarget{}, fmt.Errorf("not a valid nconnection: %w", err)
+		}
+		return ResolvedTarget{}, &NeedsIAError{Input: s, Key: key, Platform: platform}
 	}
 	prefix, rest, ok := strings.Cut(s, ":")
 	if !ok {
-		return nil, fmt.Errorf("target must be pubkey:<hex>, connection:<platform>:<external-id>:<ia-pubkey>, or bearer-target")
+		return ResolvedTarget{}, fmt.Errorf("target must be a hex pubkey, npub1..., a NIP-05 identifier (name@domain), an nconnection1..., pubkey:<hex>, connection:<platform>:<external-id>:<ia-pubkey>, or bearer-target")
 	}
 	switch prefix {
 	case "pubkey":
 		if rest == "" {
-			return nil, fmt.Errorf("pubkey: target is missing a hex pubkey")
+			return ResolvedTarget{}, fmt.Errorf("pubkey: target is missing a hex pubkey")
 		}
-		return nipcash.Pubkey(rest), nil
+		return ResolvedTarget{Target: nipcash.Pubkey(rest), Input: s}, nil
 	case "connection":
 		parts := strings.Split(rest, ":")
 		if len(parts) != 3 {
-			return nil, fmt.Errorf("connection: target needs platform:external-id:ia-pubkey, got %d field(s)", len(parts))
+			return ResolvedTarget{}, fmt.Errorf("connection: target needs platform:external-id:ia-pubkey, got %d field(s)", len(parts))
 		}
-		return nipcash.ConnectionKey(nipIC.WebIdentity(parts[0]), parts[1], parts[2]), nil
+		return ResolvedTarget{Target: nipcash.ConnectionKey(nipIC.WebIdentity(parts[0]), parts[1], parts[2]), Input: s}, nil
 	default:
-		return nil, fmt.Errorf("unknown target kind %q (want pubkey, connection, or bearer-target)", prefix)
+		return ResolvedTarget{}, fmt.Errorf("unknown target kind %q (want pubkey, connection, or bearer-target)", prefix)
 	}
+}
+
+// ResolveConnectionTarget finishes resolving a target that ParseTarget's
+// NeedsIAError deferred: key/platform came from a decoded nconnection1...
+// string (originalInput); iaIdentity is whatever the caller obtained
+// afterward (a human via a wizard prompt, or --ia) — hex or NIP-05, the
+// same shapes ParseTarget itself accepts for a plain --to target.
+func ResolveConnectionTarget(originalInput string, key nipIC.ConnectionKey, platform nipIC.WebIdentity, iaIdentity string) (ResolvedTarget, error) {
+	iaHex, viaNIP05, err := resolveIdentityString(iaIdentity)
+	if err != nil {
+		return ResolvedTarget{}, fmt.Errorf("resolving IA identity %q: %w", iaIdentity, err)
+	}
+	iaDisplay := iaHex
+	if viaNIP05 {
+		iaDisplay = fmt.Sprintf("%s (%s)", iaIdentity, iaHex)
+	}
+	platformLabel := string(platform)
+	if platformLabel == "" {
+		platformLabel = "unspecified-platform"
+	}
+	return ResolvedTarget{
+		Target:   nipcash.ResolvedConnectionKey(key, platform, iaHex),
+		Input:    originalInput,
+		Resolved: fmt.Sprintf("%s connection; Identity Authority: %s", platformLabel, iaDisplay),
+	}, nil
+}
+
+// isHexPubkey reports whether s is a bare 64-character hex string — the
+// shape a raw Nostr pubkey always has. Deliberately strict (exact length,
+// valid hex) so it can never misfire against some other unprefixed value
+// that merely contains hex-looking characters.
+func isHexPubkey(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	_, err := hex.DecodeString(s)
+	return err == nil
 }
 
 func splitConnectionKey(rest string) (privKey, platform, externalID, attestationFile string, err error) {

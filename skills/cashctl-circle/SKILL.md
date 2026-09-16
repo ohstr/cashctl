@@ -1,6 +1,6 @@
 ---
 name: cashctl-circle
-description: Join a circle to get a personal Lightning wallet (`cashctl join`, aliasing `cashctl circle create`), the self-service call into a Circle Hub's create_circle_wallet. Use when handed a circlehub1... connection string (or a raw NWC URI for a Hub that hasn't adopted the bech32 form) and asked to join/onboard/get a wallet from it.
+description: Join a circle to get a personal Lightning wallet (`cashctl join`, aliasing `cashctl circle create`), the self-service call into a Circle Hub's create_circle_wallet. Use when handed a circlehub1... connection string (or a raw NWC URI for a Hub that hasn't adopted the bech32 form) and asked to join/onboard/get a wallet from it. For local-only inspection of a circlehub1... string itself, see `cashctl decode` in `skills/cashctl-wallet/SKILL.md`.
 license: Unlicense
 ---
 
@@ -11,7 +11,7 @@ change. -->
 # cashctl join / cashctl circle create
 
 ```sh
-cashctl join --hub circlehub1... --max-amount 100000 --json
+cashctl join circlehub1... --max-amount 100000 --json
 ```
 
 `join` is a top-level shortcut for `cashctl circle create` — identical flags
@@ -21,15 +21,18 @@ forms work identically; prefer `join`.
 
 | Flag | Meaning |
 |---|---|
-| `--hub` (required) | the Circle Hub connection: `circlehub1...` (recommended) or a raw NWC URI |
-| `--max-amount` | requested spend cap, in mloki |
+| *(positional)*, or `--hub` (required) | the Circle Hub connection: `circlehub1...` (recommended) or a raw NWC URI |
+| `--max-amount` | requested spend cap, in loki |
 | `--expiry` | requested expiry duration (`0` = the Hub's own default) |
 | `--budget-renewal` | `daily`\|`weekly`\|`monthly`\|`yearly`\|`never` (default: the Hub's own) |
 | `--as` | override credential — `pubkey:<privkey>` (the only NIP-CW credential mode); defaults to your local identity |
 
+`--hub` is kept working exactly as before for scripted/agentic use — the
+positional form above is just the shorter path for everything else.
+
 ```sh
 # {"wallet": "circle:<label-or-n>", "default": true, "response": {...}}
-cashctl join --hub circlehub1... --max-amount 100000 --json
+cashctl join circlehub1... --max-amount 100000 --json
 ```
 
 A `--hub` value that's actually a **Cash Hub** connection (`cashhub1...`)
@@ -43,3 +46,8 @@ generated name and set as your default if it's your first-ever wallet
 There is no `circle leave`/`circle list` — a circle membership is just an
 ordinary registered wallet from this point on (`cashctl wallet show`,
 `cashctl connect rm <name>` to drop it).
+
+To inspect a `circlehub1...` connection locally without joining it, use
+the general-purpose `cashctl decode circlehub1...` (see
+`skills/cashctl-wallet/SKILL.md`) — the same TLV payload `join --hub`
+decodes internally before dialing, just exposed directly.

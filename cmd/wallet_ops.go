@@ -31,8 +31,8 @@ func newWalletBudgetCmd() *cobra.Command {
 				output.PrintJSON(budget)
 				return nil
 			}
-			fmt.Printf("used:    %d mloki\n", budget.UsedBudgetMloki)
-			fmt.Printf("total:   %d mloki\n", budget.TotalBudgetMloki)
+			fmt.Printf("used:    %d %s\n", budget.UsedBudgetMloki, output.CurrencyUnit)
+			fmt.Printf("total:   %d %s\n", budget.TotalBudgetMloki, output.CurrencyUnit)
 			fmt.Printf("renewal: %s\n", budget.RenewalPeriod)
 			if budget.RenewsAt != nil {
 				fmt.Printf("renews:  %s\n", time.Unix(*budget.RenewsAt, 0).UTC().Format(time.RFC3339))
@@ -44,7 +44,7 @@ func newWalletBudgetCmd() *cobra.Command {
 
 func newWalletInvoiceCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "invoice <amount-mloki>",
+		Use:   fmt.Sprintf("invoice <amount-%s>", output.CurrencyUnit),
 		Short: "Create a Lightning invoice on the connected wallet",
 		Args:  output.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -52,7 +52,7 @@ func newWalletInvoiceCmd() *cobra.Command {
 			desc, _ := cmd.Flags().GetString("desc")
 			var amount int64
 			if _, err := fmt.Sscanf(args[0], "%d", &amount); err != nil || amount <= 0 {
-				return output.InvalidInputError(cmd, args[0], fmt.Errorf("amount must be a positive number of mloki"))
+				return output.InvalidInputError(cmd, args[0], fmt.Errorf("amount must be a positive number of %s", output.CurrencyUnit))
 			}
 			h, err := dialForCommand(cmd)
 			if err != nil {
@@ -97,7 +97,18 @@ func newWalletPayCmd() *cobra.Command {
 				output.PrintJSON(result)
 				return nil
 			}
-			fmt.Printf("Paid. Fee: %d mloki.\n", result.FeesPaidMloki)
+			// FeeSkimMloki is a circle_wallet-only extra: the parent
+			// circle_hub's forwarding-fee cut, on top of FeesPaidMloki (the
+			// real Lightning routing fee) — see
+			// nip47.PayInvoiceResult.FeeSkimMloki's doc comment. Called out
+			// separately rather than folded into "Fee:" since it's a
+			// different thing (a Hub policy charge, not network cost) and is
+			// 0/absent for every non-circle wallet.
+			if result.FeeSkimMloki > 0 {
+				fmt.Printf("Paid. Fee: %d %s (+ %d %s circle forwarding fee).\n", result.FeesPaidMloki, output.CurrencyUnit, result.FeeSkimMloki, output.CurrencyUnit)
+			} else {
+				fmt.Printf("Paid. Fee: %d %s.\n", result.FeesPaidMloki, output.CurrencyUnit)
+			}
 			return nil
 		},
 	}
@@ -126,7 +137,7 @@ func newWalletListTxCmd() *cobra.Command {
 				return nil
 			}
 			for _, tx := range result.Transactions {
-				fmt.Printf("%-9s %-9s %8d mloki  %s\n", tx.Type, tx.State, tx.AmountMloki, tx.Description)
+				fmt.Printf("%-9s %-9s %8d %-5s %s\n", tx.Type, tx.State, tx.AmountMloki, output.CurrencyUnit, tx.Description)
 			}
 			return nil
 		},

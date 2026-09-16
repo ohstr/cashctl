@@ -27,10 +27,11 @@ var nwcErrorCode = map[string]ErrorCode{
 }
 
 // nwcErrorMessages translates NIP-47's error codes into plain language for
-// human/table mode. --json mode never uses this — it preserves the raw
-// {code, message} an agent needs, via NWCCode and the underlying error
-// text (see cashctl-plan.md's "Human errors, not protocol errors"
-// principle).
+// human/table mode. --json mode never uses this for its "error" field —
+// it preserves the wallet's own raw message instead, via
+// CLIError.RawMessage (see cashctl-plan.md's "Human errors, not protocol
+// errors" principle) — plus NWCCode, for an agent that wants to branch on
+// the code rather than parse text.
 var nwcErrorMessages = map[string]string{
 	"RATE_LIMITED":           "You're making requests too quickly. Wait a moment and try again.",
 	"NOT_IMPLEMENTED":        "This wallet doesn't support that operation.",
@@ -52,22 +53,30 @@ var nwcErrorMessages = map[string]string{
 // nipcash/nipcw client call on a wallet decline) into a *CLIError: cashctl's
 // own coarse ErrorCode (for the exit code and --json "code" field), a
 // plain-language Message translated from the table above (human mode) or
-// the wallet's own message (unrecognized code), and the raw NWC code
-// preserved as CLIError.NWCCode either way.
+// the wallet's own message (unrecognized code), the raw NWC code preserved
+// as CLIError.NWCCode either way, and the wallet's own raw message
+// preserved as CLIError.RawMessage either way too — a translated code's
+// specific detail (an exact amount, a specific floor violated, ...) would
+// otherwise be discarded entirely, human mode and --json alike, even
+// though --json exists precisely for a consumer that wants more than the
+// generic bucket text.
 func NWCError(cmd *cobra.Command, err *relayclient.WalletError) error {
 	silence(cmd)
 	code := nwcErrorCode[err.Code]
 	if code == "" {
 		code = CodeInternal
 	}
-	message := err.Message
+	// Sanitized: err.Message is the wallet's own raw text, not cashctl's.
+	rawMessage := Sanitize(err.Message)
+	message := rawMessage
 	if friendly, ok := nwcErrorMessages[err.Code]; ok {
 		message = friendly
 	}
 	return &CLIError{
-		Err:     &plainError{message},
-		Code:    code,
-		NWCCode: err.Code,
+		Err:        &plainError{message},
+		Code:       code,
+		NWCCode:    err.Code,
+		RawMessage: rawMessage,
 	}
 }
 

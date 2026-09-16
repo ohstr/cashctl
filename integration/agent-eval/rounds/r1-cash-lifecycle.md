@@ -15,14 +15,15 @@ You've been handed two fixtures, mounted read-only:
 1. Make sure you have an identity: `cashctl init --json` (fine to re-run if
    an earlier round already did this — it should say so, not error).
 2. Inspect the token **without** touching your wallet yet:
-   `cashctl cash decode "$(cat /fixtures/r1-cash-token.txt)"`.
-3. Now actually receive it into your wallet, with verification:
-   `cashctl receive "$(cat /fixtures/r1-cash-token.txt)" --verify`.
+   `cashctl decode "$(cat /fixtures/r1-cash-token.txt)"`.
+3. Now actually receive it into your wallet (this always cross-checks
+   against the Hub before saving anything):
+   `cashctl receive "$(cat /fixtures/r1-cash-token.txt)"`.
 4. Check its co-recipients: `cashctl cash list-recipients`.
 5. Register the wallet fixture as a named connection called `payout`:
    `cashctl connect add payout "$(cat /fixtures/r1-wallet-uri.txt)"`.
 6. Redeem the token you received in step 3 into `payout`:
-   `cashctl redeem --to payout --yes`.
+   `cashctl redeem --into payout --yes`.
 7. Confirm it: `cashctl wallet balance --breakdown` and `cashctl wallet
    history` — the token should no longer show up as a held token, and the
    history should record the redeem.

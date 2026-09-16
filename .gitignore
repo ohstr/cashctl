@@ -4,3 +4,4 @@ integration/config.local.yaml
 /.claude/
 /.docs-kit/
 /.drafts/
+/docs/private/

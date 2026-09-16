@@ -82,7 +82,7 @@ func setUpPlainWalletWithPayScope(t *testing.T, admin *adminClient) adminCreateA
 // against two real, live wallet connections: registering, listing,
 // switching the default, the -c/--connection override, and removal —
 // verified by actually dialing (`wallet get-info`), not just checking the
-// local connections.json shape.
+// local cashctl.db state.
 func TestConnect_AddListUseRm(t *testing.T) {
 	cfg, err := LoadConfig("")
 	if err != nil {

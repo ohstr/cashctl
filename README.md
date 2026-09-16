@@ -20,11 +20,12 @@ to get a personal Lightning wallet.**
 - [`cashctl wallet balance`](#cashctl-wallet-balance) — Every wallet's live balance plus every held cash token's value, summed into one figure
 - [`cashctl wallet <op>`](#cashctl-wallet-op) — get-info, budget, invoice, pay, list-tx, sign-message: ordinary NWC operations against whichever wallet is current
 - [`cashctl connect add/list/use/rm`](#cashctl-connect-addlistuserm) — Register an NWC connection: a plain Lightning wallet you already have
+- [`cashctl decode`](#cashctl-decode) — Inspect any cash token, Circle Hub connection, or NWC URI locally, no network call
 - [`cashctl receive`](#cashctl-receive) — "Cash-in" a token: decode it and add it to your wallet
 - [`cashctl redeem`](#cashctl-redeem) — Redeem a held token into a Lightning wallet
 - [`cashctl transfer`](#cashctl-transfer) — Send a held token to someone else, in full or split
 - [`cashctl consolidate`](#cashctl-consolidate) — Merge several held tokens into one
-- [`cashctl cash list-recipients/decode/verify-provenance`](#cashctl-cash-list-recipientsdecodeverify-provenance) — Inspect a token, locally or against its Hub
+- [`cashctl cash list-recipients`](#cashctl-cash-list-recipients) — Check your allocation and co-recipients of a held token (network)
 
 `cashctl` mints nothing itself — minting is the Hub operator's own tooling.
 
@@ -107,7 +108,7 @@ cashctl init --json
 Join a circle to get a personal wallet.
 
 ```sh
-cashctl join --hub <circlehub1... or NWC URI> --max-amount 100000
+cashctl join <circlehub1... or NWC URI> --max-amount 100000
 ```
 
 The self-service entry point into a circle. Give it a Circle Hub's
@@ -118,13 +119,13 @@ URI if the Hub hasn't adopted the bech32 form yet.
 wallet. If it's your first wallet, it also becomes your default.
 
 ```sh
-cashctl join --hub circlehub1... --max-amount 100000 --budget-renewal monthly
+cashctl join circlehub1... --max-amount 100000 --budget-renewal monthly
 ```
 
 | Flag | Meaning |
 |---|---|
-| `--hub` (required) | the Circle Hub connection |
-| `--max-amount` | requested spend cap, in mloki |
+| *(positional)*, or `--hub` | the Circle Hub connection (required) |
+| `--max-amount` | requested spend cap, in loki |
 | `--expiry` | requested expiry duration (default: the Hub's own) |
 | `--budget-renewal` | `daily`\|`weekly`\|`monthly`\|`yearly`\|`never` (default: the Hub's own) |
 | `--as` | override credential (defaults to your local identity) |
@@ -186,30 +187,47 @@ cashctl connect use work
 cashctl connect rm work
 ```
 
+## `cashctl decode`
+
+Inspect any cash token, Circle Hub connection (`circlehub1...`), or NWC
+URI locally — no network call, and no wallet needed.
+
+```sh
+cashctl decode lokicash1...       # local-only, includes mint-signature verification if present
+cashctl decode lokicash1... --check  # also cross-checks against the Hub
+```
+
 ## `cashctl receive`
 
 "Cash-in" a token.
 
 ```sh
 cashctl receive lokicash1...
-cashctl receive lokicash1... --verify   # cross-check against the Hub via list_recipients
-cashctl receive lokicash1... --secret <bearer_secret>   # bearer-mode tokens only, see below
+cashctl receive lokicash1...#deadbeef   # bearer-mode: the combined "<token>#<bearer_secret>" presentation
 ```
 
-Decodes the token locally and records it in your wallet right away, marked
-unverified. No network call, so it's instant.
+Decodes the token, prints its details, then cross-checks it against the
+Cash Hub (`list_recipients`) before saving anything — a token with no
+matching recipient there, or one the Cash Hub can't be reached to confirm
+at all, is refused outright. Nothing is added to your wallet unless that
+check passes.
 
 If you paste a Circle Hub or Cash Hub connection here instead of a token,
 `cashctl` gives you a specific error pointing you to the right command.
 
-**Bearer-mode tokens are two values, not one.** The `lokicash1...` string
-only decodes the token and lists its recipients — it's never enough to
-redeem or transfer a bearer slice.
+**Bearer-mode tokens are two values, not one.** `lokicash1...` alone only
+decodes the token — it's never enough to redeem or transfer a bearer
+slice. The `bearer_secret` must arrive embedded, `<token>#<bearer_secret>`
+(NIP-CASH's combined bearer-slice presentation — paste the whole thing).
+There's no `--secret` flag: a bearer token pasted without it just gets
+inspected and checked, never saved.
 
-The actual spending credential, `bearer_secret`, is minted once and handed
-out separately by the Hub operator. Pass it with `--secret` when you
-receive the token. If you skip it, the token is still saved, but
-`redeem`/`transfer` will ask for `--as bearer:<secret>` before acting on it.
+**A saved bearer-mode receipt gets secured automatically.** Anyone who
+saw the same secret before you got it could still spend it too, so
+`receive` asks to re-key it right away (defaults to yes; always proceeds
+under `--yes`/`--json`), merging it with any other cash you hold from the
+same issuer. A failure here doesn't fail the receive — retry later with
+`cashctl consolidate --to bearer-target`.
 
 ## `cashctl redeem`
 
@@ -217,49 +235,90 @@ Redeem a held token into a Lightning wallet.
 
 ```sh
 cashctl redeem                          # auto-picks your one held token and default wallet
-cashctl redeem --token tok-a1b2 --to work
+cashctl redeem work                     # into wallet "work" — or: --token tok-a1b2 --into work
 cashctl redeem --invoice lnbc1...       # bypass both — redeem into any invoice, no cashctl wallet needed
 ```
+
+If you hold more than one token and don't pass `--token`, `redeem`
+(and `transfer`/`consolidate` below) shows a numbered list and asks which
+one — `--token`/`--yes`/`--json` skip straight past it for scripted use.
+
+Before confirming, `redeem` shows the expected fee (only when it's
+actually non-zero — a same-node redeem is routinely free) and warns if
+the token's redemption deadline is close or already passed. Every
+money-moving confirmation (`redeem`/`transfer`/`consolidate`) defaults to
+**no** on a bare Enter — like any wallet, sending or redeeming is never
+something a stray keypress can accept by accident.
 
 | Flag | Meaning |
 |---|---|
 | `--token` | which held token (auto-picked if you only hold one) |
-| `--to` | destination wallet (default: your default wallet) |
+| *(positional)*, or `--into` | destination wallet (default: your default wallet) |
 | `--invoice` | redeem straight into this external invoice |
 | `--as` | override credential — required for a connection-key-bound token |
 
 ## `cashctl transfer`
 
-Send a held token, in full or split.
+Send a held token, in full or split. The destination needs no prefix for
+the common case — a hex pubkey, `npub1...`, a NIP-05 identifier
+(`name@domain`, resolved live), or an `nconnection1...` are all recognized
+by shape:
 
 ```sh
-cashctl transfer --to pubkey:<hex>                      # transfer it all
-cashctl transfer --to pubkey:<hex> --split 3000          # keep the rest as a new token
-cashctl transfer --to bearer-target
-cashctl transfer --to connection:<platform>:<external-id>:<ia-pubkey>
+cashctl transfer npub1w0lxfr9...                  # transfer it all
+cashctl transfer alice@example.com 3000            # split off 3000, keep the rest as a new token
+cashctl transfer bearer-target
+cashctl transfer connection:<platform>:<external-id>:<ia-pubkey>
+cashctl transfer nconnection1... --ia ia@example.com
 ```
+
+Equivalent, explicit-flag form for scripted/agentic use:
+`cashctl transfer --to npub1w0lxfr9... --split 3000`.
+
+An `nconnection1...` never carries an Identity Authority itself — resolving
+one asks for one, via `--ia <identity>` (hex or NIP-05) or an interactive
+prompt. Whenever a target gets resolved to something not obvious from what
+you typed (a NIP-05 lookup, or an `nconnection1...`'s IA), cashctl shows it
+back before using it.
+
+**Cash selection**: when an amount is given and `--token` isn't, cashctl
+picks which held token(s) reach it exactly, rather than just resolving
+which one token to act on:
+
+- one held token's amount matches exactly → a full transfer of it.
+- one held token covers it → split-transfers the smallest one that does
+  (best-fit, not the largest available).
+- no single token covers it, but several from the same minter, summed,
+  do → consolidates that subset into one token first, then transfers from
+  the result — two chained calls shown as one confirmation.
+- nothing covers it → refuses, naming exactly how much you hold and why
+  it can't be reached (funds fragmented across separate Hubs), rather
+  than silently sending as several transfers to different minters.
 
 ## `cashctl consolidate`
 
 Merge several held tokens into one.
 
 ```sh
-cashctl consolidate --sources tok-a1b2,tok-c3d4
+cashctl consolidate                             # everything you currently hold
+cashctl consolidate tok-a1b2 tok-c3d4            # just these two
 cashctl consolidate --sources tok-a1b2,lokicash1...:5000:pubkey:<privkey> --to pubkey:<hex>
 ```
 
-`--sources` takes bare local ledger IDs — amount and credential are already
-known for each entry. Use the verbose `<token>:<amount>:<credential>` form
-only for a source that isn't in your local ledger.
+Positional IDs (or `--sources`, comma-separated) — amount and credential
+are already known for each held entry. With neither given, consolidates
+every currently held token. Use the verbose `<token>:<amount>:<credential>`
+form (`--sources` only) for a source that isn't in your local ledger.
+`--to` defaults to your own identity; `--to bearer-target` merges into a
+fresh, anonymous bearer note instead (needs Hub support).
 
-## `cashctl cash list-recipients`/`decode`/`verify-provenance`
+## `cashctl cash list-recipients`
 
-Inspect a token.
+Check your allocation and co-recipients of a held token — the same call
+`cashctl receive` makes internally to check a token before saving it.
 
 ```sh
 cashctl cash list-recipients               # your allocation + co-recipients of a held token
-cashctl cash decode lokicash1...           # local-only, no network call
-cashctl cash verify-provenance lokicash1...  # check a mint-signature, locally
 ```
 
 ## Agent skills
@@ -277,8 +336,15 @@ npx skills add ohstr/cashctl --all -y
 ## Configuration
 
 State lives under `$XDG_CONFIG_HOME/cashctl` (or `~/.config/cashctl` on
-Linux/macOS): `identity.json`, `connections.json`, `ledger.json`. Override
-the location with `--config-dir`.
+Linux/macOS) in a single SQLite database, `cashctl.db` (0600 — it can hold
+a plaintext identity key and bearer-mode spending secrets). Override the
+location with `--config-dir`.
+
+**Breaking, if you used a pre-release build**: `cashctl.db` replaces the
+three flat JSON files (`identity.json`, `connections.json`, `ledger.json`)
+earlier builds used — no migration path, no dual-read. If you have
+existing state in those files, back them up before upgrading; cashctl
+won't see them anymore.
 
 If you point `init` at an [ncli](https://github.com/ohstr/ncli) vault,
 `cashctl` only reads it. Your vault stays at its own usual path, unaffected.

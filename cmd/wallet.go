@@ -93,7 +93,7 @@ func newWalletShowCmd() *cobra.Command {
 			fmt.Printf("Identity: %s (%s)\n", npub, source)
 			fmt.Println()
 			if s.IsEmpty() {
-				fmt.Println("No wallets registered yet. Run `cashctl join --hub ...` or `cashctl connect add`.")
+				fmt.Println("No wallets registered yet. Run `cashctl join <hub-connection>` or `cashctl connect add`.")
 			} else {
 				fmt.Println("Wallets:")
 				for _, c := range s.Connections {
@@ -106,16 +106,16 @@ func newWalletShowCmd() *cobra.Command {
 			}
 			held := l.Held()
 			fmt.Printf("\nHeld cash tokens: %d\n", len(held))
-			for _, e := range held {
+			for i, e := range held {
 				amount := "unknown amount"
 				if e.AmountMillis != nil {
-					amount = fmt.Sprintf("%d mloki", *e.AmountMillis)
+					amount = fmt.Sprintf("%d %s", *e.AmountMillis, output.CurrencyUnit)
 				}
-				verified := ""
+				status := "verified"
 				if !e.Verified {
-					verified = " (unverified)"
+					status = "unverified"
 				}
-				fmt.Printf("  %s: %s%s\n", e.ID, amount, verified)
+				fmt.Printf("  %d) %s   received %s   %s\n", i+1, amount, formatReceivedDate(e.ReceivedAt), status)
 			}
 			return nil
 		},
@@ -209,9 +209,26 @@ func newWalletGetInfoCmd() *cobra.Command {
 				output.PrintJSON(info)
 				return nil
 			}
-			fmt.Printf("alias:   %s\n", info.Alias)
-			fmt.Printf("network: %s\n", info.Network)
-			fmt.Printf("methods: %v\n", info.Methods)
+			// Sanitized: get_info's response is whatever the dialed
+			// wallet/Hub returns, not cashctl's own text.
+			methods := make([]string, len(info.Methods))
+			for i, m := range info.Methods {
+				methods[i] = output.Sanitize(m)
+			}
+			fmt.Printf("alias:   %s\n", output.Sanitize(info.Alias))
+			fmt.Printf("network: %s\n", output.Sanitize(info.Network))
+			fmt.Printf("methods: %v\n", methods)
+			// CircleWallet is only ever set when the dialed connection IS a
+			// circle_hub's own connection (never a joined member's own
+			// circle_wallet) — see nip47.GetInfoResult.CircleWallet's doc
+			// comment. Surfacing it here is what lets `wallet get-info`
+			// against a raw Circle Hub connection show its forwarding-fee
+			// rate before joining, matching what `--json` already exposes.
+			if cw := info.CircleWallet; cw != nil {
+				fmt.Printf("circle policy:    %s\n", output.Sanitize(cw.CirclePolicy))
+				fmt.Printf("circle fee:       %d ppm\n", cw.FeesPpm)
+				fmt.Printf("circle available: %d %s\n", cw.AvailableMloki, output.CurrencyUnit)
+			}
 			return nil
 		},
 	}

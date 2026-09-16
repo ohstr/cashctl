@@ -47,19 +47,27 @@ var retryableCodes = map[ErrorCode]bool{
 	CodeNetwork:  true,
 }
 
-// CLIError is cashctl's own classified error. Err is the underlying cause;
-// Code drives the exit code and --json "code" field; Input is the specific
-// offending value (already redacted if sensitive, see RedactSecretInput),
-// omitted from output when empty; NWCCode, when set, is the raw NIP-47
-// error code a wallet returned — preserved verbatim in --json output
-// alongside cashctl's own coarser Code, so an agent that needs
-// finer-grained branching than cashctl's 7 buckets still gets it (see
-// NWCError in nwc_errors.go).
+// CLIError is cashctl's own classified error. Err is the underlying cause
+// — its Error() is what human mode prints and what --json falls back to
+// when RawMessage is empty; Code drives the exit code and --json "code"
+// field; Input is the specific offending value (already redacted if
+// sensitive, see RedactSecretInput), omitted from output when empty;
+// NWCCode, when set, is the raw NIP-47 error code a wallet returned —
+// preserved verbatim in --json output alongside cashctl's own coarser
+// Code, so an agent that needs finer-grained branching than cashctl's 7
+// buckets still gets it (see NWCError in nwc_errors.go). RawMessage, when
+// set, is the wallet's own specific error text (already Sanitized) —
+// EmitError prefers it for --json's "error" field over Err's translated,
+// deliberately-generic human message, since an agent parsing --json wants
+// the specific reason (e.g. the exact floor/amount a request violated),
+// not the same canned sentence every request in that error's bucket
+// produces.
 type CLIError struct {
-	Err     error
-	Code    ErrorCode
-	Input   string
-	NWCCode string
+	Err        error
+	Code       ErrorCode
+	Input      string
+	NWCCode    string
+	RawMessage string
 }
 
 func (e *CLIError) Error() string { return e.Err.Error() }

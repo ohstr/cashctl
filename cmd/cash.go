@@ -13,8 +13,6 @@ func newCashCmd() *cobra.Command {
 		newCashTransferCmd(),
 		newCashConsolidateCmd(),
 		newCashListRecipientsCmd(),
-		newCashDecodeCmd(),
-		newCashVerifyProvenanceCmd(),
 	)
 	return cmd
 }

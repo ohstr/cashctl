@@ -1,5 +1,5 @@
 // Package appdir resolves cashctl's local state directory — where
-// identity.json, connections.json, and ledger.json all live.
+// cashctl.db (see internal/store) lives.
 package appdir
 
 import (
