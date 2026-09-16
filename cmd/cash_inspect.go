@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/ohstr/nmilat/nipcash"
 	nipcashclient "github.com/ohstr/nmilat/nipcash/client"
 	"github.com/spf13/cobra"
 
@@ -19,7 +18,8 @@ func newCashListRecipientsCmd() *cobra.Command {
 		Short: "Check your allocation and co-recipients of a held token",
 		Long: `Recipients of the same mint_cash batch share one wallet connection —
 this is how a receiver checks their own allocation and co-recipients
-within it. It's the exact call "cashctl receive --verify" makes internally.`,
+within it. It's the exact call "cashctl receive" makes internally, to
+check a token before saving it.`,
 		Args: output.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			jsonMode, _ := cmd.Flags().GetBool("json")
@@ -54,11 +54,23 @@ within it. It's the exact call "cashctl receive --verify" makes internally.`,
 						status = fmt.Sprintf("claimed %s", time.Unix(*r.ClaimedAt, 0).UTC().Format("2006-01-02"))
 					}
 				}
-				identity := r.IdentityType
+				// Sanitized: identity_type/identity_value are unvalidated
+				// wire strings from the Hub, not cashctl's own text.
+				identity := output.Sanitize(r.IdentityType)
 				if r.IdentityValue != "" {
-					identity = fmt.Sprintf("%s:%s", r.IdentityType, r.IdentityValue)
+					identity = fmt.Sprintf("%s:%s", output.Sanitize(r.IdentityType), output.Sanitize(r.IdentityValue))
 				}
-				fmt.Printf("%-40s %10d mloki   %s\n", identity, r.AmountMillis, status)
+				fmt.Printf("%-40s %10d %s   %s\n", identity, r.AmountMillis, output.CurrencyUnit, status)
+			}
+			// ExpiresAt is identical on every row (NIP-CASH §Listing
+			// Recipients: one shared wallet-level deadline) — shown once,
+			// after the roster, same wording as decode --check's own cash
+			// token report (decode.go's formatExpiry). Unlike a money-
+			// moving confirmation (redeem/transfer/consolidate), this is
+			// pure inspection with nothing to gate, so it's always shown,
+			// not just when it's close.
+			if len(result.Recipients) > 0 && result.Recipients[0].ExpiresAt != nil {
+				fmt.Println(formatExpiry(*result.Recipients[0].ExpiresAt))
 			}
 			return nil
 		},
@@ -67,87 +79,16 @@ within it. It's the exact call "cashctl receive --verify" makes internally.`,
 	return cmd
 }
 
-func newCashDecodeCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "decode <token>",
-		Short: "Inspect a cash token locally, without holding it",
-		Args:  output.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			jsonMode, _ := cmd.Flags().GetBool("json")
-			tok, err := nipcash.Decode(args[0])
-			if err != nil {
-				return output.InvalidInputError(cmd, args[0], err)
-			}
-			if jsonMode {
-				// nipcash.Token has no JSON tags of its own (it's an
-				// internal SDK type, not a wire DTO) — built explicitly
-				// here so decode's --json output stays snake_case like
-				// every other cashctl command's, instead of leaking Go
-				// field names.
-				out := map[string]any{
-					"hrp":               tok.HRP,
-					"wallet_pubkey":     tok.WalletPubkey,
-					"relays":            tok.RelayURLs,
-					"identity_required": tok.IdentityRequired,
-				}
-				if tok.HasProvenance() {
-					out["mint_signature"] = fmt.Sprintf("%x", tok.MintSignature)
-					out["attested_amount_millis"] = *tok.AttestedAmountMillis
-				}
-				output.PrintJSON(out)
-				return nil
-			}
-			fmt.Printf("wallet_pubkey: %s\n", tok.WalletPubkey)
-			fmt.Printf("relays: %s\n", joinStrings(tok.RelayURLs))
-			if tok.IdentityRequired != nil {
-				fmt.Printf("identity_required: %v\n", *tok.IdentityRequired)
-			}
-			if tok.HasProvenance() {
-				fmt.Println("mint_signature: present")
-				fmt.Printf("attested_amount: %d mloki\n", *tok.AttestedAmountMillis)
-			}
-			return nil
-		},
-	}
-}
-
-func newCashVerifyProvenanceCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "verify-provenance <token>",
-		Short: "Verify a token's mint-signature provenance, locally",
-		Args:  output.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			jsonMode, _ := cmd.Flags().GetBool("json")
-			tok, err := nipcash.Decode(args[0])
-			if err != nil {
-				return output.InvalidInputError(cmd, args[0], err)
-			}
-			minter, ok := nipcash.VerifyProvenance(tok)
-			if jsonMode {
-				output.PrintJSON(map[string]any{"valid": ok, "minter_pubkey": minter})
-				return nil
-			}
-			if !ok {
-				fmt.Println("No valid provenance on this token.")
-				return nil
-			}
-			fmt.Printf("Provenance valid — minted by %s", minter)
-			if tok.AttestedAmountMillis != nil {
-				fmt.Printf(" (matches attested amount: %d mloki)", *tok.AttestedAmountMillis)
-			}
-			fmt.Println(".")
-			return nil
-		},
-	}
-}
-
+// joinStrings renders a token/connection's own relay URLs for display.
+// Sanitized: a relay URL has no character restrictions of its own — an
+// attacker-crafted one could otherwise carry a terminal escape sequence.
 func joinStrings(ss []string) string {
 	out := ""
 	for i, s := range ss {
 		if i > 0 {
 			out += ", "
 		}
-		out += s
+		out += output.Sanitize(s)
 	}
 	return out
 }
