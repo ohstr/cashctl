@@ -12,8 +12,8 @@ wallets, held tokens) lives under `$XDG_CONFIG_HOME/cashctl`, overridable with
 | Command | Purpose |
 |---|---|
 | `cashctl init` | Set up your identity (reusing an ncli vault entry if you have one) and optionally a default wallet |
-| `cashctl join --hub <connection>` | Join a circle via its Circle Hub connection (`circlehub1...` or a raw NWC URI), creating a personal wallet |
-| `cashctl circle create --hub <connection>` | Same as `join` — the canonical, fully-namespaced form |
+| `cashctl join <hub-connection>` | Join a circle via its Circle Hub connection (`circlehub1...` or a raw NWC URI), creating a personal wallet. `--hub <connection>` is equivalent, for scripted/agentic use |
+| `cashctl circle create <hub-connection>` | Same as `join` — the canonical, fully-namespaced form |
 | `cashctl wallet show` | Your identity, registered wallets, and held cash tokens |
 | `cashctl wallet history` | Local action log (receive/redeem/transfer/consolidate) |
 | `cashctl wallet use <name>` / `cashctl connect use <name>` | Switch your default wallet |
@@ -21,19 +21,39 @@ wallets, held tokens) lives under `$XDG_CONFIG_HOME/cashctl`, overridable with
 | `cashctl wallet get-info` / `budget` / `invoice <amount>` / `pay <invoice>` / `list-tx` / `sign-message <msg>` | Ordinary NIP-47 calls against the current wallet |
 | `cashctl invoice <amount>` / `cashctl pay <invoice>` | Top-level shortcuts for `wallet invoice`/`wallet pay` |
 | `cashctl connect add <name> <connection>` / `list` / `rm <name>` | Register/list/remove any other NWC connection |
-| `cashctl receive <token> [--verify] [--secret <bearer_secret>]` | Decode a cash token locally and add it to your wallet; `--verify` cross-checks it against the Hub; `--secret` captures a bearer-mode token's spending credential (see below) |
-| `cashctl redeem [--token <id>] [--to <name>] [--invoice <bolt11>] [--as <credential>]` | Redeem a held token into a wallet or a raw invoice |
-| `cashctl transfer --to <target> [--split <mloki>] [--as <credential>]` | Send a held token, in full or split |
-| `cashctl consolidate --sources <ids-or-verbose> [--to <target>]` | Merge several held tokens into one |
+| `cashctl decode <string> [--check]` | Inspect any cash token, Circle Hub connection (`circlehub1...`), or NWC URI locally, no network call; `--check` opts into a read-only Hub check (cash token: matching recipient; circle hub: can we join) |
+| `cashctl receive <token>` | Decode a cash token, print its details, then cross-check it against the Cash Hub before adding it to your wallet — refuses anything that doesn't check out. A bearer-mode token's `bearer_secret` must be embedded, `<token>#<bearer_secret>` (NIP-CASH's combined bearer-slice presentation) — pasted bare, it degrades to a read-only report instead of erroring. A saved bearer-mode receipt is then offered automatic securing: re-keyed under a fresh secret (and merged with any other same-issuer holding), reported under `"secured"` |
+| `cashctl redeem [wallet] [--token <id>] [--invoice <bolt11>] [--as <credential>]` | Redeem a held token into a wallet (positional, or `--into`) or a raw invoice |
+| `cashctl transfer <target> [amount] [--as <credential>]` | Send a held token, in full or split — target and amount are positional, or `--to`/`--split`. With an amount and no `--token`, cash selection picks which held token(s) reach it exactly (auto-consolidating a same-minter subset first if no single token covers it) instead of just picking one token to act on |
+| `cashctl consolidate [id...] [--to <target>]` | Merge several held tokens into one — positional IDs, or `--sources`; with neither, merges everything held |
 | `cashctl cash list-recipients [--token <id>]` | Your allocation + co-recipients of a held token (network) |
-| `cashctl cash decode <token>` | Inspect a token locally, no network call |
-| `cashctl cash verify-provenance <token>` | Verify a token's mint-signature, locally |
 | `cashctl version` | Print the cashctl version |
 
-Credential/target flag syntax (`--as`, `--to`): `pubkey:<hex-or-privkey>`,
-`bearer:<secret>` / `bearer-target`, `connection-key:<privkey>,<platform>,
-<external-id>,<attestation-file>` (redeem/transfer only), `connection:
-<platform>:<external-id>:<ia-pubkey>` (transfer `--to` only).
+A `--to`/positional target (`transfer`, `consolidate`) needs no prefix for
+the common case — a bare 64-hex pubkey, `npub1...`, a NIP-05 identifier
+(`name@domain`, resolved live via the domain's `/.well-known/nostr.json`),
+or an `nconnection1...` are all sniffed by shape. `bearer-target` is a
+literal keyword. The explicit, scripted/advanced forms keep working for
+what unprefixed sniffing can't cover: `pubkey:<hex>`,
+`connection:<platform>:<external-id>:<ia-pubkey>`.
+
+An `nconnection1...` never carries an Identity Authority itself (a local,
+sender-side trust decision, not part of the shareable connection string)
+— resolving one asks for one: `--ia
+<identity>` (hex pubkey or NIP-05) supplies it non-interactively; without
+it, an interactive session is prompted, and a `--json`/`--yes` call gets a
+usage error naming `--ia` instead. Whenever something beyond a bare
+hex/npub gets resolved (a NIP-05 lookup, or an `nconnection1...`'s IA),
+the result is shown back before it's used — printed as a `resolves to:`
+line in text mode, and always present as `target_resolved` in `--json`
+output (empty string when nothing needed resolving).
+
+`--as`'s credential syntax is unchanged and always needs its prefix (never
+auto-detected — a bare hex string is genuinely ambiguous between a private
+key and a bearer secret, so guessing isn't safe here the way it is for a
+public target): `pubkey:<hex-or-privkey>`, `bearer:<secret>`,
+`connection-key:<privkey>,<platform>,<external-id>,<attestation-file>`
+(redeem/transfer only).
 
 ## Output conventions
 
@@ -80,8 +100,9 @@ of the structured error alone.
 
 This repo ships example-driven guidance in `skills/`, one file per area:
 
-- Setting up an identity, managing wallets, or making ordinary Lightning
-  calls (`init`, `wallet ...`, `connect ...`) → `skills/cashctl-wallet/SKILL.md`
+- Setting up an identity, managing wallets, making ordinary Lightning
+  calls, or decoding any token/connection string locally (`init`,
+  `wallet ...`, `connect ...`, `decode`) → `skills/cashctl-wallet/SKILL.md`
 - Receiving, redeeming, transferring, or consolidating NIP-CASH tokens
   (`receive`, `redeem`, `transfer`, `consolidate`, `cash ...`) →
   `skills/cashctl-cash/SKILL.md`

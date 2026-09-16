@@ -1,5 +1,13 @@
 set shell := ["bash", "-uc"]
 
+# cashctl isn't a member of the shared ohstr/go.work workspace one directory
+# up, so Go's auto-detection of that file (it walks up from cwd) would
+# otherwise block every command below outright. This also makes go.mod's
+# own `replace github.com/ohstr/nmilat => ...` (local dev, see go.mod's own
+# comment on it) actually take effect instead of being silently shadowed by
+# workspace mode. Harmless to leave once that replace is eventually dropped.
+export GOWORK := "off"
+
 # List all available recipes
 default:
     @just --list --unsorted
