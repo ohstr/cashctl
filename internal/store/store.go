@@ -85,7 +85,16 @@ func Open() (*sql.DB, error) {
 		return nil, err
 	}
 
-	db, err := sql.Open("sqlite", path)
+	// busy_timeout(5000): SQLite's own internal busy-handler, not a
+	// hand-rolled one — on SQLITE_BUSY it retries with backoff at the C
+	// level for up to 5s before ever returning the error to Go, which is
+	// what ledger.Save's own Go-level withBusyRetry then wraps as a second,
+	// coarser line of defense (see its own doc comment). Without this, two
+	// `cashctl` processes committing within the same few milliseconds could
+	// fail outright — confirmed live and under `go test -race`, where the
+	// race detector's own overhead widens that window enough to turn a rare
+	// case into a routine one.
+	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=busy_timeout(5000)")
 	if err != nil {
 		return nil, err
 	}
