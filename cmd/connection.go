@@ -17,7 +17,7 @@ import (
 // cashctl-plan.md's walkthrough #3.
 const noWalletConfiguredMsg = `no wallet configured yet.
   Already have one?  cashctl connect add <name> <connection-uri>
-  Want to join a circle instead?  cashctl join --hub <hub-connection>`
+  Want to join a circle instead?  cashctl join <hub-connection>`
 
 // ResolveConnectionValue returns the raw connection string to dial: -c/
 // --connection wins if given (resolved by store name, or used directly as

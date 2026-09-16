@@ -27,13 +27,13 @@ func newCircleCmd() *cobra.Command {
 
 func newCircleCreateCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "create",
+		Use:   "create [hub-connection]",
 		Short: "Join a circle (self-service create_circle_wallet)",
-		Args:  output.NoArgs,
+		Args:  output.MaximumNArgs(1),
 		RunE:  runCircleCreate,
 	}
-	cmd.Flags().String("hub", "", "the Circle Hub connection: a circlehub1... string (recommended), or a raw NWC URI")
-	cmd.Flags().Uint64("max-amount", 0, "requested spend cap (mloki)")
+	cmd.Flags().String("hub", "", "the Circle Hub connection: a circlehub1... string (recommended), or a raw NWC URI — same as the positional argument, kept for scripted/agentic use")
+	cmd.Flags().Uint64("max-amount", 0, fmt.Sprintf("requested spend cap (%s)", output.CurrencyUnit))
 	cmd.Flags().Duration("expiry", 0, "requested expiry duration (0 = Hub default)")
 	cmd.Flags().String("budget-renewal", "", "daily|weekly|monthly|yearly|never (default: Hub default)")
 	cmd.Flags().String("as", "", "override credential (defaults to your local identity)")
@@ -48,14 +48,22 @@ func runCircleCreate(cmd *cobra.Command, args []string) error {
 	budgetRenewal, _ := cmd.Flags().GetString("budget-renewal")
 	asFlag, _ := cmd.Flags().GetString("as")
 
+	var positionalHub string
+	if len(args) > 0 {
+		positionalHub = args[0]
+	}
+	hub, err := resolvePositionalOrFlag(cmd, positionalHub, "hub", hubFlag)
+	if err != nil {
+		return err
+	}
 	// Checked explicitly (not cobra's own MarkFlagRequired) so a missing
-	// --hub is a classified UsageError — see cash_consolidate.go's own
+	// hub is a classified UsageError — see cash_consolidate.go's own
 	// comment on --sources for why.
-	if hubFlag == "" {
-		return output.UsageError(cmd, fmt.Errorf("--hub is required"))
+	if hub == "" {
+		return output.UsageError(cmd, fmt.Errorf("a Circle Hub connection is required — pass it directly (cashctl join <hub-connection>) or via --hub"))
 	}
 
-	pairingURI, label, err := resolveHubConnection(cmd, hubFlag)
+	pairingURI, label, err := resolveHubConnection(cmd, hub)
 	if err != nil {
 		return err
 	}
@@ -123,7 +131,7 @@ func runCircleCreate(cmd *cobra.Command, args []string) error {
 	if renewal == "" {
 		renewal = "never"
 	}
-	fmt.Printf("%s New wallet: %s (max %d mloki/%s)\n", greeting, name, maxAmount, renewal)
+	fmt.Printf("%s New wallet: %s (max %d %s/%s)\n", greeting, name, maxAmount, output.CurrencyUnit, renewal)
 	if setDefault {
 		fmt.Printf("Default wallet set to %s.\n", name)
 	} else if !wasEmpty {

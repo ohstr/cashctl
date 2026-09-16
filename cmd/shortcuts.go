@@ -21,6 +21,7 @@ func init() {
 		newCircleCmd(),
 		newWalletCmd(),
 		newConnectCmd(),
+		newDecodeCmd(),
 		newVersionCmd(),
 	)
 }
@@ -46,7 +47,7 @@ func shortcutOf(cmd *cobra.Command) *cobra.Command {
 func joinShortcut() *cobra.Command {
 	canonical := newCircleCreateCmd()
 	clone := shortcutOf(canonical)
-	clone.Use = "join"
+	clone.Use = "join [hub-connection]"
 	clone.Short = "Join a circle (self-service create_circle_wallet)"
 	return clone
 }
