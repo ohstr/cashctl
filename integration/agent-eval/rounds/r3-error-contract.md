@@ -13,7 +13,7 @@ its exit code and its exact stderr JSON:
 2. `cashctl wallet show --bogus-flag --json` — a flag that doesn't exist
 3. `cashctl join --json` — a required flag (`--hub`) missing
 4. `cashctl transfer --json` — a required flag (`--to`) missing
-5. `cashctl cash decode not-a-valid-token --json` — a value that fails to parse
+5. `cashctl decode not-a-valid-token --json` — a value that fails to parse
 6. `cashctl redeem --json` — a legitimate "nothing to act on" case (assuming
    you hold no cash tokens in this fresh environment)
 7. `cashctl wallet balance --from does-not-exist --json` — a named

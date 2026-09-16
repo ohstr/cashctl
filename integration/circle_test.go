@@ -11,11 +11,49 @@ import (
 	relayclient "github.com/ohstr/nmilat/relay/client"
 )
 
+// circleHubOpts configures an ephemeral circle_hub's admin-set policy knobs
+// for scenario-specific fixtures (fee/expiry audits vary these
+// deliberately) — zero-valued fields fall back to setUpCircleHub's own
+// long-standing defaults, so most callers only need to set what their
+// scenario actually varies. Mirrors lokihub's own
+// integration/ephemeral_test.go ephemeralCircleHubOpts pattern.
+type circleHubOpts struct {
+	MaxExpSecs        int    // 0 -> 86400
+	PerWalletMaxMloki int    // 0 -> 1_000_000
+	FeesPpm           int    // 0 is itself meaningful (no fee) - never defaulted
+	MinBudgetRenewal  string // "" -> lokihub defaults to "monthly" server-side
+	FundLoki          uint64 // 0 -> 100
+}
+
+func (o circleHubOpts) withDefaults() circleHubOpts {
+	if o.MaxExpSecs == 0 {
+		o.MaxExpSecs = 86400
+	}
+	if o.PerWalletMaxMloki == 0 {
+		o.PerWalletMaxMloki = 1_000_000
+	}
+	if o.FundLoki == 0 {
+		o.FundLoki = 100
+	}
+	return o
+}
+
 // setUpCircleHub provisions a throwaway allowlist-policy circle_hub,
 // authorizes pubkeyHex under it, root-funds it, and registers cleanup —
-// the shared fixture every circle test in this file builds on.
+// the shared fixture every circle test in this file builds on. Uses
+// circleHubOpts's defaults — see setUpCircleHubOpts for fee/expiry-scenario
+// fixtures.
 func setUpCircleHub(t *testing.T, admin *adminClient, pubkeyHex string) adminCreateAppResponse {
 	t.Helper()
+	return setUpCircleHubOpts(t, admin, pubkeyHex, circleHubOpts{})
+}
+
+// setUpCircleHubOpts is setUpCircleHub's parametrized form — lets a
+// scenario test configure a nonzero FeesPpm or a short MaxExpSecs without
+// duplicating the create/fund/allowlist/cleanup wiring.
+func setUpCircleHubOpts(t *testing.T, admin *adminClient, pubkeyHex string, opts circleHubOpts) adminCreateAppResponse {
+	t.Helper()
+	opts = opts.withDefaults()
 	hubResp, err := admin.createApp(adminCreateAppRequest{
 		Name: ephemeralFixtureNamePrefix + " circle_hub",
 		Kind: "circle_hub",
@@ -26,8 +64,10 @@ func setUpCircleHub(t *testing.T, admin *adminClient, pubkeyHex string) adminCre
 		Scopes:                  []string{"circle_wallet"},
 		CircleIdentityName:      ephemeralFixtureNamePrefix + " circle identity",
 		CirclePolicy:            "allowlist",
-		CircleMaxExpSecs:        86400,
-		CirclePerWalletMaxMloki: 1_000_000,
+		CircleMaxExpSecs:        opts.MaxExpSecs,
+		CirclePerWalletMaxMloki: opts.PerWalletMaxMloki,
+		CircleFeesPpm:           opts.FeesPpm,
+		CircleMinBudgetRenewal:  opts.MinBudgetRenewal,
 	})
 	if err != nil {
 		t.Fatalf("create ephemeral circle_hub: %v", err)
@@ -52,7 +92,7 @@ func setUpCircleHub(t *testing.T, admin *adminClient, pubkeyHex string) adminCre
 			}
 		}
 	})
-	if err := admin.transfer(hubResp.ID, 100); err != nil {
+	if err := admin.transfer(hubResp.ID, opts.FundLoki); err != nil {
 		t.Fatalf("fund ephemeral circle_hub: %v", err)
 	}
 	if err := admin.addCircleAllowlistMember(hubResp.ID, pubkeyHex); err != nil {
@@ -134,6 +174,49 @@ func TestCircleJoin_ViaRawNWCURI(t *testing.T) {
 	joinResp := f.mustJSON("join", "--hub", hubResp.PairingUri, "--max-amount", "100000", "--yes")
 	if walletName, _ := joinResp["wallet"].(string); walletName == "" {
 		t.Fatalf("join --hub <raw NWC URI>: no wallet name in response: %v", joinResp)
+	}
+}
+
+// TestDecodeCheck_CircleHub confirms `cashctl decode <circlehub1...>
+// --check` reports joining as possible against a real, reachable
+// circle_hub (reachable + advertises create_circle_wallet), without ever
+// actually joining it — no wallet gets registered as a side effect,
+// checked or not.
+func TestDecodeCheck_CircleHub(t *testing.T) {
+	cfg, err := LoadConfig("")
+	if err != nil {
+		t.Skipf("skipping: could not load integration config (%v) — see integration/README.md", err)
+	}
+	admin, ok := newAdminClient(cfg)
+	if !ok {
+		t.Skip("skipping: admin_api not configured — see integration/README.md")
+	}
+
+	f := newFixture(t)
+	initResp := f.mustJSON("wallet", "init")
+	npub, _ := initResp["npub"].(string)
+	pubHex, err := npubToHex(npub)
+	if err != nil {
+		t.Fatalf("decode local identity npub: %v", err)
+	}
+
+	hubResp := setUpCircleHub(t, admin, pubHex)
+	if hubResp.CircleHubToken == nil || *hubResp.CircleHubToken == "" {
+		t.Fatalf("create ephemeral circle_hub: no circleHubToken in response: %+v", hubResp)
+	}
+
+	decodeResp := f.mustJSON("decode", *hubResp.CircleHubToken, "--check")
+	check, _ := decodeResp["check"].(map[string]any)
+	if check == nil {
+		t.Fatalf("decode --check: no check field in response: %v", decodeResp)
+	}
+	if ok, _ := check["ok"].(bool); !ok {
+		t.Errorf("decode --check on a real, reachable circle_hub: ok = %v, want true (check: %v)", check["ok"], check)
+	}
+
+	listResp := f.mustJSON("connect", "list")
+	if conns, _ := listResp["connections"].([]any); len(conns) != 0 {
+		t.Errorf("decode --check must never register a wallet, but connect list reports: %v", conns)
 	}
 }
 

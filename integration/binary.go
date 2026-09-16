@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -88,6 +89,32 @@ func (f *fixture) run(args ...string) result {
 	full := append([]string{"--config-dir", f.configDir, "--json"}, args...)
 	cmd := exec.Command(f.bin, full...)
 	cmd.Env = append(os.Environ(), "XDG_CONFIG_HOME="+f.xdgHome)
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+	exitCode := 0
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			exitCode = exitErr.ExitCode()
+		} else {
+			f.t.Fatalf("running cashctl %v: %v", args, err)
+		}
+	}
+	return result{Stdout: stdout.String(), Stderr: stderr.String(), ExitCode: exitCode}
+}
+
+// runInteractive is run's counterpart for exercising a real interactive
+// confirmation prompt: omits --json (which implies --yes, skipping every
+// prompt) and pipes stdin. stdin == "" simulates a bare Enter.
+func (f *fixture) runInteractive(stdin string, args ...string) result {
+	f.t.Helper()
+	full := append([]string{"--config-dir", f.configDir}, args...)
+	cmd := exec.Command(f.bin, full...)
+	cmd.Env = append(os.Environ(), "XDG_CONFIG_HOME="+f.xdgHome)
+	cmd.Stdin = strings.NewReader(stdin)
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

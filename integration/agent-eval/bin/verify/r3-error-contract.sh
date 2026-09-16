@@ -35,7 +35,7 @@ check_probe "unknown_command_is_usage"  2 usage         cashctl bogus-command --
 check_probe "unknown_flag_is_usage"     2 usage         cashctl wallet show --bogus-flag --json
 check_probe "missing_required_hub_is_usage" 2 usage     cashctl join --json
 check_probe "missing_required_to_is_usage"  2 usage     cashctl transfer --json
-check_probe "bad_token_is_invalid_input" 3 invalid_input cashctl cash decode not-a-valid-token --json
+check_probe "bad_token_is_invalid_input" 3 invalid_input cashctl decode not-a-valid-token --json
 check_probe "no_held_tokens_is_not_found" 4 not_found   cashctl redeem --json
 check_probe "unknown_wallet_is_not_found" 4 not_found   cashctl wallet balance --from does-not-exist --json
 
