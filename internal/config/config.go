@@ -5,20 +5,22 @@
 package config
 
 import (
-	"encoding/json"
+	"database/sql"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 
-	"github.com/ohstr/cashctl/internal/appdir"
+	"github.com/ohstr/cashctl/internal/store"
 )
 
 // Connection is one named wallet/hub connection cashctl knows about — either
 // a raw nostr+walletconnect:// URI, or a bech32 string
 // (cashhub1.../circlehub1.../lokicash1...) — stored exactly as given.
+// JSON tags matter here even though this is no longer the on-disk shape:
+// `connect list`/`wallet show` embed []Connection directly into their
+// --json output (cmd/connect.go, cmd/wallet.go) — the --json contract
+// doesn't change as part of the storage-layer swap.
 type Connection struct {
 	Name    string `json:"name"`
 	Value   string `json:"value"`
@@ -35,54 +37,92 @@ type Connection struct {
 	LastKnownBalanceAt    string `json:"last_known_balance_at,omitempty"`
 }
 
-// Store is the on-disk shape of connections.json.
+// Store is the in-memory shape of cashctl.db's connections table, loaded
+// whole and saved whole like ledger.Ledger (see its own doc comment) —
+// Default is stored as an is_default column on whichever row is current,
+// not a separate table, since it's a property of exactly one connection.
 type Store struct {
-	Connections []Connection `json:"connections,omitempty"`
-	Default     string       `json:"default,omitempty"`
+	Connections []Connection
+	Default     string
 }
 
-func path() (string, error) {
-	dir, err := appdir.Dir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, "connections.json"), nil
-}
-
-// Load reads connections.json, returning an empty (not nil) *Store if the
-// file doesn't exist yet — a fresh install has no connections, not an
-// error condition.
+// Load reads every connection from cashctl.db, returning an empty (not
+// nil) *Store if there are none yet — a fresh install has no connections,
+// not an error condition.
 func Load() (*Store, error) {
-	p, err := path()
+	db, err := store.Open()
 	if err != nil {
 		return nil, err
 	}
-	data, err := os.ReadFile(p)
-	if errors.Is(err, os.ErrNotExist) {
-		return &Store{}, nil
-	}
+	defer db.Close()
+
+	// ORDER BY rowid, not added_at (see ledger.Load's identical comment) —
+	// added_at only has 1-second precision, so two connections added in
+	// the same second would otherwise sort by name instead of reliably
+	// preserving insertion order.
+	rows, err := db.Query(`SELECT name, value, added_at, last_known_balance_mloki, last_known_balance_at, is_default
+		FROM connections ORDER BY rowid`)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("cashctl.db: reading connections: %w", err)
 	}
-	var s Store
-	if err := json.Unmarshal(data, &s); err != nil {
-		return nil, fmt.Errorf("connections.json is corrupt: %w", err)
+	defer rows.Close()
+
+	s := &Store{}
+	for rows.Next() {
+		var c Connection
+		var lastKnownBalance sql.NullInt64
+		var lastKnownBalanceAt sql.NullString
+		var isDefault bool
+		if err := rows.Scan(&c.Name, &c.Value, &c.AddedAt, &lastKnownBalance, &lastKnownBalanceAt, &isDefault); err != nil {
+			return nil, fmt.Errorf("cashctl.db: reading connections: %w", err)
+		}
+		if lastKnownBalance.Valid {
+			v := lastKnownBalance.Int64
+			c.LastKnownBalanceMloki = &v
+		}
+		c.LastKnownBalanceAt = lastKnownBalanceAt.String
+		if isDefault {
+			s.Default = c.Name
+		}
+		s.Connections = append(s.Connections, c)
 	}
-	return &s, nil
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("cashctl.db: reading connections: %w", err)
+	}
+	return s, nil
 }
 
-// Save persists s. 0600: a connection's Value is frequently a secret-
-// bearing pairing URI, not just a public identifier.
+// Save replaces cashctl.db's connections table with s's current contents,
+// in one transaction.
 func (s *Store) Save() error {
-	p, err := path()
+	db, err := store.Open()
 	if err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(s, "", "  ")
+	defer db.Close()
+
+	tx, err := db.Begin()
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(p, data, 0600)
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(`DELETE FROM connections`); err != nil {
+		return fmt.Errorf("cashctl.db: clearing connections: %w", err)
+	}
+	for _, c := range s.Connections {
+		var lastKnownBalance sql.NullInt64
+		if c.LastKnownBalanceMloki != nil {
+			lastKnownBalance = sql.NullInt64{Int64: *c.LastKnownBalanceMloki, Valid: true}
+		}
+		_, err := tx.Exec(`INSERT INTO connections (name, value, added_at, last_known_balance_mloki, last_known_balance_at, is_default)
+			VALUES (?, ?, ?, ?, ?, ?)`,
+			c.Name, c.Value, c.AddedAt, lastKnownBalance, c.LastKnownBalanceAt, c.Name == s.Default)
+		if err != nil {
+			return fmt.Errorf("cashctl.db: saving connection %s: %w", c.Name, err)
+		}
+	}
+	return tx.Commit()
 }
 
 // Find looks up a connection by name.
