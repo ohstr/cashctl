@@ -15,9 +15,13 @@ import (
 )
 
 // walletBalanceLine is one row of the itemized breakdown — a live wallet
-// or a held cash token, each contributing to the unified total.
+// or a held cash token, each contributing to the unified total. Name
+// stays the raw ledger ID for a held token (scriptable, --json only);
+// DisplayName is what a human actually sees printed under --breakdown —
+// never the raw ID (see docs/private/wallet-abstraction-plan.md).
 type walletBalanceLine struct {
 	Name        string `json:"name"`
+	DisplayName string `json:"-"`
 	AmountMloki int64  `json:"amount_mloki"`
 	Kind        string `json:"kind"`               // "wallet" | "held_token"
 	Stranded    bool   `json:"stranded,omitempty"` // expired wallet, showing a cached figure
@@ -49,7 +53,7 @@ func runWalletBalance(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			continue // unreachable right now — omitted, not fatal to the whole command
 		}
-		lines = append(lines, walletBalanceLine{Name: c.Name, AmountMloki: amount, Kind: "wallet", Stranded: isStranded})
+		lines = append(lines, walletBalanceLine{Name: c.Name, DisplayName: c.Name, AmountMloki: amount, Kind: "wallet", Stranded: isStranded})
 		total += amount
 		if isStranded {
 			stranded += amount
@@ -65,7 +69,12 @@ func runWalletBalance(cmd *cobra.Command, args []string) error {
 			continue
 		}
 		amount := int64(*e.AmountMillis)
-		lines = append(lines, walletBalanceLine{Name: e.ID, AmountMloki: amount, Kind: "held_token"})
+		lines = append(lines, walletBalanceLine{
+			Name:        e.ID,
+			DisplayName: fmt.Sprintf("held cash (%s)", formatReceivedDate(e.ReceivedAt)),
+			AmountMloki: amount,
+			Kind:        "held_token",
+		})
 		total += amount
 	}
 
@@ -79,9 +88,9 @@ func runWalletBalance(cmd *cobra.Command, args []string) error {
 	}
 
 	if stranded > 0 {
-		fmt.Printf("%d mloki total — %d mloki in an expired wallet (renew or it may be swept)\n", total, stranded)
+		fmt.Printf("%d %s total — %d %s in an expired wallet (renew or it may be swept)\n", total, output.CurrencyUnit, stranded, output.CurrencyUnit)
 	} else {
-		fmt.Printf("%d mloki total\n", total)
+		fmt.Printf("%d %s total\n", total, output.CurrencyUnit)
 	}
 	if breakdown {
 		for _, line := range lines {
@@ -89,7 +98,7 @@ func runWalletBalance(cmd *cobra.Command, args []string) error {
 			if line.Stranded {
 				marker = " [expired — money-moving disabled]"
 			}
-			fmt.Printf("  %-20s %d mloki%s\n", line.Name, line.AmountMloki, marker)
+			fmt.Printf("  %-20s %d %s%s\n", line.DisplayName, line.AmountMloki, output.CurrencyUnit, marker)
 		}
 	}
 	return nil
@@ -109,7 +118,7 @@ func runWalletBalanceFrom(cmd *cobra.Command, from string, jsonMode bool) error 
 			output.PrintJSON(map[string]any{"name": from, "amount_mloki": amount, "stranded": stranded})
 			return nil
 		}
-		fmt.Printf("%d mloki\n", amount)
+		fmt.Printf("%d %s\n", amount, output.CurrencyUnit)
 		return nil
 	}
 	l, err := ledger.Load()
@@ -121,7 +130,7 @@ func runWalletBalanceFrom(cmd *cobra.Command, from string, jsonMode bool) error 
 			output.PrintJSON(map[string]any{"name": from, "amount_mloki": *e.AmountMillis})
 			return nil
 		}
-		fmt.Printf("%d mloki\n", *e.AmountMillis)
+		fmt.Printf("%d %s\n", *e.AmountMillis, output.CurrencyUnit)
 		return nil
 	}
 	return output.NotFoundError(cmd, from, fmt.Errorf("no wallet or held token named %q", from))
