@@ -151,7 +151,7 @@ func load() (*Ledger, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	l := &Ledger{}
 	// ORDER BY rowid (SQLite's own implicit insertion-order column — the
@@ -175,12 +175,12 @@ func load() (*Ledger, error) {
 		if err := rows.Scan(&e.ID, &e.Token, &e.WalletPubkey, &e.MinterPubkey, &e.Secret, &relayURLs,
 			&identityRequired, &amountMillis, &e.ReceivedAt, &e.Verified, &e.Status, &e.BearerSecret,
 			&e.ConnectionKeyPlatform, &e.ConnectionKeyExternalID, &e.AttestationEventID, &e.IAPubkey); err != nil {
-			rows.Close()
+			_ = rows.Close()
 			return nil, fmt.Errorf("cashctl.db: reading entries: %w", err)
 		}
 		if relayURLs.Valid && relayURLs.String != "" {
 			if err := json.Unmarshal([]byte(relayURLs.String), &e.RelayURLs); err != nil {
-				rows.Close()
+				_ = rows.Close()
 				return nil, fmt.Errorf("cashctl.db: entry %s has corrupt relay_urls: %w", e.ID, err)
 			}
 		}
@@ -197,13 +197,13 @@ func load() (*Ledger, error) {
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("cashctl.db: reading entries: %w", err)
 	}
-	rows.Close()
+	_ = rows.Close()
 
 	histRows, err := db.Query(`SELECT at, action, detail FROM history ORDER BY id`)
 	if err != nil {
 		return nil, fmt.Errorf("cashctl.db: reading history: %w", err)
 	}
-	defer histRows.Close()
+	defer func() { _ = histRows.Close() }()
 	for histRows.Next() {
 		var h HistoryEntry
 		if err := histRows.Scan(&h.At, &h.Action, &h.Detail); err != nil {
@@ -267,13 +267,13 @@ func (l *Ledger) save() error {
 	if err != nil {
 		return err
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	tx, err := db.Begin()
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	for _, e := range l.Entries {
 		if prior, ok := l.loaded[e.ID]; ok && entriesEqual(prior, e) {

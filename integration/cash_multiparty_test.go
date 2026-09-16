@@ -203,9 +203,9 @@ func TestMultiParty_ForwardPortionKeepRemainder_AtoBtoC(t *testing.T) {
 	// B is about to owe C, but sum (60,000) to more than enough.
 	hub := setUpCashHub(t, admin)
 	const (
-		amount1      = uint64(25_000)
-		amount2      = uint64(35_000)
-		owedToC      = uint64(45_000)
+		amount1       = uint64(25_000)
+		amount2       = uint64(35_000)
+		owedToC       = uint64(45_000)
 		wantRemainder = amount1 + amount2 - owedToC
 	)
 	token1, minter1, ok1 := mintSignedPubkeyTokenFromHub(t, b, hub, bPub, amount1)

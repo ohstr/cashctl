@@ -90,11 +90,11 @@ func Open() (*sql.DB, error) {
 		return nil, err
 	}
 	if _, err := db.Exec(schema); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("cashctl.db schema migration: %w", err)
 	}
 	if err := os.Chmod(path, 0600); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, err
 	}
 	return db, nil

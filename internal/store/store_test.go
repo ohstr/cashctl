@@ -21,7 +21,7 @@ func TestOpen_CreatesFileWithRestrictivePermissions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	p, err := Path()
 	if err != nil {
@@ -43,7 +43,7 @@ func TestOpen_IsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first Open() error = %v", err)
 	}
-	db1.Close()
+	_ = db1.Close()
 
 	// Re-opening an existing database must not fail or wipe it — the
 	// schema's CREATE TABLE/INDEX IF NOT EXISTS statements must be safe to
@@ -52,7 +52,7 @@ func TestOpen_IsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second Open() error = %v", err)
 	}
-	defer db2.Close()
+	defer func() { _ = db2.Close() }()
 
 	if _, err := db2.Exec(`INSERT INTO connections (name, value, added_at) VALUES ('a', 'b', 'c')`); err != nil {
 		t.Fatalf("inserting into a re-opened database failed: %v", err)
@@ -62,7 +62,7 @@ func TestOpen_IsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("third Open() error = %v", err)
 	}
-	defer db3.Close()
+	defer func() { _ = db3.Close() }()
 
 	var count int
 	if err := db3.QueryRow(`SELECT COUNT(*) FROM connections`).Scan(&count); err != nil {

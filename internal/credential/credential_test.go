@@ -458,8 +458,8 @@ func TestLooksLikeNIP05(t *testing.T) {
 		{"alice@example.com", true},
 		{"alice@sub.example.com", true},
 		{"no-at-sign", false},
-		{"@example.com", false},   // empty name
-		{"alice@", false},         // empty/invalid domain
+		{"@example.com", false}, // empty name
+		{"alice@", false},       // empty/invalid domain
 		{"alice@not_a_domain", false},
 		{"pubkey:deadbeef", false}, // must not shadow the explicit prefix form
 	}

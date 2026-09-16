@@ -46,7 +46,7 @@ func Exists() (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	var n int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM identity`).Scan(&n); err != nil {
@@ -66,7 +66,7 @@ func Load() (*Stored, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	var s Stored
 	err = db.QueryRow(`SELECT source, npub, label, priv_hex FROM identity LIMIT 1`).
@@ -110,13 +110,13 @@ func save(s *Stored) error {
 	if err != nil {
 		return err
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	tx, err := db.Begin()
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	if _, err := tx.Exec(`DELETE FROM identity`); err != nil {
 		return fmt.Errorf("cashctl.db: clearing identity: %w", err)

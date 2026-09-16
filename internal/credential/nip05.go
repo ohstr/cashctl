@@ -48,7 +48,7 @@ func resolveNIP05(identifier string) (hexPubkey string, err error) {
 	if err != nil {
 		return "", fmt.Errorf("could not reach %s: %w", domain, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("%s returned %s for nostr.json", domain, resp.Status)
 	}

@@ -54,7 +54,7 @@ func Load() (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	// ORDER BY rowid, not added_at (see ledger.Load's identical comment) —
 	// added_at only has 1-second precision, so two connections added in
@@ -65,7 +65,7 @@ func Load() (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("cashctl.db: reading connections: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	s := &Store{}
 	for rows.Next() {
@@ -99,13 +99,13 @@ func (s *Store) Save() error {
 	if err != nil {
 		return err
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	tx, err := db.Begin()
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	if _, err := tx.Exec(`DELETE FROM connections`); err != nil {
 		return fmt.Errorf("cashctl.db: clearing connections: %w", err)
