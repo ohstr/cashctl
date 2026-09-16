@@ -8,9 +8,19 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
+
+// CurrencyUnit is the unit label cashctl prints after amounts in
+// human-readable text (CLI output, --help text, docs) — hardcoded for now,
+// but centralized here so a future per-deployment unit preference (e.g.
+// "FLC") is a one-line change instead of a hunt through every fmt.Printf
+// call site. Doesn't touch --json field names or on-disk storage, which
+// stay "mloki" (the actual sub-unit amounts are stored/transmitted in) —
+// this is a display label only.
+const CurrencyUnit = "loki"
 
 // PrintJSON writes v as indented JSON to stdout — the shared success-path
 // result renderer every --json command uses, so stdout only ever carries
@@ -39,8 +49,16 @@ func EmitError(cmd *cobra.Command, err error) {
 	}
 	ce := AsCLIError(err)
 	if jsonMode {
+		// RawMessage (when set — an NWC decline, see nwc_errors.go) is the
+		// wallet's own specific text; ce.Err.Error() here would be the same
+		// deliberately-generic bucket sentence human mode prints, discarding
+		// exactly the detail a --json consumer is most likely to want.
+		errMessage := ce.Err.Error()
+		if ce.RawMessage != "" {
+			errMessage = ce.RawMessage
+		}
 		payload := map[string]any{
-			"error":     ce.Err.Error(),
+			"error":     errMessage,
 			"code":      string(ce.Code),
 			"retryable": retryableCodes[ce.Code],
 		}
@@ -56,6 +74,24 @@ func EmitError(cmd *cobra.Command, err error) {
 		return
 	}
 	fmt.Fprintf(os.Stderr, "Error: %s\n", ce.Err.Error())
+}
+
+// Sanitize replaces ASCII control characters (0x00-0x1F, 0x7F — every
+// ANSI escape sequence starts with one, ESC 0x1B) with U+FFFD before s
+// reaches a terminal. Apply to any text from outside cashctl's own
+// control (a Hub's label, a relay URL, get_info fields, an NWC error
+// message, ...) before printing — otherwise it could rewrite or hide
+// what's shown. Replaced, not deleted, so tampering stays visible.
+func Sanitize(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if r < 0x20 || r == 0x7f {
+			b.WriteRune('�')
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }
 
 // Linef prints a human-only narration line (a progress note, a status

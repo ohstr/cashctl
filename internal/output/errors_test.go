@@ -1,7 +1,10 @@
 package output
 
 import (
+	"encoding/json"
 	"errors"
+	"io"
+	"os"
 	"testing"
 
 	relayclient "github.com/ohstr/nmilat/relay/client"
@@ -218,4 +221,101 @@ func TestNWCError_UnknownCodeFallsBackToWalletMessage(t *testing.T) {
 	if ce.Error() != "a message cashctl doesn't know how to translate" {
 		t.Errorf("Error() = %q, want the wallet's own message verbatim", ce.Error())
 	}
+}
+
+// TestNWCError_TranslatedCodeStillPreservesRawMessage guards against the
+// bug found auditing cash_transfer's CashMinTransferMloki floor: a
+// translated code's specific detail (here, which exact amount/floor was
+// violated) used to be discarded entirely — CLIError.Err carried only the
+// generic bucket sentence, and EmitError's --json "error" field read from
+// Err too, so a --json consumer had no way to learn the specific reason
+// behind two BAD_REQUEST declines that print byte-identical error bodies.
+func TestNWCError_TranslatedCodeStillPreservesRawMessage(t *testing.T) {
+	err := NWCError(newTestCmd(), &relayclient.WalletError{
+		Code:    "BAD_REQUEST",
+		Message: "split amount 500 is below this wallet's min_transfer_mloki floor of 1000",
+	})
+	ce := AsCLIError(err)
+	if ce.Error() != "That request wasn't valid." {
+		t.Errorf("Error() = %q, want the generic human-mode translation unchanged", ce.Error())
+	}
+	if ce.RawMessage != "split amount 500 is below this wallet's min_transfer_mloki floor of 1000" {
+		t.Errorf("RawMessage = %q, want the wallet's own specific text preserved", ce.RawMessage)
+	}
+}
+
+// TestEmitError_JSONModeUsesRawMessageOverGenericTranslation is the same
+// finding, proven at EmitError's own boundary (the actual --json "error"
+// field a script/agent reads), not just at the CLIError level.
+func TestEmitError_JSONModeUsesRawMessageOverGenericTranslation(t *testing.T) {
+	cmd := newTestCmd()
+	_ = cmd.Flags().Set("json", "true")
+	err := NWCError(cmd, &relayclient.WalletError{
+		Code:    "BAD_REQUEST",
+		Message: "remainder 200 is below this wallet's min_transfer_mloki floor of 1000",
+	})
+
+	stderr := captureStderr(t, func() { EmitError(cmd, err) })
+
+	var payload struct {
+		Error string `json:"error"`
+		Code  string `json:"code"`
+	}
+	if jsonErr := json.Unmarshal(stderr, &payload); jsonErr != nil {
+		t.Fatalf("EmitError's --json output didn't parse as JSON: %v\noutput: %s", jsonErr, stderr)
+	}
+	if payload.Error != "remainder 200 is below this wallet's min_transfer_mloki floor of 1000" {
+		t.Errorf(`--json "error" = %q, want the wallet's own specific message, not the generic bucket text`, payload.Error)
+	}
+	if payload.Code != "invalid_input" {
+		t.Errorf(`--json "code" = %q, want "invalid_input"`, payload.Code)
+	}
+}
+
+// TestEmitError_JSONModeFallsBackToTranslationWithoutRawMessage confirms
+// the fallback: a CLIError built without NWCError (no RawMessage set at
+// all, e.g. UsageError/InvalidInputError/... — every other constructor in
+// this package) must keep behaving exactly as before this fix — --json's
+// "error" field is Err.Error(), same as human mode.
+func TestEmitError_JSONModeFallsBackToTranslationWithoutRawMessage(t *testing.T) {
+	cmd := newTestCmd()
+	_ = cmd.Flags().Set("json", "true")
+	err := InvalidInputError(cmd, "", errors.New("ordinary cashctl-side validation error"))
+
+	stderr := captureStderr(t, func() { EmitError(cmd, err) })
+
+	var payload struct {
+		Error string `json:"error"`
+	}
+	if jsonErr := json.Unmarshal(stderr, &payload); jsonErr != nil {
+		t.Fatalf("EmitError's --json output didn't parse as JSON: %v\noutput: %s", jsonErr, stderr)
+	}
+	if payload.Error != "ordinary cashctl-side validation error" {
+		t.Errorf(`--json "error" = %q, want the underlying error unchanged`, payload.Error)
+	}
+}
+
+// captureStderr redirects os.Stderr for the duration of fn and returns
+// whatever it wrote — EmitError has no injectable writer, it always
+// targets os.Stderr directly (see its own doc comment on why: a script
+// parsing --json's stdout result must never see errors on the same
+// stream).
+func captureStderr(t *testing.T, fn func()) []byte {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	orig := os.Stderr
+	os.Stderr = w
+	defer func() { os.Stderr = orig }()
+
+	fn()
+
+	_ = w.Close()
+	out, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("reading captured stderr: %v", err)
+	}
+	return out
 }
