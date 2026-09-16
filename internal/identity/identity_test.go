@@ -8,9 +8,10 @@ import (
 	ncli "github.com/ohstr/ncli/client"
 
 	"github.com/ohstr/cashctl/internal/appdir"
+	"github.com/ohstr/cashctl/internal/store"
 )
 
-// withTempDirs isolates both cashctl's own appdir (identity.json) and ncli's
+// withTempDirs isolates both cashctl's own appdir (cashctl.db) and ncli's
 // vault (client.VaultPath/PrefsPath) under one fresh temp dir per test,
 // mirroring ncli's own test isolation technique (withTempConfigDir in
 // ncli's client package) — same XDG_CONFIG_HOME override reaches both,
@@ -87,16 +88,16 @@ func TestGenerateAndSaveLocal_FilePermissions(t *testing.T) {
 	if _, err := GenerateAndSaveLocal(); err != nil {
 		t.Fatalf("GenerateAndSaveLocal() error = %v", err)
 	}
-	p, err := path()
+	p, err := store.Path()
 	if err != nil {
-		t.Fatalf("path() error = %v", err)
+		t.Fatalf("store.Path() error = %v", err)
 	}
 	info, err := os.Stat(p)
 	if err != nil {
 		t.Fatalf("Stat() error = %v", err)
 	}
 	if perm := info.Mode().Perm(); perm != 0600 {
-		t.Errorf("identity.json permissions = %o, want 0600", perm)
+		t.Errorf("cashctl.db permissions = %o, want 0600", perm)
 	}
 }
 
@@ -130,9 +131,9 @@ func TestNcliVaultRef_RoundTripAndResolve(t *testing.T) {
 	if s.Source != SourceNcliVault || s.Npub != entry.Npub || s.Label != "main" {
 		t.Fatalf("Load() = %+v, want ncli-vault ref to %q/%q", s, entry.Npub, "main")
 	}
-	// The whole point: identity.json never holds a copy of the privkey.
+	// The whole point: an ncli-vault reference never holds a copy of the privkey.
 	if s.PrivHex != "" {
-		t.Error("identity.json holds a copied privkey for an ncli-vault reference — it must not")
+		t.Error("stored identity holds a copied privkey for an ncli-vault reference — it must not")
 	}
 
 	promptCalled := false
