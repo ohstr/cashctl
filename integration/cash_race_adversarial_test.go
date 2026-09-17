@@ -628,13 +628,12 @@ func TestRace_ConcurrentJoinDifferentConfigDirs(t *testing.T) {
 		t.Fatalf("two independently-initialized fixtures generated the SAME identity — a real bug in identity generation, not this test")
 	}
 
-	// FundLoki well past setUpCircleHub's own single-join default (100 loki
-	// == a 100_000 mloki hub budget, exactly enough for ONE --max-amount
-	// 100000 reservation): two concurrent joins each reserving 100000
-	// mloki from a shared circle-wide budget need enough headroom that
-	// whichever commits second doesn't legitimately hit QUOTA_EXCEEDED —
-	// that's a fixture-sizing question, not the local-bookkeeping race
-	// this test actually targets.
+	// FundLoki well past setUpCircleHub's own single-join default (100
+	// loki, exactly enough for ONE --max-amount 100 reservation): two
+	// concurrent joins each reserving 100 loki from a shared circle-wide
+	// budget need enough headroom that whichever commits second doesn't
+	// legitimately hit QUOTA_EXCEEDED — that's a fixture-sizing question,
+	// not the local-bookkeeping race this test actually targets.
 	hub := setUpCircleHubOpts(t, admin, pubHexA, circleHubOpts{FundLoki: 500})
 	if err := admin.addCircleAllowlistMember(hub.ID, pubHexB); err != nil {
 		t.Fatalf("authorize user B under circle_hub allowlist: %v", err)
@@ -644,8 +643,8 @@ func TestRace_ConcurrentJoinDifferentConfigDirs(t *testing.T) {
 	}
 
 	results := runConcurrentAcrossFixtures(
-		fixtureCall{userA, []string{"join", "--hub", *hub.CircleHubToken, "--max-amount", "100000", "--yes"}},
-		fixtureCall{userB, []string{"join", "--hub", *hub.CircleHubToken, "--max-amount", "100000", "--yes"}},
+		fixtureCall{userA, []string{"join", "--hub", *hub.CircleHubToken, "--max-amount", "100", "--yes"}},
+		fixtureCall{userB, []string{"join", "--hub", *hub.CircleHubToken, "--max-amount", "100", "--yes"}},
 	)
 	joinA, joinB := results[0], results[1]
 	if joinA.ExitCode != 0 {

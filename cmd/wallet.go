@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/ohstr/nmilat/nip19"
+	"github.com/ohstr/nmilat/nip47"
 	relayclient "github.com/ohstr/nmilat/relay/client"
 	"github.com/ohstr/nmilat/utils"
 	"github.com/spf13/cobra"
@@ -105,11 +107,15 @@ func newWalletShowCmd() *cobra.Command {
 				}
 			}
 			held := l.Held()
-			fmt.Printf("\nHeld cash tokens: %d\n", len(held))
+			if len(held) == 0 {
+				fmt.Println("\nNo held cash tokens.")
+			} else {
+				fmt.Printf("\nHeld cash tokens: %d\n", len(held))
+			}
 			for i, e := range held {
 				amount := "unknown amount"
 				if e.AmountMillis != nil {
-					amount = fmt.Sprintf("%d %s", *e.AmountMillis, output.CurrencyUnit)
+					amount = output.FormatAmount(int64(*e.AmountMillis))
 				}
 				status := "verified"
 				if !e.Verified {
@@ -194,15 +200,28 @@ func newWalletGetInfoCmd() *cobra.Command {
 			if !ok {
 				return output.NotFoundError(cmd, "", errors.New(noWalletConfiguredMsg))
 			}
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-			client, err := DialGeneric(ctx, value)
+			var info *nip47.GetInfoResult
+			var dialErr bool
+			err = WithSpinner(jsonMode, "Fetching info...", func() error {
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				client, cErr := DialGeneric(ctx, value)
+				if cErr != nil {
+					dialErr = true
+					return cErr
+				}
+				defer client.Close()
+				i, cErr := client.GetInfo(ctx)
+				if cErr != nil {
+					return cErr
+				}
+				info = i
+				return nil
+			})
 			if err != nil {
-				return output.NetworkError(cmd, err)
-			}
-			defer client.Close()
-			info, err := client.GetInfo(ctx)
-			if err != nil {
+				if dialErr {
+					return output.NetworkError(cmd, err)
+				}
 				return classifyNWCErr(cmd, err)
 			}
 			if jsonMode {
@@ -217,7 +236,7 @@ func newWalletGetInfoCmd() *cobra.Command {
 			}
 			fmt.Printf("alias:   %s\n", output.Sanitize(info.Alias))
 			fmt.Printf("network: %s\n", output.Sanitize(info.Network))
-			fmt.Printf("methods: %v\n", methods)
+			fmt.Printf("methods: %s\n", strings.Join(methods, ", "))
 			// CircleWallet is only ever set when the dialed connection IS a
 			// circle_hub's own connection (never a joined member's own
 			// circle_wallet) — see nip47.GetInfoResult.CircleWallet's doc
@@ -227,7 +246,7 @@ func newWalletGetInfoCmd() *cobra.Command {
 			if cw := info.CircleWallet; cw != nil {
 				fmt.Printf("circle policy:    %s\n", output.Sanitize(cw.CirclePolicy))
 				fmt.Printf("circle fee:       %d ppm\n", cw.FeesPpm)
-				fmt.Printf("circle available: %d %s\n", cw.AvailableMloki, output.CurrencyUnit)
+				fmt.Printf("circle available: %s\n", output.FormatAmount(cw.AvailableMloki))
 			}
 			return nil
 		},
@@ -238,10 +257,10 @@ func newWalletBalanceCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "balance",
 		Short: "Show your unified balance",
-		Long: `Sums every locally-known wallet's real NWC balance plus every unredeemed
-held cash token's value into one figure — the way a real wallet app shows
-"your balance," not a protocol inventory. Use --breakdown for the itemized
-per-wallet/per-token detail.`,
+		Long:  `Sums every wallet's balance plus unredeemed held cash into one figure.`,
+		Example: `  cashctl wallet balance
+  cashctl wallet balance --breakdown
+  cashctl wallet balance --from work`,
 		Args: output.NoArgs,
 		RunE: runWalletBalance,
 	}

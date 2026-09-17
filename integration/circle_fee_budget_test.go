@@ -212,7 +212,7 @@ func TestCircleWallet_FeeBudgetMatchesHubGroundTruth(t *testing.T) {
 		t.Fatalf("create ephemeral circle_hub: no circleHubToken in response: %+v", hubResp)
 	}
 
-	joinResp := f.mustJSON("join", "--hub", *hubResp.CircleHubToken, "--max-amount", "100000", "--yes")
+	joinResp := f.mustJSON("join", "--hub", *hubResp.CircleHubToken, "--max-amount", "100", "--yes")
 	walletName, _ := joinResp["wallet"].(string)
 	if walletName == "" {
 		t.Fatalf("join: no wallet name in response: %v", joinResp)
@@ -230,7 +230,7 @@ func TestCircleWallet_FeeBudgetMatchesHubGroundTruth(t *testing.T) {
 	// Fund the circle wallet: a second ephemeral plain wallet pays a real
 	// invoice it made.
 	const fundAmountMloki = 20000
-	invoiceResp := f.mustJSON("wallet", "invoice", fmt.Sprintf("%d", fundAmountMloki), "--desc", "fee-budget test funding")
+	invoiceResp := f.mustJSON("wallet", "invoice", lokiArg(fundAmountMloki), "--desc", "fee-budget test funding")
 	invoiceStr, _ := invoiceResp["invoice"].(string)
 	if invoiceStr == "" {
 		t.Fatalf("wallet invoice: no invoice in response: %v", invoiceResp)
@@ -565,7 +565,7 @@ func TestCircleWallet_FeesPpm100Percent_SelfPaymentExempt_MatchesHubGroundTruth(
 		t.Fatalf("create ephemeral circle_hub: no circleHubToken in response: %+v", hubResp)
 	}
 
-	joinResp := f.mustJSON("join", "--hub", *hubResp.CircleHubToken, "--max-amount", "100000", "--yes")
+	joinResp := f.mustJSON("join", "--hub", *hubResp.CircleHubToken, "--max-amount", "100", "--yes")
 	walletName, _ := joinResp["wallet"].(string)
 	if walletName == "" {
 		t.Fatalf("join: no wallet name in response: %v", joinResp)
@@ -578,7 +578,7 @@ func TestCircleWallet_FeesPpm100Percent_SelfPaymentExempt_MatchesHubGroundTruth(
 	childAppID := children[0].AppID
 
 	const fundAmountMloki = 20000
-	invoiceResp := f.mustJSON("wallet", "invoice", fmt.Sprintf("%d", fundAmountMloki), "--desc", "100pct fee-budget test funding")
+	invoiceResp := f.mustJSON("wallet", "invoice", lokiArg(fundAmountMloki), "--desc", "100pct fee-budget test funding")
 	invoiceStr, _ := invoiceResp["invoice"].(string)
 	if invoiceStr == "" {
 		t.Fatalf("wallet invoice: no invoice in response: %v", invoiceResp)
@@ -716,7 +716,7 @@ func TestCircleWallet_FeesPpm100Percent_NonSelfPayment_ViaFlndInvoice(t *testing
 		t.Fatalf("create ephemeral circle_hub: no circleHubToken in response: %+v", hubResp)
 	}
 
-	joinResp := f.mustJSON("join", "--hub", *hubResp.CircleHubToken, "--max-amount", "150000", "--yes")
+	joinResp := f.mustJSON("join", "--hub", *hubResp.CircleHubToken, "--max-amount", "150", "--yes")
 	walletName, _ := joinResp["wallet"].(string)
 	if walletName == "" {
 		t.Fatalf("join: no wallet name in response: %v", joinResp)
@@ -731,7 +731,7 @@ func TestCircleWallet_FeesPpm100Percent_NonSelfPayment_ViaFlndInvoice(t *testing
 	// Fund generously: needs to cover payAmountMloki + its 100% skim + fee
 	// reserve for the attempt below.
 	const fundAmountMloki = 100_000
-	invoiceResp := f.mustJSON("wallet", "invoice", fmt.Sprintf("%d", fundAmountMloki), "--desc", "100pct fee non-self-payment test funding")
+	invoiceResp := f.mustJSON("wallet", "invoice", lokiArg(fundAmountMloki), "--desc", "100pct fee non-self-payment test funding")
 	invoiceStr, _ := invoiceResp["invoice"].(string)
 	if invoiceStr == "" {
 		t.Fatalf("wallet invoice: no invoice in response: %v", invoiceResp)
@@ -841,7 +841,7 @@ func TestCircleHub_MinBudgetRenewal_TighterThanFloorRejected(t *testing.T) {
 		t.Fatalf("create ephemeral circle_hub: no circleHubToken in response: %+v", hubResp)
 	}
 
-	res := f.run("join", "--hub", *hubResp.CircleHubToken, "--max-amount", "100000", "--budget-renewal", "daily", "--yes")
+	res := f.run("join", "--hub", *hubResp.CircleHubToken, "--max-amount", "100", "--budget-renewal", "daily", "--yes")
 	if res.ExitCode != 3 {
 		t.Fatalf("join --budget-renewal daily against a weekly floor: exit = %d, want 3 (invalid_input)\nstdout: %s\nstderr: %s", res.ExitCode, res.Stdout, res.Stderr)
 	}
@@ -884,7 +884,7 @@ func TestCircleHub_MinBudgetRenewal_AtOrLooserThanFloorAccepted(t *testing.T) {
 		t.Fatalf("create ephemeral circle_hub: no circleHubToken in response: %+v", hubResp)
 	}
 
-	joinResp := f.mustJSON("join", "--hub", *hubResp.CircleHubToken, "--max-amount", "100000", "--budget-renewal", "monthly", "--yes")
+	joinResp := f.mustJSON("join", "--hub", *hubResp.CircleHubToken, "--max-amount", "100", "--budget-renewal", "monthly", "--yes")
 	walletName, _ := joinResp["wallet"].(string)
 	if walletName == "" {
 		t.Fatalf("join --budget-renewal monthly against a weekly floor: no wallet name in response: %v", joinResp)
@@ -926,7 +926,7 @@ func TestCircleHub_MinBudgetRenewal_OmittedDefaultsToNeverRegardlessOfFloor(t *t
 		t.Fatalf("create ephemeral circle_hub: no circleHubToken in response: %+v", hubResp)
 	}
 
-	joinResp := f.mustJSON("join", "--hub", *hubResp.CircleHubToken, "--max-amount", "100000", "--yes")
+	joinResp := f.mustJSON("join", "--hub", *hubResp.CircleHubToken, "--max-amount", "100", "--yes")
 	walletName, _ := joinResp["wallet"].(string)
 	if walletName == "" {
 		t.Fatalf("join with no --budget-renewal against a yearly floor: no wallet name in response: %v", joinResp)

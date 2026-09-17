@@ -9,7 +9,7 @@ import (
 )
 
 // newTestReceiveCmd mirrors cash_transfer_test.go's own newTestTransferCmd
-// — secureBearerReceipt/checkClaimWithCashHub read these flags directly
+// — protectBearerReceipt/checkClaimWithCashHub read these flags directly
 // off cmd.
 func newTestReceiveCmd() *cobra.Command {
 	c := &cobra.Command{}
@@ -18,18 +18,18 @@ func newTestReceiveCmd() *cobra.Command {
 	return c
 }
 
-// TestSecureBearerReceipt_NonBearer_NotApplicable confirms the pure,
+// TestProtectBearerReceipt_NonBearer_NotApplicable confirms the pure,
 // no-network guard: a non-bearer entry never reaches the confirm prompt,
-// the ledger, or a dial — it's the one branch of secureBearerReceipt this
+// the ledger, or a dial — it's the one branch of protectBearerReceipt this
 // package can unit-test directly (the rest are network-touching, covered
 // by the integration suite instead, matching this codebase's existing
 // split between unit and integration test responsibilities).
-func TestSecureBearerReceipt_NonBearer_NotApplicable(t *testing.T) {
+func TestProtectBearerReceipt_NonBearer_NotApplicable(t *testing.T) {
 	c := newTestReceiveCmd()
 	l := &ledger.Ledger{}
 	entry := &ledger.Entry{ID: "tok-abcd"}
 
-	status, finalEntry := secureBearerReceipt(c, l, entry, false)
+	status, finalEntry := protectBearerReceipt(c, l, entry, false)
 
 	if status.Status != "not_applicable" {
 		t.Fatalf("Status = %q, want \"not_applicable\"", status.Status)
@@ -39,17 +39,17 @@ func TestSecureBearerReceipt_NonBearer_NotApplicable(t *testing.T) {
 	}
 }
 
-// TestSecureBearerReceipt_Declined confirms declining the confirm prompt
+// TestProtectBearerReceipt_Declined confirms declining the confirm prompt
 // returns cleanly without ever reaching the ledger or a dial — entry has
 // no real token, so a real attempt to build a RekeyBearerSlice call from
 // it would fail loudly (or hang), not return cleanly.
-func TestSecureBearerReceipt_Declined(t *testing.T) {
+func TestProtectBearerReceipt_Declined(t *testing.T) {
 	c := newTestReceiveCmd()
 	withStdin(t, "n\n")
 	l := &ledger.Ledger{}
 	entry := &ledger.Entry{ID: "tok-abcd", Token: "not-a-real-token"}
 
-	status, finalEntry := secureBearerReceipt(c, l, entry, true)
+	status, finalEntry := protectBearerReceipt(c, l, entry, true)
 
 	if status.Status != "declined" {
 		t.Fatalf("Status = %q, want \"declined\"", status.Status)

@@ -144,9 +144,9 @@ func TestCashTransfer_OverdraftAttempt(t *testing.T) {
 		t.Fatalf("receive: exit %d\nstderr: %s", res.ExitCode, res.Stderr)
 	}
 
-	res := f.run("transfer", fakeHex32(t), "--split", "999999999", "--yes")
+	res := f.run("transfer", fakeHex32(t), "--amount", "999999.999", "--yes")
 	if res.ExitCode == 0 {
-		t.Fatalf("transfer --split (more than held): unexpectedly succeeded: %s", res.Stdout)
+		t.Fatalf("transfer --amount (more than held): unexpectedly succeeded: %s", res.Stdout)
 	}
 
 	// Whatever the failure shape, the token must be left exactly as it

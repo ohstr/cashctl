@@ -14,14 +14,11 @@ import (
 // RootCmd is cashctl's top-level command.
 var RootCmd = &cobra.Command{
 	Use:   "cashctl",
-	Short: "A wallet CLI for NIP-CASH cash and NIP-CW circle wallets",
-	Long: `cashctl is a wallet for someone who doesn't run a Hub or node themselves:
-join a circle to get a personal Lightning wallet, and receive, hold, spend,
-and consolidate NIP-CASH tokens — like a normal wallet.
-
-Run "cashctl init" to get started. Every command supports --json for
-scripted/agentic use; see AGENTS.md for the JSON schema and exit-code
-contract.`,
+	Short: "A wallet CLI for Cash and Circle wallets",
+	Example: `  cashctl init
+  cashctl join <hub-connection>
+  cashctl receive <token>
+  cashctl transfer 5 <pubkey>`,
 	SilenceUsage:  true,
 	SilenceErrors: true,
 }

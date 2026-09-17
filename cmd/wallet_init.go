@@ -14,16 +14,12 @@ import (
 
 func newWalletInitCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "init",
-		Short: "Set up your cashctl identity (and optionally a Lightning wallet)",
-		Long: `Sets up the Nostr identity cashctl signs with by default everywhere —
-reusing an existing ncli vault identity if you have one, or generating a
-new one just for cashctl otherwise.
-
-Also offers to register a Lightning wallet connection (NWC) as your
-default, if you already have one.`,
-		Args: output.NoArgs,
-		RunE: runWalletInit,
+		Use:     "init",
+		Short:   "Set up your identity and, optionally, a wallet",
+		Long:    `Creates (or reuses) your Nostr identity, and optionally registers a default wallet.`,
+		Example: `  cashctl init`,
+		Args:    output.NoArgs,
+		RunE:    runWalletInit,
 	}
 	return cmd
 }
@@ -80,7 +76,7 @@ func setUpIdentity(cmd *cobra.Command, jsonMode bool) (npub, source string, err 
 				}
 				entry = entries[idx]
 			}
-			use := jsonMode || Confirm(cmd, true, fmt.Sprintf("Found an existing Nostr identity in your ncli vault (label: %q). Use it for cashctl?", entry.Label))
+			use := jsonMode || Confirm(cmd, true, fmt.Sprintf("Use existing identity %q?", entry.Label))
 			if use {
 				if err := identity.SaveNcliVaultRef(entry.Npub, entry.Label); err != nil {
 					return "", "", err
@@ -119,12 +115,12 @@ func offerDefaultWallet(cmd *cobra.Command, jsonMode bool) string {
 	if jsonMode {
 		return ""
 	}
-	value, err := PromptLine("Do you already have a Lightning wallet connection (NWC)? Paste it now to set as your default, or press Enter to skip: ")
+	value, err := PromptLine("Have an NWC wallet to set as default? Paste it, or Enter to skip: ")
 	if err != nil || value == "" {
 		return ""
 	}
 	if dial.Sniff(value) == dial.KindCashHub {
-		output.Linef(false, "That's a Cash Hub connection (for minting cash), not a Lightning wallet — skipping.")
+		output.Linef(false, "That's a Hub connection, not a wallet — skipping.")
 		return ""
 	}
 	s, err := config.Load()

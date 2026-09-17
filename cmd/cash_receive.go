@@ -19,25 +19,10 @@ import (
 func newCashReceiveCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "receive <token>",
-		Short: `"Cash-in" a token: check it against the Cash Hub and add it to your wallet`,
-		Long: `Decodes a cash token, prints its details, then cross-checks it against the
-Cash Hub (the same list_recipients call "cashctl cash list-recipients"
-makes) before saving anything — a token with no matching recipient on the
-Cash Hub, or one the Cash Hub can't be reached to confirm at all, is
-refused outright and never added to your wallet.
-
-For a bearer-mode token, the spending secret (bearer_secret) MUST be
-embedded in the token itself as "<token>#<bearer_secret>" (NIP-CASH's
-combined bearer-slice presentation) — paste the whole thing. A bearer
-token with no embedded secret has nothing this command can act on: it
-degrades to a read-only check (the same contract "cashctl decode --check"
-has — never saves anything), since the token's own connection alone is
-never enough to redeem/transfer a bearer slice.
-
-Once received, a bearer-mode bill is automatically re-keyed (and combined
-with any other cash you already hold from the same issuer) so the secret
-you were handed can no longer spend it — you'll be asked to confirm this
-first.`,
+		Short: `"Cash-in" a token: verify and add it to your wallet`,
+		Long:  `Verifies a cash token against the Hub before saving it. A bearer token needs its secret embedded as "<token>#<secret>".`,
+		Example: `  cashctl receive lokicash1...
+  cashctl receive lokicash1...#deadbeef`,
 		Args: output.ExactArgs(1),
 		RunE: runCashReceive,
 	}
@@ -86,7 +71,7 @@ func runCashReceive(cmd *cobra.Command, args []string) error {
 			checkResult, checkErr := checkClaimOnce(cmd, input, tok)
 			if !jsonMode {
 				if checkErr == nil {
-					fmt.Printf("check: matches a real recipient on the Cash Hub (%d %s)\n", checkResult.AmountMillis, output.CurrencyUnit)
+					fmt.Printf("check: matches (%s)\n", output.FormatAmount(int64(checkResult.AmountMillis)))
 				} else {
 					fmt.Printf("check: %s\n", checkErr)
 				}
@@ -97,9 +82,7 @@ func runCashReceive(cmd *cobra.Command, args []string) error {
 			return nil
 		}
 		fmt.Println()
-		fmt.Println("No spending secret embedded — nothing to receive yet. Ask the sender")
-		fmt.Println("for the full combined string (token#secret), or run `cashctl decode` to")
-		fmt.Println("inspect this bill without holding it.")
+		fmt.Println(`No spending secret — ask for the full "token#secret" string, or run "cashctl decode".`)
 		return nil
 	}
 
@@ -140,7 +123,7 @@ func runCashReceive(cmd *cobra.Command, args []string) error {
 		}
 		return output.RuntimeError(cmd, err)
 	}
-	l.AppendHistory("receive", fmt.Sprintf("received %d %s", result.AmountMillis, output.CurrencyUnit))
+	l.AppendHistory("receive", fmt.Sprintf("received %s", output.FormatAmount(int64(result.AmountMillis))))
 
 	if err := l.Save(); err != nil {
 		// A concurrent `cashctl receive` of this same token: both
@@ -157,14 +140,16 @@ func runCashReceive(cmd *cobra.Command, args []string) error {
 	}
 
 	if !jsonMode {
-		fmt.Printf("Verified against the Cash Hub — received %d %s.\n", result.AmountMillis, output.CurrencyUnit)
+		fmt.Printf("Received %s.\n", output.FormatAmount(int64(result.AmountMillis)))
 	}
 
 	// result.IsBearer, not the pre-check guess above.
-	secured, finalEntry := secureBearerReceipt(cmd, l, added, result.IsBearer)
+	protected, finalEntry := protectBearerReceipt(cmd, l, added, result.IsBearer)
 
 	if jsonMode {
-		output.PrintJSON(map[string]any{"entry": finalEntry, "secured": secured.json()})
+		// JSON key stays "secured" — an intentional, unchanged part of the
+		// --json contract (only the human-mode wording/identifiers changed).
+		output.PrintJSON(map[string]any{"entry": finalEntry, "secured": protected.json()})
 	}
 	return nil
 }
@@ -183,14 +168,16 @@ func printCashBill(jsonMode bool, tok nipcash.Token, isBearer bool) {
 	}
 	switch {
 	case isBearer:
-		output.Linef(jsonMode, "  identity: bearer-mode (spending secret provided)")
+		output.Linef(jsonMode, "  identity: bearer-mode")
 	case tok.IdentityRequired != nil:
-		output.Linef(jsonMode, "  identity: requires proof (will be matched against your local identity)")
+		output.Linef(jsonMode, "  identity: requires proof")
 	default:
 		output.Linef(jsonMode, "  identity: unspecified")
 	}
-	if tok.HasProvenance() {
-		output.Linef(jsonMode, "  attested_amount: %d %s (mint-signed)", *tok.AttestedAmountMillis, output.CurrencyUnit)
+	minterLine, amountLine := formatMinterStatus(tok)
+	output.Linef(jsonMode, "  %s", minterLine)
+	if amountLine != "" {
+		output.Linef(jsonMode, "  %s", amountLine)
 	}
 }
 
@@ -223,7 +210,7 @@ func checkClaimWithCashHub(cmd *cobra.Command, input string, tok nipcash.Token) 
 	jsonMode, _ := cmd.Flags().GetBool("json")
 	var result *nipcash.CheckClaimResult
 	noMatch := false
-	err := WithSpinner(jsonMode, "Checking with the Cash Hub...", func() error {
+	err := WithSpinner(jsonMode, "Checking...", func() error {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		client, err := nipcashclient.Connect(ctx, input)

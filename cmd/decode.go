@@ -55,25 +55,10 @@ func newDecodeCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "decode <string>",
 		Short: "Inspect any cash token, Circle Hub connection, or NWC URI locally",
-		Long: `Decodes whichever of these you paste in, entirely locally by default (no
-network call, nothing dialed or held):
-
-  - a cash-token-family string (lokicash1..., satscash1..., ...) — a bearer
-    slice's token MAY arrive as "<token>#<bearer_secret>" (NIP-CASH's
-    combined bearer-slice presentation); decode splits and handles both
-    halves automatically
-  - a circlehub1... Circle Hub connection
-  - a plain nostr+walletconnect:// pairing URI
-
-The pairing secret is never included in the output — nor is an embedded
-bearer_secret, ever: decode only ever reports that one was present.
-
---check opts into an extra, read-only network round trip: for a cash
-token, cross-checks it against the Hub (the same check "cashctl receive"
-makes before saving it, just without saving anything here); for a
-circlehub1... connection, checks it's reachable and that the Hub actually
-supports create_circle_wallet — not whether this identity is allowlisted,
-only whether joining is possible at all.`,
+		Long:  `Inspects a cash token, Circle Hub connection, or NWC URI locally. --check adds a network round trip.`,
+		Example: `  cashctl decode lokicash1...
+  cashctl decode lokicash1... --check
+  cashctl decode circlehub1...`,
 		Args: output.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			jsonMode, _ := cmd.Flags().GetBool("json")
@@ -128,7 +113,7 @@ func decodeCashToken(cmd *cobra.Command, value string, jsonMode, check, hasEmbed
 		}
 		printMintSignatureStatus(tok)
 		if hasEmbeddedBearerSecret {
-			fmt.Println("bearer_secret: embedded in this string (NIP-CASH's combined bearer-slice presentation) — `cashctl receive` will use it automatically, no --secret needed")
+			fmt.Println("bearer_secret: embedded — `cashctl receive` uses it automatically")
 		}
 	}
 
@@ -232,24 +217,35 @@ func decodeNWCURI(cmd *cobra.Command, value string, jsonMode bool) error {
 	return nil
 }
 
-// printMintSignatureStatus reports a cash token's mint-provenance pair, if
-// any — and unlike the raw HasProvenance() presence check, actually
-// verifies the signature (nipcash.VerifyProvenance) before calling it
-// "valid," so decode never tells a human a forged/corrupt signature is
-// trustworthy just because the fields are present.
-func printMintSignatureStatus(tok nipcash.Token) {
+// formatMinterStatus verifies (not just checks presence of) tok's
+// mint-provenance, so a forged/corrupt signature is never reported as
+// trustworthy just because the fields are present. Returns the "minter: ..."
+// line and, whenever there's a signature to speak of at all (valid or
+// not), the "attested_amount: ..." line to print right after it — ""
+// when there's no provenance, so the caller can skip that line entirely.
+// Shared by decode's own printMintSignatureStatus and cash_receive.go's
+// printCashBill, which need the exact same 3-state check.
+func formatMinterStatus(tok nipcash.Token) (minterLine, amountLine string) {
 	if !tok.HasProvenance() {
-		fmt.Println("mint_signature: none (unsigned token)")
-		return
+		return "minter: unknown", ""
 	}
 	minter, valid := nipcash.VerifyProvenance(tok)
 	if !valid {
-		fmt.Println("mint_signature: present but INVALID — do not trust the attested amount below")
-		fmt.Printf("attested_amount: %d %s (unverified)\n", *tok.AttestedAmountMillis, output.CurrencyUnit)
-		return
+		return "minter: INVALID SIGNATURE — don't trust attested_amount",
+			fmt.Sprintf("attested_amount: %s (unverified)", output.FormatAmount(int64(*tok.AttestedAmountMillis)))
 	}
-	fmt.Printf("mint_signature: valid — minted by %s\n", minter)
-	fmt.Printf("attested_amount: %d %s\n", *tok.AttestedAmountMillis, output.CurrencyUnit)
+	return fmt.Sprintf("minter: %s", minter),
+		fmt.Sprintf("attested_amount: %s", output.FormatAmount(int64(*tok.AttestedAmountMillis)))
+}
+
+// printMintSignatureStatus is decode's own top-level, unindented rendering
+// of formatMinterStatus's result.
+func printMintSignatureStatus(tok nipcash.Token) {
+	minterLine, amountLine := formatMinterStatus(tok)
+	fmt.Println(minterLine)
+	if amountLine != "" {
+		fmt.Println(amountLine)
+	}
 }
 
 // shouldRunCheck decides whether decode's --check network round trip
@@ -280,7 +276,7 @@ func shouldCheckCashToken(cmd *cobra.Command, jsonMode, checkFlag bool, isBearer
 	if !jsonMode && !cmd.Flags().Changed("check") {
 		if !isBearer {
 			if exists, _ := identity.Exists(); !exists {
-				fmt.Println("Skipping Hub check — this token requires an identity proof and no local identity is configured (run `cashctl init` first).")
+				fmt.Println("Skipping check — no local identity (run `cashctl init`).")
 				return false
 			}
 		}
@@ -305,7 +301,7 @@ type cashCheckResult struct {
 func checkCashTokenAgainstHub(cmd *cobra.Command, jsonMode bool, value string, tok nipcash.Token) cashCheckResult {
 	var amount uint64
 	var expiresAt *int64
-	err := WithSpinner(jsonMode, "Checking with the Hub...", func() error {
+	err := WithSpinner(jsonMode, "Checking...", func() error {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		client, err := nipcashclient.Connect(ctx, value)
@@ -347,7 +343,7 @@ func printCashCheck(r cashCheckResult) {
 		fmt.Printf("check: %s\n", r.Error)
 		return
 	}
-	fmt.Printf("check: matches a real recipient on the Hub (%d %s)\n", *r.AmountMillis, output.CurrencyUnit)
+	fmt.Printf("check: matches (%s)\n", output.FormatAmount(int64(*r.AmountMillis)))
 	if r.ExpiresAt != nil {
 		fmt.Println(formatExpiry(*r.ExpiresAt))
 	}
@@ -377,7 +373,7 @@ type circleCheckResult struct {
 }
 
 func checkCircleHubJoinable(jsonMode bool, conn nipcw.CircleHubConnection) circleCheckResult {
-	err := WithSpinner(jsonMode, "Checking with the Hub...", func() error {
+	err := WithSpinner(jsonMode, "Checking...", func() error {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		pairing := &nip47.PairingInfo{WalletPubkey: conn.WalletPubkey, RelayURLs: conn.RelayURLs, Secret: conn.Secret}
@@ -407,7 +403,7 @@ func checkCircleHubJoinable(jsonMode bool, conn nipcw.CircleHubConnection) circl
 
 func printCircleCheck(r circleCheckResult) {
 	if r.OK {
-		fmt.Println("check: reachable — this Hub supports create_circle_wallet, joining is possible")
+		fmt.Println("check: joinable")
 		return
 	}
 	fmt.Printf("check: %s\n", r.Error)

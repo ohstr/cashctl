@@ -67,6 +67,226 @@ func TestResolveConsolidateSources_BothGivenErrors(t *testing.T) {
 	}
 }
 
+// --- mergeableMinterGroups / pickMinterGroups: the no-args/no---sources
+// default's auto-detection — grouping held tokens by minter (only
+// same-minter sources can actually be merged) instead of naively trying
+// to merge everything, and letting an interactive session choose which
+// group(s) to process when more than one qualifies.
+
+// groupableEntry builds a pubkey-mode, consolidation-eligible held entry
+// (ledger.GroupableForConsolidation's own contract: known amount, known
+// minter, not bearer, not connection-key-bound) for a given minter.
+func groupableEntry(id, minter string, amountMillis uint64) ledger.Entry {
+	return ledger.Entry{
+		ID:           id,
+		Status:       ledger.StatusHeld,
+		AmountMillis: ptrTo(amountMillis),
+		MinterPubkey: ptrTo(minter),
+	}
+}
+
+func TestMergeableMinterGroups_NothingHeldIsEmpty(t *testing.T) {
+	if got := mergeableMinterGroups(nil); len(got) != 0 {
+		t.Errorf("mergeableMinterGroups(nil) = %v, want empty", got)
+	}
+}
+
+func TestMergeableMinterGroups_SingletonMinterExcluded(t *testing.T) {
+	held := []ledger.Entry{groupableEntry("tok-a", "minter-a", 1000)}
+	if got := mergeableMinterGroups(held); len(got) != 0 {
+		t.Errorf("mergeableMinterGroups(1 entry, 1 minter) = %v, want empty (nothing to merge a singleton into)", got)
+	}
+}
+
+func TestMergeableMinterGroups_TwoSameMinterTokensGroup(t *testing.T) {
+	held := []ledger.Entry{
+		groupableEntry("tok-a", "minter-a", 1000),
+		groupableEntry("tok-b", "minter-a", 2000),
+	}
+	got := mergeableMinterGroups(held)
+	if len(got) != 1 {
+		t.Fatalf("mergeableMinterGroups() = %d groups, want 1", len(got))
+	}
+	group, ok := got["minter-a"]
+	if !ok || len(group) != 2 {
+		t.Fatalf("got[\"minter-a\"] = %v, want both entries", group)
+	}
+}
+
+func TestMergeableMinterGroups_TwoDifferentMintersBothGroup(t *testing.T) {
+	held := []ledger.Entry{
+		groupableEntry("tok-a", "minter-a", 1000),
+		groupableEntry("tok-b", "minter-a", 2000),
+		groupableEntry("tok-c", "minter-b", 500),
+		groupableEntry("tok-d", "minter-b", 700),
+	}
+	got := mergeableMinterGroups(held)
+	if len(got) != 2 {
+		t.Fatalf("mergeableMinterGroups() = %d groups, want 2 (one per minter)", len(got))
+	}
+	if len(got["minter-a"]) != 2 || len(got["minter-b"]) != 2 {
+		t.Errorf("got = %v, want 2 entries in each minter's group", got)
+	}
+}
+
+func TestMergeableMinterGroups_MixOfSingletonAndGroupableExcludesSingleton(t *testing.T) {
+	held := []ledger.Entry{
+		groupableEntry("tok-a", "minter-a", 1000), // alone under minter-a
+		groupableEntry("tok-b", "minter-b", 500),
+		groupableEntry("tok-c", "minter-b", 700),
+	}
+	got := mergeableMinterGroups(held)
+	if len(got) != 1 {
+		t.Fatalf("mergeableMinterGroups() = %d groups, want 1 (minter-a's lone token excluded)", len(got))
+	}
+	if _, ok := got["minter-a"]; ok {
+		t.Error("minter-a (a singleton) present in result, want excluded")
+	}
+}
+
+func TestMergeableMinterGroups_BearerAndConnectionKeyEntriesExcluded(t *testing.T) {
+	bearer := groupableEntry("tok-a", "minter-a", 1000)
+	bearer.IdentityRequired = ptrTo(false)
+	connKey := groupableEntry("tok-b", "minter-a", 1000)
+	connKey.ConnectionKeyPlatform = "some-platform"
+	held := []ledger.Entry{bearer, connKey, groupableEntry("tok-c", "minter-a", 1000)}
+
+	got := mergeableMinterGroups(held)
+	if len(got) != 0 {
+		t.Errorf("mergeableMinterGroups() = %v, want empty (bearer/connection-key entries aren't groupable, leaving only 1 eligible entry for minter-a)", got)
+	}
+}
+
+func TestPickMinterGroups_JSONModeReturnsAllWithoutPrompting(t *testing.T) {
+	cmd := testCmdWithFlags(true, false)
+	groups := map[string][]ledger.Entry{
+		"minter-a": {groupableEntry("tok-a", "minter-a", 1000), groupableEntry("tok-b", "minter-a", 1000)},
+		"minter-b": {groupableEntry("tok-c", "minter-b", 500), groupableEntry("tok-d", "minter-b", 500)},
+	}
+	got, err := pickMinterGroups(cmd, groups)
+	if err != nil {
+		t.Fatalf("pickMinterGroups() error = %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("pickMinterGroups() = %d groups, want 2 (every qualifying group, no terminal to prompt from)", len(got))
+	}
+}
+
+func TestPickMinterGroups_YesFlagReturnsAllWithoutPrompting(t *testing.T) {
+	cmd := testCmdWithFlags(false, true)
+	groups := map[string][]ledger.Entry{
+		"minter-a": {groupableEntry("tok-a", "minter-a", 1000), groupableEntry("tok-b", "minter-a", 1000)},
+		"minter-b": {groupableEntry("tok-c", "minter-b", 500), groupableEntry("tok-d", "minter-b", 500)},
+	}
+	got, err := pickMinterGroups(cmd, groups)
+	if err != nil {
+		t.Fatalf("pickMinterGroups() error = %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("pickMinterGroups() = %d groups, want 2", len(got))
+	}
+}
+
+func TestPickMinterGroups_SingleGroupNeedsNoPrompt(t *testing.T) {
+	// No stdin queued at all — if this fell through to PromptLine, reading
+	// from an empty reader would hang/EOF instead of just returning.
+	cmd := testCmdWithFlags(false, false)
+	groups := map[string][]ledger.Entry{
+		"minter-a": {groupableEntry("tok-a", "minter-a", 1000), groupableEntry("tok-b", "minter-a", 1000)},
+	}
+	got, err := pickMinterGroups(cmd, groups)
+	if err != nil {
+		t.Fatalf("pickMinterGroups() error = %v", err)
+	}
+	if len(got) != 1 || len(got[0]) != 2 {
+		t.Fatalf("pickMinterGroups() = %v, want the single group untouched", got)
+	}
+}
+
+func TestPickMinterGroups_InteractiveBareEnterPicksAll(t *testing.T) {
+	stubStdin(t, "\n")
+	cmd := testCmdWithFlags(false, false)
+	groups := map[string][]ledger.Entry{
+		"minter-a": {groupableEntry("tok-a", "minter-a", 1000), groupableEntry("tok-b", "minter-a", 1000)},
+		"minter-b": {groupableEntry("tok-c", "minter-b", 500), groupableEntry("tok-d", "minter-b", 500)},
+	}
+	var got [][]ledger.Entry
+	var err error
+	withStdoutSuppressed(func() {
+		got, err = pickMinterGroups(cmd, groups)
+	})
+	if err != nil {
+		t.Fatalf("pickMinterGroups() error = %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("pickMinterGroups(bare Enter) = %d groups, want 2 (all)", len(got))
+	}
+}
+
+func TestPickMinterGroups_InteractivePicksSpecificByNumber(t *testing.T) {
+	stubStdin(t, "2\n")
+	cmd := testCmdWithFlags(false, false)
+	groups := map[string][]ledger.Entry{
+		"minter-a": {groupableEntry("tok-a", "minter-a", 1000), groupableEntry("tok-b", "minter-a", 1000)},
+		"minter-b": {groupableEntry("tok-c", "minter-b", 500), groupableEntry("tok-d", "minter-b", 500)},
+	}
+	var got [][]ledger.Entry
+	var err error
+	withStdoutSuppressed(func() {
+		got, err = pickMinterGroups(cmd, groups)
+	})
+	if err != nil {
+		t.Fatalf("pickMinterGroups() error = %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("pickMinterGroups(\"2\") = %d groups, want 1", len(got))
+	}
+	// sortedMinterKeys orders alphabetically: minter-a=1, minter-b=2.
+	if got[0][0].MinterPubkey == nil || *got[0][0].MinterPubkey != "minter-b" {
+		t.Errorf("pickMinterGroups(\"2\") picked minter %v, want minter-b", got[0][0].MinterPubkey)
+	}
+}
+
+func TestPickMinterGroups_InvalidChoiceErrors(t *testing.T) {
+	stubStdin(t, "9\n")
+	cmd := testCmdWithFlags(false, false)
+	groups := map[string][]ledger.Entry{
+		"minter-a": {groupableEntry("tok-a", "minter-a", 1000), groupableEntry("tok-b", "minter-a", 1000)},
+		"minter-b": {groupableEntry("tok-c", "minter-b", 500), groupableEntry("tok-d", "minter-b", 500)},
+	}
+	var err error
+	withStdoutSuppressed(func() {
+		_, err = pickMinterGroups(cmd, groups)
+	})
+	if err == nil {
+		t.Fatal("expected an error for an out-of-range choice")
+	}
+}
+
+// TestPickMinterGroups_NeverPrintsRawID is the consolidate-side regression
+// guard docs/private/wallet-abstraction-plan.md calls for: a human
+// choosing among minter groups sees index + token count + total amount,
+// never a raw ledger.Entry.ID (mirrors TestPickHeldToken_NeverPrintsRawID
+// in cash_redeem_test.go for the identical concern in the single-select
+// picker).
+func TestPickMinterGroups_NeverPrintsRawID(t *testing.T) {
+	stubStdin(t, "1\n")
+	cmd := testCmdWithFlags(false, false)
+	groups := map[string][]ledger.Entry{
+		"minter-a": {groupableEntry("tok-a", "minter-a", 1000), groupableEntry("tok-b", "minter-a", 1000)},
+		"minter-b": {groupableEntry("tok-c", "minter-b", 500), groupableEntry("tok-d", "minter-b", 500)},
+	}
+	printed := withCapturedStdout(func() {
+		_, _ = pickMinterGroups(cmd, groups)
+	})
+	if strings.Contains(printed, "tok-") {
+		t.Fatalf("pickMinterGroups printed a raw ledger ID:\n%s", printed)
+	}
+	if !strings.Contains(printed, "2 tokens") {
+		t.Fatalf("pickMinterGroups didn't print the expected group summary:\n%s", printed)
+	}
+}
+
 // --- doCashConsolidate: the dial-candidate retry policy, exercised with no
 // network via attemptCashConsolidateFn (a package-var seam, the same
 // pattern prompt.go's own stdin uses for PromptLine/Confirm) instead of a

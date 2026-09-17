@@ -19,16 +19,19 @@ import (
 
 func newCashTransferCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "transfer [target] [amount]",
+		Use:   "transfer [amount] [target]",
 		Short: "Send a held cash token, in full or split",
-		Args:  output.MaximumNArgs(2),
-		RunE:  runCashTransfer,
+		Example: `  cashctl transfer 5
+  cashctl transfer 5 <pubkey>
+  cashctl transfer alice@example.com --amount 2`,
+		Args: output.MaximumNArgs(2),
+		RunE: runCashTransfer,
 	}
 	cmd.Flags().String("token", "", "which held token to transfer (auto-picked if you only hold one)")
-	cmd.Flags().String("to", "", "recipient — a hex pubkey, npub1..., name@domain (NIP-05), an nconnection1..., bearer-target, or the advanced pubkey:/connection: forms; same as the positional argument, kept for scripted/agentic use")
-	cmd.Flags().Uint64("split", 0, fmt.Sprintf("split off this much (%s), keeping the rest — 0 transfers it all; same as the positional amount, kept for scripted/agentic use", output.CurrencyUnit))
+	cmd.Flags().String("to", "", "recipient — hex pubkey, npub1..., name@domain, nconnection1..., bearer-target, or pubkey:/connection: forms")
+	cmd.Flags().String("amount", "", fmt.Sprintf("how much to send, in %s — omitted sends the whole held token", output.CurrencyUnit))
 	cmd.Flags().String("as", "", "override credential")
-	cmd.Flags().String("ia", "", "Identity Authority to trust (hex pubkey or NIP-05) for an nconnection1... target that doesn't specify one")
+	cmd.Flags().String("ia", "", "Identity Authority to trust (hex pubkey or name@domain) for an nconnection1... target that doesn't specify one")
 	return cmd
 }
 
@@ -140,10 +143,10 @@ func expiryWarningSuffix(expiresAt *int64, verb string) string {
 	remaining := time.Until(time.Unix(*expiresAt, 0))
 	const soon = 24 * time.Hour
 	if remaining <= 0 {
-		return fmt.Sprintf(" WARNING: this token's Hub deadline has already passed — this %s will likely be rejected.", verb)
+		return "Deadline passed — may fail."
 	}
 	if remaining < soon {
-		return fmt.Sprintf(" WARNING: this token expires in %s — %s it now or it may become unusable.", remaining.Round(time.Minute), verb)
+		return fmt.Sprintf("Expires in %s — %s now.", remaining.Round(time.Minute), verb)
 	}
 	return ""
 }
@@ -193,14 +196,17 @@ func transferWithAutoConsolidate(cmd *cobra.Command, l *ledger.Ledger, group []l
 		return output.RuntimeError(cmd, err)
 	}
 
-	sum := ledger.SumAmounts(group)
-	message := fmt.Sprintf("This will first consolidate %d tokens (%d %s total) into one, then send %d %s to %s",
-		len(group), sum, output.CurrencyUnit, sendAmount, output.CurrencyUnit, toValue)
-	if sum > sendAmount {
-		message += fmt.Sprintf(", keeping %d %s as a new token for you", sum-sendAmount, output.CurrencyUnit)
-	}
 	jsonMode, _ := cmd.Flags().GetBool("json")
 	yesFlag, _ := cmd.Flags().GetBool("yes")
+
+	displayTarget := toValue
+	if _, ok := target.Target.(*nipcash.BearerTarget); ok {
+		displayTarget = "whoever holds this"
+	}
+
+	sum := ledger.SumAmounts(group)
+	message := fmt.Sprintf("Consolidate %d tokens (%s) then send %s to %s?",
+		len(group), output.FormatAmount(int64(sum)), output.FormatAmount(int64(sendAmount)), displayTarget)
 	if !jsonMode && !yesFlag {
 		// Best-effort, interactive-only — see fetchExpiresAt's own doc
 		// comment on why this applies here too, not just to cash_redeem.
@@ -221,34 +227,43 @@ func transferWithAutoConsolidate(cmd *cobra.Command, l *ledger.Ledger, group []l
 		// — worth knowing before committing, not after.
 		var earliest *int64
 		var anyExpired bool
-		for i := range group {
-			ea := fetchExpiresAt(cmd, group[i].Token)
-			earliest = earliestExpiry(earliest, ea)
-			if ea != nil && time.Until(time.Unix(*ea, 0)) <= 0 {
-				anyExpired = true
+		_ = WithSpinner(jsonMode, "Checking expiry...", func() error {
+			for i := range group {
+				ea := fetchExpiresAt(cmd, group[i].Token)
+				earliest = earliestExpiry(earliest, ea)
+				if ea != nil && time.Until(time.Unix(*ea, 0)) <= 0 {
+					anyExpired = true
+				}
 			}
-		}
+			return nil
+		})
 		if anyExpired {
-			message += " WARNING: one of these has already expired — the merge will still go through, but the transfer onward will then fail (it has to act through the just-merged, already-expired wallet); your funds will land in a new held token instead of reaching the recipient."
-		} else {
-			message += expiryWarningSuffix(earliest, "transfer")
+			fmt.Println("One source is expired — merge succeeds but the transfer onward will fail; funds land in a new held token instead.")
+		} else if w := expiryWarningSuffix(earliest, "transfer"); w != "" {
+			fmt.Println(w)
 		}
 	}
 	// defaultYes=false: moves real money — never accept on a bare Enter.
-	if !Confirm(cmd, false, message+". Continue?") {
+	if !Confirm(cmd, false, message) {
 		fmt.Println("Cancelled.")
 		return nil
 	}
 
 	var sources []nipcash.Source
 	sourceIDs := make([]string, len(group))
-	for i := range group {
-		src, err := sourceFromEntry(cmd, l, &group[i])
-		if err != nil {
-			return err
+	err = WithSpinner(jsonMode, "Preparing sources...", func() error {
+		for i := range group {
+			src, sErr := sourceFromEntry(cmd, l, &group[i])
+			if sErr != nil {
+				return sErr
+			}
+			sources = append(sources, src)
+			sourceIDs[i] = group[i].ID
 		}
-		sources = append(sources, src)
-		sourceIDs[i] = group[i].ID
+		return nil
+	})
+	if err != nil {
+		return err
 	}
 
 	interimCred, err := localCashCredential(cmd)
@@ -293,7 +308,12 @@ func transferWithAutoConsolidate(cmd *cobra.Command, l *ledger.Ledger, group []l
 	for i := range group {
 		dialCandidates[i] = group[i].Token
 	}
-	result, ffsErr := attemptTransferFromSourcesWithRetry(dialCandidates, params)
+	var result *nipcashclient.TransferFromSourcesResult
+	var ffsErr error
+	_ = WithSpinner(jsonMode, "Transferring...", func() error {
+		result, ffsErr = attemptTransferFromSourcesWithRetry(dialCandidates, params)
+		return nil
+	})
 	if ffsErr == nil {
 		// Full success: the interim wallet was spent again by the very
 		// same call, within milliseconds of existing — it never needs
@@ -308,7 +328,7 @@ func transferWithAutoConsolidate(cmd *cobra.Command, l *ledger.Ledger, group []l
 		// prior test ever tried to actually receive an
 		// auto-consolidated transfer's result on the other end).
 		markSourcesConsolidated(l, sourceIDs, result.ConsolidatedFirst.AmountMillis)
-		return printAndSaveTransferResult(cmd, l, result.Transfer, sendAmount, toValue, target.Resolved, sourceIDs)
+		return printAndSaveTransferResult(cmd, l, result.Transfer, sendAmount, toValue, target, sourceIDs)
 	}
 
 	var partial *nipcashclient.PartialProgressError
@@ -411,16 +431,21 @@ func markSourcesConsolidated(l *ledger.Ledger, sourceIDs []string, amountMillis 
 	for _, id := range sourceIDs {
 		_ = l.SetStatus(id, ledger.StatusConsolidated)
 	}
-	l.AppendHistory("consolidate", fmt.Sprintf("consolidated %d tokens into one %d %s note", len(sourceIDs), amountMillis, output.CurrencyUnit))
+	l.AppendHistory("consolidate", fmt.Sprintf("consolidated %d tokens into one %s note", len(sourceIDs), output.FormatAmount(int64(amountMillis))))
 }
 
 // printAndSaveTransferResult applies a completed cash_transfer call's
 // ledger effects and renders cashctl's own output — shared by the plain
 // single-source path and transferWithAutoConsolidate, since both end in
 // exactly the same "one CashTransferResult, maybe a remainder" shape.
-func printAndSaveTransferResult(cmd *cobra.Command, l *ledger.Ledger, transferResult *nipcash.CashTransferResult, sentAmount uint64, toValue, targetResolved string, consolidatedFrom []string) error {
+// target is accepted (not just its Resolved string) so a bearer target's
+// combined <token>#<secret> string — the actual thing the recipient
+// needs — can be assembled here, since only this function ever sees
+// transferResult.NewWalletToken (the token half; the secret half was
+// already known at confirm time via target.Target's own BearerTarget).
+func printAndSaveTransferResult(cmd *cobra.Command, l *ledger.Ledger, transferResult *nipcash.CashTransferResult, sentAmount uint64, toValue string, target credential.ResolvedTarget, consolidatedFrom []string) error {
 	jsonMode, _ := cmd.Flags().GetBool("json")
-	l.AppendHistory("transfer", fmt.Sprintf("transferred %d %s to %s", sentAmount, output.CurrencyUnit, toValue))
+	l.AppendHistory("transfer", fmt.Sprintf("transferred %s to %s", output.FormatAmount(int64(sentAmount)), toValue))
 
 	var remainderEntry *ledger.Entry
 	if transferResult.RemainderWalletToken != "" {
@@ -429,7 +454,7 @@ func printAndSaveTransferResult(cmd *cobra.Command, l *ledger.Ledger, transferRe
 			remainderEntry.AmountMillis = transferResult.RemainingAmountMillis
 		}
 		if remainderEntry.AmountMillis != nil {
-			l.AppendHistory("transfer", fmt.Sprintf("kept remainder of %d %s as a new token", *remainderEntry.AmountMillis, output.CurrencyUnit))
+			l.AppendHistory("transfer", fmt.Sprintf("kept remainder of %s as a new token", output.FormatAmount(int64(*remainderEntry.AmountMillis))))
 		} else {
 			l.AppendHistory("transfer", "kept remainder as a new token")
 		}
@@ -438,13 +463,26 @@ func printAndSaveTransferResult(cmd *cobra.Command, l *ledger.Ledger, transferRe
 		return output.RuntimeError(cmd, err)
 	}
 
+	// For a bearer target there's no recipient identity — the recipient
+	// is whoever holds the combined token#secret string, so that's what
+	// gets displayed/returned in its place. toValue itself (the literal
+	// "bearer-target"/user input) still goes to AppendHistory above
+	// unchanged — only this display/--json substitution uses the
+	// assembled string.
+	displayTo := toValue
+	var cashToSend string
+	if bt, ok := target.Target.(*nipcash.BearerTarget); ok && transferResult.NewWalletToken != "" {
+		cashToSend = fmt.Sprintf("%s#%s", transferResult.NewWalletToken, bt.Secret())
+		displayTo = cashToSend
+	}
+
 	if jsonMode {
 		// nipcash.CashTransferResult has no JSON tags of its own (an
 		// internal SDK type, not a wire DTO) — built explicitly here so
 		// --json output stays snake_case like every other cashctl command's,
 		// instead of leaking Go field names (see cash_inspect.go's decode
 		// command for the same fix).
-		output.PrintJSON(map[string]any{
+		out := map[string]any{
 			"amount_millis":           transferResult.AmountMillis,
 			"identity_type":           transferResult.IdentityType,
 			"identity_value":          transferResult.IdentityValue,
@@ -452,49 +490,78 @@ func printAndSaveTransferResult(cmd *cobra.Command, l *ledger.Ledger, transferRe
 			"new_wallet_pubkey":       transferResult.NewWalletPubkey,
 			"new_wallet_token":        transferResult.NewWalletToken,
 			"remainder_entry":         remainderEntry,
-			"target_resolved":         targetResolved,
+			"target_resolved":         target.Resolved,
 			"consolidated_from":       consolidatedFrom,
-		})
+		}
+		if cashToSend != "" {
+			out["cash_to_send"] = cashToSend
+		}
+		output.PrintJSON(out)
 		return nil
 	}
-	if remainderEntry != nil {
-		kept := uint64(0)
-		if remainderEntry.AmountMillis != nil {
-			kept = *remainderEntry.AmountMillis
-		}
-		fmt.Printf("Sent %d %s to %s, keeping %d %s as a new token for you.\n", sentAmount, output.CurrencyUnit, toValue, kept, output.CurrencyUnit)
-	} else {
-		fmt.Printf("Transferred %d %s to %s.\n", sentAmount, output.CurrencyUnit, toValue)
-	}
+	// A remainder left over from a split is saved above regardless — never
+	// narrated here. Same reasoning as the pre-transfer confirm message:
+	// this is wallet mechanism, not something the user decided, and it's
+	// always visible afterward via `cashctl wallet show`/`wallet balance`.
+	fmt.Printf("Transferred %s to %s.\n", output.FormatAmount(int64(sentAmount)), displayTo)
 	return nil
+}
+
+// disambiguateTransferArgs decides which of transfer's up-to-2 positional
+// args is the target and which is the amount — sniffed by shape, not
+// position: every real target (hex pubkey, npub1..., a name@domain,
+// nconnection1..., "bearer-target", or the pubkey:/connection: forms)
+// fails output.ParseAmount, so anything that parses as a loki amount
+// (whole or fractional, e.g. "500" or "0.5") can only ever be the amount.
+// This is what lets `cashctl transfer 500` (no target at all) work instead
+// of failing to parse "500" as a target, and — with two args — lets both
+// `cashctl transfer 5000 <target>` (the documented order) and `cashctl
+// transfer <target> 5000` (the old order) resolve the same way, since
+// whichever side parses as an amount is the amount. Pure and cobra-free
+// so it's unit-testable directly, mirroring resolveConsolidateSources's
+// own reasoning in cash_consolidate.go.
+func disambiguateTransferArgs(args []string) (positionalTo, positionalAmount string) {
+	switch len(args) {
+	case 1:
+		if _, numErr := output.ParseAmount(args[0]); numErr == nil {
+			positionalAmount = args[0]
+		} else {
+			positionalTo = args[0]
+		}
+	case 2:
+		if _, numErr := output.ParseAmount(args[0]); numErr == nil {
+			positionalAmount, positionalTo = args[0], args[1]
+		} else {
+			positionalTo, positionalAmount = args[0], args[1]
+		}
+	}
+	return positionalTo, positionalAmount
 }
 
 func runCashTransfer(cmd *cobra.Command, args []string) error {
 	jsonMode, _ := cmd.Flags().GetBool("json")
 	toFlagValue, _ := cmd.Flags().GetString("to")
-	splitFlagValue, _ := cmd.Flags().GetUint64("split")
+	amountFlagValue, _ := cmd.Flags().GetString("amount")
 
-	var positionalTo, positionalAmount string
-	if len(args) > 0 {
-		positionalTo = args[0]
-	}
-	if len(args) > 1 {
-		positionalAmount = args[1]
-	}
+	positionalTo, positionalAmount := disambiguateTransferArgs(args)
 
 	toValue, err := resolvePositionalOrFlag(cmd, positionalTo, "to", toFlagValue)
 	if err != nil {
 		return err
 	}
-	// Checked explicitly (not cobra's own MarkFlagRequired) so a missing
-	// destination is a classified UsageError — see cash_consolidate.go's
-	// own comment on --sources for why.
-	if toValue == "" {
-		return output.UsageError(cmd, fmt.Errorf("a destination is required — pass it directly (cashctl transfer <target>) or via --to"))
-	}
-	splitFlag, err := resolvePositionalOrFlagUint64(cmd, positionalAmount, "split", splitFlagValue)
+	amountFlag, err := resolvePositionalOrFlagAmount(cmd, positionalAmount, "amount", amountFlagValue)
 	if err != nil {
 		return err
+	}
+	// No target given at all, but an amount was: default to a bearer note
+	// instead of erroring — "just an amount, share the result with
+	// whoever" is a complete, valid request, not a usage mistake. An
+	// explicit --to/positional target still always wins when given.
+	if toValue == "" {
+		if amountFlag == 0 {
+			return output.UsageError(cmd, fmt.Errorf("a destination is required — pass it directly (cashctl transfer <target>) or via --to"))
+		}
+		toValue = "bearer-target"
 	}
 
 	target, err := resolveTarget(cmd, toValue)
@@ -512,7 +579,7 @@ func runCashTransfer(cmd *cobra.Command, args []string) error {
 
 	tokenFlag, _ := cmd.Flags().GetString("token")
 	var entry *ledger.Entry
-	if tokenFlag == "" && splitFlag > 0 && len(l.Held()) > 0 {
+	if tokenFlag == "" && amountFlag > 0 && len(l.Held()) > 0 {
 		// A target amount was given and no specific token was pinned —
 		// cash selection decides which held token(s) reach it exactly,
 		// instead of resolveHeldToken's plain single-entry pick (see
@@ -520,12 +587,12 @@ func runCashTransfer(cmd *cobra.Command, args []string) error {
 		// held: with nothing held at all, resolveHeldToken's own "receive
 		// one first" error below is the clearer message — cash selection
 		// would otherwise report a confusing "0 total, funds fragmented."
-		plan, err := ledger.SelectForAmount(l.Held(), splitFlag)
+		plan, err := ledger.SelectForAmount(l.Held(), amountFlag)
 		if err != nil {
 			return output.UsageError(cmd, err)
 		}
 		if len(plan.ConsolidateFirst) > 0 {
-			return transferWithAutoConsolidate(cmd, l, plan.ConsolidateFirst, splitFlag, toValue, target)
+			return transferWithAutoConsolidate(cmd, l, plan.ConsolidateFirst, amountFlag, toValue, target)
 		}
 		liveEntry, err := resolveLiveEntry(l, plan.Entry.ID)
 		if err != nil {
@@ -533,7 +600,7 @@ func runCashTransfer(cmd *cobra.Command, args []string) error {
 		}
 		entry = liveEntry
 		if !plan.Split {
-			splitFlag = 0
+			amountFlag = 0
 		}
 	} else {
 		e, err := resolveHeldToken(cmd, l)
@@ -550,13 +617,30 @@ func runCashTransfer(cmd *cobra.Command, args []string) error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	client, err := nipcashclient.Connect(ctx, entry.Token)
+
+	var client *nipcashclient.Client
+	err = WithSpinner(jsonMode, "Connecting...", func() error {
+		c, cErr := nipcashclient.Connect(ctx, entry.Token)
+		if cErr != nil {
+			return cErr
+		}
+		client = c
+		return nil
+	})
 	if err != nil {
 		return output.NetworkError(cmd, err)
 	}
 	defer client.Close()
 
-	amount, err := resolveAmount(cmd, l, entry, client)
+	var amount uint64
+	err = WithSpinner(jsonMode, "Checking amount...", func() error {
+		a, aErr := resolveAmount(cmd, l, entry, client)
+		if aErr != nil {
+			return aErr
+		}
+		amount = a
+		return nil
+	})
 	if err != nil {
 		return err
 	}
@@ -565,40 +649,59 @@ func runCashTransfer(cmd *cobra.Command, args []string) error {
 	var expiresAt *int64
 	if !jsonMode && !yesFlag {
 		// Best-effort, never blocks — see fetchExpiresAt's own doc comment.
-		expiresAt = fetchExpiresAt(cmd, entry.Token)
+		_ = WithSpinner(jsonMode, "Checking expiry...", func() error {
+			expiresAt = fetchExpiresAt(cmd, entry.Token)
+			return nil
+		})
+	}
+
+	displayTarget := toValue
+	if _, ok := target.Target.(*nipcash.BearerTarget); ok {
+		displayTarget = "whoever holds this"
 	}
 
 	var splitAmount *uint64
 	sentAmount := amount
-	message := fmt.Sprintf("This will transfer %d %s to %s.", amount, output.CurrencyUnit, toValue)
-	if splitFlag > 0 {
-		splitAmount = &splitFlag
-		sentAmount = splitFlag
-		if splitFlag > amount {
-			// amount-splitFlag would underflow (uint64) into a huge
-			// nonsensical "keeping" figure — name the real shortfall.
-			message = fmt.Sprintf("This asks to send %d %s to %s, but the held token only has %d %s — the Hub will refuse this.", splitFlag, output.CurrencyUnit, toValue, amount, output.CurrencyUnit)
-		} else {
-			remainder := amount - splitFlag
-			message = fmt.Sprintf("This sends %d %s to %s, keeping %d %s as a new token for you.", splitFlag, output.CurrencyUnit, toValue, remainder, output.CurrencyUnit)
+	sendAmount := amount
+	if amountFlag > 0 {
+		if amountFlag > amount {
+			return output.UsageError(cmd, fmt.Errorf("can't send %s to %s — held token only has %s", output.FormatAmount(int64(amountFlag)), displayTarget, output.FormatAmount(int64(amount))))
 		}
+		splitAmount = &amountFlag
+		sentAmount = amountFlag
+		sendAmount = amountFlag
 	}
-	message += expiryWarningSuffix(expiresAt, "transfer")
+	// Splitting off a partial amount and keeping the rest as a new token is
+	// mechanism, not a decision — same as a Bitcoin wallet not asking
+	// "keep the change?" before spending a UTXO bigger than the payment.
+	// The confirmation only ever names what's actually being sent.
+	message := fmt.Sprintf("Transfer %s to %s?", output.FormatAmount(int64(sendAmount)), displayTarget)
+	if w := expiryWarningSuffix(expiresAt, "transfer"); w != "" {
+		fmt.Println(w)
+	}
 	// defaultYes=false: moves real money — never accept on a bare Enter.
-	if !Confirm(cmd, false, message+" Continue?") {
+	if !Confirm(cmd, false, message) {
 		fmt.Println("Cancelled.")
 		return nil
 	}
 
-	result, err := client.CashTransfer(ctx, nipcash.CashTransferParams{
-		Credential: cred, To: target.Target, CurrentAmount: amount, SplitAmount: splitAmount,
+	var result *nipcash.CashTransferResult
+	err = WithSpinner(jsonMode, "Transferring...", func() error {
+		r, cErr := client.CashTransfer(ctx, nipcash.CashTransferParams{
+			Credential: cred, To: target.Target, CurrentAmount: amount, SplitAmount: splitAmount,
+		})
+		if cErr != nil {
+			return cErr
+		}
+		result = r
+		return nil
 	})
 	if err != nil {
 		return classifyNWCErr(cmd, err)
 	}
 
 	_ = l.SetStatus(entry.ID, ledger.StatusTransferred)
-	return printAndSaveTransferResult(cmd, l, result, sentAmount, toValue, target.Resolved, nil)
+	return printAndSaveTransferResult(cmd, l, result, sentAmount, toValue, target, nil)
 }
 
 // resolveLiveEntry re-resolves id against l itself and returns the result —

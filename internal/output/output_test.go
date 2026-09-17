@@ -41,3 +41,88 @@ func TestSanitize_EmptyString(t *testing.T) {
 		t.Errorf("Sanitize(\"\") = %q, want empty", got)
 	}
 }
+
+func TestFormatAmount(t *testing.T) {
+	cases := []struct {
+		mloki int64
+		want  string
+	}{
+		{0, "0 loki"},
+		{1000, "1 loki"},
+		{1500, "1.5 loki"},
+		{1005, "1.005 loki"},
+		{1050, "1.05 loki"},
+		{999, "0.999 loki"},
+		{1, "0.001 loki"},
+		{-1500, "-1.5 loki"},
+		{10_000_000, "10000 loki"},
+	}
+	for _, c := range cases {
+		if got := FormatAmount(c.mloki); got != c.want {
+			t.Errorf("FormatAmount(%d) = %q, want %q", c.mloki, got, c.want)
+		}
+	}
+}
+
+func TestParseAmount(t *testing.T) {
+	cases := []struct {
+		in   string
+		want uint64
+	}{
+		{"0", 0},
+		{"5", 5000},
+		{"0.5", 500},
+		{"1.234", 1234},
+		{"0.001", 1},
+		{"10000", 10_000_000},
+		{"1.5", 1500},
+		{"1.05", 1050},
+		{"  5  ", 5000}, // surrounding whitespace trimmed, matching resolvePositionalOrFlag's own convention
+	}
+	for _, c := range cases {
+		got, err := ParseAmount(c.in)
+		if err != nil {
+			t.Errorf("ParseAmount(%q) error = %v, want nil", c.in, err)
+			continue
+		}
+		if got != c.want {
+			t.Errorf("ParseAmount(%q) = %d, want %d", c.in, got, c.want)
+		}
+	}
+}
+
+func TestParseAmount_RejectsInvalid(t *testing.T) {
+	for _, in := range []string{
+		"", "   ", "-5", "abc", "1.2.3", "1.", "1.2345", "5 loki", "5,000",
+	} {
+		if _, err := ParseAmount(in); err == nil {
+			t.Errorf("ParseAmount(%q) = nil error, want an error", in)
+		}
+	}
+}
+
+func TestParseAmount_LeadingDotIsHalfALoki(t *testing.T) {
+	// ".5" (no leading "0") is a common shorthand — accepted the same as
+	// "0.5", not treated as a missing whole part.
+	got, err := ParseAmount(".5")
+	if err != nil {
+		t.Fatalf("ParseAmount(\".5\") error = %v", err)
+	}
+	if got != 500 {
+		t.Errorf("ParseAmount(\".5\") = %d, want 500", got)
+	}
+}
+
+func TestParseAmount_RoundTripsWithFormatAmount(t *testing.T) {
+	for _, mloki := range []int64{0, 1, 5, 999, 1000, 1234, 10_000_000} {
+		formatted := FormatAmount(mloki)
+		loki := strings.TrimSuffix(formatted, " loki")
+		got, err := ParseAmount(loki)
+		if err != nil {
+			t.Fatalf("ParseAmount(%q) (from FormatAmount(%d)) error = %v", loki, mloki, err)
+		}
+		if int64(got) != mloki {
+			t.Errorf("ParseAmount(FormatAmount(%d)) = %d, want %d", mloki, got, mloki)
+		}
+	}
+}

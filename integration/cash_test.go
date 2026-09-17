@@ -591,7 +591,7 @@ func TestCashTransfer_Full(t *testing.T) {
 	targetHex := fakeHex32(t)
 	transferResp := f.mustJSON("transfer", "--to", "pubkey:"+targetHex, "--yes")
 	if transferResp["remaining_amount_millis"] != nil {
-		t.Errorf("transfer (full, no --split): expected no remaining_amount_millis, got %v", transferResp["remaining_amount_millis"])
+		t.Errorf("transfer (full, no --amount): expected no remaining_amount_millis, got %v", transferResp["remaining_amount_millis"])
 	}
 
 	// A full transfer to a pubkey/connection-key target is an IN-PLACE
@@ -662,7 +662,7 @@ func TestCashTransfer_Split(t *testing.T) {
 	}
 
 	targetHex := fakeHex32(t)
-	transferResp := f.mustJSON("transfer", "--to", "pubkey:"+targetHex, "--split", "200000", "--yes")
+	transferResp := f.mustJSON("transfer", "--to", "pubkey:"+targetHex, "--amount", "200", "--yes")
 	remaining, _ := transferResp["remaining_amount_millis"].(float64)
 	if uint64(remaining) != remainderMillis {
 		t.Errorf("remaining_amount_millis = %v, want %d", transferResp["remaining_amount_millis"], remainderMillis)

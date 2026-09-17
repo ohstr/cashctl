@@ -113,7 +113,7 @@ func TestPickHeldToken_NeverPrintsRawID(t *testing.T) {
 	if strings.Contains(printed, "tok-") {
 		t.Fatalf("pickHeldToken printed a raw ledger ID:\n%s", printed)
 	}
-	if !strings.Contains(printed, "1000 loki") {
+	if !strings.Contains(printed, "1 loki") {
 		t.Fatalf("pickHeldToken didn't print the expected amount:\n%s", printed)
 	}
 }
@@ -317,7 +317,7 @@ func TestPreviewSuffix_FeeOnlyMentionedWhenNonZero(t *testing.T) {
 		t.Errorf("previewSuffix() with no fee/expiry = %q, want empty", got)
 	}
 	got := previewSuffix(redeemQuote{AmountMillis: 1000, RedeemFeeMillis: 100, NetRedeemableMillis: 900})
-	if !strings.Contains(got, "900") || !strings.Contains(got, "fee") {
-		t.Errorf("previewSuffix() with a nonzero fee = %q, want it to mention the fee and the net (900) amount", got)
+	if !strings.Contains(got, "0.9 loki") || !strings.Contains(got, "Fee") {
+		t.Errorf("previewSuffix() with a nonzero fee = %q, want it to mention the fee and the net (900 mloki = 0.9 loki) amount", got)
 	}
 }

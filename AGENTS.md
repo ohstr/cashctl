@@ -2,7 +2,7 @@
 
 `cashctl` is a Go CLI wallet for [NIP-CASH](https://github.com/flokiorg/lokihub/blob/main/docs/nips/NIP-CASH.md)
 cash tokens and [NIP-CW](https://github.com/flokiorg/lokihub/blob/main/docs/nips/NIP-CW.md)
-circle wallets — for someone who doesn't run a Hub or node themselves.
+circle wallets.
 Assume the `cashctl` binary is already on `PATH`. State (identity, registered
 wallets, held tokens) lives under `$XDG_CONFIG_HOME/cashctl`, overridable with
 `--config-dir`.
@@ -12,8 +12,8 @@ wallets, held tokens) lives under `$XDG_CONFIG_HOME/cashctl`, overridable with
 | Command | Purpose |
 |---|---|
 | `cashctl init` | Set up your identity (reusing an ncli vault entry if you have one) and optionally a default wallet |
-| `cashctl join <hub-connection>` | Join a circle via its Circle Hub connection (`circlehub1...` or a raw NWC URI), creating a personal wallet. `--hub <connection>` is equivalent, for scripted/agentic use |
-| `cashctl circle create <hub-connection>` | Same as `join` — the canonical, fully-namespaced form |
+| `cashctl join <hub-connection> <max-amount>` | Join a circle via its Circle Hub connection (`circlehub1...` or a raw NWC URI) and a requested spend cap in loki — both positional, either order, or `--hub`/`--max-amount`. A cap is required; NIP-CW has no "0 means unlimited" convention |
+| `cashctl circle join <hub-connection> <max-amount>` | Same as `join` — the canonical, fully-namespaced form |
 | `cashctl wallet show` | Your identity, registered wallets, and held cash tokens |
 | `cashctl wallet history` | Local action log (receive/redeem/transfer/consolidate) |
 | `cashctl wallet use <name>` / `cashctl connect use <name>` | Switch your default wallet |
@@ -24,8 +24,8 @@ wallets, held tokens) lives under `$XDG_CONFIG_HOME/cashctl`, overridable with
 | `cashctl decode <string> [--check]` | Inspect any cash token, Circle Hub connection (`circlehub1...`), or NWC URI locally, no network call; `--check` opts into a read-only Hub check (cash token: matching recipient; circle hub: can we join) |
 | `cashctl receive <token>` | Decode a cash token, print its details, then cross-check it against the Cash Hub before adding it to your wallet — refuses anything that doesn't check out. A bearer-mode token's `bearer_secret` must be embedded, `<token>#<bearer_secret>` (NIP-CASH's combined bearer-slice presentation) — pasted bare, it degrades to a read-only report instead of erroring. A saved bearer-mode receipt is then offered automatic securing: re-keyed under a fresh secret (and merged with any other same-issuer holding), reported under `"secured"` |
 | `cashctl redeem [wallet] [--token <id>] [--invoice <bolt11>] [--as <credential>]` | Redeem a held token into a wallet (positional, or `--into`) or a raw invoice |
-| `cashctl transfer <target> [amount] [--as <credential>]` | Send a held token, in full or split — target and amount are positional, or `--to`/`--split`. With an amount and no `--token`, cash selection picks which held token(s) reach it exactly (auto-consolidating a same-minter subset first if no single token covers it) instead of just picking one token to act on |
-| `cashctl consolidate [id...] [--to <target>]` | Merge several held tokens into one — positional IDs, or `--sources`; with neither, merges everything held |
+| `cashctl transfer [amount] [target] [--as <credential>]` | Send a held token, in full or split — amount and target are positional (either order), or `--to`/`--amount`. No target at all defaults to a bearer note (a `<token>#<secret>` string to hand anyone). With an amount and no `--token`, cash selection picks which held token(s) reach it exactly (auto-consolidating a same-minter subset first if no single token covers it) instead of just picking one token to act on |
+| `cashctl consolidate [id...] [--to <target>]` | Merge several held tokens into one — positional IDs, or `--sources`, for exact control (IDs discoverable via `wallet show --json`; plain-text `wallet show` never prints them). With neither, auto-groups held tokens by minter (only same-minter tokens can merge) and consolidates each group with 2+ tokens — one group proceeds directly, several prompt interactively (or all process under `--json`/`--yes`) |
 | `cashctl cash list-recipients [--token <id>]` | Your allocation + co-recipients of a held token (network) |
 | `cashctl version` | Print the cashctl version |
 
@@ -106,5 +106,5 @@ This repo ships example-driven guidance in `skills/`, one file per area:
 - Receiving, redeeming, transferring, or consolidating NIP-CASH tokens
   (`receive`, `redeem`, `transfer`, `consolidate`, `cash ...`) →
   `skills/cashctl-cash/SKILL.md`
-- Joining a circle for a personal wallet (`join`, `circle create`) →
+- Joining a circle for a personal wallet (`join`, `circle join`) →
   `skills/cashctl-circle/SKILL.md`

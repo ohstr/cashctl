@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -31,20 +30,30 @@ func resolvePositionalOrFlag(cmd *cobra.Command, positional, flagName, flagValue
 	return flagValue, nil
 }
 
-// resolvePositionalOrFlagUint64 is resolvePositionalOrFlag's counterpart
-// for a numeric flag whose zero value means "not set" (cash_transfer's
-// --split, in millis) — used for transfer's optional positional amount.
-func resolvePositionalOrFlagUint64(cmd *cobra.Command, positional, flagName string, flagValue uint64) (uint64, error) {
-	if positional == "" {
-		return flagValue, nil
+// resolvePositionalOrFlagAmount is resolvePositionalOrFlag's counterpart
+// for an amount flag (cash_transfer's --amount, circle join's
+// --max-amount) — both the positional and the flag are loki strings a
+// human typed (cashctl's CLI surface is loki-only, see CurrencyUnit's own
+// doc comment); this parses whichever one(s) are set via
+// output.ParseAmount and returns the result in mloki, cashctl's actual
+// wire/ledger unit.
+func resolvePositionalOrFlagAmount(cmd *cobra.Command, positional, flagName, flagValue string) (uint64, error) {
+	positional = strings.TrimSpace(positional)
+	flagValue = strings.TrimSpace(flagValue)
+	if positional == "" && flagValue == "" {
+		return 0, nil
 	}
-	parsed, err := strconv.ParseUint(positional, 10, 64)
-	if err != nil {
-		return 0, output.InvalidInputError(cmd, positional, fmt.Errorf("amount must be a whole number of %s", output.CurrencyUnit))
-	}
-	if flagValue != 0 && flagValue != parsed {
+	if positional != "" && flagValue != "" && positional != flagValue {
 		return 0, output.UsageError(cmd, fmt.Errorf(
-			"got both a positional amount (%d) and --%s (%d) with different values — pass only one", parsed, flagName, flagValue))
+			"got both a positional amount (%q) and --%s (%q) with different values — pass only one", positional, flagName, flagValue))
+	}
+	raw := positional
+	if raw == "" {
+		raw = flagValue
+	}
+	parsed, err := output.ParseAmount(raw)
+	if err != nil {
+		return 0, output.InvalidInputError(cmd, raw, err)
 	}
 	return parsed, nil
 }

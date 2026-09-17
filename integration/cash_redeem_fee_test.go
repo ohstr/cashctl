@@ -464,7 +464,7 @@ func TestCashRedeemFee_MakeInvoiceAcceptsZeroAmount(t *testing.T) {
 // end-to-end 100%-fee edge case: RedeemFeePpm: 1_000_000 makes
 // NetRedeemableMillis exactly 0 for every slice this hub mints. Checks,
 // against a real lokihub instance:
-//   - the confirmation message reads sensibly ("you'll receive 0 mloki",
+//   - the confirmation message reads sensibly ("you'll receive 0 loki",
 //     not something nonsensical) — captured via a real interactive prompt
 //     (f.runInteractive), since f.run always passes --json, which skips
 //     the confirmation text entirely (Confirm never prints under
