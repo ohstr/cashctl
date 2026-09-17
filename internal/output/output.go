@@ -8,19 +8,88 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
 )
 
-// CurrencyUnit is the unit label cashctl prints after amounts in
-// human-readable text (CLI output, --help text, docs) — hardcoded for now,
-// but centralized here so a future per-deployment unit preference (e.g.
-// "FLC") is a one-line change instead of a hunt through every fmt.Printf
-// call site. Doesn't touch --json field names or on-disk storage, which
-// stay "mloki" (the actual sub-unit amounts are stored/transmitted in) —
-// this is a display label only.
+// CurrencyUnit is the unit label cashctl uses for an amount a human
+// *types* — flag/positional descriptions, --help text,
+// input-validation errors. cashctl's CLI surface is loki-only end to
+// end: every amount a human types (parsed via ParseAmount) or reads
+// (rendered via FormatAmount) is loki. mloki — the actual wire/ledger
+// granularity everything is stored and computed in — never appears
+// anywhere in that surface; it's an internal implementation detail
+// ParseAmount/FormatAmount convert across at the boundary. Hardcoded for
+// now, but centralized here so a future per-deployment unit preference is
+// a one-line change instead of a hunt through every call site.
 const CurrencyUnit = "loki"
+
+// mlokiPerLoki is cashctl's fixed unit ratio: 1 loki == 1000 mloki (the
+// "milli" prefix is literal). The only place this ratio is spelled out —
+// ParseAmount and FormatAmount are the only things that should ever
+// multiply/divide by it.
+const mlokiPerLoki = 1000
+
+// ParseAmount parses a human-typed loki amount — FormatAmount's inverse
+// — into whole mloki, cashctl's actual wire/ledger granularity. Accepts
+// an optional single "." followed by 1-3 fractional digits (mloki is
+// loki's finest representable unit, so anything past 3 decimal places
+// isn't a real amount). Every --amount/--max-amount flag and every
+// positional amount argument goes through this, so a human never has to
+// type or think in mloki (see CurrencyUnit's own doc comment).
+func ParseAmount(s string) (uint64, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, fmt.Errorf("amount is required")
+	}
+	whole, frac, hasFrac := strings.Cut(s, ".")
+	if hasFrac && (frac == "" || len(frac) > 3 || strings.Contains(frac, ".")) {
+		return 0, fmt.Errorf("%q is not a valid amount in loki — up to 3 decimal places", s)
+	}
+	if whole == "" {
+		whole = "0"
+	}
+	wholeLoki, err := strconv.ParseUint(whole, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%q is not a valid amount in loki", s)
+	}
+	var fracMloki uint64
+	if hasFrac {
+		fracMloki, err = strconv.ParseUint(frac+strings.Repeat("0", 3-len(frac)), 10, 64)
+		if err != nil {
+			return 0, fmt.Errorf("%q is not a valid amount in loki", s)
+		}
+	}
+	return wholeLoki*mlokiPerLoki + fracMloki, nil
+}
+
+// FormatAmount renders an mloki amount — the unit every amount cashctl
+// receives, computes, or stores actually is — as the "<N>[.<frac>] loki"
+// string cashctl prints in human-readable text, ParseAmount's inverse.
+// This is the one place the mloki -> loki conversion happens on the way
+// out, so a future unit change (or a change to how much sub-unit
+// precision to show) is a one-function fix instead of a hunt through
+// every fmt.Printf call site. --json output stays in mloki, unconverted,
+// on purpose: mloki is the wire/ledger granularity an amount can
+// actually take, so it's what a script gets back; loki is only ever a
+// friendlier way for a human to *read* that same number.
+func FormatAmount(mloki int64) string {
+	neg := mloki < 0
+	if neg {
+		mloki = -mloki
+	}
+	whole, frac := mloki/mlokiPerLoki, mloki%mlokiPerLoki
+	s := strconv.FormatInt(whole, 10)
+	if frac != 0 {
+		s += "." + strings.TrimRight(fmt.Sprintf("%03d", frac), "0")
+	}
+	if neg {
+		s = "-" + s
+	}
+	return s + " loki"
+}
 
 // PrintJSON writes v as indented JSON to stdout — the shared success-path
 // result renderer every --json command uses, so stdout only ever carries

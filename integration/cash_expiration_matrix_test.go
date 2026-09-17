@@ -360,7 +360,7 @@ func TestCashTransfer_AutoConsolidate_ExpiredSourceFailsButFundsAreRecorded(t *t
 	// PartialProgressError branch must have recorded it as a new held
 	// token, not dropped it, even though the transfer itself failed.
 	if n := heldCount(t, f); n != 1 {
-		t.Fatalf("expected the interim-consolidated 8000-loki token to still be recorded as held despite the failed transfer, got %d held", n)
+		t.Fatalf("expected the interim-consolidated 8000-mloki token to still be recorded as held despite the failed transfer, got %d held", n)
 	}
 	showResp := f.mustJSON("wallet", "show")
 	held, _ := showResp["held_tokens"].([]any)

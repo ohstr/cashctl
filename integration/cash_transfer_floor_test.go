@@ -38,6 +38,23 @@ import (
 	"testing"
 )
 
+// lokiArg formats an exact mloki amount as the loki string cashctl's
+// --amount/--max-amount now expect on the CLI (internal/output.ParseAmount
+// is the inverse) — up to 3 fractional digits round-trips mloki-level
+// precision exactly, which this file's own floor/floor-1 boundary checks
+// depend on.
+func lokiArg(mloki int64) string {
+	neg := mloki < 0
+	if neg {
+		mloki = -mloki
+	}
+	s := fmt.Sprintf("%d.%03d", mloki/1000, mloki%1000)
+	if neg {
+		s = "-" + s
+	}
+	return s
+}
+
 // TestCashTransferMinFloor_SplitAtFloor_Succeeds confirms a split whose
 // carved-off amount equals the floor EXACTLY succeeds (lokihub's own check
 // is amount < floor, not <=) and its remainder (also comfortably above the
@@ -67,7 +84,7 @@ func TestCashTransferMinFloor_SplitAtFloor_Succeeds(t *testing.T) {
 		t.Fatalf("receive: exit %d\nstderr: %s", res.ExitCode, res.Stderr)
 	}
 
-	transferResp := f.mustJSON("transfer", fakeHex32(t), "--split", fmt.Sprint(floor), "--yes")
+	transferResp := f.mustJSON("transfer", fakeHex32(t), "--amount", lokiArg(floor), "--yes")
 	remaining, _ := transferResp["remaining_amount_millis"].(float64)
 	if wantRemainder := total - uint64(floor); uint64(remaining) != wantRemainder {
 		t.Errorf("remaining_amount_millis = %v, want %d", transferResp["remaining_amount_millis"], wantRemainder)
@@ -110,7 +127,7 @@ func TestCashTransferMinFloor_SplitBelowFloor_Rejected(t *testing.T) {
 		t.Fatalf("receive: exit %d\nstderr: %s", res.ExitCode, res.Stderr)
 	}
 
-	res := f.run("transfer", fakeHex32(t), "--split", fmt.Sprint(floor-1), "--yes")
+	res := f.run("transfer", fakeHex32(t), "--amount", lokiArg(floor-1), "--yes")
 	if res.ExitCode != 3 {
 		t.Fatalf("split one unit below the floor: exit = %d, want 3 (invalid_input)\nstdout: %s\nstderr: %s", res.ExitCode, res.Stdout, res.Stderr)
 	}
@@ -176,7 +193,7 @@ func TestCashTransferMinFloor_RemainderBelowFloor_Rejected(t *testing.T) {
 		t.Fatalf("receive: exit %d\nstderr: %s", res.ExitCode, res.Stderr)
 	}
 
-	res := f.run("transfer", fakeHex32(t), "--split", fmt.Sprint(splitAmount), "--yes")
+	res := f.run("transfer", fakeHex32(t), "--amount", lokiArg(int64(splitAmount)), "--yes")
 	if res.ExitCode != 3 {
 		t.Fatalf("split leaving a below-floor remainder: exit = %d, want 3 (invalid_input)\nstdout: %s\nstderr: %s", res.ExitCode, res.Stdout, res.Stderr)
 	}

@@ -17,22 +17,34 @@ func newWalletBudgetCmd() *cobra.Command {
 		Args:  output.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			jsonMode, _ := cmd.Flags().GetBool("json")
-			h, err := dialForCommand(cmd)
+			var budget *nip47.GetBudgetResult
+			var dialErr bool
+			err := WithSpinner(jsonMode, "Fetching budget...", func() error {
+				h, hErr := dialForCommand(cmd)
+				if hErr != nil {
+					dialErr = true
+					return hErr
+				}
+				defer h.Close()
+				b, cErr := h.client.GetBudget(h.ctx)
+				if cErr != nil {
+					return cErr
+				}
+				budget = b
+				return nil
+			})
 			if err != nil {
-				return err
-			}
-			defer h.Close()
-			client := h.client
-			budget, err := client.GetBudget(h.ctx)
-			if err != nil {
+				if dialErr {
+					return err
+				}
 				return classifyNWCErr(cmd, err)
 			}
 			if jsonMode {
 				output.PrintJSON(budget)
 				return nil
 			}
-			fmt.Printf("used:    %d %s\n", budget.UsedBudgetMloki, output.CurrencyUnit)
-			fmt.Printf("total:   %d %s\n", budget.TotalBudgetMloki, output.CurrencyUnit)
+			fmt.Printf("used:    %s\n", output.FormatAmount(budget.UsedBudgetMloki))
+			fmt.Printf("total:   %s\n", output.FormatAmount(budget.TotalBudgetMloki))
 			fmt.Printf("renewal: %s\n", budget.RenewalPeriod)
 			if budget.RenewsAt != nil {
 				fmt.Printf("renews:  %s\n", time.Unix(*budget.RenewsAt, 0).UTC().Format(time.RFC3339))
@@ -44,24 +56,38 @@ func newWalletBudgetCmd() *cobra.Command {
 
 func newWalletInvoiceCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   fmt.Sprintf("invoice <amount-%s>", output.CurrencyUnit),
-		Short: "Create a Lightning invoice on the connected wallet",
-		Args:  output.ExactArgs(1),
+		Use:     fmt.Sprintf("invoice <amount-%s>", output.CurrencyUnit),
+		Short:   "Create a Lightning invoice on the connected wallet",
+		Example: `  cashctl invoice 5 --desc "coffee"`,
+		Args:    output.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			jsonMode, _ := cmd.Flags().GetBool("json")
 			desc, _ := cmd.Flags().GetString("desc")
-			var amount int64
-			if _, err := fmt.Sscanf(args[0], "%d", &amount); err != nil || amount <= 0 {
+			mloki, err := output.ParseAmount(args[0])
+			if err != nil || mloki == 0 {
 				return output.InvalidInputError(cmd, args[0], fmt.Errorf("amount must be a positive number of %s", output.CurrencyUnit))
 			}
-			h, err := dialForCommand(cmd)
+			amount := int64(mloki)
+			var tx *nip47.Transaction
+			var dialErr bool
+			err = WithSpinner(jsonMode, "Creating invoice...", func() error {
+				h, hErr := dialForCommand(cmd)
+				if hErr != nil {
+					dialErr = true
+					return hErr
+				}
+				defer h.Close()
+				t, cErr := h.client.MakeInvoice(h.ctx, nip47.MakeInvoiceParams{Amount: amount, Description: desc})
+				if cErr != nil {
+					return cErr
+				}
+				tx = t
+				return nil
+			})
 			if err != nil {
-				return err
-			}
-			defer h.Close()
-			client := h.client
-			tx, err := client.MakeInvoice(h.ctx, nip47.MakeInvoiceParams{Amount: amount, Description: desc})
-			if err != nil {
+				if dialErr {
+					return err
+				}
 				return classifyNWCErr(cmd, err)
 			}
 			if jsonMode {
@@ -78,19 +104,32 @@ func newWalletInvoiceCmd() *cobra.Command {
 
 func newWalletPayCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "pay <invoice>",
-		Short: "Pay a Lightning invoice from the connected wallet",
-		Args:  output.ExactArgs(1),
+		Use:     "pay <invoice>",
+		Short:   "Pay a Lightning invoice from the connected wallet",
+		Example: `  cashctl pay lnbc1...`,
+		Args:    output.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			jsonMode, _ := cmd.Flags().GetBool("json")
-			h, err := dialForCommand(cmd)
+			var result *nip47.PayInvoiceResult
+			var dialErr bool
+			err := WithSpinner(jsonMode, "Paying...", func() error {
+				h, hErr := dialForCommand(cmd)
+				if hErr != nil {
+					dialErr = true
+					return hErr
+				}
+				defer h.Close()
+				r, cErr := h.client.PayInvoice(h.ctx, nip47.PayInvoiceParams{Invoice: args[0]})
+				if cErr != nil {
+					return cErr
+				}
+				result = r
+				return nil
+			})
 			if err != nil {
-				return err
-			}
-			defer h.Close()
-			client := h.client
-			result, err := client.PayInvoice(h.ctx, nip47.PayInvoiceParams{Invoice: args[0]})
-			if err != nil {
+				if dialErr {
+					return err
+				}
 				return classifyNWCErr(cmd, err)
 			}
 			if jsonMode {
@@ -105,9 +144,9 @@ func newWalletPayCmd() *cobra.Command {
 			// different thing (a Hub policy charge, not network cost) and is
 			// 0/absent for every non-circle wallet.
 			if result.FeeSkimMloki > 0 {
-				fmt.Printf("Paid. Fee: %d %s (+ %d %s circle forwarding fee).\n", result.FeesPaidMloki, output.CurrencyUnit, result.FeeSkimMloki, output.CurrencyUnit)
+				fmt.Printf("Paid. Fee: %s (+ %s circle forwarding fee).\n", output.FormatAmount(result.FeesPaidMloki), output.FormatAmount(result.FeeSkimMloki))
 			} else {
-				fmt.Printf("Paid. Fee: %d %s.\n", result.FeesPaidMloki, output.CurrencyUnit)
+				fmt.Printf("Paid. Fee: %s.\n", output.FormatAmount(result.FeesPaidMloki))
 			}
 			return nil
 		},
@@ -122,14 +161,26 @@ func newWalletListTxCmd() *cobra.Command {
 		Args:  output.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			jsonMode, _ := cmd.Flags().GetBool("json")
-			h, err := dialForCommand(cmd)
+			var result *nip47.ListTransactionsResult
+			var dialErr bool
+			err := WithSpinner(jsonMode, "Fetching transactions...", func() error {
+				h, hErr := dialForCommand(cmd)
+				if hErr != nil {
+					dialErr = true
+					return hErr
+				}
+				defer h.Close()
+				r, cErr := h.client.ListTransactions(h.ctx, nip47.ListTransactionsParams{})
+				if cErr != nil {
+					return cErr
+				}
+				result = r
+				return nil
+			})
 			if err != nil {
-				return err
-			}
-			defer h.Close()
-			client := h.client
-			result, err := client.ListTransactions(h.ctx, nip47.ListTransactionsParams{})
-			if err != nil {
+				if dialErr {
+					return err
+				}
 				return classifyNWCErr(cmd, err)
 			}
 			if jsonMode {
@@ -137,7 +188,7 @@ func newWalletListTxCmd() *cobra.Command {
 				return nil
 			}
 			for _, tx := range result.Transactions {
-				fmt.Printf("%-9s %-9s %8d %-5s %s\n", tx.Type, tx.State, tx.AmountMloki, output.CurrencyUnit, tx.Description)
+				fmt.Printf("%-9s %-9s %12s %s\n", tx.Type, tx.State, output.FormatAmount(tx.AmountMloki), tx.Description)
 			}
 			return nil
 		},
@@ -151,14 +202,26 @@ func newWalletSignMessageCmd() *cobra.Command {
 		Args:  output.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			jsonMode, _ := cmd.Flags().GetBool("json")
-			h, err := dialForCommand(cmd)
+			var result *nip47.SignMessageResult
+			var dialErr bool
+			err := WithSpinner(jsonMode, "Signing...", func() error {
+				h, hErr := dialForCommand(cmd)
+				if hErr != nil {
+					dialErr = true
+					return hErr
+				}
+				defer h.Close()
+				r, cErr := h.client.SignMessage(h.ctx, nip47.SignMessageParams{Message: args[0]})
+				if cErr != nil {
+					return cErr
+				}
+				result = r
+				return nil
+			})
 			if err != nil {
-				return err
-			}
-			defer h.Close()
-			client := h.client
-			result, err := client.SignMessage(h.ctx, nip47.SignMessageParams{Message: args[0]})
-			if err != nil {
+				if dialErr {
+					return err
+				}
 				return classifyNWCErr(cmd, err)
 			}
 			if jsonMode {

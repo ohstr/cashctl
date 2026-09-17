@@ -136,8 +136,8 @@ func TestCashRedeem_PreviewShowsExpiryWarning(t *testing.T) {
 	if !strings.Contains(res.Stdout, "expires in") && !strings.Contains(res.Stdout, "deadline has already passed") {
 		t.Errorf("redeem confirmation: expected an expiry warning (this hub's own CashMaxExpSecs is 1h), got stdout: %q", res.Stdout)
 	}
-	if !strings.Contains(res.Stdout, "30000") {
-		t.Errorf("redeem confirmation: expected the token's own amount (30000) shown before confirming, got stdout: %q", res.Stdout)
+	if !strings.Contains(res.Stdout, "30 loki") {
+		t.Errorf("redeem confirmation: expected the token's own amount (30000 mloki = 30 loki) shown before confirming, got stdout: %q", res.Stdout)
 	}
 
 	if n := heldCount(t, f); n != 1 {

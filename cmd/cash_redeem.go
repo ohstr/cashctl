@@ -4,12 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/ohstr/nmilat/nip47"
 	"github.com/ohstr/nmilat/nipcash"
 	nipcashclient "github.com/ohstr/nmilat/nipcash/client"
+	relayclient "github.com/ohstr/nmilat/relay/client"
 	"github.com/spf13/cobra"
 
 	"github.com/ohstr/cashctl/internal/config"
@@ -22,17 +22,15 @@ func newCashRedeemCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "redeem [wallet]",
 		Short: "Redeem a held cash token into a Lightning wallet",
-		Long: `cash_redeem always needs a destination invoice on the wire — cashctl
-generates one for you: --token picks the source (auto-picked when you only
-hold one), the destination wallet (positional, or --into) defaults to your
-default wallet. --invoice bypasses both, redeeming straight into an invoice
-from any other wallet app you already have — no cashctl-registered wallet
-needed.`,
+		Long:  `Redeems a held cash token into a Lightning wallet, or straight into any invoice via --invoice.`,
+		Example: `  cashctl redeem
+  cashctl redeem savings --token tok-abc123
+  cashctl redeem --invoice lnbc1...`,
 		Args: output.MaximumNArgs(1),
 		RunE: runCashRedeem,
 	}
 	cmd.Flags().String("token", "", "which held token to redeem (auto-picked if you only hold one)")
-	cmd.Flags().String("into", "", "which wallet to redeem into (defaults to your default wallet); same as the positional argument, kept for scripted/agentic use")
+	cmd.Flags().String("into", "", "which wallet to redeem into (defaults to your default wallet)")
 	cmd.Flags().String("invoice", "", "redeem straight into this external invoice")
 	cmd.Flags().String("as", "", "override credential (pubkey:<priv> | connection-key:... | bearer:<secret>)")
 	return cmd
@@ -68,7 +66,15 @@ func runCashRedeem(cmd *cobra.Command, args []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	sourceClient, err := nipcashclient.Connect(ctx, entry.Token)
+	var sourceClient *nipcashclient.Client
+	err = WithSpinner(jsonMode, "Connecting...", func() error {
+		c, cErr := nipcashclient.Connect(ctx, entry.Token)
+		if cErr != nil {
+			return cErr
+		}
+		sourceClient = c
+		return nil
+	})
 	if err != nil {
 		return output.NetworkError(cmd, err)
 	}
@@ -80,9 +86,9 @@ func runCashRedeem(cmd *cobra.Command, args []string) error {
 	if explicitInvoice != "" {
 		invoice = explicitInvoice
 		destName = "the invoice above"
-		message = fmt.Sprintf("This will redeem this cash token into %s.", destName)
+		message = fmt.Sprintf("Redeem into %s?", destName)
 		if entry.AmountMillis != nil {
-			message = fmt.Sprintf("This will redeem %d %s into %s.", *entry.AmountMillis, output.CurrencyUnit, destName)
+			message = fmt.Sprintf("Redeem %s into %s?", output.FormatAmount(int64(*entry.AmountMillis)), destName)
 		}
 	} else {
 		// Always a live CheckClaim, in every mode including --json/--yes:
@@ -90,7 +96,15 @@ func runCashRedeem(cmd *cobra.Command, args []string) error {
 		// decides the destination invoice's amount below (see
 		// redeemInvoiceAmount) — "skip it, nothing prints the preview" is
 		// no longer a valid reason to bypass this.
-		quote, err := resolveRedeemQuote(cmd, l, entry, sourceClient)
+		var quote redeemQuote
+		err = WithSpinner(jsonMode, "Checking fee quote...", func() error {
+			q, qErr := resolveRedeemQuote(cmd, l, entry, sourceClient)
+			if qErr != nil {
+				return qErr
+			}
+			quote = q
+			return nil
+		})
 		if err != nil {
 			return err
 		}
@@ -98,21 +112,33 @@ func runCashRedeem(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			return err
 		}
-		destClient, err := DialGeneric(ctx, destValue)
-		if err != nil {
-			return output.NetworkError(cmd, err)
-		}
-		defer destClient.Close()
-		tx, err := destClient.MakeInvoice(ctx, nip47.MakeInvoiceParams{Amount: int64(redeemInvoiceAmount(quote))})
+		var destClient *relayclient.NWCClient
+		err = WithSpinner(jsonMode, "Preparing invoice...", func() error {
+			c, cErr := DialGeneric(ctx, destValue)
+			if cErr != nil {
+				return cErr
+			}
+			destClient = c
+			tx, cErr := c.MakeInvoice(ctx, nip47.MakeInvoiceParams{Amount: int64(redeemInvoiceAmount(quote))})
+			if cErr != nil {
+				return cErr
+			}
+			invoice = tx.Invoice
+			return nil
+		})
 		if err != nil {
 			return classifyNWCErr(cmd, err)
 		}
-		invoice = tx.Invoice
+		defer destClient.Close()
 		destName = destWalletName
-		message = fmt.Sprintf("This will redeem %d %s into %s.", quote.AmountMillis, output.CurrencyUnit, destName)
-		message += previewSuffix(quote)
+		message = fmt.Sprintf("Redeem %s into %s?", output.FormatAmount(int64(quote.AmountMillis)), destName)
+		if fee := previewSuffix(quote); fee != "" {
+			fmt.Println(fee)
+		}
+		if w := expiryWarningSuffix(quote.ExpiresAt, "redeem"); w != "" {
+			fmt.Println(w)
+		}
 	}
-	message += " Continue?"
 	// defaultYes=false: moves real money — never accept on a bare Enter.
 	// --yes/--json skip this entirely, unaffected.
 	if !Confirm(cmd, false, message) {
@@ -120,14 +146,22 @@ func runCashRedeem(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	result, err := sourceClient.CashRedeem(ctx, nipcash.CashRedeemParams{Invoice: invoice, Credential: cred})
+	var result *nipcash.CashRedeemResult
+	err = WithSpinner(jsonMode, "Redeeming...", func() error {
+		r, cErr := sourceClient.CashRedeem(ctx, nipcash.CashRedeemParams{Invoice: invoice, Credential: cred})
+		if cErr != nil {
+			return cErr
+		}
+		result = r
+		return nil
+	})
 	if err != nil {
 		return classifyNWCErr(cmd, err)
 	}
 
 	_ = l.SetStatus(entry.ID, ledger.StatusRedeemed)
 	if entry.AmountMillis != nil {
-		l.AppendHistory("redeem", fmt.Sprintf("redeemed %d %s into %s", *entry.AmountMillis, output.CurrencyUnit, destName))
+		l.AppendHistory("redeem", fmt.Sprintf("redeemed %s into %s", output.FormatAmount(int64(*entry.AmountMillis)), destName))
 	} else {
 		l.AppendHistory("redeem", fmt.Sprintf("redeemed into %s", destName))
 	}
@@ -142,7 +176,7 @@ func runCashRedeem(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Printf("Redeemed → %s.\n", destName)
 	if result.FeesPaid > 0 {
-		fmt.Printf("Fee: %d %s.\n", result.FeesPaid, output.CurrencyUnit)
+		fmt.Printf("Fee: %s.\n", output.FormatAmount(int64(result.FeesPaid)))
 	}
 	return nil
 }
@@ -205,7 +239,12 @@ func resolveHeldToken(cmd *cobra.Command, l *ledger.Ledger) (*ledger.Entry, erro
 // answer.
 func pickHeldToken(cmd *cobra.Command, held []ledger.Entry) (*ledger.Entry, error) {
 	tooManyErr := func() error {
-		return output.UsageError(cmd, fmt.Errorf("you hold %d cash tokens — specify which with --token <id> (see `cashctl wallet show`)", len(held)))
+		// This branch is only reached under --json/--yes (jsonMode ||
+		// yesFlag below) — no terminal to interactively pick from — so the
+		// hint points at --json too: wallet show's plain-text listing
+		// deliberately never prints entry.ID (docs/private/
+		// wallet-abstraction-plan.md), only --json does.
+		return output.UsageError(cmd, fmt.Errorf("you hold %d cash tokens — specify which with --token <id> (see `cashctl wallet show --json`)", len(held)))
 	}
 	jsonMode, _ := cmd.Flags().GetBool("json")
 	yesFlag, _ := cmd.Flags().GetBool("yes")
@@ -217,7 +256,7 @@ func pickHeldToken(cmd *cobra.Command, held []ledger.Entry) (*ledger.Entry, erro
 	for i, e := range held {
 		amount := "unknown amount"
 		if e.AmountMillis != nil {
-			amount = fmt.Sprintf("%d %s", *e.AmountMillis, output.CurrencyUnit)
+			amount = output.FormatAmount(int64(*e.AmountMillis))
 		}
 		output.Linef(false, "  %d) %s   received %s", i+1, amount, formatReceivedDate(e.ReceivedAt))
 	}
@@ -402,30 +441,21 @@ func redeemInvoiceAmount(q redeemQuote) uint64 {
 	return q.NetRedeemableMillis
 }
 
-// previewSuffix renders q as additional confirmation text — "" if there's
-// nothing to show. Fee is only mentioned when non-zero (a same-node
-// redeem is routinely free) — and, since redeemInvoiceAmount always
-// requests the net amount in that case, the outcome is one of exactly two
-// things: this exact fee is charged, or (only if this specific redemption
-// turns out to resolve to a same-node payment instead) the Hub rejects it
-// outright rather than charging anything — never a range in between, so
-// this doesn't hedge with "up to"/"at least" language. Expiry warning only
-// when it's actually close, so it doesn't become noise a user learns to
-// ignore.
+// previewSuffix renders q's fee caveat as its own confirmation-prompt
+// line — "" if there's nothing to show. Fee is only mentioned when
+// non-zero (a same-node redeem is routinely free) — and, since
+// redeemInvoiceAmount always requests the net amount in that case, the
+// outcome is one of exactly two things: this exact fee is charged, or
+// (only if this specific redemption turns out to resolve to a same-node
+// payment instead) the Hub rejects it outright rather than charging
+// anything — never a range in between, so this doesn't hedge with "up
+// to"/"at least" language. Expiry is handled separately, by the shared
+// expiryWarningSuffix (cash_transfer.go) — same wording `transfer`/
+// `consolidate` already use, rather than a second copy of it here.
 func previewSuffix(q redeemQuote) string {
-	var b strings.Builder
-	if q.RedeemFeeMillis > 0 {
-		fmt.Fprintf(&b, " This Hub charges a redeem fee: you'll receive %d %s (a %d %s cut). If this happens to resolve to a same-node payment instead, it will be rejected rather than waived — retry with --invoice for the full amount if that happens.",
-			q.NetRedeemableMillis, output.CurrencyUnit, q.RedeemFeeMillis, output.CurrencyUnit)
+	if q.RedeemFeeMillis == 0 {
+		return ""
 	}
-	if q.ExpiresAt != nil {
-		remaining := time.Until(time.Unix(*q.ExpiresAt, 0))
-		const soon = 24 * time.Hour
-		if remaining <= 0 {
-			fmt.Fprintf(&b, " WARNING: this token's redemption deadline has already passed — this may fail.")
-		} else if remaining < soon {
-			fmt.Fprintf(&b, " WARNING: this token expires in %s — redeem it now or it may become unspendable.", remaining.Round(time.Minute))
-		}
-	}
-	return b.String()
+	return fmt.Sprintf("Fee: %s (you receive %s). Rejected instead of waived on a same-node match — retry with --invoice if so.",
+		output.FormatAmount(int64(q.RedeemFeeMillis)), output.FormatAmount(int64(q.NetRedeemableMillis)))
 }

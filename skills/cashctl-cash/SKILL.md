@@ -100,7 +100,7 @@ live against the domain's own `/.well-known/nostr.json`), or an
 
 ```sh
 cashctl transfer npub1w0lxfr9... --json                     # send it all
-cashctl transfer alice@example.com 3000 --json               # split off 3000, keep the rest as a new held token
+cashctl transfer 3 alice@example.com --json                  # split off 3, keep the rest as a new held token
 cashctl transfer bearer-target --json
 cashctl transfer connection:<platform>:<external-id>:<ia-pubkey> --json
 cashctl transfer nconnection1... --ia ia@example.com --json  # or hex — see below
@@ -110,7 +110,7 @@ Equivalent explicit-flag form for scripted/agentic use — same
 auto-detection applies to the `--to` value either way:
 
 ```sh
-cashctl transfer --to npub1w0lxfr9... --split 3000 --json
+cashctl transfer --to npub1w0lxfr9... --amount 3 --json
 ```
 
 An `nconnection1...` never carries an Identity Authority itself (a local,
@@ -145,22 +145,34 @@ splitting the send across several transfers.
 ## `cashctl consolidate` — merge several into one
 
 ```sh
-cashctl consolidate --json                                    # no sources given: merges everything you hold
+cashctl consolidate --json                                    # no sources given: auto-groups held tokens by minter, merges each group
 cashctl consolidate tok-a1b2 tok-c3d4 --json                   # positional IDs — or --sources tok-a1b2,tok-c3d4
-cashctl consolidate --sources tok-a1b2,lokicash1...:5000:pubkey:<privkey> --to pubkey:<hex> --json
+cashctl consolidate --sources tok-a1b2,lokicash1...:5:pubkey:<privkey> --to pubkey:<hex> --json
 ```
 
 Positional IDs, or `--sources` comma-separated: a bare ID already in your
 ledger (amount/credential resolved automatically), or the verbose
-`<token>:<amount>:<credential>` form (`--sources` only) for a source that
+`<token>:<amount-loki>:<credential>` form (`--sources` only) for a source that
 isn't held locally — only `pubkey:`/`bearer:` credentials work in that
 verbose form (a `connection-key:` value has its own embedded commas,
 ambiguous in this shorthand — receive it into your ledger first instead).
-Needs at least 2 sources; with neither positional IDs nor `--sources`
-given, defaults to every token you currently hold. `--to` defaults to
-your own identity; `--to bearer-target` merges into a fresh, anonymous
-bearer note instead (same keyword `transfer` uses) — requires a Hub that
-accepts a bearer `cash_consolidate` target.
+IDs are discoverable via `cashctl wallet show --json`'s `held_tokens`
+array — plain-text `wallet show` deliberately never prints them.
+Needs at least 2 sources per call.
+
+With neither positional IDs nor `--sources` given: only same-minter
+tokens can actually be merged, so cashctl groups held tokens by minter
+and consolidates each group with 2+ tokens (a lone token from a minter
+needs no merge, and is skipped) — under `--json`, every qualifying group
+is processed with no prompt. Response shape depends on how many groups
+were actually processed: exactly one (the common case) returns the same
+`{"new_entry", "expires_at", "target_resolved"}` object as the
+explicit-sources form always has; more than one returns
+`{"consolidated": [{"new_entry", "expires_at", "target_resolved"}, ...]}`
+instead — check which key is present rather than assuming one shape.
+`--to` defaults to your own identity; `--to bearer-target` merges into a
+fresh, anonymous bearer note instead (same keyword `transfer` uses) —
+requires a Hub that accepts a bearer `cash_consolidate` target.
 
 ## `cashctl cash list-recipients`
 

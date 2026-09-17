@@ -5,12 +5,8 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/ohstr/cashctl.svg)](https://pkg.go.dev/github.com/ohstr/cashctl)
 [![License: Unlicense](https://img.shields.io/badge/license-Unlicense-blue.svg)](LICENSE)
 
-**A wallet CLI for [cash](https://github.com/flokiorg/lokihub/blob/main/docs/nips/NIP-CASH.md)
-tokens on energy-backed coins with Lightning support: receive, hold, spend,
-and consolidate them.**
-
-**Join a [circle](https://github.com/flokiorg/lokihub/blob/main/docs/nips/NIP-CW.md)
-to get a personal Lightning wallet.**
+**A wallet CLI for [Cash](https://github.com/flokiorg/lokihub/blob/main/docs/nips/NIP-CASH.md)
+and [Circle wallets](https://github.com/flokiorg/lokihub/blob/main/docs/nips/NIP-CW.md).**
 
 ## Features
 
@@ -108,29 +104,30 @@ cashctl init --json
 Join a circle to get a personal wallet.
 
 ```sh
-cashctl join <circlehub1... or NWC URI> --max-amount 100000
+cashctl join <circlehub1... or NWC URI> 100
 ```
 
 The self-service entry point into a circle. Give it a Circle Hub's
-connection — the `circlehub1...` string its operator gives out, or a raw NWC
-URI if the Hub hasn't adopted the bech32 form yet.
+connection and the spend cap you want — both positional, in either order,
+or via `--hub`/`--max-amount`. A cap is required: NIP-CW has no "0 means
+unlimited" convention, so the Hub rejects a request that omits one.
 
 `join` calls `create_circle_wallet` on your behalf and saves the resulting
 wallet. If it's your first wallet, it also becomes your default.
 
 ```sh
-cashctl join circlehub1... --max-amount 100000 --budget-renewal monthly
+cashctl join circlehub1... --max-amount 100 --budget-renewal monthly
 ```
 
 | Flag | Meaning |
 |---|---|
 | *(positional)*, or `--hub` | the Circle Hub connection (required) |
-| `--max-amount` | requested spend cap, in loki |
+| *(positional)*, or `--max-amount` | requested spend cap, in loki (required) |
 | `--expiry` | requested expiry duration (default: the Hub's own) |
 | `--budget-renewal` | `daily`\|`weekly`\|`monthly`\|`yearly`\|`never` (default: the Hub's own) |
 | `--as` | override credential (defaults to your local identity) |
 
-`join` is a top-level shortcut for `cashctl circle create`.
+`join` is a top-level shortcut for `cashctl circle join`.
 
 ## `cashctl wallet show`
 
@@ -265,15 +262,16 @@ the common case — a hex pubkey, `npub1...`, a NIP-05 identifier
 by shape:
 
 ```sh
-cashctl transfer npub1w0lxfr9...                  # transfer it all
-cashctl transfer alice@example.com 3000            # split off 3000, keep the rest as a new token
+cashctl transfer 5                                 # no recipient — get a cash string to hand anyone
+cashctl transfer npub1w0lxfr9...                    # transfer it all
+cashctl transfer 3 alice@example.com                # split off 3, keep the rest as a new token
 cashctl transfer bearer-target
 cashctl transfer connection:<platform>:<external-id>:<ia-pubkey>
 cashctl transfer nconnection1... --ia ia@example.com
 ```
 
 Equivalent, explicit-flag form for scripted/agentic use:
-`cashctl transfer --to npub1w0lxfr9... --split 3000`.
+`cashctl transfer --to npub1w0lxfr9... --amount 3`.
 
 An `nconnection1...` never carries an Identity Authority itself — resolving
 one asks for one, via `--ia <identity>` (hex or NIP-05) or an interactive
@@ -300,15 +298,25 @@ which one token to act on:
 Merge several held tokens into one.
 
 ```sh
-cashctl consolidate                             # everything you currently hold
+cashctl consolidate                             # auto-detects which held tokens share a minter and merges each group
 cashctl consolidate tok-a1b2 tok-c3d4            # just these two
-cashctl consolidate --sources tok-a1b2,lokicash1...:5000:pubkey:<privkey> --to pubkey:<hex>
+cashctl consolidate --sources tok-a1b2,lokicash1...:5:pubkey:<privkey> --to pubkey:<hex>
 ```
 
-Positional IDs (or `--sources`, comma-separated) — amount and credential
-are already known for each held entry. With neither given, consolidates
-every currently held token. Use the verbose `<token>:<amount>:<credential>`
-form (`--sources` only) for a source that isn't in your local ledger.
+With no IDs/`--sources` given, cashctl can't just merge *everything* —
+only tokens sharing a minter can actually be combined — so it groups your
+held tokens by minter and consolidates each group that has 2+ tokens
+(a lone token from a minter needs nothing merged, and is left alone).
+One group: it just proceeds. More than one: an interactive session asks
+which group(s) to process (Enter for all); `--json`/`--yes` processes
+every qualifying group, since there's no terminal to ask from.
+
+Positional IDs (or `--sources`, comma-separated) skip all of that for
+exact control — amount and credential are already known for each held
+entry. Use the verbose `<token>:<amount-loki>:<credential>` form
+(`--sources` only) for a source that isn't in your local ledger; the IDs
+themselves are visible via `cashctl wallet show --json`; plain-text
+`wallet show` never prints them (see `cashctl consolidate --help`).
 `--to` defaults to your own identity; `--to bearer-target` merges into a
 fresh, anonymous bearer note instead (needs Hub support).
 

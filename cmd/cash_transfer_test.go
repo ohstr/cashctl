@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"errors"
 	"reflect"
 	"strings"
@@ -29,7 +30,7 @@ func newTestTransferCmd() *cobra.Command {
 	c.Flags().Bool("yes", false, "")
 	c.Flags().String("token", "", "")
 	c.Flags().String("to", "", "")
-	c.Flags().Uint64("split", 0, "")
+	c.Flags().String("amount", "", "")
 	c.Flags().String("as", "", "")
 	c.Flags().String("ia", "", "")
 	return c
@@ -177,19 +178,19 @@ func TestExpiryWarningSuffix_NilExpiryIsEmpty(t *testing.T) {
 func TestExpiryWarningSuffix_AlreadyPassed(t *testing.T) {
 	past := time.Now().Add(-time.Hour).Unix()
 	got := expiryWarningSuffix(&past, "transfer")
-	if !strings.Contains(got, "already passed") {
+	if !strings.Contains(got, "passed") {
 		t.Errorf("expiryWarningSuffix(past) = %q, want it to say the deadline already passed", got)
 	}
-	if !strings.Contains(got, "transfer") {
-		t.Errorf("expiryWarningSuffix(past, %q) = %q, want the verb named in the warning", "transfer", got)
-	}
+	// The already-passed case is deliberately verb-agnostic ("Deadline
+	// passed — may fail.") — unlike the "expires soon" case below, naming
+	// the specific action doesn't add anything once it's already too late.
 }
 
 func TestExpiryWarningSuffix_SoonWarns(t *testing.T) {
 	soon := time.Now().Add(2 * time.Hour).Unix()
 	got := expiryWarningSuffix(&soon, "consolidate")
-	if !strings.Contains(got, "expires in") {
-		t.Errorf("expiryWarningSuffix(2h out) = %q, want an 'expires in ...' warning", got)
+	if !strings.Contains(got, "Expires in") {
+		t.Errorf("expiryWarningSuffix(2h out) = %q, want an 'Expires in ...' warning", got)
 	}
 	if !strings.Contains(got, "consolidate") {
 		t.Errorf("expiryWarningSuffix(2h out, %q) = %q, want the verb named in the warning", "consolidate", got)
@@ -474,5 +475,187 @@ func TestResolveLiveEntry_CashSelectedEntryWritesThroughOnMutation(t *testing.T)
 	}
 	if plan.Entry.AmountMillis == nil || *plan.Entry.AmountMillis != amount {
 		t.Errorf("plan.Entry.AmountMillis = %v, want unchanged at %d — confirms it really is a separate copy, not aliased with l.Entries", plan.Entry.AmountMillis, amount)
+	}
+}
+
+// --- disambiguateTransferArgs: the positional-args logic that lets
+// `cashctl transfer 100` (bare amount, no target) work — this is the
+// regression test for that exact bearer-transfer UX request: a purely
+// numeric single argument must be read as an amount, never as a target,
+// so it doesn't get rejected as an invalid target string, and a real
+// target string must never be misread as an amount. With two args, this
+// also pins that both the documented `<amount> <target>` order and the
+// old `<target> <amount>` order resolve the same way.
+
+func TestDisambiguateTransferArgs_NoArgs(t *testing.T) {
+	to, amount := disambiguateTransferArgs(nil)
+	if to != "" || amount != "" {
+		t.Errorf("disambiguateTransferArgs(nil) = (%q, %q), want (\"\", \"\")", to, amount)
+	}
+}
+
+func TestDisambiguateTransferArgs_SingleNumericArgIsAmount(t *testing.T) {
+	to, amount := disambiguateTransferArgs([]string{"100"})
+	if to != "" {
+		t.Errorf("disambiguateTransferArgs([\"100\"]) to = %q, want empty (no target given)", to)
+	}
+	if amount != "100" {
+		t.Errorf("disambiguateTransferArgs([\"100\"]) amount = %q, want \"100\"", amount)
+	}
+}
+
+func TestDisambiguateTransferArgs_SingleFractionalArgIsAmount(t *testing.T) {
+	// A fractional loki amount ("0.5") must still be recognized as an
+	// amount, not a target — disambiguateTransferArgs now sniffs shape via
+	// output.ParseAmount (which accepts loki's up-to-3-decimal precision),
+	// not a plain-integer check.
+	to, amount := disambiguateTransferArgs([]string{"0.5"})
+	if to != "" {
+		t.Errorf("disambiguateTransferArgs([\"0.5\"]) to = %q, want empty (no target given)", to)
+	}
+	if amount != "0.5" {
+		t.Errorf("disambiguateTransferArgs([\"0.5\"]) amount = %q, want \"0.5\"", amount)
+	}
+}
+
+func TestDisambiguateTransferArgs_SingleNonNumericArgIsTarget(t *testing.T) {
+	for _, arg := range []string{
+		"alice@example.com",
+		"a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+		"bearer-target",
+		"nconnection1qqs2u2jj",
+	} {
+		to, amount := disambiguateTransferArgs([]string{arg})
+		if to != arg {
+			t.Errorf("disambiguateTransferArgs([%q]) to = %q, want %q", arg, to, arg)
+		}
+		if amount != "" {
+			t.Errorf("disambiguateTransferArgs([%q]) amount = %q, want empty", arg, amount)
+		}
+	}
+}
+
+func TestDisambiguateTransferArgs_TwoArgsAreTargetThenAmount(t *testing.T) {
+	to, amount := disambiguateTransferArgs([]string{"alice@example.com", "500"})
+	if to != "alice@example.com" || amount != "500" {
+		t.Errorf("disambiguateTransferArgs(2 args) = (%q, %q), want (\"alice@example.com\", \"500\")", to, amount)
+	}
+}
+
+func TestDisambiguateTransferArgs_TwoArgsAmountThenTargetAlsoWorks(t *testing.T) {
+	to, amount := disambiguateTransferArgs([]string{"500", "alice@example.com"})
+	if to != "alice@example.com" || amount != "500" {
+		t.Errorf("disambiguateTransferArgs(2 args, amount-first) = (%q, %q), want (\"alice@example.com\", \"500\")", to, amount)
+	}
+}
+
+// --- printAndSaveTransferResult: the cash_to_send assembly for a bearer
+// transfer — the regression test for "reveal only the sent piece, never
+// require an unknown flag to signal a bearer send." A bearer target's
+// combined <token>#<secret> string must appear ONLY when this transfer
+// actually is a bearer transfer, and only the newly-minted sent token,
+// never a remainder.
+
+func withTempConfigDirForTransferResult(t *testing.T) {
+	t.Helper()
+	tmp := t.TempDir()
+	appdir.SetOverride(tmp)
+	t.Cleanup(func() { appdir.SetOverride("") })
+}
+
+func TestPrintAndSaveTransferResult_BearerTargetAssemblesCashToSend(t *testing.T) {
+	withTempConfigDirForTransferResult(t)
+	c := testCmdWithFlags(true, false)
+	l := &ledger.Ledger{}
+	bt := nipcash.NewBearerTarget()
+	target := credential.ResolvedTarget{Target: bt}
+	result := &nipcash.CashTransferResult{AmountMillis: 500, NewWalletToken: "new-sent-token"}
+
+	captured := withCapturedStdout(func() {
+		if err := printAndSaveTransferResult(c, l, result, 500, "bearer-target", target, nil); err != nil {
+			t.Fatalf("printAndSaveTransferResult() error = %v", err)
+		}
+	})
+
+	var out map[string]any
+	if err := json.Unmarshal([]byte(captured), &out); err != nil {
+		t.Fatalf("json.Unmarshal(%q) error = %v", captured, err)
+	}
+	want := "new-sent-token#" + bt.Secret()
+	got, _ := out["cash_to_send"].(string)
+	if got != want {
+		t.Errorf("cash_to_send = %q, want %q", got, want)
+	}
+}
+
+func TestPrintAndSaveTransferResult_BearerTargetHumanModeShowsCashString(t *testing.T) {
+	withTempConfigDirForTransferResult(t)
+	c := testCmdWithFlags(false, false)
+	l := &ledger.Ledger{}
+	bt := nipcash.NewBearerTarget()
+	target := credential.ResolvedTarget{Target: bt}
+	result := &nipcash.CashTransferResult{AmountMillis: 500, NewWalletToken: "new-sent-token"}
+
+	captured := withCapturedStdout(func() {
+		if err := printAndSaveTransferResult(c, l, result, 500, "bearer-target", target, nil); err != nil {
+			t.Fatalf("printAndSaveTransferResult() error = %v", err)
+		}
+	})
+
+	want := "new-sent-token#" + bt.Secret()
+	if !strings.Contains(captured, want) {
+		t.Errorf("printed output = %q, want it to contain the combined cash string %q", captured, want)
+	}
+	if strings.Contains(captured, "bearer-target") {
+		t.Errorf("printed output = %q, want the literal \"bearer-target\" placeholder never shown to the human", captured)
+	}
+}
+
+func TestPrintAndSaveTransferResult_NonBearerTargetOmitsCashToSend(t *testing.T) {
+	withTempConfigDirForTransferResult(t)
+	c := testCmdWithFlags(true, false)
+	l := &ledger.Ledger{}
+	target := credential.ResolvedTarget{Target: nipcash.Pubkey(strings.Repeat("a1", 32))}
+	result := &nipcash.CashTransferResult{AmountMillis: 500, NewWalletToken: "new-sent-token"}
+
+	captured := withCapturedStdout(func() {
+		if err := printAndSaveTransferResult(c, l, result, 500, "alice@example.com", target, nil); err != nil {
+			t.Fatalf("printAndSaveTransferResult() error = %v", err)
+		}
+	})
+
+	var out map[string]any
+	if err := json.Unmarshal([]byte(captured), &out); err != nil {
+		t.Fatalf("json.Unmarshal(%q) error = %v", captured, err)
+	}
+	if _, present := out["cash_to_send"]; present {
+		t.Errorf("cash_to_send present = %v, want the key entirely absent for a non-bearer target", out["cash_to_send"])
+	}
+}
+
+func TestPrintAndSaveTransferResult_BearerTargetNoNewTokenOmitsCashToSend(t *testing.T) {
+	// Defensive: a bearer target with no NewWalletToken (shouldn't happen
+	// in practice — a placed bearer transfer always mints one — but the
+	// assembly branch is guarded on this explicitly) must not assemble a
+	// bogus "#secret" string with no token half.
+	withTempConfigDirForTransferResult(t)
+	c := testCmdWithFlags(true, false)
+	l := &ledger.Ledger{}
+	bt := nipcash.NewBearerTarget()
+	target := credential.ResolvedTarget{Target: bt}
+	result := &nipcash.CashTransferResult{AmountMillis: 500}
+
+	captured := withCapturedStdout(func() {
+		if err := printAndSaveTransferResult(c, l, result, 500, "bearer-target", target, nil); err != nil {
+			t.Fatalf("printAndSaveTransferResult() error = %v", err)
+		}
+	})
+
+	var out map[string]any
+	if err := json.Unmarshal([]byte(captured), &out); err != nil {
+		t.Fatalf("json.Unmarshal(%q) error = %v", captured, err)
+	}
+	if _, present := out["cash_to_send"]; present {
+		t.Errorf("cash_to_send present = %v, want absent when there's no new wallet token to combine with the secret", out["cash_to_send"])
 	}
 }

@@ -49,7 +49,7 @@ func TestSession_FullLifecycle_HistoryCoherentAcrossMixedOps(t *testing.T) {
 	if circleHub.CircleHubToken == nil || *circleHub.CircleHubToken == "" {
 		t.Fatalf("create ephemeral circle_hub: no circleHubToken in response: %+v", circleHub)
 	}
-	joinResp := u.mustJSON("join", "--hub", *circleHub.CircleHubToken, "--max-amount", "100000", "--yes")
+	joinResp := u.mustJSON("join", "--hub", *circleHub.CircleHubToken, "--max-amount", "100", "--yes")
 	walletName, _ := joinResp["wallet"].(string)
 	if walletName == "" {
 		t.Fatalf("join: no wallet name in response: %v", joinResp)
@@ -181,7 +181,7 @@ func TestSession_MultiWalletRedeemRouting(t *testing.T) {
 	if circleHub1.CircleHubToken == nil || circleHub2.CircleHubToken == nil {
 		t.Fatalf("create ephemeral circle_hubs: missing circleHubToken(s): %+v / %+v", circleHub1, circleHub2)
 	}
-	join1 := u.mustJSON("join", "--hub", *circleHub1.CircleHubToken, "--max-amount", "100000", "--yes")
+	join1 := u.mustJSON("join", "--hub", *circleHub1.CircleHubToken, "--max-amount", "100", "--yes")
 	wallet1, _ := join1["wallet"].(string)
 	if wallet1 == "" {
 		t.Fatalf("join (1st): no wallet name in response: %v", join1)
@@ -189,7 +189,7 @@ func TestSession_MultiWalletRedeemRouting(t *testing.T) {
 	if def, _ := join1["default"].(bool); !def {
 		t.Errorf("join (1st, first-ever wallet): default = %v, want true", def)
 	}
-	join2 := u.mustJSON("join", "--hub", *circleHub2.CircleHubToken, "--max-amount", "100000", "--yes")
+	join2 := u.mustJSON("join", "--hub", *circleHub2.CircleHubToken, "--max-amount", "100", "--yes")
 	wallet2, _ := join2["wallet"].(string)
 	if wallet2 == "" || wallet2 == wallet1 {
 		t.Fatalf("join (2nd): wallet name = %q, want a distinct non-empty name from %q", wallet2, wallet1)

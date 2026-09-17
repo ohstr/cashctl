@@ -79,7 +79,7 @@ default):
 ```sh
 cashctl wallet get-info --json
 cashctl wallet budget --json
-cashctl wallet invoice 5000 --desc "test" --json   # amount is loki; prints {"invoice", "payment_hash", ...}
+cashctl wallet invoice 5 --desc "test" --json      # amount is loki; prints {"invoice", "payment_hash", ...}
 cashctl wallet pay lnbc1... --json
 cashctl wallet list-tx --json
 cashctl wallet sign-message "hello" --json

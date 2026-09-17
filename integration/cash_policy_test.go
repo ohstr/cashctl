@@ -39,7 +39,7 @@ func TestCircleWallet_BudgetCapDeclineIsCleanAndWalletStaysUsable(t *testing.T) 
 		t.Fatalf("create ephemeral circle_hub: no circleHubToken in response: %+v", circleHub)
 	}
 	const capMloki = uint64(5_000)
-	joinResp := u.mustJSON("join", "--hub", *circleHub.CircleHubToken, "--max-amount", "5000", "--yes")
+	joinResp := u.mustJSON("join", "--hub", *circleHub.CircleHubToken, "--max-amount", "5", "--yes")
 	if walletName, _ := joinResp["wallet"].(string); walletName == "" {
 		t.Fatalf("join: no wallet name in response: %v", joinResp)
 	}
@@ -110,7 +110,7 @@ func TestCircleWallet_ExpiredFallsBackToStrandedBalance(t *testing.T) {
 	}
 	const expiry = 20 * time.Second
 	joinTime := time.Now()
-	joinResp := u.mustJSON("join", "--hub", *circleHub.CircleHubToken, "--max-amount", "100000", "--expiry", expiry.String(), "--yes")
+	joinResp := u.mustJSON("join", "--hub", *circleHub.CircleHubToken, "--max-amount", "100", "--expiry", expiry.String(), "--yes")
 	walletName, _ := joinResp["wallet"].(string)
 	if walletName == "" {
 		t.Fatalf("join: no wallet name in response: %v", joinResp)

@@ -132,7 +132,7 @@ func TestCircleJoin_CreateWalletAndGetInfo(t *testing.T) {
 		t.Fatalf("create ephemeral circle_hub: no circleHubToken in response: %+v", hubResp)
 	}
 
-	joinResp := f.mustJSON("join", "--hub", *hubResp.CircleHubToken, "--max-amount", "100000", "--yes")
+	joinResp := f.mustJSON("join", "--hub", *hubResp.CircleHubToken, "--max-amount", "100", "--yes")
 	walletName, _ := joinResp["wallet"].(string)
 	if walletName == "" {
 		t.Fatalf("join: no wallet name in response: %v", joinResp)
@@ -171,7 +171,7 @@ func TestCircleJoin_ViaRawNWCURI(t *testing.T) {
 
 	hubResp := setUpCircleHub(t, admin, pubHex)
 
-	joinResp := f.mustJSON("join", "--hub", hubResp.PairingUri, "--max-amount", "100000", "--yes")
+	joinResp := f.mustJSON("join", "--hub", hubResp.PairingUri, "--max-amount", "100", "--yes")
 	if walletName, _ := joinResp["wallet"].(string); walletName == "" {
 		t.Fatalf("join --hub <raw NWC URI>: no wallet name in response: %v", joinResp)
 	}
@@ -247,10 +247,11 @@ func TestCircleWallet_FullOps(t *testing.T) {
 	if hubResp.CircleHubToken == nil {
 		t.Fatalf("create ephemeral circle_hub: no circleHubToken in response: %+v", hubResp)
 	}
-	// max-amount must fit within setUpCircleHub's own funding (100 loki =
-	// 100,000 mloki) — the Hub's create_circle_wallet commitment check
+	// --max-amount (in loki, cashctl's CLI-facing unit — see
+	// output.CurrencyUnit) must fit within setUpCircleHub's own funding
+	// (100 loki) — the Hub's create_circle_wallet commitment check
 	// rejects a cap it can't actually back.
-	if res := f.run("join", "--hub", *hubResp.CircleHubToken, "--max-amount", "100000", "--yes"); res.ExitCode != 0 {
+	if res := f.run("join", "--hub", *hubResp.CircleHubToken, "--max-amount", "100", "--yes"); res.ExitCode != 0 {
 		t.Fatalf("join: exit %d\nstderr: %s", res.ExitCode, res.Stderr)
 	}
 
@@ -258,7 +259,7 @@ func TestCircleWallet_FullOps(t *testing.T) {
 		t.Errorf("wallet budget: doesn't look like a real get_budget result: %v", budgetResp)
 	}
 
-	invoiceResp := f.mustJSON("wallet", "invoice", "10000", "--desc", "circle wallet ops test")
+	invoiceResp := f.mustJSON("wallet", "invoice", lokiArg(10000), "--desc", "circle wallet ops test")
 	invoiceStr, _ := invoiceResp["invoice"].(string)
 	if invoiceStr == "" {
 		t.Fatalf("wallet invoice: no invoice in response: %v", invoiceResp)
