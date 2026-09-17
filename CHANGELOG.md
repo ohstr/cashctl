@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.2.0]
+
+- All amounts (`transfer`, `join --max-amount`, `consolidate --sources`,
+  `invoice`) are now in loki, not mloki.
+- `transfer` no longer narrates the split remainder ("keep X") — it just
+  confirms and reports the amount sent.
+- `transfer`'s target/amount positional args work in either order.
+- `join` takes its spend cap positionally too, in either order; a cap is
+  now required instead of silently failing at the Hub.
+- `consolidate` with no args auto-groups held tokens by minter and merges
+  each group, instead of only doing so as a single call across everything held.
+- `circle create` renamed to `circle join`, matching the top-level `join`.
+- Trimmed verbose help text and prompts across most commands.
+- Fixed a stale hint pointing at `wallet show` instead of `wallet show --json` for a held token's ID.
+
 ## [0.1.0]
 
 - Storage moved to a single SQLite database (`cashctl.db`), replacing three JSON files.
