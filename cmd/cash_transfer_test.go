@@ -115,6 +115,53 @@ func TestResolveTarget_PlainTargetUnaffected(t *testing.T) {
 	}
 }
 
+// --- shouldPrintResolvedTarget: the pre-confirm "resolves to:" gate.
+// A bearer target's Resolved carries the freshly generated secret (needed
+// intact for --json's target_resolved field — pinned by
+// TestParseTarget_BearerTarget_ResolvedSurfacesSecret in
+// internal/credential), but printing it before anything is confirmed is
+// pure noise since it's shown again anyway, combined with the resulting
+// token, once the transfer completes. These two tests pin both halves at
+// once: the data survives untouched, only the premature print is gated.
+
+func TestShouldPrintResolvedTarget_BearerTargetIsFalse(t *testing.T) {
+	c := newTestTransferCmd()
+	rt, err := resolveTarget(c, "bearer-target")
+	if err != nil {
+		t.Fatalf("resolveTarget(bearer-target) error = %v", err)
+	}
+	if rt.Resolved == "" {
+		t.Fatal("resolveTarget(bearer-target) Resolved is empty — the generated secret would be unrecoverable (see credential.go's own ParseTarget)")
+	}
+	if shouldPrintResolvedTarget(rt) {
+		t.Error("shouldPrintResolvedTarget(bearer target) = true, want false — the secret shouldn't be printed before anything is confirmed")
+	}
+}
+
+func TestShouldPrintResolvedTarget_NonBearerResolutionIsTrue(t *testing.T) {
+	c := newTestTransferCmd()
+	if err := c.Flags().Set("ia", "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"); err != nil {
+		t.Fatal(err)
+	}
+	rt, err := resolveTarget(c, nconnectionForTest(t))
+	if err != nil {
+		t.Fatalf("resolveTarget(nconnection, --ia) error = %v", err)
+	}
+	if rt.Resolved == "" {
+		t.Fatal("resolveTarget(nconnection, --ia) Resolved is empty (test fixture assumption)")
+	}
+	if !shouldPrintResolvedTarget(rt) {
+		t.Error("shouldPrintResolvedTarget(nconnection resolution) = false, want true — this is a real identity worth reviewing before confirming")
+	}
+}
+
+func TestShouldPrintResolvedTarget_EmptyResolvedIsFalse(t *testing.T) {
+	rt := credential.ResolvedTarget{Target: nipcash.Pubkey(strings.Repeat("a1", 32))}
+	if shouldPrintResolvedTarget(rt) {
+		t.Error("shouldPrintResolvedTarget(empty Resolved) = true, want false — nothing to show")
+	}
+}
+
 // TestTransferWithAutoConsolidate_Declined confirms declining the
 // combined consolidate+transfer confirmation returns cleanly (nil error)
 // — and, critically, never reaches either wire call: group's fake
