@@ -5,7 +5,7 @@ import "github.com/spf13/cobra"
 func newCashCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "cash",
-		Short: "Receive, redeem, transfer, and consolidate NIP-CASH tokens",
+		Short: "Receive, redeem, transfer, and consolidate cash tokens",
 	}
 	cmd.AddCommand(
 		newCashReceiveCmd(),

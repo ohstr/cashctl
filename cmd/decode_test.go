@@ -2,9 +2,14 @@ package cmd
 
 import (
 	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
 	"strings"
 	"testing"
 
+	"github.com/decred/dcrd/dcrec/secp256k1/v4/ecdsa"
+	btcec "github.com/flokiorg/go-flokicoin/crypto"
+	"github.com/ohstr/nmilat/nipcash"
 	"github.com/spf13/cobra"
 
 	"github.com/ohstr/cashctl/internal/appdir"
@@ -128,5 +133,71 @@ func TestShouldCheckCashToken_ExplicitFlagSkipsTheIdentityGuardEntirely(t *testi
 	// identity guard, which only applies to the interactive-prompt path.
 	if got := shouldCheckCashToken(c, false, true, false); !got {
 		t.Errorf("shouldCheckCashToken with explicit --check=true = false, want true")
+	}
+}
+
+// --- formatMinterStatus: the shared, VERIFYING (not just presence-check)
+// minter-status helper both `receive` and `decode` render — the
+// regression test for the accuracy bug it fixes (a forged/corrupt
+// signature must never be reported as trustworthy just because the
+// mint-provenance fields are present) and for the friendlier "unknown"
+// wording replacing the old "none (unsigned token)".
+
+// signMintProvenance mirrors nipcash's own unexported signProvenance test
+// helper (nipcash/provenance_test.go) — reproduces its exact double-SHA256
+// LN-signed-message digest convention, since doubleSHA256 itself isn't
+// exported for this package to call directly.
+func signMintProvenance(t *testing.T, priv *btcec.PrivateKey, hrp, walletPubkeyHex string, amountMillis uint64) []byte {
+	t.Helper()
+	payload := nipcash.MintPayload(hrp, walletPubkeyHex, amountMillis)
+	first := sha256.Sum256([]byte(nipcash.LNSignedMessagePrefix + payload))
+	second := sha256.Sum256(first[:])
+	return ecdsa.SignCompact(priv, second[:], true)
+}
+
+func TestFormatMinterStatus_NoProvenanceIsUnknown(t *testing.T) {
+	tok := nipcash.Token{HRP: "lokicash", WalletPubkey: strings.Repeat("a1", 32)}
+	minterLine, amountLine := formatMinterStatus(tok)
+	if minterLine != "minter: unknown" {
+		t.Errorf("minterLine = %q, want %q", minterLine, "minter: unknown")
+	}
+	if amountLine != "" {
+		t.Errorf("amountLine = %q, want empty (nothing to print for a token with no provenance)", amountLine)
+	}
+}
+
+func TestFormatMinterStatus_InvalidSignatureNeverReportedTrustworthy(t *testing.T) {
+	amount := uint64(5000)
+	// Garbage bytes of the wrong length: VerifyProvenance fails outright
+	// (never recovers a pubkey at all) rather than recovering a wrong one
+	// — either way formatMinterStatus must not call this trustworthy.
+	tok := nipcash.Token{HRP: "lokicash", WalletPubkey: strings.Repeat("a1", 32), MintSignature: []byte{1, 2, 3}, AttestedAmountMillis: &amount}
+	minterLine, amountLine := formatMinterStatus(tok)
+	if minterLine != "minter: INVALID SIGNATURE — don't trust attested_amount" {
+		t.Errorf("minterLine = %q, want the INVALID SIGNATURE warning", minterLine)
+	}
+	if !strings.Contains(amountLine, "unverified") {
+		t.Errorf("amountLine = %q, want it to say (unverified)", amountLine)
+	}
+}
+
+func TestFormatMinterStatus_ValidSignatureReportsMinter(t *testing.T) {
+	priv, pub := btcec.PrivKeyFromBytes([]byte{
+		1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
+		17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32,
+	})
+	walletPubkey := strings.Repeat("b2", 32)
+	amount := uint64(40000)
+	sig := signMintProvenance(t, priv, "lokicash", walletPubkey, amount)
+	tok := nipcash.Token{HRP: "lokicash", WalletPubkey: walletPubkey, MintSignature: sig, AttestedAmountMillis: &amount}
+
+	minterLine, amountLine := formatMinterStatus(tok)
+	serialized := btcec.ToSerialized(pub)
+	wantMinter := "minter: " + hex.EncodeToString(serialized[:])
+	if minterLine != wantMinter {
+		t.Errorf("minterLine = %q, want %q", minterLine, wantMinter)
+	}
+	if strings.Contains(amountLine, "unverified") {
+		t.Errorf("amountLine = %q, want no (unverified) qualifier for a genuinely valid signature", amountLine)
 	}
 }

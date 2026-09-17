@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/ohstr/nmilat/nipcash"
 	nipcashclient "github.com/ohstr/nmilat/nipcash/client"
 	"github.com/spf13/cobra"
 
@@ -14,13 +15,11 @@ import (
 
 func newCashListRecipientsCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "list-recipients",
-		Short: "Check your allocation and co-recipients of a held token",
-		Long: `Recipients of the same mint_cash batch share one wallet connection —
-this is how a receiver checks their own allocation and co-recipients
-within it. It's the exact call "cashctl receive" makes internally, to
-check a token before saving it.`,
-		Args: output.NoArgs,
+		Use:     "list-recipients",
+		Short:   "Check your allocation and co-recipients of a held token",
+		Long:    `Shows your share and co-recipients of a held token's mint batch.`,
+		Example: `  cashctl cash list-recipients`,
+		Args:    output.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			jsonMode, _ := cmd.Flags().GetBool("json")
 			l, err := ledger.Load()
@@ -31,15 +30,28 @@ check a token before saving it.`,
 			if err != nil {
 				return err
 			}
-			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-			defer cancel()
-			client, err := nipcashclient.Connect(ctx, entry.Token)
+			var result *nipcash.ListRecipientsResult
+			var dialErr bool
+			err = WithSpinner(jsonMode, "Fetching recipients...", func() error {
+				ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+				defer cancel()
+				client, cErr := nipcashclient.Connect(ctx, entry.Token)
+				if cErr != nil {
+					dialErr = true
+					return cErr
+				}
+				defer client.Close()
+				r, cErr := client.ListRecipients(ctx)
+				if cErr != nil {
+					return cErr
+				}
+				result = r
+				return nil
+			})
 			if err != nil {
-				return output.NetworkError(cmd, err)
-			}
-			defer client.Close()
-			result, err := client.ListRecipients(ctx)
-			if err != nil {
+				if dialErr {
+					return output.NetworkError(cmd, err)
+				}
 				return classifyNWCErr(cmd, err)
 			}
 			if jsonMode {
@@ -60,7 +72,7 @@ check a token before saving it.`,
 				if r.IdentityValue != "" {
 					identity = fmt.Sprintf("%s:%s", output.Sanitize(r.IdentityType), output.Sanitize(r.IdentityValue))
 				}
-				fmt.Printf("%-40s %10d %s   %s\n", identity, r.AmountMillis, output.CurrencyUnit, status)
+				fmt.Printf("%-40s %14s   %s\n", identity, output.FormatAmount(int64(r.AmountMillis)), status)
 			}
 			// ExpiresAt is identical on every row (NIP-CASH §Listing
 			// Recipients: one shared wallet-level deadline) — shown once,

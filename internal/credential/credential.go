@@ -154,12 +154,18 @@ func ParseTarget(s string) (ResolvedTarget, error) {
 		// the funds, same as any other bearer note, so it MUST be
 		// surfaced via Resolved rather than silently discarded — the
 		// caller shows it before/alongside committing, exactly like any
-		// other value this field carries.
+		// other value this field carries. Deliberately doesn't say
+		// whether it's shown again later: `consolidate --to bearer-target`
+		// (self-securing) stores it in the caller's own ledger entry and
+		// never re-displays it raw; `transfer`'s own bearer case (a gift
+		// to someone else) *does* re-display it, combined with the
+		// resulting token, once the call completes — a caller-specific
+		// claim this shared parser has no way to make accurately for both.
 		secret := target.Secret()
 		return ResolvedTarget{
 			Target:   target,
 			Input:    s,
-			Resolved: fmt.Sprintf("a fresh bearer secret was generated — write it down now, it is never shown again: %s", secret),
+			Resolved: fmt.Sprintf("Generated a bearer secret: %s", secret),
 		}, nil
 	}
 	if isHexPubkey(s) || strings.HasPrefix(s, "npub1") || looksLikeNIP05(s) {

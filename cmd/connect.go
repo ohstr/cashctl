@@ -14,10 +14,9 @@ func newConnectCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "connect",
 		Short: "Manage foreign wallet connections",
-		Long: `The general-purpose way to register any NWC connection cashctl didn't
-produce itself: your own plain Lightning wallet (e.g. a standard NWC
-connection you already generated some other way), or one handed to you
-from another device.`,
+		Long:  `Registers any NWC connection cashctl didn't create itself.`,
+		Example: `  cashctl connect add work nostr+walletconnect://...
+  cashctl connect list`,
 	}
 	cmd.AddCommand(newConnectAddCmd(), newConnectListCmd(), newConnectUseCmd(), newConnectRmCmd())
 	return cmd
