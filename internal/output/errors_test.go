@@ -295,6 +295,53 @@ func TestEmitError_JSONModeFallsBackToTranslationWithoutRawMessage(t *testing.T)
 	}
 }
 
+// TestUsageError_NeverPrintsHelpText is the regression guard for the
+// "funds are fragmented" help-dump bug: UsageError covers real runtime
+// conditions, not just malformed invocations, so it must never write
+// anything on its own (cmd.Help(), cmd.Usage(), ...) — the classified
+// error message alone, via EmitError, says what went wrong. A bare group
+// command with no subcommand still gets cobra's own separate help print
+// (Command.Runnable() false -> flag.ErrHelp), which never reaches this
+// function at all — unrelated, and not what this guards.
+func TestUsageError_NeverPrintsHelpText(t *testing.T) {
+	cmd := &cobra.Command{
+		Use:     "test",
+		Short:   "a test command",
+		Example: "  cashctl test",
+	}
+	cmd.Flags().Bool("json", false, "")
+
+	printed := captureStdout(t, func() {
+		_ = UsageError(cmd, errors.New("funds are fragmented across separate Hubs"))
+	})
+	if len(printed) != 0 {
+		t.Errorf("UsageError() wrote %q to stdout, want nothing", printed)
+	}
+}
+
+// captureStdout mirrors captureStderr below, for the one case (UsageError)
+// that historically wrote to stdout via cmd.Help() — everything else in
+// this package targets stderr exclusively.
+func captureStdout(t *testing.T, fn func()) []byte {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	orig := os.Stdout
+	os.Stdout = w
+	defer func() { os.Stdout = orig }()
+
+	fn()
+
+	_ = w.Close()
+	out, readErr := io.ReadAll(r)
+	if readErr != nil {
+		t.Fatalf("reading captured stdout: %v", readErr)
+	}
+	return out
+}
+
 // captureStderr redirects os.Stderr for the duration of fn and returns
 // whatever it wrote — EmitError has no injectable writer, it always
 // targets os.Stderr directly (see its own doc comment on why: a script
