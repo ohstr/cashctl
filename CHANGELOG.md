@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.2.0]
+## [0.2.0] ([#2](https://github.com/ohstr/cashctl/pull/2))
 
 - All amounts (`transfer`, `join --max-amount`, `consolidate --sources`,
   `invoice`) are now in loki, not mloki.
