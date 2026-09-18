@@ -1,6 +1,7 @@
 package output
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -124,5 +125,36 @@ func TestParseAmount_RoundTripsWithFormatAmount(t *testing.T) {
 		if int64(got) != mloki {
 			t.Errorf("ParseAmount(FormatAmount(%d)) = %d, want %d", mloki, got, mloki)
 		}
+	}
+}
+
+// --- errorPrefix: the red "Error:" wrapping, factored out of EmitError so
+// it's testable independent of real terminal detection (a captured pipe
+// in a test is never a TTY, so exercising EmitError itself could only
+// ever hit the uncolored branch — see errors_test.go's own captureStderr).
+
+func TestErrorPrefix_ColoredWrapsInRed(t *testing.T) {
+	got := errorPrefix(true)
+	if !strings.Contains(got, "\x1b[31m") || !strings.Contains(got, "\x1b[0m") {
+		t.Errorf("errorPrefix(true) = %q, want it wrapped in ANSI red (\\x1b[31m...\\x1b[0m)", got)
+	}
+	if !strings.Contains(got, "Error:") {
+		t.Errorf("errorPrefix(true) = %q, want it to still contain the literal text \"Error:\"", got)
+	}
+}
+
+func TestErrorPrefix_UncoloredIsPlainText(t *testing.T) {
+	got := errorPrefix(false)
+	if got != "Error:" {
+		t.Errorf("errorPrefix(false) = %q, want exactly \"Error:\" — no ANSI bytes for a script/agent parsing piped/non-TTY stderr", got)
+	}
+}
+
+func TestIsColorTerminal_NoColorEnvAlwaysFalse(t *testing.T) {
+	t.Setenv("NO_COLOR", "1")
+	// os.Stderr itself may or may not be a TTY in the test runner — NO_COLOR
+	// must win either way, so this doesn't need a real terminal to prove.
+	if isColorTerminal(os.Stderr) {
+		t.Error("isColorTerminal() = true with NO_COLOR set, want false")
 	}
 }

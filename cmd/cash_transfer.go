@@ -80,6 +80,26 @@ func resolveTarget(cmd *cobra.Command, s string) (credential.ResolvedTarget, err
 	return resolved, nil
 }
 
+// shouldPrintResolvedTarget decides whether a resolved target's Resolved
+// string is worth showing before confirming anything. Deliberately false
+// for a bearer target specifically: its Resolved carries the freshly
+// generated secret (needed intact for --json's target_resolved field —
+// see credential.go's own ParseTarget), but printing it here, before
+// anything is even confirmed, is pure noise — nothing is actionable with
+// the bare secret alone, and it's shown again anyway, combined with the
+// resulting token, once the transfer actually completes
+// (printAndSaveTransferResult's cashToSend). Every other resolution (a
+// NIP-05 lookup, an nconnection's IA) genuinely benefits from review
+// before confirming, so only the bearer case is skipped. Pure so it's
+// unit-testable without a cobra.Command.
+func shouldPrintResolvedTarget(target credential.ResolvedTarget) bool {
+	if target.Resolved == "" {
+		return false
+	}
+	_, isBearer := target.Target.(*nipcash.BearerTarget)
+	return !isBearer
+}
+
 // fetchExpiresAt best-effort fetches token's current Hub-side expiry
 // (nipcash.CheckClaimResult.ExpiresAt) — nil on any failure. Mirrors
 // cash_redeem.go's own fetchRedeemPreview: this only ever feeds an
@@ -568,7 +588,7 @@ func runCashTransfer(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	if target.Resolved != "" {
+	if shouldPrintResolvedTarget(target) {
 		output.Linef(jsonMode, "  resolves to: %s", target.Resolved)
 	}
 

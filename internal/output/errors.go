@@ -99,15 +99,17 @@ func silence(cmd *cobra.Command) {
 }
 
 // UsageError classifies err as CodeUsage — the command was invoked wrong.
-// Prints cmd's help text in human mode (skipped under --json, so help text
-// never pollutes the JSON stdout/stderr stream).
+// Doesn't print cmd's help text: CodeUsage covers real runtime conditions
+// too (e.g. transfer's "funds are fragmented"), not just malformed
+// invocations, so dumping the full --help block here was noise more often
+// than it was useful — the classified error message alone (via EmitError)
+// says what went wrong. A bare group command with no subcommand (e.g.
+// `cashctl circle`) already gets its own help print from cobra itself,
+// via a completely different path (Command.Runnable() false ->
+// flag.ErrHelp, caught before any error ever reaches here) — unaffected
+// by this.
 func UsageError(cmd *cobra.Command, err error) error {
 	silence(cmd)
-	if err != nil && cmd != nil {
-		if jsonMode, _ := cmd.Flags().GetBool("json"); !jsonMode {
-			_ = cmd.Help()
-		}
-	}
 	return wrapCLIError(CodeUsage, "", err)
 }
 

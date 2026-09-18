@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 // CurrencyUnit is the unit label cashctl uses for an amount a human
@@ -142,7 +143,29 @@ func EmitError(cmd *cobra.Command, err error) {
 		_ = enc.Encode(payload)
 		return
 	}
-	fmt.Fprintf(os.Stderr, "Error: %s\n", ce.Err.Error())
+	fmt.Fprintf(os.Stderr, "%s %s\n", errorPrefix(isColorTerminal(os.Stderr)), ce.Err.Error())
+}
+
+// errorPrefix returns "Error:", wrapped in ANSI red when colored is true —
+// factored out from EmitError so the wrapping itself is testable without
+// depending on a real terminal.
+func errorPrefix(colored bool) string {
+	if !colored {
+		return "Error:"
+	}
+	return "\x1b[31mError:\x1b[0m"
+}
+
+// isColorTerminal reports whether w is a real terminal that should get
+// ANSI color codes — false whenever output is piped, redirected, or
+// NO_COLOR is set (https://no-color.org), so a script or agent capturing
+// cashctl's stderr text always gets byte-identical plain text, never raw
+// escape codes mixed into what it parses.
+func isColorTerminal(w *os.File) bool {
+	if os.Getenv("NO_COLOR") != "" {
+		return false
+	}
+	return term.IsTerminal(int(w.Fd()))
 }
 
 // Sanitize replaces ASCII control characters (0x00-0x1F, 0x7F — every
