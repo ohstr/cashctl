@@ -1,6 +1,6 @@
 ---
 name: cashctl-cash
-description: Receive a NIP-CASH token into your local wallet (`cashctl receive`), redeem a held token into a Lightning wallet or raw invoice (`cashctl redeem`), send a held token to someone else in full or split (`cashctl transfer`), merge several held tokens into one (`cashctl consolidate`), and check its Hub-side recipients (`cashctl cash list-recipients`). For local-only inspection of a token string itself (no network call, including mint-signature verification), see `cashctl decode` in `skills/cashctl-wallet/SKILL.md`. Use whenever an agent is handed a lokicash1... (or other cash-token-family) string, needs to cash it out to Lightning, needs to forward it to another identity, or needs to combine multiple small tokens.
+description: Receive a NIP-CASH token into your local wallet (`cashctl receive`), redeem a held token into a Lightning wallet or raw invoice (`cashctl redeem`), send a held token to someone else (`cashctl transfer`), merge several held tokens into one (`cashctl consolidate`), and check its Hub-side recipients (`cashctl cash list-recipients`). For local-only inspection of a token string itself (no network call, including mint-signature verification), see `cashctl decode` in `skills/cashctl-wallet/SKILL.md`. Use whenever an agent is handed a lokicash1... (or other cash-token-family) string, needs to cash it out to Lightning, needs to forward it to another identity, or needs to combine multiple small tokens.
 license: Unlicense
 ---
 
@@ -45,13 +45,13 @@ combined presentation reports `embedded_bearer_secret_present: true`
 (never the secret's value) if you want to check which form you have
 before receiving.
 
-**A saved bearer-mode receipt is then offered automatic securing.**
+**A saved bearer-mode receipt is then offered automatic protecting.**
 Anyone who saw the same bearer secret before it reached you — the
 sender, or anyone the sender showed it to — could still spend it too,
 for as long as it stays shared. Once `receive` saves a bearer-mode
-entry, it asks to secure it immediately (defaults to yes; always
+entry, it asks to protect it immediately (defaults to yes; always
 proceeds non-interactively under `--yes`/`--json` — there's no separate
-flag to opt out). Securing re-keys the slice under a fresh secret only
+flag to opt out). Protecting re-keys the slice under a fresh secret only
 your wallet knows, and — if you already hold other cash mint-signed by
 the same issuer — merges it into that holding in the same step. Reported
 under `"secured"` in `--json` output: `{"status": "rekeyed"}` (re-keyed
@@ -60,7 +60,7 @@ in place), `{"status": "consolidated", "consolidated_with": [...],
 "declined"}`, or `{"status": "not_applicable"}` (not a bearer-mode
 receive). A wire failure here reports `{"status": "failed", "error":
 "..."}` but never fails `receive` itself — the cash is already genuinely
-yours; retry securing later with `cashctl consolidate --to
+yours; retry protecting later with `cashctl consolidate --to
 bearer-target`. Because the secret is always captured — and kept current
 — up front, `redeem`/`transfer` never need a `--as bearer:<secret>`
 override for a held token.

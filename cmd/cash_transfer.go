@@ -20,7 +20,7 @@ import (
 func newCashTransferCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "transfer [amount] [target]",
-		Short: "Send a held cash token, in full or split",
+		Short: "Send a held cash token",
 		Example: `  cashctl transfer 5
   cashctl transfer 5 <pubkey>
   cashctl transfer alice@example.com --amount 2`,
