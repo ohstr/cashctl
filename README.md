@@ -10,20 +10,20 @@ and [Circle wallets](https://github.com/flokiorg/lokihub/blob/main/docs/nips/NIP
 
 ## Features
 
-- [`cashctl init`](#cashctl-init) — Set up your identity
-- [`cashctl join`](#cashctl-join) — Join a circle to get a personal Lightning wallet
-- [`cashctl wallet show/history/use`](#cashctl-wallet-show) — Your identity, registered wallets, and local action history
-- [`cashctl wallet balance`](#cashctl-wallet-balance) — Every wallet's live balance plus every held cash token's value, summed into one figure
-- [`cashctl wallet <op>`](#cashctl-wallet-op) — get-info, budget, invoice, pay, list-tx, sign-message: ordinary NWC operations against whichever wallet is current
-- [`cashctl connect add/list/use/rm`](#cashctl-connect-addlistuserm) — Register an NWC connection: a plain Lightning wallet you already have
+- [`cashctl transfer`](#cashctl-transfer) — Send a held cash token
 - [`cashctl decode`](#cashctl-decode) — Inspect any cash token, Circle Hub connection, or NWC URI locally, no network call
-- [`cashctl receive`](#cashctl-receive) — "Cash-in" a token: decode it and add it to your wallet
-- [`cashctl redeem`](#cashctl-redeem) — Redeem a held token into a Lightning wallet
-- [`cashctl transfer`](#cashctl-transfer) — Send a held token to someone else, in full or split
-- [`cashctl consolidate`](#cashctl-consolidate) — Merge several held tokens into one
+- [`cashctl receive`](#cashctl-receive) — "Cash-in" a token: verify and add it to your wallet
+- [`cashctl redeem`](#cashctl-redeem) — Redeem a held cash token into a Lightning wallet
+- [`cashctl consolidate`](#cashctl-consolidate) — Merge several held cash tokens into one
 - [`cashctl cash list-recipients`](#cashctl-cash-list-recipients) — Check your allocation and co-recipients of a held token (network)
+- [`cashctl join`](#cashctl-join) — Join a circle to get a personal Lightning wallet
+- [`cashctl init`](#cashctl-init) — Set up your identity and, optionally, a wallet
+- [`cashctl wallet show/history/use`](#cashctl-wallet-show) — Show your identity, registered wallets, and local action history
+- [`cashctl wallet balance`](#cashctl-wallet-balance) — Sums every wallet's balance plus unredeemed held tokens into one figure
+- [`cashctl wallet <op>`](#cashctl-wallet-op) — Run ordinary NWC operations against whichever wallet is current
+- [`cashctl connect add/list/use/rm`](#cashctl-connect-addlistuserm) — Register an NWC connection: a plain Lightning wallet you already have
 
-`cashctl` mints nothing itself — minting is the Hub operator's own tooling.
+`cashctl` mints nothing itself — minting is the Cash Hub operator's own tooling.
 
 ## Installation
 
@@ -71,192 +71,9 @@ docker run --rm ghcr.io/ohstr/cashctl:latest --help
 
 **From source** — see [Development](#development).
 
-## `cashctl init`
-
-Set up your identity and first wallet.
-
-```sh
-cashctl init
-```
-
-Reuses your [ncli](https://github.com/ohstr/ncli) vault identity if you have
-one. Otherwise it generates a new identity just for `cashctl`.
-
-If you already have a Lightning wallet connection (NWC), `init` offers to
-register it as your default. Run `init` again any time — it's idempotent,
-and just reports where things stand.
-
-**Note:** under `--json`, `init` always generates a fresh local identity
-non-interactively and skips the wallet offer, since there's no way to paste
-a connection string in that mode.
-
-```sh
-cashctl init --json
-# {
-#   "npub": "npub1...",
-#   "identity_source": "cashctl-local",
-#   "default_wallet": ""
-# }
-```
-
-## `cashctl join`
-
-Join a circle to get a personal wallet.
-
-```sh
-cashctl join <circlehub1... or NWC URI> 100
-```
-
-The self-service entry point into a circle. Give it a Circle Hub's
-connection and the spend cap you want — both positional, in either order,
-or via `--hub`/`--max-amount`. A cap is required: NIP-CW has no "0 means
-unlimited" convention, so the Hub rejects a request that omits one.
-
-`join` calls `create_circle_wallet` on your behalf and saves the resulting
-wallet. If it's your first wallet, it also becomes your default.
-
-```sh
-cashctl join circlehub1... --max-amount 100 --budget-renewal monthly
-```
-
-| Flag | Meaning |
-|---|---|
-| *(positional)*, or `--hub` | the Circle Hub connection (required) |
-| *(positional)*, or `--max-amount` | requested spend cap, in loki (required) |
-| `--expiry` | requested expiry duration (default: the Hub's own) |
-| `--budget-renewal` | `daily`\|`weekly`\|`monthly`\|`yearly`\|`never` (default: the Hub's own) |
-| `--as` | override credential (defaults to your local identity) |
-
-`join` is a top-level shortcut for `cashctl circle join`.
-
-## `cashctl wallet show`
-
-Your identity, wallets, and history.
-
-```sh
-cashctl wallet show      # identity, registered wallets, held tokens
-cashctl wallet history   # local action log (receive/redeem/transfer/...)
-cashctl wallet use <name>  # switch your default wallet (also: cashctl connect use)
-```
-
-## `cashctl wallet balance`
-
-Your unified balance.
-
-```sh
-cashctl wallet balance             # one number: every wallet + every held token, summed
-cashctl wallet balance --breakdown # itemized, per-wallet/per-token
-cashctl wallet balance --from work # just one wallet or held token
-```
-
-An expired wallet can't be queried live. `balance` falls back to the
-last-known figure from your most recent successful check, marked `stranded`
-(`[expired — money-moving disabled]` in text mode). That way an expired
-wallet's money is never silently invisible.
-
-## `cashctl wallet <op>`
-
-Ordinary NWC wallet operations. Plain [NIP-47](https://github.com/nostr-protocol/nips/blob/master/47.md)
-calls against whichever wallet is current (`-c/--connection` overrides it
-for one call):
-
-```sh
-cashctl wallet get-info
-cashctl wallet budget
-cashctl wallet invoice 5000 --desc "coffee"
-cashctl wallet pay lnbc1...
-cashctl wallet list-tx
-cashctl wallet sign-message "hello"
-```
-
-`invoice` and `pay` are also available as top-level shortcuts: `cashctl
-invoice 5000` / `cashctl pay lnbc1...`.
-
-## `cashctl connect add/list/use/rm`
-
-Register a Lightning wallet you already have, over NWC — your own, or
-one handed to you from another device:
-
-```sh
-cashctl connect add work nostr+walletconnect://...
-cashctl connect list
-cashctl connect use work
-cashctl connect rm work
-```
-
-## `cashctl decode`
-
-Inspect any cash token, Circle Hub connection (`circlehub1...`), or NWC
-URI locally — no network call, and no wallet needed.
-
-```sh
-cashctl decode lokicash1...       # local-only, includes mint-signature verification if present
-cashctl decode lokicash1... --check  # also cross-checks against the Hub
-```
-
-## `cashctl receive`
-
-"Cash-in" a token.
-
-```sh
-cashctl receive lokicash1...
-cashctl receive lokicash1...#deadbeef   # bearer-mode: the combined "<token>#<bearer_secret>" presentation
-```
-
-Decodes the token, prints its details, then cross-checks it against the
-Cash Hub (`list_recipients`) before saving anything — a token with no
-matching recipient there, or one the Cash Hub can't be reached to confirm
-at all, is refused outright. Nothing is added to your wallet unless that
-check passes.
-
-If you paste a Circle Hub or Cash Hub connection here instead of a token,
-`cashctl` gives you a specific error pointing you to the right command.
-
-**Bearer-mode tokens are two values, not one.** `lokicash1...` alone only
-decodes the token — it's never enough to redeem or transfer a bearer
-slice. The `bearer_secret` must arrive embedded, `<token>#<bearer_secret>`
-(NIP-CASH's combined bearer-slice presentation — paste the whole thing).
-There's no `--secret` flag: a bearer token pasted without it just gets
-inspected and checked, never saved.
-
-**A saved bearer-mode receipt gets secured automatically.** Anyone who
-saw the same secret before you got it could still spend it too, so
-`receive` asks to re-key it right away (defaults to yes; always proceeds
-under `--yes`/`--json`), merging it with any other cash you hold from the
-same issuer. A failure here doesn't fail the receive — retry later with
-`cashctl consolidate --to bearer-target`.
-
-## `cashctl redeem`
-
-Redeem a held token into a Lightning wallet.
-
-```sh
-cashctl redeem                          # auto-picks your one held token and default wallet
-cashctl redeem work                     # into wallet "work" — or: --token tok-a1b2 --into work
-cashctl redeem --invoice lnbc1...       # bypass both — redeem into any invoice, no cashctl wallet needed
-```
-
-If you hold more than one token and don't pass `--token`, `redeem`
-(and `transfer`/`consolidate` below) shows a numbered list and asks which
-one — `--token`/`--yes`/`--json` skip straight past it for scripted use.
-
-Before confirming, `redeem` shows the expected fee (only when it's
-actually non-zero — a same-node redeem is routinely free) and warns if
-the token's redemption deadline is close or already passed. Every
-money-moving confirmation (`redeem`/`transfer`/`consolidate`) defaults to
-**no** on a bare Enter — like any wallet, sending or redeeming is never
-something a stray keypress can accept by accident.
-
-| Flag | Meaning |
-|---|---|
-| `--token` | which held token (auto-picked if you only hold one) |
-| *(positional)*, or `--into` | destination wallet (default: your default wallet) |
-| `--invoice` | redeem straight into this external invoice |
-| `--as` | override credential — required for a connection-key-bound token |
-
 ## `cashctl transfer`
 
-Send a held token, in full or split. The destination needs no prefix for
+Send a held cash token. The destination needs no prefix for
 the common case — a hex pubkey, `npub1...`, a NIP-05 identifier
 (`name@domain`, resolved live), or an `nconnection1...` are all recognized
 by shape:
@@ -293,9 +110,73 @@ which one token to act on:
   it can't be reached (funds fragmented across separate Hubs), rather
   than silently sending as several transfers to different minters.
 
+## `cashctl decode`
+
+Inspect any cash token, Circle Hub connection (`circlehub1...`), or NWC
+URI locally — no network call, and no wallet needed.
+
+```sh
+cashctl decode lokicash1...       # local-only, includes mint-signature verification if present
+cashctl decode lokicash1... --check  # also cross-checks against the Hub
+```
+
+## `cashctl receive`
+
+"Cash-in" a token.
+
+```sh
+cashctl receive lokicash1...
+cashctl receive lokicash1...#deadbeef   # bearer-mode: the combined "<token>#<bearer_secret>" presentation
+```
+
+Decodes the token, prints its details, then cross-checks it against the
+Cash Hub before saving — a token with no matching recipient, or one the
+Hub can't be reached to confirm at all, is refused outright.
+
+If you paste a Circle Hub or Cash Hub connection here instead of a token,
+`cashctl` gives you a specific error pointing you to the right command.
+
+**A bearer-mode token is two values, not one.** `lokicash1...` alone only
+decodes it — redeeming or transferring it needs the secret embedded,
+`<token>#<bearer_secret>`. There's no `--secret` flag: a bearer token
+pasted without it just gets inspected and checked, never saved.
+
+**A saved bearer-mode receipt gets protected automatically** — re-keyed
+under a fresh secret (defaults to yes; always proceeds under
+`--yes`/`--json`) and merged with any other cash you hold from the same
+issuer. A failure here doesn't fail the receive — retry later with
+`cashctl consolidate --to bearer-target`.
+
+## `cashctl redeem`
+
+Redeem a held cash token into a Lightning wallet.
+
+```sh
+cashctl redeem                          # auto-picks your one held token and default wallet
+cashctl redeem work                     # into wallet "work" — or: --token tok-a1b2 --into work
+cashctl redeem --invoice lnbc1...       # bypass both — redeem into any invoice, no cashctl wallet needed
+```
+
+If you hold more than one token and don't pass `--token`, `redeem`
+(and `transfer`/`consolidate` too) shows a numbered list and asks which
+one — `--token`/`--yes`/`--json` skip straight past it for scripted use.
+
+Before confirming, `redeem` shows the expected fee (only when it's
+actually non-zero — a same-node redeem is routinely free) and warns if
+the token's redemption deadline is close or already passed. Every
+money-moving confirmation (`redeem`/`transfer`/`consolidate`) defaults to
+**no** on a bare Enter.
+
+| Flag | Meaning |
+|---|---|
+| `--token` | which held token (auto-picked if you only hold one) |
+| *(positional)*, or `--into` | destination wallet (default: your default wallet) |
+| `--invoice` | redeem straight into this external invoice |
+| `--as` | override credential — required for a connection-key-bound token |
+
 ## `cashctl consolidate`
 
-Merge several held tokens into one.
+Merge several held cash tokens into one.
 
 ```sh
 cashctl consolidate                             # auto-detects which held tokens share a minter and merges each group
@@ -327,6 +208,118 @@ Check your allocation and co-recipients of a held token — the same call
 
 ```sh
 cashctl cash list-recipients               # your allocation + co-recipients of a held token
+```
+
+## `cashctl join`
+
+Join a circle to get a personal Lightning wallet.
+
+```sh
+cashctl join <circlehub1... or NWC URI> 100
+```
+
+The self-service entry point into a circle. Give it a Circle Hub's
+connection and the spend cap you want — both positional, in either order,
+or via `--hub`/`--max-amount`. A cap is required — there's no "unlimited"
+option.
+
+`join` calls `create_circle_wallet` on your behalf and saves the resulting
+wallet. If it's your first wallet, it also becomes your default.
+
+```sh
+cashctl join circlehub1... --max-amount 100 --budget-renewal monthly
+```
+
+| Flag | Meaning |
+|---|---|
+| *(positional)*, or `--hub` | the Circle Hub connection (required) |
+| *(positional)*, or `--max-amount` | requested spend cap, in loki (required) |
+| `--expiry` | requested expiry duration (default: the Hub's own) |
+| `--budget-renewal` | `daily`\|`weekly`\|`monthly`\|`yearly`\|`never` (default: the Hub's own) |
+| `--as` | override credential (defaults to your local identity) |
+
+`join` is a top-level shortcut for `cashctl circle join`.
+
+## `cashctl init`
+
+Set up your identity and, optionally, a wallet.
+
+```sh
+cashctl init
+```
+
+Reuses your [ncli](https://github.com/ohstr/ncli) vault identity if you have
+one. Otherwise it generates a new identity just for `cashctl`.
+
+If you already have a Lightning wallet connection (NWC), `init` offers to
+register it as your default. Run `init` again any time — it's idempotent,
+and just reports where things stand.
+
+**Note:** under `--json`, `init` generates a fresh local identity and
+skips the wallet offer — there's no way to paste a connection string in
+that mode.
+
+```sh
+cashctl init --json
+# {
+#   "npub": "npub1...",
+#   "identity_source": "cashctl-local",
+#   "default_wallet": ""
+# }
+```
+
+## `cashctl wallet show`
+
+Your identity, wallets, and history.
+
+```sh
+cashctl wallet show      # identity, registered wallets, held tokens
+cashctl wallet history   # local action log (receive/redeem/transfer/...)
+cashctl wallet use <name>  # switch your default wallet (also: cashctl connect use)
+```
+
+## `cashctl wallet balance`
+
+Your unified balance.
+
+```sh
+cashctl wallet balance             # one number: every wallet + every held token, summed
+cashctl wallet balance --breakdown # itemized, per-wallet/per-token
+cashctl wallet balance --from work # just one wallet or held token
+```
+
+An expired wallet can't be queried live. `balance` falls back to the
+last-known figure from your most recent successful check, marked
+`stranded` (`[expired]` in text mode).
+
+## `cashctl wallet <op>`
+
+Ordinary NWC wallet operations. Plain [NIP-47](https://github.com/nostr-protocol/nips/blob/master/47.md)
+calls against whichever wallet is current (`-c/--connection` overrides it
+for one call):
+
+```sh
+cashctl wallet get-info
+cashctl wallet budget
+cashctl wallet invoice 5000 --desc "coffee"
+cashctl wallet pay lnbc1...
+cashctl wallet list-tx
+cashctl wallet sign-message "hello"
+```
+
+`invoice` and `pay` are also available as top-level shortcuts: `cashctl
+invoice 5000` / `cashctl pay lnbc1...`.
+
+## `cashctl connect add/list/use/rm`
+
+Register a Lightning wallet you already have, over NWC — your own, or
+one handed to you from another device:
+
+```sh
+cashctl connect add work nostr+walletconnect://...
+cashctl connect list
+cashctl connect use work
+cashctl connect rm work
 ```
 
 ## Agent skills
