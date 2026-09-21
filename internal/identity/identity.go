@@ -80,52 +80,62 @@ func Load() (*Stored, error) {
 	return &s, nil
 }
 
+// ErrAlreadyConfigured is returned by SaveNcliVaultRef/GenerateAndSaveLocal
+// when another process claimed the identity first — see claim.
+var ErrAlreadyConfigured = errors.New("an identity was already configured by another cashctl process")
+
 // SaveNcliVaultRef records a reference to an existing ncli vault entry —
-// never a copied privkey.
+// never a copied privkey. ErrAlreadyConfigured if an identity already exists.
 func SaveNcliVaultRef(npub, label string) error {
-	return save(&Stored{Source: SourceNcliVault, Npub: npub, Label: label})
+	return claim(&Stored{Source: SourceNcliVault, Npub: npub, Label: label})
 }
 
 // GenerateAndSaveLocal generates a brand-new keypair via ncli's own
 // client.GenerateIdentity (the same generator ncli's own `ncli id` uses —
 // just persisted under cashctl's own identity table instead of ncli's
-// vault) and stores it directly. Returns the new identity's npub.
+// vault) and stores it directly. Returns the new identity's npub, or
+// ErrAlreadyConfigured if another process claimed the identity first (the
+// key just generated is then discarded, never used or shown).
 func GenerateAndSaveLocal() (npub string, err error) {
 	id, err := ncli.GenerateIdentity()
 	if err != nil {
 		return "", fmt.Errorf("failed to generate identity: %w", err)
 	}
-	if err := save(&Stored{Source: SourceLocal, PrivHex: id.PrivKeyHex}); err != nil {
+	if err := claim(&Stored{Source: SourceLocal, PrivHex: id.PrivKeyHex}); err != nil {
 		return "", err
 	}
 	return id.Npub, nil
 }
 
-// save replaces cashctl.db's identity table (at most one row) with s, in
-// one transaction — a plaintext privkey (SourceLocal) means this table
-// needs the same 0600 handling as a seed file, enforced by store.Open on
-// the database file as a whole.
-func save(s *Stored) error {
-	db, err := store.Open()
-	if err != nil {
-		return err
-	}
-	defer func() { _ = db.Close() }()
+// claim stores s as cashctl's identity ONLY if none exists yet, atomically
+// (a single INSERT ... WHERE NOT EXISTS under SQLite's write lock),
+// returning ErrAlreadyConfigured when it lost. It used to replace the
+// table's row unconditionally (DELETE + INSERT), so N processes running a
+// first-time `init` at once each generated their own key, each "succeeded"
+// and printed its own npub, and only the last write survived — every
+// earlier caller had been told about an identity that no longer existed,
+// and funds sent to it would have been unspendable. A plaintext privkey
+// (SourceLocal) means this table needs the same 0600 handling as a seed
+// file, enforced by store.Open on the database file as a whole.
+func claim(s *Stored) error {
+	return store.WithBusyRetry(func() error {
+		db, err := store.Open()
+		if err != nil {
+			return err
+		}
+		defer func() { _ = db.Close() }()
 
-	tx, err := db.Begin()
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	if _, err := tx.Exec(`DELETE FROM identity`); err != nil {
-		return fmt.Errorf("cashctl.db: clearing identity: %w", err)
-	}
-	if _, err := tx.Exec(`INSERT INTO identity (source, npub, label, priv_hex) VALUES (?, ?, ?, ?)`,
-		s.Source, s.Npub, s.Label, s.PrivHex); err != nil {
-		return fmt.Errorf("cashctl.db: saving identity: %w", err)
-	}
-	return tx.Commit()
+		res, err := db.Exec(`INSERT INTO identity (source, npub, label, priv_hex)
+			SELECT ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM identity)`,
+			s.Source, s.Npub, s.Label, s.PrivHex)
+		if err != nil {
+			return fmt.Errorf("cashctl.db: saving identity: %w", err)
+		}
+		if n, err := res.RowsAffected(); err == nil && n == 0 {
+			return ErrAlreadyConfigured
+		}
+		return nil
+	})
 }
 
 // PasswordPrompt resolves the ncli vault password when Resolve needs to

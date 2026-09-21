@@ -667,15 +667,28 @@ func TestRace_ConcurrentJoinDifferentConfigDirs(t *testing.T) {
 	// "the wallet I got from this circle" is no more a collision than two
 	// different people both naming their own bank account "Checking." The
 	// thing that actually needs to differ is the underlying server-side
-	// wallet each name points at — WalletPubkey, from create_circle_wallet's
-	// own NIP-44-encrypted, per-requester response.
-	pubkeyA, _ := respA["response"].(map[string]any)["WalletPubkey"].(string)
-	pubkeyB, _ := respB["response"].(map[string]any)["WalletPubkey"].(string)
+	// wallet each name points at — wallet_pubkey, from create_circle_wallet's
+	// own NIP-44-encrypted, per-requester response. (snake_case: join --json
+	// builds this object explicitly now, rather than marshalling the SDK's
+	// untagged struct, whose CamelCase keys also carried the new wallet's
+	// PairingURI — its actual NWC secret.)
+	respObjA, _ := respA["response"].(map[string]any)
+	respObjB, _ := respB["response"].(map[string]any)
+	pubkeyA, _ := respObjA["wallet_pubkey"].(string)
+	pubkeyB, _ := respObjB["wallet_pubkey"].(string)
 	if pubkeyA == "" || pubkeyB == "" {
-		t.Fatalf("join: missing response.WalletPubkey: A=%v B=%v", respA["response"], respB["response"])
+		t.Fatalf("join: missing response.wallet_pubkey: A=%v B=%v", respA["response"], respB["response"])
+	}
+	for name, obj := range map[string]map[string]any{"A": respObjA, "B": respObjB} {
+		if _, ok := obj["PairingURI"]; ok {
+			t.Errorf("join %s: response still carries PairingURI — the new wallet's secret", name)
+		}
+		if _, ok := obj["WalletPubkey"]; ok {
+			t.Errorf("join %s: response still uses the untagged CamelCase shape", name)
+		}
 	}
 	if pubkeyA == pubkeyB {
-		t.Errorf("BUG: both concurrent joins against the same circle_hub were handed the SAME underlying wallet (WalletPubkey %q) — a real collision, not just a shared local alias", pubkeyA)
+		t.Errorf("BUG: both concurrent joins against the same circle_hub were handed the SAME underlying wallet (wallet_pubkey %q) — a real collision, not just a shared local alias", pubkeyA)
 	}
 
 	// Each user's own side is independently live and only shows its own

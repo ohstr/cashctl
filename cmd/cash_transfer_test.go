@@ -596,6 +596,52 @@ func TestDisambiguateTransferArgs_TwoArgsAmountThenTargetAlsoWorks(t *testing.T)
 	}
 }
 
+// TestDisambiguateTransferArgs_MalformedAmountBlamesTheAmountNotTheTarget
+// is the regression guard for the bug found live: `transfer 1.5x <npub>`
+// used to report `"<npub>" is not a valid amount in loki` — the malformed
+// amount landed in the target slot (it isn't a target either, but nothing
+// checked that), and the perfectly valid npub got blamed for not parsing
+// as a number. Neither "1.5x" nor a target string parses as an amount, so
+// the old position-only fallback (args[0] fails ParseAmount -> assume
+// args[0] is the target) always picked wrong here regardless of which
+// side the malformed amount was on.
+func TestDisambiguateTransferArgs_MalformedAmountBlamesTheAmountNotTheTarget(t *testing.T) {
+	validTarget := "alice@example.com"
+	for _, badAmount := range []string{"1.5x", "5 loki", "abc123"} {
+		t.Run("amount_first="+badAmount, func(t *testing.T) {
+			to, amount := disambiguateTransferArgs([]string{badAmount, validTarget})
+			if to != validTarget {
+				t.Errorf("to = %q, want %q (the valid target, not the malformed amount)", to, validTarget)
+			}
+			if amount != badAmount {
+				t.Errorf("amount = %q, want %q (the actually-malformed one)", amount, badAmount)
+			}
+		})
+		t.Run("target_first="+badAmount, func(t *testing.T) {
+			to, amount := disambiguateTransferArgs([]string{validTarget, badAmount})
+			if to != validTarget {
+				t.Errorf("to = %q, want %q (the valid target, not the malformed amount)", to, validTarget)
+			}
+			if amount != badAmount {
+				t.Errorf("amount = %q, want %q (the actually-malformed one)", amount, badAmount)
+			}
+		})
+	}
+}
+
+// TestDisambiguateTransferArgs_BothInvalidFallsBackToAmountFirstOrder
+// covers the genuinely ambiguous case (neither side parses as an amount,
+// neither looks like a real target shape either) — there's no way to know
+// which was meant, so this pins the fallback to the documented
+// amount-first order rather than asserting a "correct" answer that
+// doesn't exist.
+func TestDisambiguateTransferArgs_BothInvalidFallsBackToAmountFirstOrder(t *testing.T) {
+	to, amount := disambiguateTransferArgs([]string{"garbage1", "garbage2"})
+	if amount != "garbage1" || to != "garbage2" {
+		t.Errorf("disambiguateTransferArgs(both invalid) = (to=%q, amount=%q), want (to=\"garbage2\", amount=\"garbage1\") — documented amount-first fallback", to, amount)
+	}
+}
+
 // --- printAndSaveTransferResult: the cash_to_send assembly for a bearer
 // transfer — the regression test for "reveal only the sent piece, never
 // require an unknown flag to signal a bearer send." A bearer target's
@@ -619,7 +665,7 @@ func TestPrintAndSaveTransferResult_BearerTargetAssemblesCashToSend(t *testing.T
 	result := &nipcash.CashTransferResult{AmountMillis: 500, NewWalletToken: "new-sent-token"}
 
 	captured := withCapturedStdout(func() {
-		if err := printAndSaveTransferResult(c, l, result, 500, "bearer-target", target, nil); err != nil {
+		if err := printAndSaveTransferResult(c, l, result, 500, "bearer-target", target, nil, ledger.Entry{}, ""); err != nil {
 			t.Fatalf("printAndSaveTransferResult() error = %v", err)
 		}
 	})
@@ -644,7 +690,7 @@ func TestPrintAndSaveTransferResult_BearerTargetHumanModeShowsCashString(t *test
 	result := &nipcash.CashTransferResult{AmountMillis: 500, NewWalletToken: "new-sent-token"}
 
 	captured := withCapturedStdout(func() {
-		if err := printAndSaveTransferResult(c, l, result, 500, "bearer-target", target, nil); err != nil {
+		if err := printAndSaveTransferResult(c, l, result, 500, "bearer-target", target, nil, ledger.Entry{}, ""); err != nil {
 			t.Fatalf("printAndSaveTransferResult() error = %v", err)
 		}
 	})
@@ -666,7 +712,7 @@ func TestPrintAndSaveTransferResult_NonBearerTargetOmitsCashToSend(t *testing.T)
 	result := &nipcash.CashTransferResult{AmountMillis: 500, NewWalletToken: "new-sent-token"}
 
 	captured := withCapturedStdout(func() {
-		if err := printAndSaveTransferResult(c, l, result, 500, "alice@example.com", target, nil); err != nil {
+		if err := printAndSaveTransferResult(c, l, result, 500, "alice@example.com", target, nil, ledger.Entry{}, ""); err != nil {
 			t.Fatalf("printAndSaveTransferResult() error = %v", err)
 		}
 	})
@@ -678,13 +724,22 @@ func TestPrintAndSaveTransferResult_NonBearerTargetOmitsCashToSend(t *testing.T)
 	if _, present := out["cash_to_send"]; present {
 		t.Errorf("cash_to_send present = %v, want the key entirely absent for a non-bearer target", out["cash_to_send"])
 	}
+	// The fix for a related bug: a pubkey/npub/connection recipient still
+	// needs an exact token string to receive with, split or not.
+	if got, _ := out["recipient_token"].(string); got != "new-sent-token" {
+		t.Errorf("recipient_token = %q, want %q", got, "new-sent-token")
+	}
 }
 
-func TestPrintAndSaveTransferResult_BearerTargetNoNewTokenOmitsCashToSend(t *testing.T) {
-	// Defensive: a bearer target with no NewWalletToken (shouldn't happen
-	// in practice — a placed bearer transfer always mints one — but the
-	// assembly branch is guarded on this explicitly) must not assemble a
-	// bogus "#secret" string with no token half.
+// TestPrintAndSaveTransferResult_BearerTargetNoNewTokenFallsBackToOriginal is
+// the regression test for the real bug (not a defensive corner case): an
+// EXACT full-amount transfer — SplitAmount == CurrentAmount, or amount
+// omitted entirely — reassigns the wallet IN PLACE, so NewWalletToken comes
+// back "" even on a genuinely completed, money-moving transfer. That used to
+// mean cash_to_send was never assembled at all: the whole gift was lost.
+// originalToken (the entry actually transferred) must be used as the
+// fallback half of the combined <token>#<secret> string.
+func TestPrintAndSaveTransferResult_BearerTargetNoNewTokenFallsBackToOriginal(t *testing.T) {
 	withTempConfigDirForTransferResult(t)
 	c := testCmdWithFlags(true, false)
 	l := &ledger.Ledger{}
@@ -693,7 +748,35 @@ func TestPrintAndSaveTransferResult_BearerTargetNoNewTokenOmitsCashToSend(t *tes
 	result := &nipcash.CashTransferResult{AmountMillis: 500}
 
 	captured := withCapturedStdout(func() {
-		if err := printAndSaveTransferResult(c, l, result, 500, "bearer-target", target, nil); err != nil {
+		if err := printAndSaveTransferResult(c, l, result, 500, "bearer-target", target, nil, ledger.Entry{}, "original-token"); err != nil {
+			t.Fatalf("printAndSaveTransferResult() error = %v", err)
+		}
+	})
+
+	var out map[string]any
+	if err := json.Unmarshal([]byte(captured), &out); err != nil {
+		t.Fatalf("json.Unmarshal(%q) error = %v", captured, err)
+	}
+	want := "original-token#" + bt.Secret()
+	if got, _ := out["cash_to_send"].(string); got != want {
+		t.Errorf("cash_to_send = %q, want %q (the fund-loss bug: an in-place full transfer must still hand back a spendable gift)", got, want)
+	}
+}
+
+// TestPrintAndSaveTransferResult_BearerTargetNothingToFallBackTo is the true
+// defensive case: neither a new wallet token nor an original token exists
+// (should be unreachable from any real call site) — must not assemble a
+// bogus "#secret" string with no token half.
+func TestPrintAndSaveTransferResult_BearerTargetNothingToFallBackTo(t *testing.T) {
+	withTempConfigDirForTransferResult(t)
+	c := testCmdWithFlags(true, false)
+	l := &ledger.Ledger{}
+	bt := nipcash.NewBearerTarget()
+	target := credential.ResolvedTarget{Target: bt}
+	result := &nipcash.CashTransferResult{AmountMillis: 500}
+
+	captured := withCapturedStdout(func() {
+		if err := printAndSaveTransferResult(c, l, result, 500, "bearer-target", target, nil, ledger.Entry{}, ""); err != nil {
 			t.Fatalf("printAndSaveTransferResult() error = %v", err)
 		}
 	})
@@ -703,6 +786,187 @@ func TestPrintAndSaveTransferResult_BearerTargetNoNewTokenOmitsCashToSend(t *tes
 		t.Fatalf("json.Unmarshal(%q) error = %v", captured, err)
 	}
 	if _, present := out["cash_to_send"]; present {
-		t.Errorf("cash_to_send present = %v, want absent when there's no new wallet token to combine with the secret", out["cash_to_send"])
+		t.Errorf("cash_to_send present = %v, want absent when there's truly nothing to combine with the secret", out["cash_to_send"])
+	}
+}
+
+// --- split remainders keep the source's credential mode: the regression
+// test for "a bearer wallet's second transfer asked for `cashctl init`."
+// lokihub leaves a split's remainder under the source's SAME identity, so
+// a remainder saved with no credential info fell through resolveCredential
+// to the (never-configured) local identity.
+
+func TestPrintAndSaveTransferResult_BearerRemainderStaysSpendableWithoutIdentity(t *testing.T) {
+	withTempConfigDirForTransferResult(t) // fresh config dir: no identity configured
+	c := testCmdWithFlags(true, false)
+	l := &ledger.Ledger{}
+	target := credential.ResolvedTarget{Target: nipcash.NewBearerTarget()}
+	remaining := uint64(9999)
+	result := &nipcash.CashTransferResult{
+		AmountMillis:          1,
+		NewWalletToken:        "new-sent-token",
+		RemainingAmountMillis: &remaining,
+		RemainderWalletToken:  "remainder-token",
+		RemainderWalletPubkey: strings.Repeat("b2", 32),
+	}
+	source := ledger.Entry{IdentityRequired: ptrTo(false), BearerSecret: strings.Repeat("c3", 32)}
+
+	withCapturedStdout(func() {
+		if err := printAndSaveTransferResult(c, l, result, 1, "bearer-target", target, nil, credentialModeOf(source), ""); err != nil {
+			t.Fatalf("printAndSaveTransferResult() error = %v", err)
+		}
+	})
+
+	rem, ok := l.FindByToken("remainder-token")
+	if !ok {
+		t.Fatal("remainder entry not saved")
+	}
+	if rem.IdentityRequired == nil || *rem.IdentityRequired {
+		t.Errorf("remainder IdentityRequired = %v, want false (bearer)", rem.IdentityRequired)
+	}
+	if rem.BearerSecret != source.BearerSecret {
+		t.Errorf("remainder BearerSecret = %q, want the source's own secret", rem.BearerSecret)
+	}
+	if rem.AmountMillis == nil || *rem.AmountMillis != remaining {
+		t.Errorf("remainder AmountMillis = %v, want %d", rem.AmountMillis, remaining)
+	}
+	// The user-visible symptom: spending the remainder must not need a
+	// local identity when the source never did.
+	if _, err := resolveCredential(testCmdWithFlags(true, false), rem); err != nil {
+		t.Errorf("resolveCredential(remainder) error = %v, want nil — a bearer remainder must not need `cashctl init`", err)
+	}
+}
+
+func TestPrintAndSaveTransferResult_PubkeyRemainderStaysPubkeyMode(t *testing.T) {
+	withTempConfigDirForTransferResult(t)
+	c := testCmdWithFlags(true, false)
+	l := &ledger.Ledger{}
+	target := credential.ResolvedTarget{Target: nipcash.Pubkey(strings.Repeat("a1", 32))}
+	result := &nipcash.CashTransferResult{
+		AmountMillis:          1,
+		NewWalletToken:        "new-sent-token",
+		RemainderWalletToken:  "remainder-token",
+		RemainderWalletPubkey: strings.Repeat("b2", 32),
+	}
+
+	withCapturedStdout(func() {
+		// The auto-consolidate path's mode: the interim wallet is the
+		// caller's own pubkey identity.
+		if err := printAndSaveTransferResult(c, l, result, 1, "alice@example.com", target, nil, ledger.Entry{IdentityRequired: ptrTo(true)}, ""); err != nil {
+			t.Fatalf("printAndSaveTransferResult() error = %v", err)
+		}
+	})
+
+	rem, ok := l.FindByToken("remainder-token")
+	if !ok {
+		t.Fatal("remainder entry not saved")
+	}
+	if rem.IdentityRequired == nil || !*rem.IdentityRequired {
+		t.Errorf("remainder IdentityRequired = %v, want true (pubkey)", rem.IdentityRequired)
+	}
+	if rem.BearerSecret != "" {
+		t.Errorf("remainder BearerSecret = %q, want empty for a pubkey-mode remainder", rem.BearerSecret)
+	}
+}
+
+// TestPrintAndSaveTransferResult_RecipientTokenNeverSavedToLedger locks in
+// the split half of the invariant cash_consolidate.go's own doCashConsolidate
+// enforces explicitly for a gift target ("must not be saved as one of the
+// caller's own held tokens") — printAndSaveTransferResult enforces the same
+// thing structurally instead, by simply never passing NewWalletToken to
+// l.Add anywhere in this file (only RemainderWalletToken, which NIP-CASH
+// guarantees server-side always stays bound to the caller's OWN unchanged
+// identity — see cash_transfer_controller.go's RemainderIdentityType/Value).
+// This test exists so a future change that starts also persisting
+// NewWalletToken (e.g. "for convenience", mirroring consolidate's own
+// newLedgerEntry shape) fails loudly instead of silently starting to save
+// the recipient's own split-off cash as if it were the caller's.
+func TestPrintAndSaveTransferResult_RecipientTokenNeverSavedToLedger(t *testing.T) {
+	withTempConfigDirForTransferResult(t)
+	c := testCmdWithFlags(true, false)
+	l := &ledger.Ledger{}
+	target := credential.ResolvedTarget{Target: nipcash.Pubkey(strings.Repeat("a1", 32))}
+	result := &nipcash.CashTransferResult{
+		AmountMillis:          1,
+		NewWalletToken:        "recipients-own-token",
+		NewWalletPubkey:       strings.Repeat("c3", 32),
+		RemainingAmountMillis: ptrTo(uint64(9999)),
+		RemainderWalletToken:  "callers-own-remainder",
+		RemainderWalletPubkey: strings.Repeat("b2", 32),
+	}
+
+	withCapturedStdout(func() {
+		if err := printAndSaveTransferResult(c, l, result, 1, "alice@example.com", target, nil, ledger.Entry{IdentityRequired: ptrTo(true)}, ""); err != nil {
+			t.Fatalf("printAndSaveTransferResult() error = %v", err)
+		}
+	})
+
+	if _, ok := l.FindByToken("recipients-own-token"); ok {
+		t.Error("the recipient's own split-off token was found in the caller's ledger — it belongs to the recipient, not the caller")
+	}
+	if len(l.Entries) != 1 {
+		t.Fatalf("l.Entries = %+v, want exactly 1 (only the caller's own remainder)", l.Entries)
+	}
+	if _, ok := l.FindByToken("callers-own-remainder"); !ok {
+		t.Error("the caller's own remainder was not saved")
+	}
+}
+
+func TestCredentialModeOf_CopiesOnlyCredentialFields(t *testing.T) {
+	amt := uint64(5000)
+	minter := "minter"
+	src := ledger.Entry{
+		ID: "tok-1", Token: "src-token", WalletPubkey: "src-pub", AmountMillis: &amt, MinterPubkey: &minter,
+		IdentityRequired: ptrTo(false), BearerSecret: "sec",
+		ConnectionKeyPlatform: "github", ConnectionKeyExternalID: "42", AttestationEventID: "ev", IAPubkey: "ia",
+	}
+	want := ledger.Entry{
+		IdentityRequired: ptrTo(false), BearerSecret: "sec",
+		ConnectionKeyPlatform: "github", ConnectionKeyExternalID: "42", AttestationEventID: "ev", IAPubkey: "ia",
+	}
+	if got := credentialModeOf(src); !reflect.DeepEqual(got, want) {
+		t.Errorf("credentialModeOf() = %+v, want %+v (identity/amount/token fields of the source must not carry over)", got, want)
+	}
+}
+
+// --- expiresAtFromCheck: an already-expired wallet rejects CheckClaim's own
+// list_recipients call with EXPIRED, so that rejection IS the expiry signal.
+// It used to collapse to nil, and the "already expired" warnings never fired.
+
+func TestExpiresAtFromCheck_ExpiredDeclineReportsAPassedDeadline(t *testing.T) {
+	err := &relayclient.WalletError{Method: "list_recipients", Code: "EXPIRED", Message: "app expired"}
+	got := expiresAtFromCheck(nil, err)
+	if got == nil {
+		t.Fatal("expiresAtFromCheck(EXPIRED) = nil, want a deadline that has already passed")
+	}
+	if time.Until(time.Unix(*got, 0)) > 0 {
+		t.Errorf("deadline %v is still in the future, want it already passed", time.Unix(*got, 0))
+	}
+	// It must be recognised as expired by the callers' own test.
+	if w := expiryWarningSuffix(got, "transfer"); w != "Deadline passed — may fail." {
+		t.Errorf("expiryWarningSuffix() = %q, want the deadline-passed warning", w)
+	}
+}
+
+func TestExpiresAtFromCheck_OtherFailuresStillMeanUnknown(t *testing.T) {
+	// Only EXPIRED is an answer: an unrelated decline or a network failure
+	// says nothing about the deadline, and must not manufacture a warning.
+	for _, err := range []error{
+		&relayclient.WalletError{Method: "list_recipients", Code: "RESTRICTED", Message: "no"},
+		errors.New("dial tcp: connection refused"),
+	} {
+		if got := expiresAtFromCheck(nil, err); got != nil {
+			t.Errorf("expiresAtFromCheck(%v) = %v, want nil", err, time.Unix(*got, 0))
+		}
+	}
+}
+
+func TestExpiresAtFromCheck_SuccessPassesTheRealDeadlineThrough(t *testing.T) {
+	when := time.Now().Add(3 * time.Hour).Unix()
+	if got := expiresAtFromCheck(&nipcash.CheckClaimResult{ExpiresAt: &when}, nil); got == nil || *got != when {
+		t.Errorf("expiresAtFromCheck() = %v, want %d", got, when)
+	}
+	if got := expiresAtFromCheck(&nipcash.CheckClaimResult{}, nil); got != nil {
+		t.Errorf("no deadline on the result: got %v, want nil", *got)
 	}
 }

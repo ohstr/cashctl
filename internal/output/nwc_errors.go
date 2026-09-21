@@ -48,6 +48,19 @@ var nwcErrorMessages = map[string]string{
 	"BAD_REQUEST":            "That request wasn't valid.",
 }
 
+// cashTokenNWCErrorMessages overrides nwcErrorMessages' wallet-oriented
+// text for codes whose meaning is different when the declining party is a
+// cash token's own Hub-side check (CheckClaim, CashRedeem, CashTransfer,
+// ListRecipients — anything dialing entry.Token itself) rather than a
+// registered wallet connection. EXPIRED above all: on a cash token this is
+// the token's own redemption deadline, not "this wallet" — cashctl used to
+// print the wallet-oriented text here regardless, which read as if the
+// user's *wallet* had expired when it was the token they were trying to
+// receive/spend.
+var cashTokenNWCErrorMessages = map[string]string{
+	"EXPIRED": "This cash token has expired and can no longer be claimed or spent.",
+}
+
 // NWCError classifies a wallet's NWC error response (nmilat's
 // relay/client.WalletError, returned by every relay/client.NWCClient and
 // nipcash/nipcw client call on a wallet decline) into a *CLIError: cashctl's
@@ -61,6 +74,21 @@ var nwcErrorMessages = map[string]string{
 // though --json exists precisely for a consumer that wants more than the
 // generic bucket text.
 func NWCError(cmd *cobra.Command, err *relayclient.WalletError) error {
+	return nwcError(cmd, err, nwcErrorMessages)
+}
+
+// NWCErrorForCashToken is NWCError's counterpart for a decline received
+// while checking or spending a cash token's own claim (not a registered
+// wallet) — see cashTokenNWCErrorMessages' own doc comment. Classification
+// (ErrorCode, exit code, NWCCode, RawMessage) is identical to NWCError;
+// only the human-mode friendly text for overridden codes differs, so
+// --json output — which always carries RawMessage, never this table — is
+// unaffected either way.
+func NWCErrorForCashToken(cmd *cobra.Command, err *relayclient.WalletError) error {
+	return nwcError(cmd, err, cashTokenNWCErrorMessages)
+}
+
+func nwcError(cmd *cobra.Command, err *relayclient.WalletError, overrides map[string]string) error {
 	silence(cmd)
 	code := nwcErrorCode[err.Code]
 	if code == "" {
@@ -69,7 +97,9 @@ func NWCError(cmd *cobra.Command, err *relayclient.WalletError) error {
 	// Sanitized: err.Message is the wallet's own raw text, not cashctl's.
 	rawMessage := Sanitize(err.Message)
 	message := rawMessage
-	if friendly, ok := nwcErrorMessages[err.Code]; ok {
+	if friendly, ok := overrides[err.Code]; ok {
+		message = friendly
+	} else if friendly, ok := nwcErrorMessages[err.Code]; ok {
 		message = friendly
 	}
 	return &CLIError{

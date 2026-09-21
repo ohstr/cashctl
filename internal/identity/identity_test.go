@@ -191,3 +191,60 @@ func TestNcliVaultRef_WrongPassword(t *testing.T) {
 		t.Fatal("expected an error resolving with the wrong vault password")
 	}
 }
+
+// N first-time `init`s racing on one fresh dir used to each generate a key,
+// each "succeed", and each report its own npub, with only the last write
+// surviving — every earlier caller was told about an identity that no longer
+// existed. The first claim must win and every later one must be told so.
+func TestGenerateAndSaveLocal_SecondClaimLosesAndLeavesTheFirstUntouched(t *testing.T) {
+	withTempDirs(t)
+
+	if _, err := GenerateAndSaveLocal(); err != nil {
+		t.Fatalf("first GenerateAndSaveLocal() error = %v", err)
+	}
+	first, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if _, err := GenerateAndSaveLocal(); !errors.Is(err, ErrAlreadyConfigured) {
+		t.Errorf("second GenerateAndSaveLocal() error = %v, want ErrAlreadyConfigured", err)
+	}
+	if err := SaveNcliVaultRef("npub1other", "other"); !errors.Is(err, ErrAlreadyConfigured) {
+		t.Errorf("SaveNcliVaultRef() over an existing identity: error = %v, want ErrAlreadyConfigured", err)
+	}
+
+	after, err := Load()
+	if err != nil {
+		t.Fatalf("Load() after the losing claims error = %v", err)
+	}
+	if after.PrivHex != first.PrivHex || after.Source != first.Source {
+		t.Error("a losing claim overwrote the identity the first one stored")
+	}
+}
+
+func TestGenerateAndSaveLocal_ConcurrentClaimsLeaveExactlyOneWinner(t *testing.T) {
+	withTempDirs(t)
+
+	const n = 8
+	results := make(chan error, n)
+	for i := 0; i < n; i++ {
+		go func() {
+			_, err := GenerateAndSaveLocal()
+			results <- err
+		}()
+	}
+	wins := 0
+	for i := 0; i < n; i++ {
+		switch err := <-results; {
+		case err == nil:
+			wins++
+		case errors.Is(err, ErrAlreadyConfigured):
+		default:
+			t.Errorf("unexpected error from a concurrent claim: %v", err)
+		}
+	}
+	if wins != 1 {
+		t.Errorf("%d of %d concurrent claims reported success, want exactly 1", wins, n)
+	}
+}

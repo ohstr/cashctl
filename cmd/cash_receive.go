@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -30,6 +31,9 @@ func newCashReceiveCmd() *cobra.Command {
 }
 
 func runCashReceive(cmd *cobra.Command, args []string) error {
+	if err := rejectConnectionFlag(cmd); err != nil {
+		return err
+	}
 	jsonMode, _ := cmd.Flags().GetBool("json")
 	// Trimmed: dial.Sniff trims for its own classification but the raw
 	// string would otherwise still reach nipcash.Decode, which rejects a
@@ -43,6 +47,8 @@ func runCashReceive(cmd *cobra.Command, args []string) error {
 		return output.InvalidInputError(cmd, input, fmt.Errorf("that's a Cash Hub connection (for minting cash) — cashctl can't mint, this needs the Hub operator's own tooling"))
 	case dial.KindNWCURI:
 		return output.InvalidInputError(cmd, input, fmt.Errorf("that looks like a wallet connection, not a cash token — use `cashctl connect add <name> <uri>` instead"))
+	case dial.KindNostrEntity:
+		return output.InvalidInputError(cmd, input, errors.New(nostrEntityMessage(dial.NostrEntityHRP(input))))
 	case dial.KindUnknown:
 		return output.InvalidInputError(cmd, input, fmt.Errorf("doesn't look like a valid cash token"))
 	}
@@ -90,7 +96,12 @@ func runCashReceive(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return output.RuntimeError(cmd, err)
 	}
-	if _, ok := l.FindByToken(input); ok {
+	// Only a token still HELD blocks this — one that's since been
+	// transferred/redeemed/consolidated away is allowed back in (ledger.Add
+	// reactivates its existing row): a full-amount transfer reassigns a
+	// wallet in place, so the very same token string legitimately returns
+	// to a previous holder.
+	if held, ok := l.FindByToken(input); ok && held.Status == ledger.StatusHeld {
 		return output.ConflictError(cmd, input, ledger.ErrAlreadyHeld)
 	}
 
@@ -98,6 +109,9 @@ func runCashReceive(cmd *cobra.Command, args []string) error {
 
 	result, err := checkClaimWithCashHub(cmd, input, tok)
 	if err != nil {
+		return err
+	}
+	if err := validateClaimedAmount(cmd, tok, result); err != nil {
 		return err
 	}
 
@@ -114,6 +128,15 @@ func runCashReceive(cmd *cobra.Command, args []string) error {
 		AmountMillis:     &result.AmountMillis,
 		Verified:         true,
 		MinterPubkey:     result.MinterPubkey,
+		ExpiresAt:        result.ExpiresAt,
+	}
+	if result.IsBearer {
+		// Shared, not yet protected: this is the secret exactly as it
+		// arrived in the token/gift string, still spendable by anyone else
+		// who was shown it too. protectBearerReceipt (below, after this
+		// entry is saved) flips it to BearerProtected on a successful
+		// re-key — see ledger.Entry.BearerProtection's own doc comment.
+		entry.BearerProtection = ledger.BearerShared
 	}
 
 	added, err := l.Add(entry)
@@ -161,31 +184,34 @@ func runCashReceive(cmd *cobra.Command, args []string) error {
 // credential (see decode.go's own "pairing secret is never included"
 // rule).
 func printCashBill(jsonMode bool, tok nipcash.Token, isBearer bool) {
-	output.Linef(jsonMode, "Cash bill:")
-	output.Linef(jsonMode, "  wallet_pubkey: %s", tok.WalletPubkey)
+	output.Notef(jsonMode, "Cash bill:")
+	output.Notef(jsonMode, "  wallet_pubkey: %s", tok.WalletPubkey)
 	if len(tok.RelayURLs) > 0 {
-		output.Linef(jsonMode, "  relays: %s", joinStrings(tok.RelayURLs))
+		output.Notef(jsonMode, "  relays: %s", joinStrings(tok.RelayURLs))
 	}
 	switch {
 	case isBearer:
-		output.Linef(jsonMode, "  identity: bearer-mode")
+		output.Notef(jsonMode, "  identity: bearer-mode")
 	case tok.IdentityRequired != nil:
-		output.Linef(jsonMode, "  identity: requires proof")
+		output.Notef(jsonMode, "  identity: requires proof")
 	default:
-		output.Linef(jsonMode, "  identity: unspecified")
+		output.Notef(jsonMode, "  identity: unspecified")
 	}
 	minterLine, amountLine := formatMinterStatus(tok)
-	output.Linef(jsonMode, "  %s", minterLine)
+	output.Notef(jsonMode, "  %s", minterLine)
 	if amountLine != "" {
-		output.Linef(jsonMode, "  %s", amountLine)
+		output.Notef(jsonMode, "  %s", amountLine)
 	}
 }
 
 // minterPubkeyFromToken resolves the Entry.MinterPubkey to persist at
 // receive time: nil for a token with no mint-provenance pair, or one whose
-// signature doesn't verify — only a token VerifyProvenance actually
-// confirms gets a trustworthy minter identity recorded (see ledger.Entry's
-// own doc comment on why this matters for cash selection).
+// signature doesn't recover cleanly — a signature VerifyProvenance
+// confirms as self-consistent gets its recovered pubkey recorded, NOT a
+// vetted "trustworthy minter": anyone can mint-sign their own token with a
+// disposable key (see ledger.Entry.MinterPubkey's own doc comment for why
+// this only ever means "same signer," never "a mint you'd trust," and why
+// that's still useful for cash selection).
 func minterPubkeyFromToken(tok nipcash.Token) *string {
 	if !tok.HasProvenance() {
 		return nil
@@ -206,6 +232,42 @@ func minterPubkeyFromToken(tok nipcash.Token) *string {
 // nothing gets saved, ever, on the strength of the token string alone.
 // Always passes its own local pubkey (best-effort): CheckClaim tries
 // both pubkey and bearer live, so the caller doesn't need to guess.
+// validateClaimedAmount is the second half of "refuses anything that
+// doesn't check out" (this file's own package doc comment): checkClaimWithCashHub
+// only proves a matching, unclaimed recipient exists — it never checks
+// that the AMOUNT the Hub reports for it is sane, or (when the token
+// carries one) consistent with its own signed provenance. Both gaps are
+// exploitable by nothing more than an attacker-controlled relay (the
+// token's own RelayURLs, dialed automatically): a fake Hub can make
+// receive display and PERSIST an arbitrary "verified" balance, and an
+// absurd reported amount (anything beyond what a real int64 mloki
+// quantity can hold — every downstream consumer, from FormatAmount's own
+// signature to ledger.Entry.AmountMillis's later int64 casts, eventually
+// assumes one) becomes negative the moment such a cast touches it,
+// exactly the value ParseAmount's own boundary already enforces on the
+// input side (internal/output.ParseAmount) — this is that same boundary
+// on the network-input side.
+//
+// tok.HasProvenance() being true only means a signature and an attested
+// amount are BOTH present, not that the signature verified — result.MinterPubkey
+// is CheckClaim's own live answer, set only when nipcash.VerifyProvenance
+// already confirmed it (see nipcashclient.CheckClaim's own implementation),
+// so checking that instead of re-verifying here can't be fooled by a
+// tampered signature paired with a forged attested amount.
+func validateClaimedAmount(cmd *cobra.Command, tok nipcash.Token, result *nipcash.CheckClaimResult) error {
+	const maxSaneAmountMloki = uint64(math.MaxInt64)
+	if result.AmountMillis > maxSaneAmountMloki {
+		return output.InvalidInputError(cmd, "", fmt.Errorf(
+			"the Hub reports an amount (%d mloki) too large to be real — refusing to trust it", result.AmountMillis))
+	}
+	if result.MinterPubkey != nil && tok.AttestedAmountMillis != nil && result.AmountMillis != *tok.AttestedAmountMillis {
+		return output.InvalidInputError(cmd, "", fmt.Errorf(
+			"the Hub reports %s for this token, but its own signed provenance attests to %s — refusing to trust either figure",
+			output.FormatAmount(int64(result.AmountMillis)), output.FormatAmount(int64(*tok.AttestedAmountMillis))))
+	}
+	return nil
+}
+
 func checkClaimWithCashHub(cmd *cobra.Command, input string, tok nipcash.Token) (*nipcash.CheckClaimResult, error) {
 	jsonMode, _ := cmd.Flags().GetBool("json")
 	var result *nipcash.CheckClaimResult
@@ -237,7 +299,12 @@ func checkClaimWithCashHub(cmd *cobra.Command, input string, tok nipcash.Token) 
 	if noMatch {
 		return nil, output.InvalidInputError(cmd, input, err)
 	}
-	return nil, output.NetworkError(cmd, err)
+	// classifyCashTokenNWCErr, not a blanket NetworkError: a Hub that
+	// ANSWERS with a decline (an expired token's EXPIRED above all) is not
+	// a network failure, and reporting it as retryable told a script to
+	// keep retrying a token whose deadline had already passed. Dial
+	// failures and timeouts are still `network`.
+	return nil, classifyCashTokenNWCErr(cmd, err)
 }
 
 // checkClaimOnce is Step 0's optional, non-fatal check for a bearer token

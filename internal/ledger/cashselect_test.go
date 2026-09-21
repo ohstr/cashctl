@@ -2,7 +2,6 @@ package ledger
 
 import (
 	"errors"
-	"strings"
 	"testing"
 )
 
@@ -139,13 +138,26 @@ func TestSelectForAmount_DifferentMintersNotGroupedTogether(t *testing.T) {
 	}
 }
 
-func TestSelectForAmount_Fragmented(t *testing.T) {
+// TestSelectForAmount_InsufficientFunds guards the fix distinguishing a
+// plain overdraft from real fragmentation: held's total (1000) doesn't
+// even reach target (5000) — there's only one token, one minter, nothing
+// "fragmented across separate Hubs" about it. This used to return the
+// exact same ErrFundsFragmented a genuinely-spread-across-minters case
+// does; it must now say plainly that there isn't enough.
+func TestSelectForAmount_InsufficientFunds(t *testing.T) {
 	held := []Entry{
 		{ID: "tok-1", AmountMillis: amountPtr(1000), MinterPubkey: minterPtr(minterA)},
 	}
 	_, err := SelectForAmount(held, 5000)
-	if !errors.Is(err, ErrFundsFragmented) {
-		t.Fatalf("SelectForAmount() error = %v, want ErrFundsFragmented", err)
+	if !errors.Is(err, ErrInsufficientFunds) {
+		t.Fatalf("SelectForAmount() error = %v, want ErrInsufficientFunds", err)
+	}
+	if errors.Is(err, ErrFundsFragmented) {
+		t.Errorf("SelectForAmount() error = %v, must NOT also be ErrFundsFragmented — this is a plain overdraft, not fragmentation", err)
+	}
+	var insuf *InsufficientFundsError
+	if !errors.As(err, &insuf) || insuf.TotalHeld != 1000 || insuf.Target != 5000 {
+		t.Errorf("error = %q, want *InsufficientFundsError{TotalHeld: 1000, Target: 5000}", err)
 	}
 }
 
@@ -243,45 +255,50 @@ func TestSelectForAmount_MultipleCoveringMintersPicksLexicographicallyFirst(t *t
 	}
 }
 
-// TestSelectForAmount_EmptyHeldIsFragmented is SelectForAmount's own
-// zero-value contract: no caller in this codebase invokes it with an
+// TestSelectForAmount_EmptyHeldIsInsufficientFunds is SelectForAmount's
+// own zero-value contract: no caller in this codebase invokes it with an
 // empty held (runCashTransfer's own call site guards len(l.Held()) > 0
 // first — see cash_transfer.go), but SelectForAmount is exported with no
 // such precondition documented, so any future caller must get a sane
-// classified error, not a panic or a nonsensical plan.
-func TestSelectForAmount_EmptyHeldIsFragmented(t *testing.T) {
+// classified error, not a panic or a nonsensical plan. 0 held is an
+// overdraft (ErrInsufficientFunds), not fragmentation — there's nothing
+// spread across separate Hubs when there's nothing at all.
+func TestSelectForAmount_EmptyHeldIsInsufficientFunds(t *testing.T) {
 	plan, err := SelectForAmount(nil, 5000)
-	if !errors.Is(err, ErrFundsFragmented) {
-		t.Fatalf("SelectForAmount(nil, ...) error = %v, want ErrFundsFragmented", err)
+	if !errors.Is(err, ErrInsufficientFunds) {
+		t.Fatalf("SelectForAmount(nil, ...) error = %v, want ErrInsufficientFunds", err)
 	}
 	if plan != nil {
 		t.Errorf("plan = %+v, want nil alongside an error", plan)
 	}
-	if !strings.Contains(err.Error(), "you hold 0 total") {
-		t.Errorf("error = %q, want it to name 0 as the total held", err.Error())
+	var insuf *InsufficientFundsError
+	if !errors.As(err, &insuf) || insuf.TotalHeld != 0 {
+		t.Errorf("error = %q, want a *InsufficientFundsError naming 0 as TotalHeld", err.Error())
 	}
 }
 
-// TestSelectForAmount_AllUnknownAmountsIsFragmented is the other half of
-// TestSelectForAmount_UnknownAmountEntriesIgnored (which mixes a known
-// amount in): held tokens can exist locally with no cached amount yet at
-// all (e.g. every entry is a cash_transfer remainder awaiting its first
-// resolveAmount call) — this must report the same 0-total fragmented
-// error an empty held does, not a misleading "you hold N total" using
-// some other field, and not a panic from GroupByMinter's own "every
-// entry has a MinterPubkey" assumption (GroupableForConsolidation's
-// filter must exclude these before they ever reach it).
-func TestSelectForAmount_AllUnknownAmountsIsFragmented(t *testing.T) {
+// TestSelectForAmount_AllUnknownAmountsIsInsufficientFunds is the other
+// half of TestSelectForAmount_UnknownAmountEntriesIgnored (which mixes a
+// known amount in): held tokens can exist locally with no cached amount
+// yet at all (e.g. every entry is a cash_transfer remainder awaiting its
+// first resolveAmount call) — this must report the same 0-total
+// insufficient-funds error an empty held does, not a misleading
+// "you hold N" using some other field, and not a panic from
+// GroupByMinter's own "every entry has a MinterPubkey" assumption
+// (GroupableForConsolidation's filter must exclude these before they ever
+// reach it).
+func TestSelectForAmount_AllUnknownAmountsIsInsufficientFunds(t *testing.T) {
 	held := []Entry{
 		{ID: "tok-1"}, // AmountMillis == nil
 		{ID: "tok-2"}, // AmountMillis == nil
 	}
 	_, err := SelectForAmount(held, 5000)
-	if !errors.Is(err, ErrFundsFragmented) {
-		t.Fatalf("SelectForAmount() error = %v, want ErrFundsFragmented", err)
+	if !errors.Is(err, ErrInsufficientFunds) {
+		t.Fatalf("SelectForAmount() error = %v, want ErrInsufficientFunds", err)
 	}
-	if !strings.Contains(err.Error(), "you hold 0 total") {
-		t.Errorf("error = %q, want it to name 0 as the total held (unknown amounts contribute nothing)", err.Error())
+	var insuf *InsufficientFundsError
+	if !errors.As(err, &insuf) || insuf.TotalHeld != 0 {
+		t.Errorf("error = %q, want a *InsufficientFundsError naming 0 as TotalHeld (unknown amounts contribute nothing)", err.Error())
 	}
 }
 

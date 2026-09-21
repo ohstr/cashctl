@@ -17,6 +17,7 @@ func newConnectCmd() *cobra.Command {
 		Long:  `Registers any NWC connection cashctl didn't create itself.`,
 		Example: `  cashctl connect add work nostr+walletconnect://...
   cashctl connect list`,
+		RunE: groupRunE,
 	}
 	cmd.AddCommand(newConnectAddCmd(), newConnectListCmd(), newConnectUseCmd(), newConnectRmCmd())
 	return cmd
@@ -32,6 +33,9 @@ func newConnectAddCmd() *cobra.Command {
 			// Trimmed: a stray space/newline makes url.Parse reject an
 			// otherwise-valid nostr+walletconnect:// URI outright.
 			name, value := args[0], strings.TrimSpace(args[1])
+			if err := validateConnectionValue(value); err != nil {
+				return output.InvalidInputError(cmd, value, err)
+			}
 
 			s, err := config.Load()
 			if err != nil {
@@ -39,14 +43,21 @@ func newConnectAddCmd() *cobra.Command {
 			}
 			wasEmpty := s.IsEmpty()
 			if err := s.Add(name, value); err != nil {
-				return output.ConflictError(cmd, name, err)
+				// invalid_input, not conflict: conflict is documented as
+				// retryable, and re-running with the same taken name can
+				// never succeed — the caller has to pick a different one.
+				return output.InvalidInputError(cmd, name, err)
 			}
 
 			setDefault := false
 			if wasEmpty {
 				setDefault = jsonMode || Confirm(cmd, true, "This is your only wallet — use it as your default?")
 			} else {
-				setDefault = !jsonMode && Confirm(cmd, false, fmt.Sprintf("Set %s as your default wallet?", name))
+				// An existing default is only ever replaced by an explicit
+				// answer: --yes means "don't ask", not "yes to changing which
+				// wallet my money goes to" (--json already behaves this way).
+				yes, _ := cmd.Flags().GetBool("yes")
+				setDefault = !jsonMode && !yes && Confirm(cmd, false, fmt.Sprintf("Set %s as your default wallet?", name))
 			}
 			if setDefault {
 				_ = s.SetDefault(name)
@@ -80,7 +91,7 @@ func newConnectListCmd() *cobra.Command {
 				return output.RuntimeError(cmd, err)
 			}
 			if jsonMode {
-				output.PrintJSON(map[string]any{"connections": s.Connections, "default": s.Default})
+				output.PrintJSON(map[string]any{"connections": output.NonNil(s.Connections), "default": s.Default})
 				return nil
 			}
 			if s.IsEmpty() {

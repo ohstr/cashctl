@@ -1,6 +1,8 @@
 package output
 
 import (
+	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -114,6 +116,47 @@ func TestParseAmount_LeadingDotIsHalfALoki(t *testing.T) {
 	}
 }
 
+// TestParseAmount_RejectsOverflow is the regression test for a real bug:
+// `transfer <target> 18446744073709552` used to overflow uint64 during the
+// loki -> mloki multiply and silently become 384 mloki (0.384 loki) — the
+// call then succeeded and moved that (wrong) small amount for real.
+// Neighbouring values separately went negative the moment any downstream
+// int64(...) cast touched them (FormatAmount's own signature, the invoice
+// amount cast in cmd/wallet_ops.go, ...) even where the uint64 multiply
+// itself didn't wrap. Every case here must be rejected outright, not
+// silently reinterpreted as a valid, wildly different amount.
+func TestParseAmount_RejectsOverflow(t *testing.T) {
+	for _, in := range []string{
+		"18446744073709552",                // wraps uint64 in the *1000 multiply -> used to become 384
+		"18446744073709551",                // wraps uint64 differently -> used to become a huge positive mloki value
+		"9223372036854776",                 // fits uint64 but negative once cast to int64 downstream
+		"9223372036854775.9",               // same boundary, exercised via the fractional-part addition
+		"99999999999999999999999999999999", // absurdly large, not even close to fitting any integer type
+	} {
+		if got, err := ParseAmount(in); err == nil {
+			t.Errorf("ParseAmount(%q) = %d, nil error — want it rejected as too large", in, got)
+		}
+	}
+}
+
+// TestParseAmount_AcceptsTheExactBoundary confirms the fix is a boundary,
+// not an overcorrection: the largest amount that fits in an int64 mloki
+// value must still parse, and one loki more must not.
+func TestParseAmount_AcceptsTheExactBoundary(t *testing.T) {
+	const maxInt64 = 1<<63 - 1
+	maxLoki := maxInt64 / 1000 // whole loki that fits with room for .000-.999 mloki of slack under the cap
+	got, err := ParseAmount(fmt.Sprintf("%d", maxLoki))
+	if err != nil {
+		t.Fatalf("ParseAmount(%d) (just under the int64 mloki boundary) error = %v", maxLoki, err)
+	}
+	if got != uint64(maxLoki)*1000 {
+		t.Errorf("ParseAmount(%d) = %d, want %d", maxLoki, got, uint64(maxLoki)*1000)
+	}
+	if _, err := ParseAmount(fmt.Sprintf("%d", maxLoki+1_000_000)); err == nil {
+		t.Errorf("ParseAmount(%d) (well past the boundary) = nil error, want rejected", maxLoki+1_000_000)
+	}
+}
+
 func TestParseAmount_RoundTripsWithFormatAmount(t *testing.T) {
 	for _, mloki := range []int64{0, 1, 5, 999, 1000, 1234, 10_000_000} {
 		formatted := FormatAmount(mloki)
@@ -147,6 +190,59 @@ func TestErrorPrefix_UncoloredIsPlainText(t *testing.T) {
 	got := errorPrefix(false)
 	if got != "Error:" {
 		t.Errorf("errorPrefix(false) = %q, want exactly \"Error:\" — no ANSI bytes for a script/agent parsing piped/non-TTY stderr", got)
+	}
+}
+
+// TestSanitize_StripsC1ControlChars is the regression test for a real
+// terminal-spoofing gap: Sanitize's original check (r < 0x20 || r == 0x7f)
+// only covered the C0 range — a terminal that honors 8-bit C1 controls in
+// UTF-8 mode (xterm, some VTE builds) executes CSI (U+009B), OSC (U+009D)
+// and ST (U+009C) from the C1 range exactly like their ESC-prefixed C0
+// equivalents, so a hostile relay URL embedded in a token/hub string could
+// clear the screen or set the window title at decode/receive time with no
+// ESC byte anywhere in it.
+func TestSanitize_StripsC1ControlChars(t *testing.T) {
+	in := "\u009b31m\u009b2J\u009d0;PWNED-TITLE\u009c"
+	got := Sanitize(in)
+	for _, r := range []rune{0x9b, 0x9c, 0x9d} {
+		if strings.ContainsRune(got, r) {
+			t.Errorf("Sanitize(%q) = %q, still contains C1 control U+%04X", in, got, r)
+		}
+	}
+}
+
+// TestSanitize_StripsBidiAndLineSeparatorChars covers the other two
+// non-printable-but-not-caught-by-the-old-check families: bidi format
+// controls (can reorder how the same bytes visually display) and the
+// Unicode line/paragraph separators (some terminals treat them as a hard
+// line break, injecting a fake extra line).
+func TestSanitize_StripsBidiAndLineSeparatorChars(t *testing.T) {
+	for _, r := range []rune{0x2028, 0x2029, 0x202a, 0x202e, 0x2066, 0x2069} {
+		in := "before" + string(r) + "after"
+		if got := Sanitize(in); strings.ContainsRune(got, r) {
+			t.Errorf("Sanitize(%q) = %q, still contains U+%04X", in, got, r)
+		}
+	}
+}
+
+// encoding/json renders a nil slice as null: a --json consumer iterating a
+// collection (`jq '.[]'`, a typed decoder) needs [] for "nothing here".
+func TestNonNil_EncodesEmptyCollectionsAsArrays(t *testing.T) {
+	var none []string
+	b, err := json.Marshal(map[string]any{"raw": none, "wrapped": NonNil(none), "empty": NonNil([]string{})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(b), `{"empty":[],"raw":null,"wrapped":[]}`; got != want {
+		t.Errorf("encoded = %s, want %s", got, want)
+	}
+}
+
+func TestNonNil_LeavesAPopulatedSliceAlone(t *testing.T) {
+	in := []int{1, 2, 3}
+	out := NonNil(in)
+	if len(out) != 3 || &out[0] != &in[0] {
+		t.Errorf("NonNil(%v) = %v, want the same slice back", in, out)
 	}
 }
 

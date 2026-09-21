@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -52,6 +53,9 @@ type consolidateResult struct {
 }
 
 func runCashConsolidate(cmd *cobra.Command, args []string) error {
+	if err := rejectConnectionFlag(cmd); err != nil {
+		return err
+	}
 	jsonMode, _ := cmd.Flags().GetBool("json")
 	sourcesFlag, _ := cmd.Flags().GetString("sources")
 	toFlag, _ := cmd.Flags().GetString("to")
@@ -212,8 +216,14 @@ func consolidateItems(cmd *cobra.Command, l *ledger.Ledger, items []string, toFl
 		}
 		target = rt.Target
 		targetResolved = rt.Resolved
-		if targetResolved != "" {
-			output.Linef(jsonMode, "  resolves to: %s", targetResolved)
+		// shouldPrintResolvedTarget (cash_transfer.go): a bearer target's
+		// Resolved carries the freshly generated secret itself — printing
+		// it here, before anything is confirmed, is the exact bearer-
+		// target-secret-before-confirm bug already found and fixed for
+		// transfer's own "resolves to:" line. Still returned in --json's
+		// target_resolved either way, same as transfer.
+		if shouldPrintResolvedTarget(rt) {
+			output.Notef(jsonMode, "  resolves to: %s", targetResolved)
 		}
 	} else {
 		myPub, err := localPubKeyHex(cmd)
@@ -238,10 +248,10 @@ func consolidateItems(cmd *cobra.Command, l *ledger.Ledger, items []string, toFl
 		// deadline in the process. This is the one case worth blocking on
 		// even under this command's ordinary "just note it" expiry
 		// posture.
-		fmt.Printf("%d of these already expired — merging it in makes the WHOLE %s token unusable too. Leave it out to keep the rest spendable.\n",
+		output.Notef(jsonMode, "%d of these already expired — merging it in makes the WHOLE %s token unusable too. Leave it out to keep the rest spendable.",
 			expiredSources, output.FormatAmount(int64(total)))
 	} else if w := expiryWarningSuffix(earliestExpiresAt, "consolidate"); w != "" {
-		fmt.Println(w)
+		output.Notef(jsonMode, "%s", w)
 	}
 	// defaultYes=false: moves real money — never accept on a bare Enter.
 	// Only reachable outside --json/--yes (Confirm auto-accepts under
@@ -254,15 +264,27 @@ func consolidateItems(cmd *cobra.Command, l *ledger.Ledger, items []string, toFl
 
 	var newEntry *ledger.Entry
 	var expiresAt *int64
+	// toFlag == "" is the same "target is my own identity" signal
+	// ifTargetIsSelf's display text above already relies on — an explicit
+	// --to <my own pubkey> isn't specially detected here either, matching
+	// that existing simplification rather than introducing a new one.
+	isSelfTarget := toFlag == ""
 	err = WithSpinner(jsonMode, "Consolidating...", func() error {
 		var cErr error
-		newEntry, expiresAt, cErr = doCashConsolidate(cmd, l, sourceTokens, sources, localIDs, target)
+		newEntry, expiresAt, cErr = doCashConsolidate(cmd, l, sourceTokens, sources, localIDs, target, isSelfTarget)
 		return cErr
 	})
 	if err != nil {
 		return nil, err
 	}
-	_ = l.Save()
+	// doCashConsolidate has already mutated l in memory (sources marked
+	// consolidated, newEntry added) but never saves it itself — a failure
+	// here means the Hub-side merge is real and this is the only place
+	// left to say so, or newEntry's own token/secret (the only way to ever
+	// reach that money again) is gone the moment this process exits.
+	if err := l.Save(); err != nil {
+		return nil, reportUnsavedResult(cmd, err, "Consolidate", entryRecoveryHint(newEntry))
+	}
 
 	return &consolidateResult{NewEntry: newEntry, ExpiresAt: expiresAt, TargetResolved: targetResolved}, nil
 }
@@ -344,6 +366,46 @@ func mergeableMinterGroups(held []ledger.Entry) map[string][]ledger.Entry {
 	return out
 }
 
+// sharedMinter returns the minter pubkey every one of entries verifiably
+// shares, or nil when any of them has none or they differ. This is what a
+// token DERIVED from entries (a split's remainder, a consolidate's merged
+// output) inherits as its own Entry.MinterPubkey: the derived token is a
+// brand-new wallet, so no mint signature can verify against it directly,
+// but the same Hub that minted its verified sources created it, and
+// cash-selection (mergeableMinterGroups, pickHeldToken) needs that fact to
+// keep treating it as spendable together with its siblings. nil, never a
+// guess, when the lineage isn't uniformly verified — claiming a minter that
+// wasn't confirmed would defeat what the field exists to guarantee.
+func sharedMinter(entries []ledger.Entry) *string {
+	var minter *string
+	for _, e := range entries {
+		if e.MinterPubkey == nil {
+			return nil
+		}
+		if minter == nil {
+			m := *e.MinterPubkey
+			minter = &m
+		} else if *minter != *e.MinterPubkey {
+			return nil
+		}
+	}
+	return minter
+}
+
+// sharedMinterOfIDs is sharedMinter over the ledger entries named by ids;
+// nil if any id isn't found.
+func sharedMinterOfIDs(l *ledger.Ledger, ids []string) *string {
+	entries := make([]ledger.Entry, 0, len(ids))
+	for _, id := range ids {
+		e, ok := l.Find(id)
+		if !ok {
+			return nil
+		}
+		entries = append(entries, *e)
+	}
+	return sharedMinter(entries)
+}
+
 // sortedMinterKeys returns groups' minter keys in a stable order, so
 // pickMinterGroups' numbered list (and its own tests) don't depend on Go's
 // randomized map iteration order.
@@ -382,10 +444,10 @@ func pickMinterGroups(cmd *cobra.Command, groups map[string][]ledger.Entry) ([][
 		return all(), nil
 	}
 
-	output.Linef(false, "Found %d separate minters you can consolidate:", len(keys))
+	output.Notef(false, "Found %d separate minters you can consolidate:", len(keys))
 	for i, k := range keys {
 		entries := groups[k]
-		output.Linef(false, "  %d) %d tokens (%s)", i+1, len(entries), output.FormatAmount(int64(ledger.SumAmounts(entries))))
+		output.Notef(false, "  %d) %d tokens (%s)", i+1, len(entries), output.FormatAmount(int64(ledger.SumAmounts(entries))))
 	}
 	choice, err := PromptLine(fmt.Sprintf("Which one(s)? [1-%d, comma-separated, or Enter for all] ", len(keys)))
 	if err != nil {
@@ -480,7 +542,52 @@ func sourceFromEntry(cmd *cobra.Command, l *ledger.Ledger, e *ledger.Entry) (nip
 // own deadline, it removes a spurious failure mode entirely. See
 // runCashConsolidate's own pre-confirm warning for the interactive-path
 // half of this same finding.
-func doCashConsolidate(cmd *cobra.Command, l *ledger.Ledger, dialCandidates []string, sources []nipcash.Source, localIDs []string, target nipcash.Target) (newEntry *ledger.Entry, expiresAt *int64, err error) {
+// reconcileAmbiguousSources is doCashConsolidate's only recourse when a
+// consolidate call fails with the ambiguous "decrypt delivery" shape
+// (warnAmbiguousDelivery's own doc comment): it can't read what the Hub
+// merged the sources into, but it CAN ask each source's own original
+// token, independently, whether the Hub still lists a claim for it — a
+// call this codebase already makes elsewhere for the exact same reason
+// (cash_receive.go's checkClaimWithCashHub, cash_redeem.go's
+// resolveAmount). A confirmed-gone source is marked Consolidated (no
+// destination to record — StatusConsolidated already means "became part
+// of some merge", true here even though which merge is unrecoverable);
+// anything else (still live, or the check itself couldn't be completed)
+// is left exactly as it was — never guessed at either way. Returns the
+// local IDs it could confirm gone, for the caller's own error message.
+func reconcileAmbiguousSources(cmd *cobra.Command, l *ledger.Ledger, localIDs []string) []string {
+	myPubHex, _ := localPubKeyHex(cmd)
+	var confirmedGone []string
+	for _, id := range localIDs {
+		e, ok := l.Find(id)
+		if !ok {
+			continue
+		}
+		tok, decErr := nipcash.Decode(e.Token)
+		if decErr != nil {
+			continue
+		}
+		func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			client, dialErr := nipcashclient.Connect(ctx, e.Token)
+			if dialErr != nil {
+				return // inconclusive — this source's own Hub might just be slow/unreachable right now
+			}
+			defer client.Close()
+			if _, claimErr := client.CheckClaim(ctx, tok, myPubHex); errors.Is(claimErr, nipcash.ErrClaimNotFound) {
+				_ = l.SetStatus(id, ledger.StatusConsolidated)
+				confirmedGone = append(confirmedGone, id)
+			}
+		}()
+	}
+	if len(confirmedGone) > 0 {
+		_ = l.Save() // best-effort: worst case, the next successful Save picks up the same corrected statuses
+	}
+	return confirmedGone
+}
+
+func doCashConsolidate(cmd *cobra.Command, l *ledger.Ledger, dialCandidates []string, sources []nipcash.Source, localIDs []string, target nipcash.Target, isSelfTarget bool) (newEntry *ledger.Entry, expiresAt *int64, err error) {
 	if len(dialCandidates) == 0 {
 		// Not reachable through runCashConsolidate today — sources and
 		// dialCandidates (sourceTokens there) are always built in lockstep,
@@ -499,7 +606,11 @@ func doCashConsolidate(cmd *cobra.Command, l *ledger.Ledger, dialCandidates []st
 			for _, id := range localIDs {
 				_ = l.SetStatus(id, ledger.StatusConsolidated)
 			}
-			newLedgerEntry := ledger.Entry{Token: result.NewWalletToken, WalletPubkey: result.NewWalletPubkey, AmountMillis: &result.AmountMillis, Verified: true}
+			newLedgerEntry := ledger.Entry{
+				Token: result.NewWalletToken, WalletPubkey: result.NewWalletPubkey, AmountMillis: &result.AmountMillis, Verified: true,
+				// Inherited, not verified against the new wallet itself — see sharedMinter.
+				MinterPubkey: sharedMinterOfIDs(l, localIDs),
+			}
 			// A bearer target's own secret only ever exists in target
 			// itself — the wire response never carries it (NIP-CASH
 			// §Bearer Slices: the caller supplies the commitment, the node
@@ -510,12 +621,38 @@ func doCashConsolidate(cmd *cobra.Command, l *ledger.Ledger, dialCandidates []st
 				newLedgerEntry.BearerSecret = bt.Secret()
 				newLedgerEntry.IdentityRequired = ptrTo(false)
 			}
-			newEntry, _ = l.Add(newLedgerEntry)
+			// A pubkey/connection_key target other than the caller's own
+			// identity is a gift — the caller doesn't own the resulting
+			// wallet and can't redeem it themselves, so it must not be
+			// saved as one of the caller's own held tokens (same rule
+			// cash_transfer's own third-party spin-off already follows:
+			// only ever persists the caller's own remainder, never the
+			// recipient's token). A bearer target keeps the existing
+			// behavior above (BearerSecret set): unlike a pubkey/
+			// connection_key gift, only the caller ever holds that secret,
+			// so it's genuinely theirs to keep track of. newEntry is still
+			// returned for display/hand-off either way, just not added to
+			// l for a non-self, non-bearer target.
+			_, isBearerTarget := target.(*nipcash.BearerTarget)
+			if isSelfTarget || isBearerTarget {
+				newEntry, _ = l.Add(newLedgerEntry)
+			} else {
+				newEntry = &newLedgerEntry
+			}
 			l.AppendHistory("consolidate", fmt.Sprintf("consolidated %d tokens into one %s note", len(localIDs), output.FormatAmount(int64(result.AmountMillis))))
 			return newEntry, result.ExpiresAt, nil
 		}
 
-		lastErr = classifyNWCErr(cmd, callErr)
+		reportErr := callErr
+		if isAmbiguousDeliveryErr(callErr) {
+			if gone := reconcileAmbiguousSources(cmd, l, localIDs); len(gone) > 0 {
+				reportErr = fmt.Errorf("%w (confirmed consumed on the Hub despite the unreadable reply: %s — marked accordingly so they won't be offered again, though the merged result itself could not be recovered)",
+					callErr, strings.Join(gone, ", "))
+			} else {
+				reportErr = warnAmbiguousDelivery(callErr, localIDs)
+			}
+		}
+		lastErr = classifyCashTokenNWCErr(cmd, reportErr)
 		if !isExpiredWalletErr(callErr) || i == len(dialCandidates)-1 {
 			return nil, nil, lastErr
 		}

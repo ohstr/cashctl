@@ -80,6 +80,13 @@ type result struct {
 	ExitCode int
 }
 
+// Combined is stdout followed by stderr. Text-mode narration (prompts,
+// previews, warnings, pick-lists) goes to stderr and results to stdout
+// (AGENTS.md), so a test asserting on what a HUMAN sees — not on which
+// stream carried it — reads both. Tests about the routing itself read
+// Stdout/Stderr directly.
+func (r result) Combined() string { return r.Stdout + r.Stderr }
+
 // run executes the cashctl binary with args, always passing --config-dir and
 // --json, isolated per-fixture. Never fails the test on a non-zero exit —
 // callers assert on ExitCode themselves, since a classified failure

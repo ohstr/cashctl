@@ -138,7 +138,7 @@ func TestCashReceive_MisPasteCircleHub(t *testing.T) {
 func TestCircleJoin_MisPasteCashHub(t *testing.T) {
 	f := newFixture(t)
 	f.mustJSON("wallet", "init")
-	res := f.run("join", "--hub", fakeCashHubConnection(t))
+	res := f.run("join", "--hub", fakeCashHubConnection(t), "--max-amount", "100")
 	if res.ExitCode != 3 {
 		t.Fatalf("join --hub cashhub1...: exit = %d, want 3 (invalid_input)\nstderr: %s", res.ExitCode, res.Stderr)
 	}
@@ -225,6 +225,39 @@ func TestDecode_MintSignatureVerification(t *testing.T) {
 	}
 	if _, present := unsignedResp["minter_pubkey"]; present {
 		t.Errorf("decode (unsigned token): must not include minter_pubkey at all: %v", unsignedResp)
+	}
+}
+
+// TestDecode_MintSignatureVerification_TextModeDoesNotOverclaimTrust is the
+// bug this exact fixture (fakeSignedCashToken) was already built to prove
+// live: a signature that recovers cleanly is real cryptography, but it's
+// signed by a throwaway key this test controls, not any mint cashctl or
+// its user has ever heard of — "valid" here means self-consistent, not
+// trustworthy. Text mode used to print a bare "minter: <pubkey>", which
+// reads as cashctl vouching for it; it must now say so explicitly. --json
+// stays untouched on purpose (TestDecode_MintSignatureVerification, above,
+// already pins mint_signature_valid/minter_pubkey — an agent parsing JSON
+// is expected to know VerifyProvenance's real semantics; a human skimming
+// text output is the one who needs the caveat spelled out).
+func TestDecode_MintSignatureVerification_TextModeDoesNotOverclaimTrust(t *testing.T) {
+	f := newFixture(t)
+	f.mustJSON("wallet", "init")
+
+	const amountMillis = uint64(12345)
+	signed, minterPubkeyHex := fakeSignedCashToken(t, amountMillis)
+
+	// EOF stdin (no --check answer needed): decode's own network-check
+	// prompt now defaults to no, so this returns immediately rather than
+	// dialing the fake/unreachable relay URL fakeSignedCashToken sets.
+	res := f.runInteractive("", "decode", signed)
+	if res.ExitCode != 0 {
+		t.Fatalf("decode (text mode, signed token): exit %d\nstdout: %s\nstderr: %s", res.ExitCode, res.Stdout, res.Stderr)
+	}
+	if !strings.Contains(res.Stdout, minterPubkeyHex) {
+		t.Errorf("decode (text mode) doesn't print the recovered minter pubkey: %s", res.Stdout)
+	}
+	if !strings.Contains(res.Stdout, "trusted mint") {
+		t.Errorf("decode (text mode) minter line doesn't caveat that a valid signature isn't a trusted mint: %s", res.Stdout)
 	}
 }
 
@@ -361,6 +394,37 @@ func TestCashTransfer_NConnectionWithIA_ResolvesPastTarget(t *testing.T) {
 	}
 	if !jsonErrorContains(t, res.Stderr, "not_found", "no held cash tokens") {
 		t.Errorf("unexpected error body (expected to fail on 'no held tokens', proving --ia resolved successfully): %s", res.Stderr)
+	}
+}
+
+// TestCashTransfer_MalformedAmountBlamesTheAmountNotTheTarget is the live
+// evidence for the disambiguateTransferArgs fix: a malformed amount
+// alongside a genuinely valid target used to blame the target — "<hex
+// pubkey> is not a valid amount in loki" — because the old position-only
+// fallback (args[0] fails ParseAmount -> assume args[0] is the target)
+// never checked whether the OTHER argument was a plausible target either.
+// Needs no live server: this fails purely on local argument parsing,
+// before any network call.
+func TestCashTransfer_MalformedAmountBlamesTheAmountNotTheTarget(t *testing.T) {
+	f := newFixture(t)
+	f.mustJSON("wallet", "init")
+
+	target := fakeHex32(t)
+	for _, args := range [][]string{
+		{"transfer", "1.5x", target, "--yes"},
+		{"transfer", target, "1.5x", "--yes"},
+	} {
+		res := f.run(args...)
+		if res.ExitCode != 3 {
+			t.Errorf("cashctl %v: exit %d, want 3 (invalid_input)\nstderr: %s", args, res.ExitCode, res.Stderr)
+			continue
+		}
+		if strings.Contains(res.Stderr, target) {
+			t.Errorf("cashctl %v: error blames the target, not the malformed amount: %s", args, res.Stderr)
+		}
+		if !jsonErrorContains(t, res.Stderr, "invalid_input", "1.5x") {
+			t.Errorf("cashctl %v: error doesn't name \"1.5x\" as the invalid amount: %s", args, res.Stderr)
+		}
 	}
 }
 

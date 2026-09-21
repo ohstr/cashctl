@@ -59,6 +59,78 @@ func TestAdd_RejectsDuplicateToken(t *testing.T) {
 	}
 }
 
+// bech32 is case-insensitive to decode, so the uppercase spelling of a held
+// token is the same token — it used to slip in as a second entry and
+// double-count the balance.
+func TestAdd_RejectsDuplicateTokenDifferingOnlyInCase(t *testing.T) {
+	l := &Ledger{}
+	if _, err := l.Add(Entry{Token: "lokicash1abcdef"}); err != nil {
+		t.Fatalf("first Add() error = %v", err)
+	}
+	if _, err := l.Add(Entry{Token: "LOKICASH1ABCDEF"}); !errors.Is(err, ErrAlreadyHeld) {
+		t.Errorf("Add() of the uppercase spelling: error = %v, want ErrAlreadyHeld", err)
+	}
+	if len(l.Entries) != 1 {
+		t.Errorf("ledger has %d entries, want 1", len(l.Entries))
+	}
+}
+
+func TestAdd_StoresTokenLowercase(t *testing.T) {
+	l := &Ledger{}
+	e, err := l.Add(Entry{Token: "LOKICASH1ABCDEF"})
+	if err != nil {
+		t.Fatalf("Add() error = %v", err)
+	}
+	if e.Token != "lokicash1abcdef" {
+		t.Errorf("stored Token = %q, want it normalized to lowercase", e.Token)
+	}
+}
+
+func TestFindByToken_IsCaseInsensitive_EvenForLegacyUppercaseRows(t *testing.T) {
+	// A row saved before Add started normalizing is stored exactly as
+	// pasted; lookups must still find it from either spelling.
+	l := &Ledger{Entries: []Entry{{ID: "old", Token: "LOKICASH1LEGACY", Status: StatusHeld}}}
+	for _, in := range []string{"LOKICASH1LEGACY", "lokicash1legacy"} {
+		if _, ok := l.FindByToken(in); !ok {
+			t.Errorf("FindByToken(%q) = not found, want the legacy uppercase row", in)
+		}
+	}
+}
+
+// A full-amount transfer reassigns a wallet in place, so the SAME token
+// string can genuinely come back to a previous holder. entries.token is
+// UNIQUE, so Add must reactivate the existing row, not reject it (and not
+// try to insert a second one).
+func TestAdd_ReactivatesANoLongerHeldToken(t *testing.T) {
+	for _, gone := range []string{StatusTransferred, StatusRedeemed, StatusConsolidated} {
+		l := &Ledger{}
+		first, err := l.Add(Entry{Token: "lokicash1abc", AmountMillis: amountPtr(1000)})
+		if err != nil {
+			t.Fatalf("first Add() error = %v", err)
+		}
+		id := first.ID
+		if err := l.SetStatus(id, gone); err != nil {
+			t.Fatalf("SetStatus(%s) error = %v", gone, err)
+		}
+		back, err := l.Add(Entry{Token: "lokicash1abc", AmountMillis: amountPtr(2500), Verified: true})
+		if err != nil {
+			t.Fatalf("status %q: Add() of a token that came back error = %v, want it accepted", gone, err)
+		}
+		if back.ID != id {
+			t.Errorf("status %q: reactivated ID = %q, want the existing row's %q", gone, back.ID, id)
+		}
+		if back.Status != StatusHeld {
+			t.Errorf("status %q: reactivated Status = %q, want held", gone, back.Status)
+		}
+		if back.AmountMillis == nil || *back.AmountMillis != 2500 || !back.Verified {
+			t.Errorf("status %q: reactivated entry didn't take the fresh fields: %+v", gone, back)
+		}
+		if len(l.Entries) != 1 {
+			t.Errorf("status %q: ledger has %d entries, want the one row reused", gone, len(l.Entries))
+		}
+	}
+}
+
 func TestFindByToken(t *testing.T) {
 	l := &Ledger{}
 	added, _ := l.Add(Entry{Token: "lokicash1abc"})
@@ -692,5 +764,124 @@ func TestSave_ManyDisjointConcurrentWritersAllSucceed(t *testing.T) {
 	}
 	if len(reloaded.History) != n {
 		t.Errorf("final history count = %d, want %d", len(reloaded.History), n)
+	}
+}
+
+// TestSaveAndLoad_PendingBearerSecretRoundTrip covers the write-ahead field
+// a rekey/protect step persists before its own wire call (see
+// cmd/receive_secure.go) — must survive a reload exactly like BearerSecret
+// itself, and stay empty (not corrupted into some sentinel) when never set.
+func TestSaveAndLoad_PendingBearerSecretRoundTrip(t *testing.T) {
+	withTempConfigDir(t)
+
+	l, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if _, err := l.Add(Entry{Token: "lokicash1pending", BearerSecret: "old-secret", PendingBearerSecret: "new-secret"}); err != nil {
+		t.Fatalf("Add() error = %v", err)
+	}
+	if _, err := l.Add(Entry{Token: "lokicash1nopending", BearerSecret: "only-secret"}); err != nil {
+		t.Fatalf("Add() error = %v", err)
+	}
+	if err := l.Save(); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	reloaded, err := Load()
+	if err != nil {
+		t.Fatalf("Load() (reloaded) error = %v", err)
+	}
+	pending, _ := reloaded.FindByToken("lokicash1pending")
+	if pending.PendingBearerSecret != "new-secret" {
+		t.Errorf("PendingBearerSecret = %q, want %q", pending.PendingBearerSecret, "new-secret")
+	}
+	if pending.BearerSecret != "old-secret" {
+		t.Errorf("BearerSecret = %q, want %q (unchanged until reconciled)", pending.BearerSecret, "old-secret")
+	}
+	noPending, _ := reloaded.FindByToken("lokicash1nopending")
+	if noPending.PendingBearerSecret != "" {
+		t.Errorf("PendingBearerSecret = %q, want empty (never set)", noPending.PendingBearerSecret)
+	}
+}
+
+// TestSaveAndLoad_ExpiresAtRoundTrip covers the Hub-side redemption
+// deadline cached at receive time (see cmd/wallet_balance.go's
+// summarizeHeldTokens) — must survive a reload exactly, and stay nil (not
+// zero) when never learned, the same nullable-pointer shape
+// IdentityRequired's own round-trip test already guards for a different
+// field.
+func TestSaveAndLoad_ExpiresAtRoundTrip(t *testing.T) {
+	withTempConfigDir(t)
+
+	l, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	expiresAt := int64(1_700_000_000)
+	if _, err := l.Add(Entry{Token: "lokicash1expiring", ExpiresAt: &expiresAt}); err != nil {
+		t.Fatalf("Add() error = %v", err)
+	}
+	if _, err := l.Add(Entry{Token: "lokicash1noexpiry"}); err != nil {
+		t.Fatalf("Add() error = %v", err)
+	}
+	if err := l.Save(); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	reloaded, err := Load()
+	if err != nil {
+		t.Fatalf("Load() (reloaded) error = %v", err)
+	}
+	expiring, _ := reloaded.FindByToken("lokicash1expiring")
+	if expiring.ExpiresAt == nil || *expiring.ExpiresAt != expiresAt {
+		t.Errorf("ExpiresAt = %v, want %d", expiring.ExpiresAt, expiresAt)
+	}
+	noExpiry, _ := reloaded.FindByToken("lokicash1noexpiry")
+	if noExpiry.ExpiresAt != nil {
+		t.Errorf("ExpiresAt = %v, want nil (never set)", *noExpiry.ExpiresAt)
+	}
+}
+
+// TestSaveAndLoad_BearerProtectionRoundTrip covers the shared-vs-protected
+// marker (see cmd/receive_secure.go, wallet.go's own `wallet show`) — must
+// survive a reload exactly, and stay "" (n/a) for a pubkey-mode entry that
+// never set it at all, the same shape ExpiresAt's own round-trip test
+// guards for a different field.
+func TestSaveAndLoad_BearerProtectionRoundTrip(t *testing.T) {
+	withTempConfigDir(t)
+
+	l, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if _, err := l.Add(Entry{Token: "lokicash1shared", BearerProtection: BearerShared}); err != nil {
+		t.Fatalf("Add() error = %v", err)
+	}
+	if _, err := l.Add(Entry{Token: "lokicash1protected", BearerProtection: BearerProtected}); err != nil {
+		t.Fatalf("Add() error = %v", err)
+	}
+	if _, err := l.Add(Entry{Token: "lokicash1pubkeymode"}); err != nil {
+		t.Fatalf("Add() error = %v", err)
+	}
+	if err := l.Save(); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	reloaded, err := Load()
+	if err != nil {
+		t.Fatalf("Load() (reloaded) error = %v", err)
+	}
+	shared, _ := reloaded.FindByToken("lokicash1shared")
+	if shared.BearerProtection != BearerShared {
+		t.Errorf("BearerProtection = %q, want %q", shared.BearerProtection, BearerShared)
+	}
+	protected, _ := reloaded.FindByToken("lokicash1protected")
+	if protected.BearerProtection != BearerProtected {
+		t.Errorf("BearerProtection = %q, want %q", protected.BearerProtection, BearerProtected)
+	}
+	pubkeyMode, _ := reloaded.FindByToken("lokicash1pubkeymode")
+	if pubkeyMode.BearerProtection != "" {
+		t.Errorf("BearerProtection = %q, want empty (never set)", pubkeyMode.BearerProtection)
 	}
 }

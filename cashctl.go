@@ -5,6 +5,8 @@ package main
 import (
 	"errors"
 	"os"
+	"strconv"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -43,18 +45,33 @@ func classifyRootErr(cmd *cobra.Command, err error) error {
 	if errors.As(err, &ce) {
 		return err // already classified further down the call stack
 	}
-	if cmd != nil {
-		for _, a := range os.Args[1:] {
-			if a == "--json" {
-				_ = cmd.Flags().Set("json", "true")
-				break
-			}
-			if a == "--" {
-				break
+	if cmd != nil && jsonRequested(os.Args[1:]) {
+		_ = cmd.Flags().Set("json", "true")
+	}
+	return output.UsageError(cmd, err)
+}
+
+// jsonRequested reports whether args turn --json on, the way cobra itself
+// would have parsed it had it got that far: bare --json, or --json=<bool>
+// (strconv.ParseBool's spellings — true/1/t/T/TRUE/True), the last one
+// winning, and nothing past a "--" terminator counting. Matching only the
+// literal "--json" meant `--json=true` got a plain-text error on a stream a
+// script had explicitly asked to keep machine-readable.
+func jsonRequested(args []string) bool {
+	on := false
+	for _, a := range args {
+		if a == "--" {
+			break
+		}
+		if a == "--json" {
+			on = true
+		} else if v, ok := strings.CutPrefix(a, "--json="); ok {
+			if b, err := strconv.ParseBool(v); err == nil {
+				on = b
 			}
 		}
 	}
-	return output.UsageError(cmd, err)
+	return on
 }
 
 // emitFor is a small indirection so tests (see main_test.go) can exercise

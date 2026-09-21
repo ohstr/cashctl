@@ -201,6 +201,17 @@ func TestCashLifecycle_MintReceiveRedeem(t *testing.T) {
 	if preimage, _ := redeemResp["preimage"].(string); preimage == "" {
 		t.Errorf("redeem: empty preimage in response (invoice may not have been paid): %v", redeemResp)
 	}
+	// The bug found auditing this: --json's destination field for an
+	// explicit --invoice redeem used to be "to_wallet":"the invoice
+	// above" — naming a line nothing ever printed, and mislabeling an
+	// invoice as a wallet. Must now be the real invoice, under its own
+	// field.
+	if got, _ := redeemResp["to_invoice"].(string); got != invoiceTx.Invoice {
+		t.Errorf(`redeem --json: to_invoice = %q, want %q`, got, invoiceTx.Invoice)
+	}
+	if _, present := redeemResp["to_wallet"]; present {
+		t.Errorf(`redeem --json: to_wallet must be absent for an --invoice redeem, got %v`, redeemResp["to_wallet"])
+	}
 }
 
 // TestCashReceive_NoMatchingRecipientRefused mints a real, live-reachable

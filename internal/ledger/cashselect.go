@@ -30,6 +30,50 @@ type SelectionPlan struct {
 // confirmation (see docs/ux-review.md Part 2, case 4).
 var ErrFundsFragmented = errors.New("funds are fragmented across separate Hubs")
 
+// FundsFragmentedError is the concrete error SelectForAmount returns for
+// ErrFundsFragmented — TotalHeld/Target are the raw mloki figures the
+// generic message below only states unlabeled ("you hold 45000 total,
+// ... the 5000 you're sending" reads as meaningless bare numbers, not an
+// amount, with no unit at all). This package stays presentation-agnostic
+// (no dependency on internal/output, which would drag cobra in transitively
+// just to format two integers) — Error() below is only ever the honest
+// fallback for a caller that doesn't specifically handle this type; the
+// one real caller (cmd/cash_transfer.go) type-asserts down to these fields
+// and re-renders them with FormatAmount's real "N loki" units instead.
+type FundsFragmentedError struct {
+	TotalHeld, Target uint64
+}
+
+func (e *FundsFragmentedError) Error() string {
+	return fmt.Sprintf("%s: you hold %d mloki total, but no single minter's tokens sum to the %d mloki you're sending",
+		ErrFundsFragmented, e.TotalHeld, e.Target)
+}
+
+func (e *FundsFragmentedError) Unwrap() error { return ErrFundsFragmented }
+
+// ErrInsufficientFunds is wrapped into the error SelectForAmount returns
+// when held's total doesn't even reach target — a plain overdraft,
+// distinct from ErrFundsFragmented (total covers Target, but no single
+// minter's tokens do): "your funds are fragmented across separate Hubs"
+// used to be reported for BOTH cases identically, which is actively wrong
+// for a simple "you don't have enough" — there's no fragmentation to
+// speak of when the total itself falls short.
+var ErrInsufficientFunds = errors.New("not enough funds")
+
+// InsufficientFundsError is the concrete error for ErrInsufficientFunds —
+// same reasoning as FundsFragmentedError's own doc comment for why the
+// raw fields exist (this package stays presentation-agnostic; the one
+// real caller re-renders them with real units).
+type InsufficientFundsError struct {
+	TotalHeld, Target uint64
+}
+
+func (e *InsufficientFundsError) Error() string {
+	return fmt.Sprintf("%s: you hold %d mloki, need %d mloki", ErrInsufficientFunds, e.TotalHeld, e.Target)
+}
+
+func (e *InsufficientFundsError) Unwrap() error { return ErrInsufficientFunds }
+
 // SelectForAmount picks a plan to reach exactly target from held (already
 // filtered to StatusHeld — see Ledger.Held), preferring, in order:
 //
@@ -84,8 +128,10 @@ func SelectForAmount(held []Entry, target uint64) (*SelectionPlan, error) {
 		}
 	}
 
-	return nil, fmt.Errorf("%w: you hold %d total, but no single minter's tokens sum to the %d you're sending",
-		ErrFundsFragmented, totalHeld, target)
+	if totalHeld < target {
+		return nil, &InsufficientFundsError{TotalHeld: totalHeld, Target: target}
+	}
+	return nil, &FundsFragmentedError{TotalHeld: totalHeld, Target: target}
 }
 
 // SumAmounts totals every entry's known AmountMillis (entries with none

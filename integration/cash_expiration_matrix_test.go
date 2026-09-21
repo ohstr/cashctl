@@ -159,6 +159,78 @@ func TestCashTransfer_ExpiredWallet_ClassifiedAsAuth(t *testing.T) {
 	}
 }
 
+// TestWalletBalance_ExpiredHeldToken_ExcludedFromTotal is the live evidence
+// for the fix to a token that stayed HELD after expiring: `balance` used to
+// keep summing an expired held token's amount into the total forever
+// (nothing cached its Hub-side deadline, so there was no local signal to
+// exclude it, and re-checking every held token live on every `balance`
+// call was never acceptable). `receive`'s own mandatory CheckClaim now
+// caches that deadline (Entry.ExpiresAt), so `balance` can exclude it
+// without a second network round trip.
+func TestWalletBalance_ExpiredHeldToken_ExcludedFromTotal(t *testing.T) {
+	cfg, err := LoadConfig("")
+	if err != nil {
+		t.Skipf("skipping: could not load integration config (%v) — see integration/README.md", err)
+	}
+	admin, ok := newAdminClient(cfg)
+	if !ok {
+		t.Skip("skipping: admin_api not configured — see integration/README.md")
+	}
+
+	f := newFixture(t)
+	initResp := f.mustJSON("wallet", "init")
+	myPubHex, err := npubToHex(initResp["npub"].(string))
+	if err != nil {
+		t.Fatalf("decode local identity npub: %v", err)
+	}
+
+	hub := setUpCashHubOpts(t, admin, cashHubOpts{MaxExpSecs: shortCashExpirySecs})
+	token := mintPubkeyTokenFromHub(t, hub, myPubHex, 10_000)
+	if res := f.run("receive", token); res.ExitCode != 0 {
+		t.Fatalf("receive: exit %d\nstderr: %s", res.ExitCode, res.Stderr)
+	}
+
+	// Before expiry: received while still valid, so receive's own
+	// CheckClaim cached a not-yet-passed ExpiresAt — the token counts
+	// normally.
+	before := f.mustJSON("wallet", "balance", "--breakdown")
+	if got := int64(before["total_mloki"].(float64)); got != 10_000 {
+		t.Fatalf("before expiry: total_mloki = %d, want 10000", got)
+	}
+	if got := int64(before["expired_held_mloki"].(float64)); got != 0 {
+		t.Fatalf("before expiry: expired_held_mloki = %d, want 0", got)
+	}
+
+	waitPastCashExpiry()
+
+	// After expiry: no new network call happened (balance never re-checks
+	// a held token live) — the exclusion comes entirely from the
+	// ExpiresAt cached at receive time.
+	after := f.mustJSON("wallet", "balance", "--breakdown")
+	if got := int64(after["total_mloki"].(float64)); got != 0 {
+		t.Errorf("after expiry: total_mloki = %d, want 0 (expired held token must not count)", got)
+	}
+	if got := int64(after["expired_held_mloki"].(float64)); got != 10_000 {
+		t.Errorf("after expiry: expired_held_mloki = %d, want 10000", got)
+	}
+	breakdown, _ := after["breakdown"].([]any)
+	if len(breakdown) != 1 {
+		t.Fatalf("after expiry: breakdown has %d lines, want 1 (still listed, not dropped)", len(breakdown))
+	}
+	line, _ := breakdown[0].(map[string]any)
+	if expired, _ := line["expired"].(bool); !expired {
+		t.Errorf("after expiry: breakdown line %v missing expired:true", line)
+	}
+	if amount := int64(line["amount_mloki"].(float64)); amount != 10_000 {
+		t.Errorf("after expiry: breakdown line amount_mloki = %d, want 10000 (still shown, just not counted)", amount)
+	}
+	// The token itself is untouched — still HELD, just excluded from the
+	// spendable total.
+	if n := heldCount(t, f); n != 1 {
+		t.Errorf("an expired held token must stay held (not disappear), got %d held", n)
+	}
+}
+
 // TestCashConsolidate_AllSourcesExpired_ClassifiedAsAuth confirms the new
 // retry-a-different-source logic (doCashConsolidate) doesn't paper over a
 // genuinely hopeless case: when every source is expired, consolidate must
@@ -183,16 +255,20 @@ func TestCashConsolidate_AllSourcesExpired_ClassifiedAsAuth(t *testing.T) {
 	hub := setUpCashHubOpts(t, admin, cashHubOpts{MaxExpSecs: shortCashExpirySecs})
 	tokenA := mintPubkeyTokenFromHub(t, hub, myPubHex, 4_000)
 	tokenB := mintPubkeyTokenFromHub(t, hub, myPubHex, 5_000)
-	if res := f.run("receive", tokenA); res.ExitCode != 0 {
-		t.Fatalf("receive A: exit %d\nstderr: %s", res.ExitCode, res.Stderr)
-	}
-	if res := f.run("receive", tokenB); res.ExitCode != 0 {
-		t.Fatalf("receive B: exit %d\nstderr: %s", res.ExitCode, res.Stderr)
+	// Plain (unsigned) mints carry no minter pubkey, so a no-arg
+	// `consolidate` (which auto-groups by minter) would find nothing to
+	// merge — name both sources explicitly instead.
+	receiveA := f.mustJSON("receive", tokenA)
+	receiveB := f.mustJSON("receive", tokenB)
+	idA, _ := receiveA["entry"].(map[string]any)["id"].(string)
+	idB, _ := receiveB["entry"].(map[string]any)["id"].(string)
+	if idA == "" || idB == "" {
+		t.Fatalf("receive: missing entry id(s): %v / %v", receiveA, receiveB)
 	}
 
 	waitPastCashExpiry()
 
-	res := f.run("consolidate", "--yes")
+	res := f.run("consolidate", "--sources", idA+","+idB, "--yes")
 	if res.ExitCode != 7 {
 		t.Fatalf("consolidate with every source expired: exit = %d, want 7 (auth)\nstdout: %s\nstderr: %s", res.ExitCode, res.Stdout, res.Stderr)
 	}
@@ -215,8 +291,8 @@ func TestCashConsolidate_AllSourcesExpired_ClassifiedAsAuth(t *testing.T) {
 // consolidating one already-expired token alongside a healthy one used to
 // fail to even PLACE outright whenever the expired one happened to be
 // dialed first, an arbitrary implementation detail. This mints the doomed
-// token first (so it lands at ledger index 0, "everything held"
-// consolidate's own default source order), waits for it alone to expire
+// token first (so it lands at ledger index 0 and is named first in
+// --sources, the order consolidate dials through), waits for it alone to expire
 // while the healthy sibling is still good for another hour, and confirms
 // the merge now succeeds regardless.
 //
@@ -254,16 +330,20 @@ func TestCashConsolidate_RescuesExpiredSourceViaHealthySibling(t *testing.T) {
 
 	// Received in this order so `doomed` lands first — the exact "index 0
 	// is the one that expired" case that used to fail the whole batch.
-	if res := f.run("receive", doomed); res.ExitCode != 0 {
-		t.Fatalf("receive (doomed): exit %d\nstderr: %s", res.ExitCode, res.Stderr)
-	}
-	if res := f.run("receive", healthy); res.ExitCode != 0 {
-		t.Fatalf("receive (healthy): exit %d\nstderr: %s", res.ExitCode, res.Stderr)
+	receiveDoomed := f.mustJSON("receive", doomed)
+	receiveHealthy := f.mustJSON("receive", healthy)
+	doomedID, _ := receiveDoomed["entry"].(map[string]any)["id"].(string)
+	healthyID, _ := receiveHealthy["entry"].(map[string]any)["id"].(string)
+	if doomedID == "" || healthyID == "" {
+		t.Fatalf("receive: missing entry id(s): %v / %v", receiveDoomed, receiveHealthy)
 	}
 
 	waitPastCashExpiry()
 
-	resp := f.mustJSON("consolidate", "--yes")
+	// Plain (unsigned) mints carry no minter pubkey, so a no-arg
+	// `consolidate` (which auto-groups by minter) would find nothing to
+	// merge — name both sources explicitly, doomed first (dial order).
+	resp := f.mustJSON("consolidate", "--sources", doomedID+","+healthyID, "--yes")
 	newEntry, _ := resp["new_entry"].(map[string]any)
 	if newEntry == nil {
 		t.Fatalf("consolidate: no new_entry in response: %v", resp)
@@ -286,6 +366,36 @@ func TestCashConsolidate_RescuesExpiredSourceViaHealthySibling(t *testing.T) {
 	}
 	if got := nwcCodeFromError(t, checkRes.Stderr); got != "EXPIRED" {
 		t.Errorf("nwc_code = %q, want EXPIRED", got)
+	}
+}
+
+// Merging a healthy token with one that has ALREADY expired strands the
+// healthy part inside a merged token that is born dead (it inherits the
+// earliest deadline). consolidate is supposed to warn before that happens —
+// but an expired wallet rejects the very CheckClaim call used to look its
+// deadline up, so the lookup failed, read as "no deadline known", and the
+// warning never fired: the user confirmed, and only found out afterwards.
+func TestCashConsolidate_WarnsWhenAMemberHasAlreadyExpired(t *testing.T) {
+	admin := adminOrSkip(t)
+	f := newFixture(t)
+	myPubHex, err := npubToHex(f.mustJSON("wallet", "init")["npub"].(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+	hub := setUpCashHub(t, admin)
+	doomed := mintPubkeyTokenExpiry(t, hub, myPubHex, 4_000, shortCashExpirySecs)
+	healthy := mintPubkeyTokenExpiry(t, hub, myPubHex, 6_000, 0)
+	doomedID, _ := f.mustJSON("receive", doomed)["entry"].(map[string]any)["id"].(string)
+	healthyID, _ := f.mustJSON("receive", healthy)["entry"].(map[string]any)["id"].(string)
+
+	waitPastCashExpiry()
+
+	res := f.runInteractive("n\n", "consolidate", doomedID, healthyID)
+	if !strings.Contains(res.Combined(), "already expired") {
+		t.Errorf("consolidate of an already-expired token with a healthy one showed no expiry warning before the prompt:\nstdout: %s\nstderr: %s", res.Stdout, res.Stderr)
+	}
+	if n := heldCount(t, f); n != 2 {
+		t.Errorf("answered n, but %d tokens are held afterward, want both untouched", n)
 	}
 }
 
@@ -349,7 +459,7 @@ func TestCashTransfer_AutoConsolidate_ExpiredSourceFailsButFundsAreRecorded(t *t
 	// ConsolidateFirst path, exercising transferWithAutoConsolidate's own
 	// retry-on-EXPIRED loop and PartialProgressError handling, not
 	// doCashConsolidate's.
-	res := f.run("transfer", fakeHex32(t), "6000", "--yes")
+	res := f.run("transfer", fakeHex32(t), lokiArg(6_000), "--yes")
 	if res.ExitCode != 7 {
 		t.Fatalf("transfer (auto-consolidate, one source already expired): exit = %d, want 7 (auth) — the interim merge inherits the expired source's deadline, so the transfer leg can never go through\nstdout: %s\nstderr: %s", res.ExitCode, res.Stdout, res.Stderr)
 	}
@@ -411,8 +521,8 @@ func TestCashTransfer_PreviewShowsExpiryWarning(t *testing.T) {
 	if res.ExitCode != 0 {
 		t.Fatalf("transfer (preview check): unexpected exit %d\nstdout: %s\nstderr: %s", res.ExitCode, res.Stdout, res.Stderr)
 	}
-	if !strings.Contains(res.Stdout, "expires in") && !strings.Contains(res.Stdout, "deadline has already passed") {
-		t.Errorf("transfer confirmation: expected an expiry warning (this hub's own CashMaxExpSecs is 1h), got stdout: %q", res.Stdout)
+	if !strings.Contains(res.Combined(), "Expires in") && !strings.Contains(res.Combined(), "Deadline passed") {
+		t.Errorf("transfer confirmation: expected an expiry warning (this hub's own CashMaxExpSecs is 1h), got stdout: %q", res.Combined())
 	}
 	if n := heldCount(t, f); n != 1 {
 		t.Fatalf("a declined transfer must leave the token held, got %d held", n)
@@ -441,19 +551,23 @@ func TestCashConsolidate_PreviewShowsExpiryWarning(t *testing.T) {
 	hub := setUpCashHub(t, admin)
 	tokenA := mintPubkeyTokenFromHub(t, hub, myPubHex, 3_000)
 	tokenB := mintPubkeyTokenFromHub(t, hub, myPubHex, 4_000)
-	if res := f.run("receive", tokenA); res.ExitCode != 0 {
-		t.Fatalf("receive A: exit %d\nstderr: %s", res.ExitCode, res.Stderr)
-	}
-	if res := f.run("receive", tokenB); res.ExitCode != 0 {
-		t.Fatalf("receive B: exit %d\nstderr: %s", res.ExitCode, res.Stderr)
+	// Plain (unsigned) mints carry no minter pubkey, so a no-arg
+	// `consolidate` (which auto-groups by minter) would find nothing to
+	// merge — name both sources explicitly instead.
+	receiveA := f.mustJSON("receive", tokenA)
+	receiveB := f.mustJSON("receive", tokenB)
+	idA, _ := receiveA["entry"].(map[string]any)["id"].(string)
+	idB, _ := receiveB["entry"].(map[string]any)["id"].(string)
+	if idA == "" || idB == "" {
+		t.Fatalf("receive: missing entry id(s): %v / %v", receiveA, receiveB)
 	}
 
-	res := f.runInteractive("\n", "consolidate")
+	res := f.runInteractive("\n", "consolidate", idA, idB)
 	if res.ExitCode != 0 {
 		t.Fatalf("consolidate (preview check): unexpected exit %d\nstdout: %s\nstderr: %s", res.ExitCode, res.Stdout, res.Stderr)
 	}
-	if !strings.Contains(res.Stdout, "expires in") && !strings.Contains(res.Stdout, "deadline has already passed") {
-		t.Errorf("consolidate confirmation: expected an expiry warning (this hub's own CashMaxExpSecs is 1h), got stdout: %q", res.Stdout)
+	if !strings.Contains(res.Combined(), "Expires in") && !strings.Contains(res.Combined(), "Deadline passed") {
+		t.Errorf("consolidate confirmation: expected an expiry warning (this hub's own CashMaxExpSecs is 1h), got stdout: %q", res.Combined())
 	}
 	if n := heldCount(t, f); n != 2 {
 		t.Fatalf("a declined consolidate must leave both tokens held, got %d held", n)
@@ -592,6 +706,13 @@ func TestCashListRecipients_ShowsExpiry(t *testing.T) {
 // mutating anything (create_circle_wallet itself isn't read-only, and no
 // other circle_hub-scoped method exists) — see
 // docs/private/audit-round2-expiration-matrix.md for the full reasoning.
+//
+// What DID get fixed (resumed session): the detection gap is unfixable,
+// but the wording used to overclaim it — a bare "ok":true/"joinable" read
+// as a guarantee. `check.note` (--json) and the text-mode "appears
+// joinable (...)" line now say plainly that this only proves reachability
+// and create_circle_wallet support, not that a real join will succeed —
+// this test's own second half is the live proof that gap is real.
 func TestDecodeCheck_ExpiredCircleHub_StillReportsJoinable(t *testing.T) {
 	cfg, err := LoadConfig("")
 	if err != nil {
@@ -637,11 +758,16 @@ func TestDecodeCheck_ExpiredCircleHub_StillReportsJoinable(t *testing.T) {
 	if ok, _ := check["ok"].(bool); !ok {
 		t.Fatalf("decode --check on an already-expired circle_hub: ok = %v, want true (this is the documented gap — get_info can't see hub-level expiry at all): %v", check["ok"], check)
 	}
+	// The gap itself can't be closed (see above), but ok:true must not be
+	// left looking like an unqualified guarantee — note should say so.
+	if note, _ := check["note"].(string); !strings.Contains(note, "expired") && !strings.Contains(note, "allowlisted") {
+		t.Errorf(`decode --check "note" = %q, want it to caveat that this doesn't confirm expiry/allowlist status`, note)
+	}
 
 	// Half 2: an actual join is correctly rejected anyway — cashctl's own
 	// error classification is fine here; it's only the pre-flight --check
 	// that can't see this coming.
-	res := f.run("join", "--hub", *hubResp.CircleHubToken, "--yes")
+	res := f.run("join", "--hub", *hubResp.CircleHubToken, "--max-amount", "100", "--yes")
 	if res.ExitCode != 7 {
 		t.Fatalf("join against an already-expired circle_hub: exit = %d, want 7 (auth)\nstdout: %s\nstderr: %s", res.ExitCode, res.Stdout, res.Stderr)
 	}

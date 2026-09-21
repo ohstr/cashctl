@@ -22,8 +22,18 @@ import (
 // --json output (cmd/connect.go, cmd/wallet.go) — the --json contract
 // doesn't change as part of the storage-layer swap.
 type Connection struct {
-	Name    string `json:"name"`
-	Value   string `json:"value"`
+	Name string `json:"name"`
+	// Value is the connection's own actual pairing secret (an NWC URI's
+	// secret= query value, or the equivalent embedded in a bech32 hub
+	// string's own TLV encoding — every connection kind this field can
+	// hold carries one) — json:"-" for the same reason
+	// ledger.Entry.Secret/BearerSecret are: `connect list`/`wallet show`
+	// embed a whole []Connection directly into --json output, so a plain
+	// json tag here would leak it to anyone who ever runs the documented
+	// way to list registered wallets. Text mode already never prints it
+	// either (cmd/connect.go's own list loop only ever prints c.Name) —
+	// this makes --json match that, not introduce a new restriction.
+	Value   string `json:"-"`
 	AddedAt string `json:"added_at"`
 
 	// LastKnownBalanceMloki/LastKnownBalanceAt cache the most recent
@@ -38,12 +48,49 @@ type Connection struct {
 }
 
 // Store is the in-memory shape of cashctl.db's connections table, loaded
-// whole and saved whole like ledger.Ledger (see its own doc comment) —
-// Default is stored as an is_default column on whichever row is current,
-// not a separate table, since it's a property of exactly one connection.
+// whole and saved as a diff against what Load read, like ledger.Ledger (see
+// its own doc comment) — Default is stored as an is_default column on
+// whichever row is current, not a separate table, since it's a property of
+// exactly one connection.
 type Store struct {
 	Connections []Connection
 	Default     string
+
+	// loaded/loadedDefault are what Load actually read (by name) — Save
+	// diffs against them so a process only ever writes what IT changed.
+	// nil/"" on a Store built directly (&Store{}) rather than via Load:
+	// everything in Connections is then treated as new, as it is.
+	loaded        map[string]Connection
+	loadedDefault string
+}
+
+// snapshot records s's current contents as the baseline the next Save
+// diffs against. Pointer fields are copied, not shared, so a later
+// in-place mutation of a live Connection can't silently rewrite its own
+// baseline and make a real change look like none.
+func (s *Store) snapshot() {
+	s.loaded = make(map[string]Connection, len(s.Connections))
+	for _, c := range s.Connections {
+		if c.LastKnownBalanceMloki != nil {
+			v := *c.LastKnownBalanceMloki
+			c.LastKnownBalanceMloki = &v
+		}
+		s.loaded[c.Name] = c
+	}
+	s.loadedDefault = s.Default
+}
+
+// connectionsEqual reports whether a and b hold the same data — a plain ==
+// would compare LastKnownBalanceMloki by pointer identity.
+func connectionsEqual(a, b Connection) bool {
+	if (a.LastKnownBalanceMloki == nil) != (b.LastKnownBalanceMloki == nil) {
+		return false
+	}
+	if a.LastKnownBalanceMloki != nil && *a.LastKnownBalanceMloki != *b.LastKnownBalanceMloki {
+		return false
+	}
+	return a.Name == b.Name && a.Value == b.Value && a.AddedAt == b.AddedAt &&
+		a.LastKnownBalanceAt == b.LastKnownBalanceAt
 }
 
 // Load reads every connection from cashctl.db, returning an empty (not
@@ -89,12 +136,34 @@ func Load() (*Store, error) {
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("cashctl.db: reading connections: %w", err)
 	}
+	s.snapshot()
 	return s, nil
 }
 
-// Save replaces cashctl.db's connections table with s's current contents,
-// in one transaction.
+// Save writes s's changes to cashctl.db in one transaction: only what
+// differs from what Load read (see Store's own doc comment) —
+//
+//   - a connection that wasn't there at Load is INSERTed, and a name a
+//     concurrent process registered since then surfaces as ErrDuplicateName
+//     rather than being silently overwritten;
+//   - one that changed is UPDATEd in place (keeping its position);
+//   - one that was there at Load and is gone now is DELETEd;
+//   - the default pointer is only touched if THIS process changed it.
+//
+// Anything else — rows another process added or changed in the meantime —
+// is left alone. This used to DELETE the whole table and reinsert its own
+// snapshot, so two concurrent `connect add`s each loaded the same empty
+// set and whichever saved last silently erased the other's connection.
+// Retried on a transient SQLITE_BUSY like ledger.Save.
 func (s *Store) Save() error {
+	if err := store.WithBusyRetry(s.save); err != nil {
+		return err
+	}
+	s.snapshot()
+	return nil
+}
+
+func (s *Store) save() error {
 	db, err := store.Open()
 	if err != nil {
 		return err
@@ -107,19 +176,50 @@ func (s *Store) Save() error {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if _, err := tx.Exec(`DELETE FROM connections`); err != nil {
-		return fmt.Errorf("cashctl.db: clearing connections: %w", err)
-	}
+	present := make(map[string]bool, len(s.Connections))
 	for _, c := range s.Connections {
+		present[c.Name] = true
+		prior, existed := s.loaded[c.Name]
+		if existed && connectionsEqual(prior, c) {
+			continue
+		}
 		var lastKnownBalance sql.NullInt64
 		if c.LastKnownBalanceMloki != nil {
 			lastKnownBalance = sql.NullInt64{Int64: *c.LastKnownBalanceMloki, Valid: true}
 		}
-		_, err := tx.Exec(`INSERT INTO connections (name, value, added_at, last_known_balance_mloki, last_known_balance_at, is_default)
-			VALUES (?, ?, ?, ?, ?, ?)`,
-			c.Name, c.Value, c.AddedAt, lastKnownBalance, c.LastKnownBalanceAt, c.Name == s.Default)
-		if err != nil {
+		if !existed {
+			if _, err := tx.Exec(`INSERT INTO connections (name, value, added_at, last_known_balance_mloki, last_known_balance_at, is_default)
+				VALUES (?, ?, ?, ?, ?, 0)`,
+				c.Name, c.Value, c.AddedAt, lastKnownBalance, c.LastKnownBalanceAt); err != nil {
+				if store.IsUniqueViolation(err) {
+					return ErrDuplicateName
+				}
+				return fmt.Errorf("cashctl.db: saving connection %s: %w", c.Name, err)
+			}
+			continue
+		}
+		if _, err := tx.Exec(`UPDATE connections SET value = ?, added_at = ?, last_known_balance_mloki = ?, last_known_balance_at = ?
+			WHERE name = ?`,
+			c.Value, c.AddedAt, lastKnownBalance, c.LastKnownBalanceAt, c.Name); err != nil {
 			return fmt.Errorf("cashctl.db: saving connection %s: %w", c.Name, err)
+		}
+	}
+	for name := range s.loaded {
+		if present[name] {
+			continue
+		}
+		if _, err := tx.Exec(`DELETE FROM connections WHERE name = ?`, name); err != nil {
+			return fmt.Errorf("cashctl.db: removing connection %s: %w", name, err)
+		}
+	}
+	if s.Default != s.loadedDefault {
+		if _, err := tx.Exec(`UPDATE connections SET is_default = 0 WHERE is_default != 0`); err != nil {
+			return fmt.Errorf("cashctl.db: clearing default: %w", err)
+		}
+		if s.Default != "" {
+			if _, err := tx.Exec(`UPDATE connections SET is_default = 1 WHERE name = ?`, s.Default); err != nil {
+				return fmt.Errorf("cashctl.db: setting default: %w", err)
+			}
 		}
 	}
 	return tx.Commit()

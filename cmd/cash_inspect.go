@@ -21,6 +21,9 @@ func newCashListRecipientsCmd() *cobra.Command {
 		Example: `  cashctl cash list-recipients`,
 		Args:    output.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := rejectConnectionFlag(cmd); err != nil {
+				return err
+			}
 			jsonMode, _ := cmd.Flags().GetBool("json")
 			l, err := ledger.Load()
 			if err != nil {
@@ -52,9 +55,10 @@ func newCashListRecipientsCmd() *cobra.Command {
 				if dialErr {
 					return output.NetworkError(cmd, err)
 				}
-				return classifyNWCErr(cmd, err)
+				return classifyCashTokenNWCErr(cmd, err)
 			}
 			if jsonMode {
+				result.Recipients = output.NonNil(result.Recipients)
 				output.PrintJSON(result)
 				return nil
 			}
