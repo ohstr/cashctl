@@ -20,6 +20,7 @@ and [Circle wallets](https://github.com/flokiorg/lokihub/blob/main/docs/nips/NIP
 - [`cashctl init`](#cashctl-init) — Set up your identity and, optionally, a wallet
 - [`cashctl wallet show/history/use`](#cashctl-wallet-show) — Show your identity, registered wallets, and local action history
 - [`cashctl wallet balance`](#cashctl-wallet-balance) — Sums every wallet's balance plus unredeemed held tokens into one figure
+- [`cashctl wallet protect`](#cashctl-wallet-protect) — Re-key a still-shared bearer holding so the original code can no longer spend it
 - [`cashctl wallet <op>`](#cashctl-wallet-op) — Run ordinary NWC operations against whichever wallet is current
 - [`cashctl connect add/list/use/rm`](#cashctl-connect-addlistuserm) — Register an NWC connection: a plain Lightning wallet you already have
 
@@ -291,6 +292,17 @@ cashctl wallet balance --from work # just one wallet or held token
 An expired wallet can't be queried live. `balance` falls back to the
 last-known figure from your most recent successful check, marked
 `stranded` (`[expired]` in text mode).
+
+## `cashctl wallet protect`
+
+Re-key a bearer holding that's still shared, so the original code can no
+longer spend it. `receive` does this automatically; use this if that was
+declined or failed.
+
+```sh
+cashctl wallet protect         # picks the holding for you
+cashctl wallet protect <id>    # a specific held token (see `wallet show --json`)
+```
 
 ## `cashctl wallet <op>`
 

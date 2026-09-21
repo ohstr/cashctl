@@ -60,8 +60,9 @@ in place), `{"status": "consolidated", "consolidated_with": [...],
 "declined"}`, or `{"status": "not_applicable"}` (not a bearer-mode
 receive). A wire failure here reports `{"status": "failed", "error":
 "..."}` but never fails `receive` itself — the cash is already genuinely
-yours; retry protecting later with `cashctl consolidate --to
-bearer-target`. Because the secret is always captured — and kept current
+yours; retry protecting later with `cashctl wallet protect [id]`
+(re-keys a single still-shared holding in place; `consolidate --to
+bearer-target` needs 2+ sources). Because the secret is always captured — and kept current
 — up front, `redeem`/`transfer` never need a `--as bearer:<secret>`
 override for a held token.
 
