@@ -177,6 +177,56 @@ func TestCircleJoin_ViaRawNWCURI(t *testing.T) {
 	}
 }
 
+// TestCircleJoin_ImmediateRetryRecoversRealOutcome is the live evidence
+// for the fix to E5-02/R1-16: two `join` attempts by the same identity,
+// against the same hub, landing in the same wall-clock second, used to
+// have the SECOND masked as a hard, non-retryable "identity_event has
+// already been used" (exit 3, invalid_input) — hiding whatever the real
+// outcome would have been (an allowlist/cap decline, or success) behind a
+// transport-level replay-guard collision that a few seconds' wait always
+// fixed. Uses an identity NOT on the hub's allowlist so the real,
+// recoverable outcome (RESTRICTED, exit 7) is unambiguous and distinct
+// from the masking error's own exit code.
+func TestCircleJoin_ImmediateRetryRecoversRealOutcome(t *testing.T) {
+	cfg, err := LoadConfig("")
+	if err != nil {
+		t.Skipf("skipping: could not load integration config (%v) — see integration/README.md", err)
+	}
+	admin, ok := newAdminClient(cfg)
+	if !ok {
+		t.Skip("skipping: admin_api not configured — see integration/README.md")
+	}
+
+	f := newFixture(t)
+	f.mustJSON("wallet", "init")
+	// Allowlisted for someone else entirely — this fixture's own identity
+	// is deliberately never on it.
+	hubResp := setUpCircleHub(t, admin, fakeHex32(t))
+	if hubResp.CircleHubToken == nil || *hubResp.CircleHubToken == "" {
+		t.Fatalf("create ephemeral circle_hub: no circleHubToken in response: %+v", hubResp)
+	}
+
+	first := f.run("join", "--hub", *hubResp.CircleHubToken, "--max-amount", "50", "--yes")
+	if first.ExitCode != 7 {
+		t.Fatalf("join (not allowlisted): exit %d, want 7 (auth)\nstderr: %s", first.ExitCode, first.Stderr)
+	}
+	if got := nwcCodeFromError(t, first.Stderr); got != "RESTRICTED" {
+		t.Fatalf("join (not allowlisted): nwc_code = %q, want RESTRICTED", got)
+	}
+
+	// Immediately after — same identity, same hub, almost certainly the
+	// same wall-clock second. Without the fix this returns exit 3
+	// ("identity_event has already been used"), masking the real
+	// RESTRICTED outcome.
+	second := f.run("join", "--hub", *hubResp.CircleHubToken, "--max-amount", "50", "--yes")
+	if second.ExitCode != 7 {
+		t.Fatalf("join (immediate retry): exit %d, want 7 (the real RESTRICTED outcome, recovered)\nstderr: %s", second.ExitCode, second.Stderr)
+	}
+	if got := nwcCodeFromError(t, second.Stderr); got != "RESTRICTED" {
+		t.Errorf("join (immediate retry): nwc_code = %q, want RESTRICTED (the replay-guard collision must be retried internally, not surfaced)", got)
+	}
+}
+
 // TestDecodeCheck_CircleHub confirms `cashctl decode <circlehub1...>
 // --check` reports joining as possible against a real, reachable
 // circle_hub (reachable + advertises create_circle_wallet), without ever

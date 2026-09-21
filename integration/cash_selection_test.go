@@ -65,7 +65,7 @@ func TestCashTransfer_CashSelection_ExactMatch(t *testing.T) {
 
 	targetHex := fakeHex32(t)
 	// No --token: cash selection must pick the one held entry itself.
-	resp := f.mustJSON("transfer", targetHex, "45000", "--yes")
+	resp := f.mustJSON("transfer", targetHex, lokiArg(int64(amountMillis)), "--yes")
 	if resp["remaining_amount_millis"] != nil {
 		t.Errorf("transfer (exact match): expected a full transfer with no remainder, got remaining_amount_millis = %v", resp["remaining_amount_millis"])
 	}
@@ -111,7 +111,7 @@ func TestCashTransfer_CashSelection_BestFitSplit(t *testing.T) {
 	}
 
 	targetHex := fakeHex32(t)
-	resp := f.mustJSON("transfer", targetHex, "20000", "--yes")
+	resp := f.mustJSON("transfer", targetHex, lokiArg(int64(targetAmount)), "--yes")
 	remaining, _ := resp["remaining_amount_millis"].(float64)
 	if uint64(remaining) != smallAmount-targetAmount {
 		t.Fatalf("transfer (best-fit split): remaining_amount_millis = %v, want %d (the smaller covering token's remainder, not the bigger one's)", resp["remaining_amount_millis"], smallAmount-targetAmount)
@@ -135,10 +135,16 @@ func TestCashTransfer_CashSelection_BestFitSplit(t *testing.T) {
 	}
 }
 
-// TestCashTransfer_CashSelection_Fragmented covers case 4: no single
-// minter's held tokens sum to the requested amount, so transfer must
+// TestCashTransfer_CashSelection_Fragmented covers case 4: the held total
+// covers the requested amount, but it's split across two different
+// minters and no single minter's tokens sum to it, so transfer must
 // refuse outright with a usage error naming the shortfall, rather than
-// silently sending as multiple transfers to different minters.
+// silently sending as multiple transfers to different minters. This needs
+// two distinct hubs (two distinct minters) — a single minter with an
+// insufficient total is a genuinely different diagnosis (plain overdraft,
+// ledger.InsufficientFundsError/invalid_input, not fragmentation) that
+// cash_transfer.go deliberately no longer conflates with this one (see its
+// own comment on the split).
 func TestCashTransfer_CashSelection_Fragmented(t *testing.T) {
 	cfg, err := LoadConfig("")
 	if err != nil {
@@ -157,24 +163,41 @@ func TestCashTransfer_CashSelection_Fragmented(t *testing.T) {
 		t.Fatalf("decode local identity npub: %v", err)
 	}
 
-	token := mintPubkeyToken(t, admin, myPubHex, 10_000)
-	if res := f.run("receive", token); res.ExitCode != 0 {
-		t.Fatalf("receive: exit %d\nstderr: %s", res.ExitCode, res.Stderr)
+	hub1 := setUpCashHub(t, admin)
+	hub2 := setUpCashHub(t, admin)
+	const amountH1, amountH2 = uint64(300_000), uint64(300_000) // 300 loki each — neither alone covers the 500 loki target
+	const target = amountH1 + amountH2 - 100_000                // 500,000: covered by the 600 loki total, but not by either hub alone
+
+	tokenH1 := mintPubkeyTokenFromHub(t, hub1, myPubHex, amountH1)
+	tokenH2 := mintPubkeyTokenFromHub(t, hub2, myPubHex, amountH2)
+	if res := f.run("receive", tokenH1); res.ExitCode != 0 {
+		t.Fatalf("receive (hub1): exit %d\nstderr: %s", res.ExitCode, res.Stderr)
+	}
+	if res := f.run("receive", tokenH2); res.ExitCode != 0 {
+		t.Fatalf("receive (hub2): exit %d\nstderr: %s", res.ExitCode, res.Stderr)
 	}
 
-	res := f.run("transfer", fakeHex32(t), "500000", "--yes")
+	res := f.run("transfer", fakeHex32(t), lokiArg(int64(target)), "--yes")
 	if res.ExitCode != 2 {
-		t.Fatalf("transfer (fragmented, only 10000 held): exit = %d, want 2 (usage)\nstderr: %s", res.ExitCode, res.Stderr)
+		t.Fatalf("transfer (fragmented across 2 hubs, 600 loki held): exit = %d, want 2 (usage)\nstderr: %s", res.ExitCode, res.Stderr)
 	}
 	if !jsonErrorContains(t, res.Stderr, "usage", "fragmented") {
 		t.Errorf("unexpected error body: %s", res.Stderr)
 	}
+	// The bug found auditing this: the shortfall used to print as two bare,
+	// unlabeled integers ("you hold 600000 total... the 500000 you're
+	// sending") — indistinguishable from any other pair of numbers, not
+	// obviously an amount at all. Must now read as real loki amounts.
+	if !jsonErrorContains(t, res.Stderr, "usage", "600 loki total") {
+		t.Errorf("error doesn't name the held total in loki: %s", res.Stderr)
+	}
+	if !jsonErrorContains(t, res.Stderr, "usage", "500 loki you're sending") {
+		t.Errorf("error doesn't name the requested amount in loki: %s", res.Stderr)
+	}
 
 	// Refusing must not touch anything held.
-	showResp := f.mustJSON("wallet", "show")
-	held, _ := showResp["held_tokens"].([]any)
-	if len(held) != 1 {
-		t.Errorf("a refused transfer must leave held tokens untouched, got %d: %v", len(held), held)
+	if n := heldCount(t, f); n != 2 {
+		t.Errorf("a refused transfer must leave held tokens untouched, got %d", n)
 	}
 }
 
@@ -232,7 +255,7 @@ func TestCashTransfer_CashSelection_AutoConsolidate(t *testing.T) {
 	}
 
 	targetHex := fakeHex32(t)
-	resp := f.mustJSON("transfer", targetHex, "40000", "--yes")
+	resp := f.mustJSON("transfer", targetHex, lokiArg(int64(targetAmount)), "--yes")
 	consolidatedFrom, _ := resp["consolidated_from"].([]any)
 	if len(consolidatedFrom) != 2 {
 		t.Fatalf("transfer (auto-consolidate): consolidated_from = %v, want 2 entries", resp["consolidated_from"])

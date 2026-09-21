@@ -3,7 +3,6 @@
 package integration
 
 import (
-	"fmt"
 	"testing"
 )
 
@@ -226,7 +225,7 @@ func TestCashTransfer_CashSelection_MinimalSubsetSkipsExtraToken(t *testing.T) {
 		t.Fatalf("decode C's local identity npub: %v", err)
 	}
 
-	transferResp := b.mustJSON("transfer", cPub, fmt.Sprintf("%d", targetAmount), "--yes")
+	transferResp := b.mustJSON("transfer", cPub, lokiArg(int64(targetAmount)), "--yes")
 	consolidatedFrom, _ := transferResp["consolidated_from"].([]any)
 	if len(consolidatedFrom) != 2 {
 		t.Fatalf("transfer: consolidated_from = %v, want exactly 2 (big+mid, not the small token)", transferResp["consolidated_from"])
@@ -315,7 +314,7 @@ func TestCashTransfer_FragmentedThenManualSplitAcrossHubs(t *testing.T) {
 
 	// The naive single call must refuse — the two hubs can't be combined
 	// silently into one transfer.
-	refused := b.run("transfer", cPub, fmt.Sprintf("%d", owed), "--yes")
+	refused := b.run("transfer", cPub, lokiArg(int64(owed)), "--yes")
 	if refused.ExitCode != 2 {
 		t.Fatalf("transfer (fragmented across 2 hubs): exit = %d, want 2 (usage)\nstderr: %s", refused.ExitCode, refused.Stderr)
 	}
@@ -333,7 +332,7 @@ func TestCashTransfer_FragmentedThenManualSplitAcrossHubs(t *testing.T) {
 		t.Errorf("manual transfer #1 (hub1, whole token): remaining_amount_millis = %v, want absent", remaining)
 	}
 	splitFromH2 := owed - amountH1
-	resp2 := b.mustJSON("transfer", cPub, fmt.Sprintf("%d", splitFromH2), "--token", idH2, "--yes")
+	resp2 := b.mustJSON("transfer", cPub, lokiArg(int64(splitFromH2)), "--token", idH2, "--yes")
 	remaining2, _ := resp2["remaining_amount_millis"].(float64)
 	if uint64(remaining2) != amountH2-splitFromH2 {
 		t.Fatalf("manual transfer #2 (hub2, split): remaining_amount_millis = %v, want %d", resp2["remaining_amount_millis"], amountH2-splitFromH2)

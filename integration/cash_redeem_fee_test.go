@@ -464,7 +464,7 @@ func TestCashRedeemFee_MakeInvoiceAcceptsZeroAmount(t *testing.T) {
 // end-to-end 100%-fee edge case: RedeemFeePpm: 1_000_000 makes
 // NetRedeemableMillis exactly 0 for every slice this hub mints. Checks,
 // against a real lokihub instance:
-//   - the confirmation message reads sensibly ("you'll receive 0 loki",
+//   - the confirmation message reads sensibly ("you receive 0 loki",
 //     not something nonsensical) — captured via a real interactive prompt
 //     (f.runInteractive), since f.run always passes --json, which skips
 //     the confirmation text entirely (Confirm never prints under
@@ -515,13 +515,13 @@ func TestCashRedeemFee_HundredPercentPpm_ZeroNetRedeemable(t *testing.T) {
 	// --json, which would skip it. "y\n" accepts, so this also exercises
 	// the full auto-invoice -> cash_redeem round trip past the prompt.
 	interactive := f.runInteractive("y\n", "redeem", "--into", hub.PairingUri)
-	if !strings.Contains(interactive.Stdout, "you'll receive 0") {
-		t.Errorf("confirmation text doesn't mention receiving 0 %s sensibly:\n%s", "loki", interactive.Stdout)
+	if !strings.Contains(interactive.Combined(), "you receive 0") {
+		t.Errorf("confirmation text doesn't mention receiving 0 %s sensibly:\n%s", "loki", interactive.Combined())
 	}
-	if strings.Contains(interactive.Stdout, "receive 0 (a") && !strings.Contains(interactive.Stdout, "0 loki (a") {
-		t.Errorf("confirmation text's units look malformed around the 0 amount:\n%s", interactive.Stdout)
+	if strings.Contains(interactive.Combined(), "you receive 0") && !strings.Contains(interactive.Combined(), "you receive 0 loki") {
+		t.Errorf("confirmation text's units look malformed around the 0 amount:\n%s", interactive.Combined())
 	}
-	t.Logf("100%% fee interactive confirmation text:\n%s", interactive.Stdout)
+	t.Logf("100%% fee interactive confirmation text:\n%s", interactive.Combined())
 
 	// Now the classified (--json) outcome. This redemption is same-node
 	// (--into the same hub that minted the token, via cashctl's own

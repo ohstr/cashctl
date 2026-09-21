@@ -1,0 +1,155 @@
+#!/usr/bin/env python3
+"""Logging shim for the campaign: runs the real cashctl and appends one JSON
+line per invocation to $CASHCTL_LOG. Records only WHAT was exercised (command
+path, flag names, output mode, how stdin answered a prompt, exit code) —
+never flag values or positionals, which carry tokens and secrets.
+
+env: CASHCTL_REAL (real binary), CASHCTL_LOG (jsonl), CASHCTL_SURFACE
+(surface.json from surface-dump), CASHCTL_AGENT (name to tag lines with).
+"""
+import json
+import os
+import subprocess
+import sys
+import threading
+import time
+
+REAL = os.environ["CASHCTL_REAL"]
+LOG = os.environ["CASHCTL_LOG"]
+SURFACE = os.environ["CASHCTL_SURFACE"]
+AGENT = os.environ.get("CASHCTL_AGENT", "?")
+
+
+def load_surface():
+    with open(SURFACE) as f:
+        return json.load(f)
+
+
+def classify(argv, surface):
+    """Walk argv against the known command tree. Returns (path, flags, eq_forms)."""
+    paths = {c["path"] for c in surface["commands"]}
+    prefixes = {" ".join(p.split(" ")[: i + 1]) for p in paths for i in range(len(p.split(" ")))}
+    takes_value, short_to_long = {}, {}
+    all_flags = list(surface["global_flags"])
+    for c in surface["commands"]:
+        all_flags += c["flags"]
+    for f in all_flags:
+        takes_value[f["name"]] = takes_value.get(f["name"], False) or f["type"] != "bool"
+        if f.get("short"):
+            short_to_long[f["short"]] = f["name"]
+    takes_value["help"] = False
+
+    path, flags, eq_forms = [], set(), set()
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a == "--":
+            break
+        if a.startswith("--"):
+            name, eq, _ = a[2:].partition("=")
+            flags.add(name)
+            if eq:
+                eq_forms.add(name)
+            elif takes_value.get(name, False):
+                i += 1
+        elif a.startswith("-") and len(a) > 1:
+            name = short_to_long.get(a[1], a[1])
+            flags.add(name)
+            if len(a) == 2 and takes_value.get(name, False):
+                i += 1
+        else:
+            cand = " ".join(path + [a])
+            if cand in prefixes:
+                path.append(a)
+        i += 1
+    return " ".join(path), sorted(flags), sorted(eq_forms)
+
+
+def categorize_stdin(data, eof):
+    """How stdin answered: tty | none (nothing arrived, no EOF) | eof | y | n | enter | other."""
+    if data is None:
+        return "tty"
+    if not data:
+        return "eof" if eof else "none"
+    lines = data.decode("utf-8", "replace").split("\n")
+    if lines and lines[-1] == "":
+        lines = lines[:-1]
+    norm = {l.strip().lower() for l in lines}
+    if norm <= {""}:
+        return "enter"
+    if norm <= {"y", "yes"}:
+        return "y"
+    if norm <= {"n", "no"}:
+        return "n"
+    return "other"
+
+
+def pump_stdin(proc, seen):
+    """Copy our stdin to the child's, recording what passed through. This is
+    a pure pass-through: if the caller leaves stdin open and idle, the child
+    sees exactly that too (no EOF is invented), and we never block waiting."""
+    try:
+        while True:
+            chunk = os.read(0, 4096)
+            if not chunk:
+                seen["eof"] = True
+                break
+            seen["data"] += chunk
+            proc.stdin.write(chunk)
+            proc.stdin.flush()
+    except (OSError, ValueError, BrokenPipeError):
+        pass
+    finally:
+        try:
+            proc.stdin.close()
+        except (OSError, ValueError, BrokenPipeError):
+            pass
+
+
+def main():
+    argv = sys.argv[1:]
+    surface = load_surface()
+    path, flags, eq_forms = classify(argv, surface)
+
+    try:
+        interactive = os.isatty(0)
+    except OSError:
+        interactive = False
+
+    seen = {"data": b"", "eof": False}
+    start = time.time()
+    if interactive:
+        proc = subprocess.Popen([REAL] + argv)
+    else:
+        proc = subprocess.Popen([REAL] + argv, stdin=subprocess.PIPE)
+        threading.Thread(target=pump_stdin, args=(proc, seen), daemon=True).start()
+    rc = proc.wait()
+    if rc < 0:
+        rc = 128 - rc
+    time.sleep(0.05)  # let the pump note an already-arrived EOF/answer
+
+    rec = {
+        "ts": int(start),
+        "agent": AGENT,
+        "path": path,
+        "flags": flags,
+        "eq_forms": eq_forms,
+        "mode": "json" if "json" in flags else "text",
+        "yes": "yes" in flags,
+        "stdin": categorize_stdin(None if interactive else seen["data"], seen["eof"]),
+        "exit": rc,
+        "ms": int((time.time() - start) * 1000),
+        "no_color": "NO_COLOR" in os.environ,
+        "ncli_pw": "NCLI_VAULT_PASSWORD" in os.environ,
+    }
+    fd = os.open(LOG, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+    try:
+        os.write(fd, (json.dumps(rec) + "\n").encode())
+    finally:
+        os.close(fd)
+    sys.stdout.flush()
+    os._exit(rc)  # don't wait on a pump thread blocked reading an idle stdin
+
+
+if __name__ == "__main__":
+    main()

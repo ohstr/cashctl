@@ -4,7 +4,6 @@ package integration
 
 import (
 	"context"
-	"fmt"
 	"testing"
 	"time"
 
@@ -122,7 +121,7 @@ func TestMultiParty_BearerRegiftChain_AtoBtoC(t *testing.T) {
 	bOwnToken, _ := bEntry["token"].(string)
 
 	const regiftAmount = uint64(20_000)
-	bTransfer := b.mustJSON("transfer", "bearer-target", fmt.Sprintf("%d", regiftAmount), "--yes")
+	bTransfer := b.mustJSON("transfer", "bearer-target", lokiArg(int64(regiftAmount)), "--yes")
 	bResolved, _ := bTransfer["target_resolved"].(string)
 	if bResolved == "" {
 		t.Fatalf("B transfer (regift split) bearer-target: target_resolved empty: %v", bTransfer)
@@ -234,7 +233,7 @@ func TestMultiParty_ForwardPortionKeepRemainder_AtoBtoC(t *testing.T) {
 		t.Fatalf("decode C's local identity npub: %v", err)
 	}
 
-	transferResp := b.mustJSON("transfer", cPub, fmt.Sprintf("%d", owedToC), "--yes")
+	transferResp := b.mustJSON("transfer", cPub, lokiArg(int64(owedToC)), "--yes")
 	consolidatedFrom, _ := transferResp["consolidated_from"].([]any)
 	if len(consolidatedFrom) != 2 {
 		t.Fatalf("transfer: consolidated_from = %v, want 2 entries", transferResp["consolidated_from"])
@@ -379,7 +378,7 @@ func TestMultiParty_MixedIdentityModeCashSelection(t *testing.T) {
 		t.Fatalf("decode C's local identity npub: %v", err)
 	}
 
-	transferResp := b.mustJSON("transfer", cPub, fmt.Sprintf("%d", target), "--yes")
+	transferResp := b.mustJSON("transfer", cPub, lokiArg(int64(target)), "--yes")
 	consolidatedFrom, _ := transferResp["consolidated_from"].([]any)
 	if len(consolidatedFrom) != 2 {
 		t.Fatalf("transfer: consolidated_from = %v, want exactly 2 (the two pubkey-mode tokens, not the bearer note)", transferResp["consolidated_from"])
@@ -457,7 +456,7 @@ func TestMultiParty_RoundTrip_AtoB_BtoA(t *testing.T) {
 
 	// B -> A, partial: keeps the rest.
 	const sentBack = uint64(15_000)
-	bTransfer := b.mustJSON("transfer", aPub, fmt.Sprintf("%d", sentBack), "--yes")
+	bTransfer := b.mustJSON("transfer", aPub, lokiArg(int64(sentBack)), "--yes")
 	remaining, _ := bTransfer["remaining_amount_millis"].(float64)
 	if uint64(remaining) != totalAmount-sentBack {
 		t.Fatalf("B transfer (partial back to A): remaining_amount_millis = %v, want %d", bTransfer["remaining_amount_millis"], totalAmount-sentBack)
