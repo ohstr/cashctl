@@ -6,8 +6,9 @@ require (
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.0
 	github.com/flokiorg/go-flokicoin v0.26.1-alpha
 	github.com/ohstr/ncli v0.4.6
-	github.com/ohstr/nmilat v0.3.0
+	github.com/ohstr/nmilat v0.3.1
 	github.com/spf13/cobra v1.10.2
+	github.com/spf13/pflag v1.0.10
 	golang.org/x/term v0.45.0
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.58.0
@@ -41,7 +42,6 @@ require (
 	github.com/sourcegraph/conc v0.3.0 // indirect
 	github.com/spf13/afero v1.12.0 // indirect
 	github.com/spf13/cast v1.7.1 // indirect
-	github.com/spf13/pflag v1.0.10 // indirect
 	github.com/spf13/viper v1.20.1 // indirect
 	github.com/subosito/gotenv v1.6.0 // indirect
 	go.etcd.io/bbolt v1.5.0 // indirect
