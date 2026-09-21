@@ -127,7 +127,27 @@ func fetchExpiresAt(cmd *cobra.Command, token string) *int64 {
 	defer client.Close()
 	myPubHex, _ := localPubKeyHex(cmd)
 	result, err := client.CheckClaim(ctx, tok, myPubHex)
+	return expiresAtFromCheck(result, err)
+}
+
+// expiresAtFromCheck turns a CheckClaim outcome into fetchExpiresAt's
+// answer. Any failure is nil (no deadline known) EXCEPT an EXPIRED decline,
+// which is itself the answer: an already-expired wallet rejects
+// list_recipients — the very call CheckClaim makes — so the check can never
+// succeed on precisely the token whose expiry matters most. Collapsing that
+// to nil meant the "already expired" warnings never fired (transfer's and
+// consolidate's own anyExpired/expiredSources logic only ever saw wallets
+// that hadn't expired yet): the user confirmed, then hit exit 7 — or, for a
+// consolidate mixing a dead source with healthy ones, silently stranded the
+// healthy part inside the merged, now-dead token. The real deadline is
+// unknowable from a rejection, so this reports one that has certainly
+// passed.
+func expiresAtFromCheck(result *nipcash.CheckClaimResult, err error) *int64 {
 	if err != nil {
+		if isExpiredWalletErr(err) {
+			passed := time.Now().Unix() - 1
+			return &passed
+		}
 		return nil
 	}
 	return result.ExpiresAt
@@ -258,9 +278,9 @@ func transferWithAutoConsolidate(cmd *cobra.Command, l *ledger.Ledger, group []l
 			return nil
 		})
 		if anyExpired {
-			fmt.Println("One source is expired — merge succeeds but the transfer onward will fail; funds land in a new held token instead.")
+			output.Notef(jsonMode, "One source is expired — merge succeeds but the transfer onward will fail; funds land in a new held token instead.")
 		} else if w := expiryWarningSuffix(earliest, "transfer"); w != "" {
-			fmt.Println(w)
+			output.Notef(jsonMode, "%s", w)
 		}
 	}
 	// defaultYes=false: moves real money — never accept on a bare Enter.
@@ -348,7 +368,16 @@ func transferWithAutoConsolidate(cmd *cobra.Command, l *ledger.Ledger, group []l
 		// prior test ever tried to actually receive an
 		// auto-consolidated transfer's result on the other end).
 		markSourcesConsolidated(l, sourceIDs, result.ConsolidatedFirst.AmountMillis)
-		return printAndSaveTransferResult(cmd, l, result.Transfer, sendAmount, toValue, target, sourceIDs)
+		// The transfer's actual source here is the interim wallet, which
+		// TransferFromSources minted under the caller's own pubkey
+		// (InterimIdentity above) — so any remainder is pubkey-mode too.
+		// "" for originalToken: the interim wallet was never shown to the
+		// user or saved, so there is nothing to fall back to — and
+		// nothing to fall back to is ever needed here, since an in-place
+		// reassignment of the interim wallet always arrives with
+		// NewWalletToken already populated (see this function's own
+		// comment above on TransferFromSources' own patching).
+		return printAndSaveTransferResult(cmd, l, result.Transfer, sendAmount, toValue, target, sourceIDs, ledger.Entry{IdentityRequired: ptrTo(true), MinterPubkey: sharedMinter(group)}, "")
 	}
 
 	var partial *nipcashclient.PartialProgressError
@@ -366,17 +395,27 @@ func transferWithAutoConsolidate(cmd *cobra.Command, l *ledger.Ledger, group []l
 		// in-place reassignment). Never worth retrying: the sources
 		// are already consumed by the consolidate that just landed.
 		markSourcesConsolidated(l, sourceIDs, partial.Consolidated.AmountMillis)
-		_, _ = l.Add(ledger.Entry{
+		newEntry, addErr := l.Add(ledger.Entry{
 			Token:        partial.Consolidated.NewWalletToken,
 			WalletPubkey: partial.Consolidated.NewWalletPubkey,
 			AmountMillis: &partial.Consolidated.AmountMillis,
 			Verified:     true,
+			MinterPubkey: sharedMinter(group),
 		})
-		_ = l.Save()
-		return classifyNWCErr(cmd, ffsErr)
+		if addErr == nil {
+			addErr = l.Save()
+		}
+		if addErr != nil {
+			// Both the interim consolidate AND the transfer onward from it
+			// are done for — the interim wallet is the only place this
+			// money is now reachable, and this save failing means even
+			// cashctl's own in-memory record of it dies with this process.
+			return reportUnsavedResult(cmd, addErr, "Transfer (interim consolidate)", entryRecoveryHint(newEntry))
+		}
+		return classifyCashTokenNWCErr(cmd, ffsErr)
 	}
 
-	return classifyNWCErr(cmd, ffsErr)
+	return classifyCashTokenNWCErr(cmd, ffsErr)
 }
 
 // attemptTransferFromSourcesWithRetry places the interim-consolidate-then-
@@ -460,16 +499,37 @@ func markSourcesConsolidated(l *ledger.Ledger, sourceIDs []string, amountMillis 
 // exactly the same "one CashTransferResult, maybe a remainder" shape.
 // target is accepted (not just its Resolved string) so a bearer target's
 // combined <token>#<secret> string — the actual thing the recipient
-// needs — can be assembled here, since only this function ever sees
-// transferResult.NewWalletToken (the token half; the secret half was
-// already known at confirm time via target.Target's own BearerTarget).
-func printAndSaveTransferResult(cmd *cobra.Command, l *ledger.Ledger, transferResult *nipcash.CashTransferResult, sentAmount uint64, toValue string, target credential.ResolvedTarget, consolidatedFrom []string) error {
+// needs — can be assembled here.
+//
+// originalToken is the token this transfer actually acted on (the held
+// entry's own token for the plain path; "" for the auto-consolidate path,
+// where it's never needed — see that call site's own comment). It's the
+// fallback half of transferResult.RecipientToken(originalToken): an EXACT
+// full-amount transfer (SplitAmount == CurrentAmount, or omitted entirely)
+// reassigns the source wallet IN PLACE — no new wallet is minted, so
+// NewWalletToken comes back "" — but the recipient still needs a copy of
+// SOME token string to ever reach that wallet again. The only such string
+// that still exists is originalToken itself, still valid, now registered
+// to the new identity (NIP-CASH §Transferring and Splitting a Slice).
+// Getting this wrong is a fund-loss bug, not a display nit: printing
+// nothing here for that case means the transfer's whole result — the
+// wallet's new owner has no way to ever spend it — cannot be recovered
+// from output alone, for BOTH bearer and pubkey/npub/connection targets.
+//
+// remainderMode carries the credential-mode fields (see credentialModeOf)
+// the remainder entry, if any, is saved with — cash_transfer leaves a
+// split's remainder under the SAME identity the source had, so it has to
+// be spendable the same way the source was.
+func printAndSaveTransferResult(cmd *cobra.Command, l *ledger.Ledger, transferResult *nipcash.CashTransferResult, sentAmount uint64, toValue string, target credential.ResolvedTarget, consolidatedFrom []string, remainderMode ledger.Entry, originalToken string) error {
 	jsonMode, _ := cmd.Flags().GetBool("json")
 	l.AppendHistory("transfer", fmt.Sprintf("transferred %s to %s", output.FormatAmount(int64(sentAmount)), toValue))
 
 	var remainderEntry *ledger.Entry
 	if transferResult.RemainderWalletToken != "" {
-		remainderEntry, _ = l.Add(ledger.Entry{Token: transferResult.RemainderWalletToken, WalletPubkey: transferResult.RemainderWalletPubkey})
+		remainder := remainderMode
+		remainder.Token = transferResult.RemainderWalletToken
+		remainder.WalletPubkey = transferResult.RemainderWalletPubkey
+		remainderEntry, _ = l.Add(remainder)
 		if transferResult.RemainingAmountMillis != nil {
 			remainderEntry.AmountMillis = transferResult.RemainingAmountMillis
 		}
@@ -479,9 +539,18 @@ func printAndSaveTransferResult(cmd *cobra.Command, l *ledger.Ledger, transferRe
 			l.AppendHistory("transfer", "kept remainder as a new token")
 		}
 	}
-	if err := l.Save(); err != nil {
-		return output.RuntimeError(cmd, err)
-	}
+
+	// recipientToken resolves the "what does the recipient actually need"
+	// question uniformly for a split (transferResult.NewWalletToken, a
+	// genuinely new wallet) and an in-place full-amount reassignment
+	// (originalToken, still valid, now under the new identity) — see this
+	// function's own doc comment. "" only when originalToken itself was
+	// never given (the auto-consolidate call site). Computed BEFORE
+	// Save() below so a save failure can still report it — the Hub-side
+	// transfer is already done by this point regardless of whether l.Save
+	// succeeds, and this string is the only way that result is ever
+	// recoverable once the process exits.
+	recipientToken := transferResult.RecipientToken(originalToken)
 
 	// For a bearer target there's no recipient identity — the recipient
 	// is whoever holds the combined token#secret string, so that's what
@@ -489,11 +558,32 @@ func printAndSaveTransferResult(cmd *cobra.Command, l *ledger.Ledger, transferRe
 	// "bearer-target"/user input) still goes to AppendHistory above
 	// unchanged — only this display/--json substitution uses the
 	// assembled string.
+	_, isBearer := target.Target.(*nipcash.BearerTarget)
 	displayTo := toValue
 	var cashToSend string
-	if bt, ok := target.Target.(*nipcash.BearerTarget); ok && transferResult.NewWalletToken != "" {
-		cashToSend = fmt.Sprintf("%s#%s", transferResult.NewWalletToken, bt.Secret())
+	if isBearer && recipientToken != "" {
+		bt := target.Target.(*nipcash.BearerTarget)
+		cashToSend = fmt.Sprintf("%s#%s", recipientToken, bt.Secret())
 		displayTo = cashToSend
+	}
+
+	if err := l.Save(); err != nil {
+		handoff := cashToSend
+		if handoff == "" {
+			handoff = recipientToken
+		}
+		var parts []string
+		if handoff != "" {
+			parts = append(parts, "the recipient's own — save this now, it will not be shown again: "+handoff)
+		}
+		if remainder := entryRecoveryString(remainderEntry); remainder != "" {
+			parts = append(parts, "your own remainder: "+remainder)
+		}
+		recovery := ""
+		if len(parts) > 0 {
+			recovery = "Save these: " + strings.Join(parts, "; ")
+		}
+		return reportUnsavedResult(cmd, err, "Transfer", recovery)
 	}
 
 	if jsonMode {
@@ -516,6 +606,13 @@ func printAndSaveTransferResult(cmd *cobra.Command, l *ledger.Ledger, transferRe
 		if cashToSend != "" {
 			out["cash_to_send"] = cashToSend
 		}
+		// recipient_token: the exact string a pubkey/npub/connection-key
+		// recipient needs to `receive` this — distinct from cash_to_send
+		// (bearer-only, carries a secret) so existing bearer-vs-not
+		// consumers of cash_to_send never see it change shape.
+		if !isBearer && recipientToken != "" {
+			out["recipient_token"] = recipientToken
+		}
 		output.PrintJSON(out)
 		return nil
 	}
@@ -524,7 +621,32 @@ func printAndSaveTransferResult(cmd *cobra.Command, l *ledger.Ledger, transferRe
 	// this is wallet mechanism, not something the user decided, and it's
 	// always visible afterward via `cashctl wallet show`/`wallet balance`.
 	fmt.Printf("Transferred %s to %s.\n", output.FormatAmount(int64(sentAmount)), displayTo)
+	if !isBearer && recipientToken != "" {
+		fmt.Printf("Give this to them: %s (they run: cashctl receive %s)\n", recipientToken, recipientToken)
+	}
 	return nil
+}
+
+// credentialModeOf returns an Entry carrying only src's credential-mode
+// fields — exactly what resolveCredential reads to decide how to spend it
+// (bearer secret, identity requirement, connection-key reference), and
+// nothing else. lokihub's cash_transfer leaves a split's remainder under
+// the source's SAME current identity (cash_transfer_controller.go carries
+// RemainderIdentityType/Value over unchanged), so a bearer source's
+// remainder is still spent by the very same secret. Without this, the
+// remainder was saved with IdentityRequired unknown and no secret, so
+// resolveCredential fell through to the local identity — which a
+// bearer-only wallet never has — and the next spend failed with "run
+// `cashctl init` first".
+func credentialModeOf(src ledger.Entry) ledger.Entry {
+	return ledger.Entry{
+		IdentityRequired:        src.IdentityRequired,
+		BearerSecret:            src.BearerSecret,
+		ConnectionKeyPlatform:   src.ConnectionKeyPlatform,
+		ConnectionKeyExternalID: src.ConnectionKeyExternalID,
+		AttestationEventID:      src.AttestationEventID,
+		IAPubkey:                src.IAPubkey,
+	}
 }
 
 // disambiguateTransferArgs decides which of transfer's up-to-2 positional
@@ -537,28 +659,59 @@ func printAndSaveTransferResult(cmd *cobra.Command, l *ledger.Ledger, transferRe
 // of failing to parse "500" as a target, and — with two args — lets both
 // `cashctl transfer 5000 <target>` (the documented order) and `cashctl
 // transfer <target> 5000` (the old order) resolve the same way, since
-// whichever side parses as an amount is the amount. Pure and cobra-free
-// so it's unit-testable directly, mirroring resolveConsolidateSources's
-// own reasoning in cash_consolidate.go.
+// whichever side parses as an amount is the amount.
+//
+// When NEITHER side parses as an amount (a malformed amount, most often —
+// "1.5x", "5 loki" — typo'd or over-precise), credential.LooksLikeTarget
+// breaks the tie: exactly one side looking like a real target shape means
+// the OTHER side is the (malformed) amount, so resolvePositionalOrFlagAmount
+// reports THAT one as invalid — not the npub that happened to land in the
+// amount slot under the old position-only fallback (confirmed live: the
+// old code blamed the recipient, "npub1uem7...3dfp9 is not a valid amount
+// in loki", for a typo in the OTHER argument). Genuinely ambiguous input
+// (both or neither look like a target) falls back to the documented
+// amount-first order, same as before.
+//
+// Pure and cobra-free so it's unit-testable directly, mirroring
+// resolveConsolidateSources's own reasoning in cash_consolidate.go.
 func disambiguateTransferArgs(args []string) (positionalTo, positionalAmount string) {
+	looksLikeAmount := func(s string) bool {
+		_, err := output.ParseAmount(s)
+		return err == nil
+	}
 	switch len(args) {
 	case 1:
-		if _, numErr := output.ParseAmount(args[0]); numErr == nil {
+		if looksLikeAmount(args[0]) {
 			positionalAmount = args[0]
 		} else {
 			positionalTo = args[0]
 		}
 	case 2:
-		if _, numErr := output.ParseAmount(args[0]); numErr == nil {
+		amount0, amount1 := looksLikeAmount(args[0]), looksLikeAmount(args[1])
+		target0, target1 := credential.LooksLikeTarget(args[0]), credential.LooksLikeTarget(args[1])
+		switch {
+		case amount0 && !amount1:
 			positionalAmount, positionalTo = args[0], args[1]
-		} else {
+		case amount1 && !amount0:
 			positionalTo, positionalAmount = args[0], args[1]
+		case target0 && !target1:
+			positionalTo, positionalAmount = args[0], args[1]
+		case target1 && !target0:
+			positionalTo, positionalAmount = args[1], args[0]
+		default:
+			// Genuinely ambiguous (both or neither parse as an amount, AND
+			// both or neither look like a target) — nothing left to sniff,
+			// so fall back to the documented amount-first order.
+			positionalAmount, positionalTo = args[0], args[1]
 		}
 	}
 	return positionalTo, positionalAmount
 }
 
 func runCashTransfer(cmd *cobra.Command, args []string) error {
+	if err := rejectConnectionFlag(cmd); err != nil {
+		return err
+	}
 	jsonMode, _ := cmd.Flags().GetBool("json")
 	toFlagValue, _ := cmd.Flags().GetString("to")
 	amountFlagValue, _ := cmd.Flags().GetString("amount")
@@ -569,9 +722,24 @@ func runCashTransfer(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	// An amount string was actually typed, as opposed to omitted — needed
+	// below to tell "transfer 0 <target>"/"--amount 0" (a real, explicit
+	// request for nothing) apart from a bare "transfer <target>" (amount
+	// omitted, sentinel 0 meaning "the whole token" everywhere else in
+	// this function): resolvePositionalOrFlagAmount itself can't make
+	// that distinction — ParseAmount("0") succeeds same as an empty
+	// string collapsing to its own "nothing given" 0 return.
+	amountGiven := strings.TrimSpace(positionalAmount) != "" || strings.TrimSpace(amountFlagValue) != ""
 	amountFlag, err := resolvePositionalOrFlagAmount(cmd, positionalAmount, "amount", amountFlagValue)
 	if err != nil {
 		return err
+	}
+	if amountGiven && amountFlag == 0 {
+		// Confirmed live: without this, a computed amount of 0 (a rounding
+		// bug, an unset variable defaulting to "0") silently transferred
+		// the ENTIRE held token instead of failing — real money moved on
+		// an input that was never a meaningful request to send anything.
+		return output.UsageError(cmd, fmt.Errorf("amount must be greater than 0 (omit it entirely to send the whole held token)"))
 	}
 	// No target given at all, but an amount was: default to a bearer note
 	// instead of erroring — "just an amount, share the result with
@@ -589,7 +757,7 @@ func runCashTransfer(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	if shouldPrintResolvedTarget(target) {
-		output.Linef(jsonMode, "  resolves to: %s", target.Resolved)
+		output.Notef(jsonMode, "  resolves to: %s", target.Resolved)
 	}
 
 	l, err := ledger.Load()
@@ -606,9 +774,32 @@ func runCashTransfer(cmd *cobra.Command, args []string) error {
 		// docs/ux-review.md Part 2). Only once something is actually
 		// held: with nothing held at all, resolveHeldToken's own "receive
 		// one first" error below is the clearer message — cash selection
-		// would otherwise report a confusing "0 total, funds fragmented."
+		// would otherwise report a confusing "not enough funds: you hold 0."
 		plan, err := ledger.SelectForAmount(l.Held(), amountFlag)
 		if err != nil {
+			// Both error types' own Error() states their two amounts as
+			// bare unlabeled numbers (see FundsFragmentedError's own doc
+			// comment: ledger stays presentation-agnostic) — re-rendered
+			// here with real units so "you hold 3 loki, need 5 loki" /
+			// "you hold 45 loki total... the 5 loki you're sending" reads
+			// as an amount, not meaningless integers. Insufficient funds
+			// (the total itself falls short) is also a genuinely different
+			// diagnosis from fragmentation (the total covers it, but no
+			// single minter's tokens do) — conflating them used to call a
+			// plain overdraft "fragmented across separate Hubs", which is
+			// simply false when only one Hub was ever involved. invalid_input,
+			// not usage: the amount requested is what's actually wrong here,
+			// not how the command was invoked.
+			var insuf *ledger.InsufficientFundsError
+			if errors.As(err, &insuf) {
+				return output.InvalidInputError(cmd, "", fmt.Errorf("not enough funds: you hold %s, need %s",
+					output.FormatAmount(int64(insuf.TotalHeld)), output.FormatAmount(int64(insuf.Target))))
+			}
+			var frag *ledger.FundsFragmentedError
+			if errors.As(err, &frag) {
+				return output.UsageError(cmd, fmt.Errorf("%w: you hold %s total, but no single minter's tokens sum to the %s you're sending",
+					ledger.ErrFundsFragmented, output.FormatAmount(int64(frag.TotalHeld)), output.FormatAmount(int64(frag.Target))))
+			}
 			return output.UsageError(cmd, err)
 		}
 		if len(plan.ConsolidateFirst) > 0 {
@@ -697,7 +888,7 @@ func runCashTransfer(cmd *cobra.Command, args []string) error {
 	// The confirmation only ever names what's actually being sent.
 	message := fmt.Sprintf("Transfer %s to %s?", output.FormatAmount(int64(sendAmount)), displayTarget)
 	if w := expiryWarningSuffix(expiresAt, "transfer"); w != "" {
-		fmt.Println(w)
+		output.Notef(jsonMode, "%s", w)
 	}
 	// defaultYes=false: moves real money — never accept on a bare Enter.
 	if !Confirm(cmd, false, message) {
@@ -707,8 +898,10 @@ func runCashTransfer(cmd *cobra.Command, args []string) error {
 
 	var result *nipcash.CashTransferResult
 	err = WithSpinner(jsonMode, "Transferring...", func() error {
-		r, cErr := client.CashTransfer(ctx, nipcash.CashTransferParams{
-			Credential: cred, To: target.Target, CurrentAmount: amount, SplitAmount: splitAmount,
+		r, cErr := spendBearerEntry(entry, cred, func(c nipcash.Credential) (*nipcash.CashTransferResult, error) {
+			return client.CashTransfer(ctx, nipcash.CashTransferParams{
+				Credential: c, To: target.Target, CurrentAmount: amount, SplitAmount: splitAmount,
+			})
 		})
 		if cErr != nil {
 			return cErr
@@ -717,11 +910,18 @@ func runCashTransfer(cmd *cobra.Command, args []string) error {
 		return nil
 	})
 	if err != nil {
-		return classifyNWCErr(cmd, err)
+		return classifyCashTokenNWCErr(cmd, err)
 	}
 
 	_ = l.SetStatus(entry.ID, ledger.StatusTransferred)
-	return printAndSaveTransferResult(cmd, l, result, sentAmount, toValue, target, nil)
+	// The remainder is a brand-new wallet the same Hub split off entry, so
+	// it inherits entry's verified minter (see sharedMinter) — without this
+	// a split remainder silently fell out of cash-selection's same-minter
+	// grouping, and a later spend needing it together with a sibling
+	// failed as "insufficient" despite the funds being right there.
+	remainderMode := credentialModeOf(*entry)
+	remainderMode.MinterPubkey = entry.MinterPubkey
+	return printAndSaveTransferResult(cmd, l, result, sentAmount, toValue, target, nil, remainderMode, entry.Token)
 }
 
 // resolveLiveEntry re-resolves id against l itself and returns the result —

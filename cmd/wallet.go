@@ -23,6 +23,7 @@ func newWalletCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "wallet",
 		Short: "Manage your identity, wallets, and their history",
+		RunE:  groupRunE,
 	}
 	cmd.AddCommand(
 		newWalletInitCmd(),
@@ -31,6 +32,7 @@ func newWalletCmd() *cobra.Command {
 		&cobra.Command{Use: "use <name>", Short: "Set the default wallet", Args: output.ExactArgs(1), RunE: runWalletUse},
 		newWalletGetInfoCmd(), newWalletBalanceCmd(), newWalletBudgetCmd(),
 		newWalletInvoiceCmd(), newWalletPayCmd(), newWalletListTxCmd(), newWalletSignMessageCmd(),
+		newWalletProtectCmd(),
 	)
 	return cmd
 }
@@ -59,17 +61,29 @@ func newWalletShowCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			jsonMode, _ := cmd.Flags().GetBool("json")
 
-			idStored, err := identity.Load()
-			if err != nil {
-				return output.NotFoundError(cmd, "", err)
-			}
-			npub, err := identityNpub()
-			if err != nil {
-				return output.RuntimeError(cmd, err)
-			}
-			source := string(idStored.Source)
-			if idStored.Source == identity.SourceNcliVault {
-				source = fmt.Sprintf("ncli-vault:%s", idStored.Label)
+			// Identity is OPTIONAL here, unlike everywhere else it's
+			// loaded: a bearer-only wallet (never run `init`, and never
+			// needs to — receive/transfer/redeem of a bearer-mode entry
+			// all work without one) still holds real wallets/tokens worth
+			// listing. Only a genuine identity.Load failure OTHER than
+			// "none configured yet" is still a real error.
+			var npub, source string
+			var err error
+			idStored, idErr := identity.Load()
+			switch {
+			case idErr == nil:
+				npub, err = identityNpub()
+				if err != nil {
+					return output.RuntimeError(cmd, err)
+				}
+				source = string(idStored.Source)
+				if idStored.Source == identity.SourceNcliVault {
+					source = fmt.Sprintf("ncli-vault:%s", idStored.Label)
+				}
+			case errors.Is(idErr, identity.ErrNotConfigured):
+				// npub/source stay "" — surfaced as such below.
+			default:
+				return output.RuntimeError(cmd, idErr)
 			}
 
 			s, err := config.Load()
@@ -85,14 +99,18 @@ func newWalletShowCmd() *cobra.Command {
 				output.PrintJSON(map[string]any{
 					"npub":            npub,
 					"identity_source": source,
-					"wallets":         s.Connections,
+					"wallets":         output.NonNil(s.Connections),
 					"default_wallet":  s.Default,
-					"held_tokens":     l.Held(),
+					"held_tokens":     output.NonNil(l.Held()),
 				})
 				return nil
 			}
 
-			fmt.Printf("Identity: %s (%s)\n", npub, source)
+			if npub != "" {
+				fmt.Printf("Identity: %s (%s)\n", npub, source)
+			} else {
+				fmt.Println("No local identity configured yet — bearer-mode holdings below still work fine without one. Run `cashctl init` if you need a pubkey-mode identity.")
+			}
 			fmt.Println()
 			if s.IsEmpty() {
 				fmt.Println("No wallets registered yet. Run `cashctl join <hub-connection>` or `cashctl connect add`.")
@@ -121,6 +139,20 @@ func newWalletShowCmd() *cobra.Command {
 				if !e.Verified {
 					status = "unverified"
 				}
+				// bearer-mode only (e.BearerProtection is "" — n/a — for a
+				// pubkey-mode entry, see its own doc comment): "shared"
+				// means the spending secret is still whatever was embedded
+				// in the received token/gift string, spendable by anyone
+				// else who was shown it too — the whole reason `receive`
+				// offers to protect a bearer gift automatically, and the
+				// one status here money can actually be at risk from, not
+				// just informational the way verified/unverified is.
+				switch e.BearerProtection {
+				case ledger.BearerShared:
+					status += ", bearer (shared — still spendable by anyone with the code; `cashctl wallet protect " + e.ID + "` fixes this)"
+				case ledger.BearerProtected:
+					status += ", bearer (protected)"
+				}
 				fmt.Printf("  %d) %s   received %s   %s\n", i+1, amount, formatReceivedDate(e.ReceivedAt), status)
 			}
 			return nil
@@ -140,7 +172,7 @@ func newWalletHistoryCmd() *cobra.Command {
 				return output.RuntimeError(cmd, err)
 			}
 			if jsonMode {
-				output.PrintJSON(map[string]any{"history": l.History})
+				output.PrintJSON(map[string]any{"history": output.NonNil(l.History)})
 				return nil
 			}
 			if len(l.History) == 0 {
@@ -164,7 +196,7 @@ func dialForCommand(cmd *cobra.Command) (*nwcHandle, error) {
 		return nil, output.RuntimeError(cmd, err)
 	}
 	if !ok {
-		return nil, output.NotFoundError(cmd, "", errors.New(noWalletConfiguredMsg))
+		return nil, output.NotFoundError(cmd, "", errors.New(noWalletMessage()))
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	client, err := DialGeneric(ctx, value)
@@ -198,7 +230,7 @@ func newWalletGetInfoCmd() *cobra.Command {
 				return output.RuntimeError(cmd, err)
 			}
 			if !ok {
-				return output.NotFoundError(cmd, "", errors.New(noWalletConfiguredMsg))
+				return output.NotFoundError(cmd, "", errors.New(noWalletMessage()))
 			}
 			var info *nip47.GetInfoResult
 			var dialErr bool

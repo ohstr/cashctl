@@ -232,6 +232,35 @@ func ResolveConnectionTarget(originalInput string, key nipIC.ConnectionKey, plat
 	}, nil
 }
 
+// LooksLikeTarget reports whether s has the SHAPE of a cash_transfer
+// target — every branch ParseTarget itself dispatches on, checked
+// LOCALLY and without resolving anything live (unlike looksLikeNIP05's
+// own caller inside ParseTarget, which — once this shape check passes —
+// goes on to actually look the identifier up; this function only asks
+// "could this plausibly be one," the same question ParseAmount answers
+// for an amount). Exists for a caller that needs to guess which of two
+// positional args is the target BEFORE committing to parsing either one
+// as anything in particular — see cash_transfer.go's
+// disambiguateTransferArgs, whose own bug this closes: when neither
+// argument parses as an amount (a malformed amount typo, most often),
+// blindly assuming positional order used to blame whichever argument
+// happened to land in the "amount" slot, even when it was obviously the
+// target (an npub) and the OTHER argument was the actually-malformed
+// amount.
+func LooksLikeTarget(s string) bool {
+	if s == "bearer-target" {
+		return true
+	}
+	if isHexPubkey(s) || strings.HasPrefix(s, "npub1") || looksLikeNIP05(s) {
+		return true
+	}
+	if strings.HasPrefix(s, nipIC.NConnectionPrefix+"1") {
+		return true
+	}
+	prefix, _, ok := strings.Cut(s, ":")
+	return ok && (prefix == "pubkey" || prefix == "connection")
+}
+
 // isHexPubkey reports whether s is a bare 64-character hex string — the
 // shape a raw Nostr pubkey always has. Deliberately strict (exact length,
 // valid hex) so it can never misfire against some other unprefixed value

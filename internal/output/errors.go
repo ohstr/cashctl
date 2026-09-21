@@ -57,11 +57,13 @@ var retryableCodes = map[ErrorCode]bool{
 // Code, so an agent that needs finer-grained branching than cashctl's 7
 // buckets still gets it (see NWCError in nwc_errors.go). RawMessage, when
 // set, is the wallet's own specific error text (already Sanitized) —
-// EmitError prefers it for --json's "error" field over Err's translated,
-// deliberately-generic human message, since an agent parsing --json wants
-// the specific reason (e.g. the exact floor/amount a request violated),
-// not the same canned sentence every request in that error's bucket
-// produces.
+// EmitError uses it as --json's whole "error" field (an agent wants the
+// specific reason, e.g. the exact floor/amount a request violated, not the
+// same canned sentence every request in that error's bucket produces) and
+// appends it, parenthetically, after Err's translated human-mode message
+// too — a human reading "The wallet hit an internal error. Try again."
+// with no other detail used to have no way to tell a genuinely transient
+// decline from a permanent one dumped into the same catch-all bucket.
 type CLIError struct {
 	Err        error
 	Code       ErrorCode
@@ -77,6 +79,17 @@ func (e *CLIError) Unwrap() error { return e.Err }
 // *CLIError — reclassifying an already-classified error would silently
 // discard whatever more-specific classification produced it further down
 // the call stack.
+//
+// input is redacted by every caller already (RedactSecretInput), but
+// err's own message text isn't — a call site building its own message
+// with fmt.Errorf around a raw value (e.g. "no wallet or held token named
+// %q", rather than relying on the input field to carry it) would
+// otherwise bypass redaction entirely, one audit away from a leak. This
+// is the last, catch-all place every such error passes through before
+// ever reaching EmitError, so it's redacted here too — but only replaced
+// when redaction actually changes something, so the overwhelming
+// majority of ordinary (non-secret) errors keep their own Unwrap chain
+// intact for anything downstream still trying errors.As/Is against them.
 func wrapCLIError(code ErrorCode, input string, err error) error {
 	if err == nil {
 		return nil
@@ -84,6 +97,9 @@ func wrapCLIError(code ErrorCode, input string, err error) error {
 	var existing *CLIError
 	if errors.As(err, &existing) {
 		return err
+	}
+	if redacted := RedactSecretInput(err.Error()); redacted != err.Error() {
+		err = errors.New(redacted)
 	}
 	return &CLIError{Err: err, Code: code, Input: input}
 }
@@ -216,39 +232,85 @@ func NoArgs(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// secretLikePattern matches cashctl's own raw-secret-shaped inputs: a bech32
-// nsec1... key, or a bare 64-character hex string (a raw privkey/secret,
-// as used directly in pubkey:<privkey>/bearer:<secret> credential
-// strings — see internal/credential). Redacting these from error output
-// (which may be logged, pasted into a bug report, or echoed by --json)
-// matters more for cashctl than for most CLIs: its whole domain is handling
-// literal spending secrets as command arguments.
-var secretLikePattern = regexp.MustCompile(`^(nsec1[a-z0-9]+|[0-9a-fA-F]{64})$`)
+// secretLikePattern matches cashctl's own raw-secret-shaped inputs, as a
+// STANDALONE value: a bech32 nsec1... key, or a bare 64-character hex
+// string (a raw privkey/secret, as used directly in
+// pubkey:<privkey>/bearer:<secret> credential strings — see
+// internal/credential). Case-insensitive and tolerant of surrounding
+// whitespace: a value copy-pasted with a stray leading space or typed in
+// uppercase is exactly as secret as the canonical form, and treating it
+// as unrecognized (returning it unredacted, the previous behavior) is the
+// one wrong answer here. Redacting these from error output (which may be
+// logged, pasted into a bug report, or echoed by --json) matters more for
+// cashctl than for most CLIs: its whole domain is handling literal
+// spending secrets as command arguments.
+var secretLikePattern = regexp.MustCompile(`(?i)^\s*(nsec1[a-z0-9]+|[0-9a-f]{64})\s*$`)
 
-// RedactSecretInput returns "" if s looks like a raw secret (see
-// secretLikePattern) or contains one after a credential-string prefix
-// (bearer:<secret>, or the <privkey> component of pubkey:<privkey> /
-// connection-key:<privkey>,...), so a command's own error/JSON output
-// never echoes spendable material back out. Returns s unchanged otherwise.
+// credentialPrefixPattern finds cashctl's own credential-string prefixes
+// (bearer:/pubkey:/connection-key:) ANYWHERE in a string, case/space-
+// insensitively — not just as the whole string. A --sources
+// <token>:<amount>:<credential> entry embeds one after two other
+// colon-separated fields; matching only at position 0 (the previous
+// behavior) let a bad amount there report the ENTIRE entry, private key
+// included, since redaction never even looked past the first colon.
+var credentialPrefixPattern = regexp.MustCompile(`(?i)\b(bearer|pubkey|connection-key)\s*:\s*(\S+)`)
+
+// secretBearingBech32Pattern matches a bech32 CONNECTION string —
+// cashhub1/circlehub1/nconnection1 — deliberately NOT a cash-token HRP
+// (lokicash1, satscash1, ...): a held cash token is meant to be shown
+// (cashctl prints/returns it routinely, e.g. ledger.Entry.Token's own
+// plain json tag, unlike Secret/BearerSecret's json:"-"), whereas a Hub or
+// pairing connection string is something a user only ever mis-pastes into
+// the wrong command, never something they're meant to hand back out — and
+// every one of these encodes its own dialing secret as a single
+// TLV-packed blob with no substring that's safe to reveal (unlike an NWC
+// URI's separate secret= query parameter, see nwcSecretPattern below), so
+// a match here is redacted wholesale.
+var secretBearingBech32Pattern = regexp.MustCompile(`(?i)\b(cashhub|circlehub|nconnection)1[a-z0-9]{20,}`)
+
+// nwcSecretPattern matches specifically the secret= query value of a
+// nostr+walletconnect:// URI — the one part of that URI that's actually
+// secret (the host/pubkey and relay parameters are not, see
+// nip47.ParsePairingURI).
+var nwcSecretPattern = regexp.MustCompile(`(?i)([?&]secret=)[0-9a-f]+`)
+
+// giftSecretPattern matches the "#<secret>" half of a bearer gift string
+// (<token>#<bearer_secret>, NIP-CASH's combined presentation) — the exact
+// shape internal/dial's own SplitBearerSliceString parses.
+var giftSecretPattern = regexp.MustCompile(`#[0-9a-fA-F]{64}\b`)
+
+// RedactSecretInput scrubs every secret-shaped substring it recognizes out
+// of s — a raw nsec1/64-hex value (redacted
+// entirely), a bearer:/pubkey:/connection-key: credential (its secret
+// component blanked, wherever in s it appears), an NWC URI's own secret=
+// value, a bearer gift string's #<secret> half, or a Hub/token bech32
+// string (redacted entirely, HRP kept) — so a command's own error/--json
+// output never echoes spendable material back out, however it was
+// embedded in what the user typed. Returns s unchanged if none apply.
 func RedactSecretInput(s string) string {
 	if secretLikePattern.MatchString(s) {
 		return ""
 	}
-	if prefix, rest, ok := strings.Cut(s, ":"); ok {
-		switch prefix {
-		case "bearer":
-			return prefix + ":<redacted>"
-		case "pubkey":
-			return prefix + ":<redacted>"
-		case "connection-key":
+	out := credentialPrefixPattern.ReplaceAllStringFunc(s, func(m string) string {
+		g := credentialPrefixPattern.FindStringSubmatch(m)
+		prefix, rest := g[1], g[2]
+		if strings.EqualFold(prefix, "connection-key") {
 			// connection-key:<privkey>,<platform>,<external-id>,<attestation-file>
-			// — only the leading privkey component is secret.
+			// — only the leading privkey component is secret; the rest
+			// stays legible in the error, same as the other two prefixes'
+			// own single secret component.
 			parts := strings.SplitN(rest, ",", 2)
 			if len(parts) == 2 {
 				return prefix + ":<redacted>," + parts[1]
 			}
-			return prefix + ":<redacted>"
 		}
-	}
-	return s
+		return prefix + ":<redacted>"
+	})
+	out = nwcSecretPattern.ReplaceAllString(out, "${1}<redacted>")
+	out = giftSecretPattern.ReplaceAllString(out, "#<redacted>")
+	out = secretBearingBech32Pattern.ReplaceAllStringFunc(out, func(m string) string {
+		hrp := secretBearingBech32Pattern.FindStringSubmatch(m)[1]
+		return hrp + "1<redacted>"
+	})
+	return out
 }

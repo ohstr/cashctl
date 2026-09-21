@@ -470,6 +470,36 @@ func TestLooksLikeNIP05(t *testing.T) {
 	}
 }
 
+// TestLooksLikeTarget covers every shape ParseTarget itself dispatches on
+// (see LooksLikeTarget's own doc comment for why this exists: disambiguating
+// transfer's positional args needs a local, no-network "could this
+// plausibly be a target" answer before committing to parsing either
+// argument as anything specific).
+func TestLooksLikeTarget(t *testing.T) {
+	tests := []struct {
+		in   string
+		want bool
+	}{
+		{"bearer-target", true},
+		{strings.Repeat("a1", 32), true}, // 64-hex pubkey
+		{"npub1anything", true},          // prefix alone is enough for this shape check
+		{"alice@example.com", true},
+		{"nconnection1qqs2u2jj", true},
+		{"pubkey:deadbeef", true},
+		{"connection:discord:12345:deadbeef", true},
+		{"", false},
+		{"1.5x", false}, // the actual bug this exists to fix: a malformed amount
+		{"5 loki", false},
+		{"abc123", false}, // not 64 hex chars, no @ sign, no recognized prefix
+		{"500", false},    // a plain amount must never look like a target
+	}
+	for _, tt := range tests {
+		if got := LooksLikeTarget(tt.in); got != tt.want {
+			t.Errorf("LooksLikeTarget(%q) = %v, want %v", tt.in, got, tt.want)
+		}
+	}
+}
+
 // stubNIP05Endpoint redirects nip05Endpoint at srvURL for the duration of a
 // test, ignoring the real domain — the only way to exercise resolveNIP05
 // against a local httptest.Server instead of a live network call. Returns

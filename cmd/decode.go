@@ -44,10 +44,12 @@ import (
 // dialing for real) — --check is a no-op for that kind.
 //
 // In text mode, a human doesn't have to already know --check exists: if it
-// wasn't passed explicitly, decode asks interactively instead (default
-// yes) — see shouldRunCheck. --json never prompts (an agent has no
-// terminal to answer from): it only checks when --check is passed, exactly
-// as before. A cash token needing an identity proof (not bearer-mode) is
+// wasn't passed explicitly, decode asks interactively instead (default NO
+// — see shouldRunCheck's own doc comment for why: this command's whole
+// pitch is no network by default) — see shouldRunCheck. --json never
+// prompts (an agent has no terminal to answer from): it only checks when
+// --check is passed, exactly as before. A cash token needing an identity
+// proof (not bearer-mode) is
 // never prompted for at all when no local identity is configured — the
 // check would have nothing to match against — decode just says so instead
 // of asking a question it already knows the answer to.
@@ -61,6 +63,9 @@ func newDecodeCmd() *cobra.Command {
   cashctl decode circlehub1...`,
 		Args: output.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := rejectConnectionFlag(cmd); err != nil {
+				return err
+			}
 			jsonMode, _ := cmd.Flags().GetBool("json")
 			check, _ := cmd.Flags().GetBool("check")
 			// Split before sniffing: NIP-CASH's "<token>#<bearer_secret>"
@@ -85,6 +90,8 @@ func newDecodeCmd() *cobra.Command {
 			case dial.KindCashHub:
 				return output.InvalidInputError(cmd, value, fmt.Errorf(
 					"that's a Cash Hub connection (for minting cash) — cashctl has no mint capability and can't decode this format"))
+			case dial.KindNostrEntity:
+				return output.InvalidInputError(cmd, value, errors.New(nostrEntityMessage(dial.NostrEntityHRP(value))))
 			default:
 				return output.InvalidInputError(cmd, value, fmt.Errorf(
 					"not a recognized cash token, Circle Hub connection, or NWC URI"))
@@ -219,12 +226,29 @@ func decodeNWCURI(cmd *cobra.Command, value string, jsonMode bool) error {
 
 // formatMinterStatus verifies (not just checks presence of) tok's
 // mint-provenance, so a forged/corrupt signature is never reported as
-// trustworthy just because the fields are present. Returns the "minter: ..."
-// line and, whenever there's a signature to speak of at all (valid or
-// not), the "attested_amount: ..." line to print right after it — ""
-// when there's no provenance, so the caller can skip that line entirely.
-// Shared by decode's own printMintSignatureStatus and cash_receive.go's
-// printCashBill, which need the exact same 3-state check.
+// having ANY minter at all just because the fields are present — a
+// tampered pair (mismatched signature/amount, wrong length, ...) fails
+// RecoverCompact outright and gets the explicit INVALID line below.
+//
+// The valid case needs its own caveat, not just a bare pubkey:
+// VerifyProvenance uses ECDSA signature RECOVERY, not verification
+// against any known/trusted key — "valid" only means the signature is
+// internally self-consistent with WalletPubkey+AttestedAmountMillis and
+// names WHICH key produced it, never that the recovered key is a mint
+// cashctl (or its user) has ever heard of. Anyone can mint-sign their own
+// token with a throwaway key and get a "valid" signature and a
+// made-up-but-real minter pubkey out of this exact same check — printing
+// just "minter: <pubkey>" read, to a human, as "cashctl vouches for this,"
+// which it never did (see ledger.Entry.MinterPubkey's own doc comment:
+// this is a same-signer grouping signal for cash selection, not an
+// authenticity guarantee).
+//
+// Returns the "minter: ..." line and, whenever there's a signature to
+// speak of at all (valid or not), the "attested_amount: ..." line to
+// print right after it — "" when there's no provenance, so the caller can
+// skip that line entirely. Shared by decode's own printMintSignatureStatus
+// and cash_receive.go's printCashBill, which need the exact same 3-state
+// check.
 func formatMinterStatus(tok nipcash.Token) (minterLine, amountLine string) {
 	if !tok.HasProvenance() {
 		return "minter: unknown", ""
@@ -234,7 +258,7 @@ func formatMinterStatus(tok nipcash.Token) (minterLine, amountLine string) {
 		return "minter: INVALID SIGNATURE — don't trust attested_amount",
 			fmt.Sprintf("attested_amount: %s (unverified)", output.FormatAmount(int64(*tok.AttestedAmountMillis)))
 	}
-	return fmt.Sprintf("minter: %s", minter),
+	return fmt.Sprintf("minter: %s (valid signature ≠ a trusted mint — anyone can self-sign)", minter),
 		fmt.Sprintf("attested_amount: %s", output.FormatAmount(int64(*tok.AttestedAmountMillis)))
 }
 
@@ -253,13 +277,22 @@ func printMintSignatureStatus(tok nipcash.Token) {
 // flag-only: exactly checkFlag, same as before this existed. In text mode,
 // an explicit --check/--check=false on the command line is honored as-is
 // (no point re-asking a question the user already answered); otherwise
-// decode asks interactively, default yes, so a human doesn't need to
-// already know the flag exists.
+// decode asks interactively so a human doesn't need to already know the
+// flag exists — default NO: decode's whole pitch (its own doc comment,
+// above) is "no network call and nothing dialed by default," and a bare
+// Enter or a closed/empty stdin (a script piping decode with neither
+// --check nor --yes/--json) used to default to yes, silently going online
+// anyway — for a token whose embedded relay URL fully controls where
+// cashctl connects, that's a real fingerprint/deanonymization exposure
+// the documented default-safe contract exists specifically to avoid. An
+// explicit --yes still opts in (its own established "don't ask, I know
+// what I'm doing" contract, same as every other confirmation), only the
+// unattended-defaults case changed.
 func shouldRunCheck(cmd *cobra.Command, jsonMode, checkFlag bool, prompt string) bool {
 	if jsonMode || cmd.Flags().Changed("check") {
 		return checkFlag
 	}
-	return Confirm(cmd, true, prompt)
+	return Confirm(cmd, false, prompt)
 }
 
 // shouldCheckCashToken wraps shouldRunCheck with one more guard specific to
@@ -276,7 +309,7 @@ func shouldCheckCashToken(cmd *cobra.Command, jsonMode, checkFlag bool, isBearer
 	if !jsonMode && !cmd.Flags().Changed("check") {
 		if !isBearer {
 			if exists, _ := identity.Exists(); !exists {
-				fmt.Println("Skipping check — no local identity (run `cashctl init`).")
+				output.Notef(false, "Skipping check — no local identity (run `cashctl init`).")
 				return false
 			}
 		}
@@ -366,11 +399,25 @@ func formatExpiry(expiresAt int64) string {
 // connection: only ever "is joining possible here at all" (reachable, and
 // the Hub advertises create_circle_wallet) — never a check of whether any
 // particular identity is allowlisted, since nothing short of actually
-// calling create_circle_wallet answers that.
+// calling create_circle_wallet answers that. It ALSO can't see the Hub's
+// own expiry: get_info is always-granted and bypasses the generic per-app
+// expiry check entirely (confirmed live — an already-expired circle_hub's
+// connection still reports OK here, even though `join` against the same
+// connection is correctly rejected EXPIRED/auth; there's no read-only
+// NIP-47 call that could see this ahead of time — see
+// docs/private/audit-round2-expiration-matrix.md). Note carries that
+// caveat into --json too, not just the text-mode rendering below, so a
+// script/agent doesn't read OK:true as a stronger guarantee than it is.
 type circleCheckResult struct {
 	OK    bool   `json:"ok"`
 	Error string `json:"error,omitempty"`
+	Note  string `json:"note,omitempty"`
 }
+
+// circleJoinableCaveat is circleCheckResult's own Note/text-mode wording
+// when OK — see the type's own doc comment for exactly what this can and
+// can't prove.
+const circleJoinableCaveat = "reachable and supports circle wallets — doesn't confirm the Hub hasn't expired or that you're allowlisted; an actual `join` can still fail"
 
 func checkCircleHubJoinable(jsonMode bool, conn nipcw.CircleHubConnection) circleCheckResult {
 	err := WithSpinner(jsonMode, "Checking...", func() error {
@@ -398,12 +445,12 @@ func checkCircleHubJoinable(jsonMode bool, conn nipcw.CircleHubConnection) circl
 		// Sanitized: same reasoning as checkCashTokenAgainstHub above.
 		return circleCheckResult{OK: false, Error: output.Sanitize(err.Error())}
 	}
-	return circleCheckResult{OK: true}
+	return circleCheckResult{OK: true, Note: circleJoinableCaveat}
 }
 
 func printCircleCheck(r circleCheckResult) {
 	if r.OK {
-		fmt.Println("check: joinable")
+		fmt.Printf("check: appears joinable (%s)\n", r.Note)
 		return
 	}
 	fmt.Printf("check: %s\n", r.Error)

@@ -7,6 +7,7 @@ package output
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -63,7 +64,26 @@ func ParseAmount(s string) (uint64, error) {
 			return 0, fmt.Errorf("%q is not a valid amount in loki", s)
 		}
 	}
-	return wholeLoki*mlokiPerLoki + fracMloki, nil
+	// Every downstream consumer of this value eventually treats it as an
+	// mloki quantity that fits in an int64 — FormatAmount's own signature,
+	// nipcash's wire types, wallet_ops.go's invoice amount cast, ... — so
+	// this is the one place on the whole CLI to catch an amount that
+	// would otherwise silently wrap: unchecked, wholeLoki*mlokiPerLoki
+	// alone overflows uint64 well within a typeable number of digits
+	// (18446744073709552 loki used to become 384 mloki and actually
+	// move), and a value between MaxInt64 and MaxUint64 would separately
+	// wrap NEGATIVE the moment any downstream int64(...) cast touches it.
+	// Bounding at MaxInt64 up front makes both classes of wrap
+	// unreachable rather than relying on every cast site to notice.
+	const maxAmountMloki = uint64(math.MaxInt64)
+	if wholeLoki > maxAmountMloki/mlokiPerLoki {
+		return 0, fmt.Errorf("%q is too large — the largest amount cashctl accepts is %s", s, FormatAmount(math.MaxInt64))
+	}
+	total := wholeLoki*mlokiPerLoki + fracMloki
+	if total > maxAmountMloki {
+		return 0, fmt.Errorf("%q is too large — the largest amount cashctl accepts is %s", s, FormatAmount(math.MaxInt64))
+	}
+	return total, nil
 }
 
 // FormatAmount renders an mloki amount — the unit every amount cashctl
@@ -90,6 +110,18 @@ func FormatAmount(mloki int64) string {
 		s = "-" + s
 	}
 	return s + " loki"
+}
+
+// NonNil returns s, or an empty (non-nil) slice if s is nil. encoding/json
+// renders a nil slice as `null` and an empty one as `[]` — and a --json
+// consumer iterating a collection (`jq '.[]'`, a typed decoder) needs the
+// latter for "nothing here", not a value it has to special-case. Wrap every
+// collection put into --json output that can legitimately be empty.
+func NonNil[T any](s []T) []T {
+	if s == nil {
+		return []T{}
+	}
+	return s
 }
 
 // PrintJSON writes v as indented JSON to stdout — the shared success-path
@@ -143,7 +175,21 @@ func EmitError(cmd *cobra.Command, err error) {
 		_ = enc.Encode(payload)
 		return
 	}
-	fmt.Fprintf(os.Stderr, "%s %s\n", errorPrefix(isColorTerminal(os.Stderr)), ce.Err.Error())
+	msg := ce.Err.Error()
+	// RawMessage, appended (not substituted) when it says more than the
+	// generic bucket sentence above it: a translated NWC code's text is
+	// deliberately generic ("The wallet hit an internal error. Try
+	// again.") and used to be the ONLY thing human mode ever printed for
+	// it — actively misleading on INTERNAL/OTHER above all, since those
+	// are catch-all buckets for whatever didn't fit a more specific code,
+	// not necessarily a transient condition worth retrying. Equal check:
+	// an unrecognized NWC code has no translation, so RawMessage IS
+	// ce.Err.Error() already (see NWCError/NWCErrorForCashToken) —
+	// appending it there would just repeat the same sentence twice.
+	if ce.RawMessage != "" && ce.RawMessage != msg {
+		msg = fmt.Sprintf("%s (%s)", msg, ce.RawMessage)
+	}
+	fmt.Fprintf(os.Stderr, "%s %s\n", errorPrefix(isColorTerminal(os.Stderr)), msg)
 }
 
 // errorPrefix returns "Error:", wrapped in ANSI red when colored is true —
@@ -177,7 +223,7 @@ func isColorTerminal(w *os.File) bool {
 func Sanitize(s string) string {
 	var b strings.Builder
 	for _, r := range s {
-		if r < 0x20 || r == 0x7f {
+		if isUnsafeControlRune(r) {
 			b.WriteRune('�')
 			continue
 		}
@@ -186,13 +232,59 @@ func Sanitize(s string) string {
 	return b.String()
 }
 
-// Linef prints a human-only narration line (a progress note, a status
-// update) to stdout — a no-op under --json, since a JSON consumer only
-// wants the final structured result, never narration mixed into the same
-// stream it's parsing as JSON.
+// isUnsafeControlRune reports whether r is a character cashctl never wants
+// to pass through to a terminal raw. Beyond the original C0 controls
+// (0x00-0x1F) and DEL (0x7F):
+//   - C1 controls (U+0080-U+009F) — confirmed live: a terminal that honors
+//     8-bit C1 in UTF-8 mode (xterm, some VTE builds) executes CSI (U+009B),
+//     OSC (U+009D) and ST (U+009C) from this range exactly like their
+//     familiar ESC-prefixed C0 equivalents, so a hostile relay URL embedded
+//     in a token/hub string could clear the screen or set the window title
+//     at `decode`/`receive` time — the exact gap Sanitize's own C0 check
+//     was written to close, just one code point range short of it.
+//   - U+2028/U+2029 (Unicode line/paragraph separator) — some terminals
+//     and log viewers treat these as a hard line break, letting text
+//     inject a fake extra line the same way a literal newline would.
+//   - U+202A-U+202E, U+2066-U+2069 (bidi format controls) — can reorder
+//     how the SAME bytes visually display, letting an attacker-chosen
+//     label/URL read as something other than what it actually is.
+func isUnsafeControlRune(r rune) bool {
+	switch {
+	case r < 0x20 || r == 0x7f:
+		return true
+	case r >= 0x80 && r <= 0x9f:
+		return true
+	case r == 0x2028 || r == 0x2029:
+		return true
+	case r >= 0x202a && r <= 0x202e:
+		return true
+	case r >= 0x2066 && r <= 0x2069:
+		return true
+	default:
+		return false
+	}
+}
+
+// Linef prints a human-readable RESULT line to stdout — text mode's
+// counterpart to PrintJSON, a no-op under --json (a JSON consumer only wants
+// the final structured result, never text mixed into the stream it's
+// parsing). For progress, previews, warnings and pick-lists use Notef
+// instead: AGENTS.md sends narration to stderr always, so a script piping a
+// command's stdout gets only what the command produced.
 func Linef(jsonMode bool, format string, args ...any) {
 	if jsonMode {
 		return
 	}
 	fmt.Printf(format+"\n", args...)
+}
+
+// Notef prints a human-only NARRATION line — a progress note, a preview, a
+// warning, a pick-list — to stderr, a no-op under --json. Narration goes to
+// stderr always (AGENTS.md) so stdout carries only the command's result and
+// `cashctl ... > file` or `| jq` never captures a prompt or a spinner frame.
+func Notef(jsonMode bool, format string, args ...any) {
+	if jsonMode {
+		return
+	}
+	fmt.Fprintf(os.Stderr, format+"\n", args...)
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"strings"
 	"testing"
 
 	relayclient "github.com/ohstr/nmilat/relay/client"
@@ -133,6 +134,53 @@ func TestRedactSecretInput(t *testing.T) {
 			input: "lokicash1qypqxpq9qcrsszg2pvxq6rs0zqg3zyg3zygs9qypqxpq",
 			want:  "lokicash1qypqxpq9qcrsszg2pvxq6rs0zqg3zyg3zygs9qypqxpq",
 		},
+		// The following cases fix a real bug (--sources <token>:<amount>:
+		// pubkey:<privkey> echoed the private key back on a bad amount)
+		// and its documented near-misses: leading/trailing whitespace and
+		// mixed case defeated the old whole-string-only match entirely.
+		{
+			name:  "uppercase nsec is still redacted",
+			input: "NSEC1QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ",
+			want:  "",
+		},
+		{
+			name:  "whitespace-padded hex is still redacted",
+			input: "  bb7a99ee8fc7ac5529e0747fc12f438f8e3c7765cd0a887e33d16dee8c0ba7a6  ",
+			want:  "",
+		},
+		{
+			// The trailing quote is consumed along with the secret (\S+
+			// doesn't stop at punctuation) — cosmetic only: what matters
+			// is that the key itself never survives, quote or not.
+			name:  "uppercase PUBKEY: prefix and a leading space are still caught",
+			input: " 'PUBKEY:bb7a99ee8fc7ac5529e0747fc12f438f8e3c7765cd0a887e33d16dee8c0ba7a6'",
+			want:  " 'PUBKEY:<redacted>",
+		},
+		{
+			name:  "a credential embedded after other fields is redacted, the rest stays legible",
+			input: "tok-c12d:notanumber:pubkey:bb7a99ee8fc7ac5529e0747fc12f438f8e3c7765cd0a887e33d16dee8c0ba7a6",
+			want:  "tok-c12d:notanumber:pubkey:<redacted>",
+		},
+		{
+			name:  "an NWC URI's secret= value is redacted, the rest (pubkey, relay) is not",
+			input: "nostr+walletconnect://" + strings.Repeat("a1", 32) + "?relay=wss%3A%2F%2Fx.invalid&secret=" + strings.Repeat("b2", 32),
+			want:  "nostr+walletconnect://" + strings.Repeat("a1", 32) + "?relay=wss%3A%2F%2Fx.invalid&secret=<redacted>",
+		},
+		{
+			name:  "a bearer gift string's #secret half is redacted, the token half is not",
+			input: "lokicash1qypqxpq9qcrsszg2pvxq6rs0zqg3zyg3zygs9qypqxpq#" + strings.Repeat("c3", 32),
+			want:  "lokicash1qypqxpq9qcrsszg2pvxq6rs0zqg3zyg3zygs9qypqxpq#<redacted>",
+		},
+		{
+			name:  "a Cash Hub connection string is redacted wholesale",
+			input: "cashhub1qqsxyzsomefakepayloadthatlookslikebech32qqq",
+			want:  "cashhub1<redacted>",
+		},
+		{
+			name:  "a Circle Hub connection string is redacted wholesale",
+			input: "circlehub1qqsxyzsomefakepayloadthatlookslikebech32qqq",
+			want:  "circlehub1<redacted>",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -209,6 +257,49 @@ func TestNWCError_ExpiredMapsToAuth(t *testing.T) {
 	}
 	if ExitCode(err) != 7 {
 		t.Errorf("ExitCode = %d, want 7", ExitCode(err))
+	}
+}
+
+// TestNWCErrorForCashToken_ExpiredDoesNotCallItAWallet guards against the
+// bug found receiving/redeeming/transferring/consolidating an already-
+// expired cash token: classifyNWCErr's shared EXPIRED text ("This wallet
+// has expired...") is correct for a registered NWC wallet decline but
+// wrong for a cash token's own Hub-side claim check — the thing that
+// expired is the token, not "this wallet". Classification (code, exit
+// code, NWCCode) must stay identical to NWCError; only the human-mode text
+// differs.
+func TestNWCErrorForCashToken_ExpiredDoesNotCallItAWallet(t *testing.T) {
+	cmd := newTestCmd()
+	err := NWCErrorForCashToken(cmd, &relayclient.WalletError{Code: "EXPIRED", Message: "raw"})
+	ce := AsCLIError(err)
+	if ce.Code != CodeAuth {
+		t.Errorf("Code = %q, want %q", ce.Code, CodeAuth)
+	}
+	if ExitCode(err) != 7 {
+		t.Errorf("ExitCode = %d, want 7", ExitCode(err))
+	}
+	if ce.NWCCode != "EXPIRED" {
+		t.Errorf("NWCCode = %q, want %q", ce.NWCCode, "EXPIRED")
+	}
+	if strings.Contains(ce.Error(), "wallet") {
+		t.Errorf("Error() = %q, still calls the expired cash token a wallet", ce.Error())
+	}
+	if !strings.Contains(ce.Error(), "token") {
+		t.Errorf("Error() = %q, want it to say this is about the token", ce.Error())
+	}
+}
+
+// TestNWCErrorForCashToken_OtherCodesMatchNWCError guards against
+// NWCErrorForCashToken accidentally losing the shared translation table
+// for every code it doesn't override.
+func TestNWCErrorForCashToken_OtherCodesMatchNWCError(t *testing.T) {
+	for _, code := range []string{"BAD_REQUEST", "RATE_LIMITED", "INTERNAL", "SOME_FUTURE_CODE"} {
+		walletErr := &relayclient.WalletError{Code: code, Message: "raw " + code}
+		got := AsCLIError(NWCErrorForCashToken(newTestCmd(), walletErr)).Error()
+		want := AsCLIError(NWCError(newTestCmd(), walletErr)).Error()
+		if got != want {
+			t.Errorf("code %s: NWCErrorForCashToken = %q, want same as NWCError %q", code, got, want)
+		}
 	}
 }
 
@@ -292,6 +383,65 @@ func TestEmitError_JSONModeFallsBackToTranslationWithoutRawMessage(t *testing.T)
 	}
 	if payload.Error != "ordinary cashctl-side validation error" {
 		t.Errorf(`--json "error" = %q, want the underlying error unchanged`, payload.Error)
+	}
+}
+
+// TestEmitError_HumanModeAppendsRawMessage guards against the bug found
+// auditing wallet/Hub declines in text mode: EmitError used to print ONLY
+// the generic bucket sentence ("The wallet hit an internal error. Try
+// again.") with no way for a human to tell a genuinely transient decline
+// from a permanent one dumped into the same INTERNAL/OTHER catch-all —
+// unlike --json, which already carried the wallet's own specific
+// RawMessage (see TestEmitError_JSONModeUsesRawMessageOverGenericTranslation).
+// The generic sentence must stay first (still the primary, skimmable
+// guidance), with the specific reason appended in parentheses, not
+// replaced — reproduced across every command that classifies a wallet
+// decline through NWCError/NWCErrorForCashToken (redeem, transfer,
+// consolidate, join, invoice, pay, list-tx all share this one code path).
+func TestEmitError_HumanModeAppendsRawMessage(t *testing.T) {
+	cmd := newTestCmd() // --json defaults false
+	err := NWCError(cmd, &relayclient.WalletError{
+		Code:    "INTERNAL",
+		Message: "signature verification failed for spend authorization",
+	})
+
+	stderr := string(captureStderr(t, func() { EmitError(cmd, err) }))
+
+	if !strings.Contains(stderr, "The wallet hit an internal error. Try again.") {
+		t.Errorf("stderr = %q, want the generic bucket sentence still present", stderr)
+	}
+	if !strings.Contains(stderr, "signature verification failed for spend authorization") {
+		t.Errorf("stderr = %q, want the wallet's own specific reason appended, not dropped", stderr)
+	}
+}
+
+// TestEmitError_HumanModeNoDuplicateForUnknownCode covers the code path
+// where RawMessage IS the human message already (an NWC code with no
+// translation — see NWCError's own fallback): appending it would just
+// print the same sentence twice.
+func TestEmitError_HumanModeNoDuplicateForUnknownCode(t *testing.T) {
+	cmd := newTestCmd()
+	err := NWCError(cmd, &relayclient.WalletError{Code: "SOME_FUTURE_CODE", Message: "a message cashctl doesn't know how to translate"})
+
+	stderr := string(captureStderr(t, func() { EmitError(cmd, err) }))
+
+	if n := strings.Count(stderr, "a message cashctl doesn't know how to translate"); n != 1 {
+		t.Errorf("stderr = %q, want the message to appear exactly once, got %d", stderr, n)
+	}
+}
+
+// TestEmitError_HumanModeUnaffectedWithoutRawMessage is human mode's
+// counterpart to TestEmitError_JSONModeFallsBackToTranslationWithoutRawMessage
+// — every non-NWC constructor (UsageError, InvalidInputError, ...) must
+// print exactly as before this fix.
+func TestEmitError_HumanModeUnaffectedWithoutRawMessage(t *testing.T) {
+	cmd := newTestCmd()
+	err := InvalidInputError(cmd, "", errors.New("ordinary cashctl-side validation error"))
+
+	stderr := string(captureStderr(t, func() { EmitError(cmd, err) }))
+
+	if strings.TrimSpace(stderr) != "Error: ordinary cashctl-side validation error" {
+		t.Errorf("stderr = %q, want unchanged plain human-mode text", stderr)
 	}
 }
 

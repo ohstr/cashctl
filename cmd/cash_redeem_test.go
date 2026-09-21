@@ -36,6 +36,30 @@ func withCapturedStdout(fn func()) string {
 	return <-out
 }
 
+// withCapturedOutput is withCapturedStdout for text that's now narration —
+// pick-lists, prompts, previews — and so goes to stderr (AGENTS.md): both
+// streams, merged, since these tests assert on WHAT is printed (never a raw
+// ID), not which stream carries it. Stream routing is asserted separately
+// (prompt_test.go's own captureStreams).
+func withCapturedOutput(fn func()) string {
+	realOut, realErr := os.Stdout, os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		fn()
+		return ""
+	}
+	os.Stdout, os.Stderr = w, w
+	out := make(chan string)
+	go func() {
+		b, _ := io.ReadAll(r)
+		out <- string(b)
+	}()
+	fn()
+	os.Stdout, os.Stderr = realOut, realErr
+	_ = w.Close()
+	return <-out
+}
+
 func testCmdWithFlags(jsonMode, yes bool) *cobra.Command {
 	cmd := &cobra.Command{}
 	cmd.Flags().Bool("json", jsonMode, "")
@@ -106,7 +130,7 @@ func TestPickHeldToken_NeverPrintsRawID(t *testing.T) {
 	cmd := testCmdWithFlags(false, false)
 	entries := heldEntries(2)
 
-	printed := withCapturedStdout(func() {
+	printed := withCapturedOutput(func() {
 		_, _ = pickHeldToken(cmd, entries)
 	})
 
@@ -319,5 +343,61 @@ func TestPreviewSuffix_FeeOnlyMentionedWhenNonZero(t *testing.T) {
 	got := previewSuffix(redeemQuote{AmountMillis: 1000, RedeemFeeMillis: 100, NetRedeemableMillis: 900})
 	if !strings.Contains(got, "0.9 loki") || !strings.Contains(got, "Fee") {
 		t.Errorf("previewSuffix() with a nonzero fee = %q, want it to mention the fee and the net (900 mloki = 0.9 loki) amount", got)
+	}
+}
+
+// --- safeDestinationLabel: the fix for a real secret leak. resolveDestWallet
+// used to return the raw connection string itself as the display name for
+// an unregistered `--into`/positional destination — reaching the confirm
+// prompt, --json's to_wallet, and persisted wallet history.
+
+func TestSafeDestinationLabel_NWCURIShowsPubkeyNotSecret(t *testing.T) {
+	uri := "nostr+walletconnect://" + strings.Repeat("a1", 32) + "?relay=wss%3A%2F%2Fx.invalid&secret=" + strings.Repeat("b2", 32)
+	got := safeDestinationLabel(uri)
+	if strings.Contains(got, strings.Repeat("b2", 32)) {
+		t.Errorf("safeDestinationLabel(%q) = %q, leaks the secret", uri, got)
+	}
+	if !strings.Contains(got, strings.Repeat("a1", 4)) {
+		t.Errorf("safeDestinationLabel(%q) = %q, want it to identify the wallet by its (non-secret) pubkey prefix", uri, got)
+	}
+}
+
+func TestSafeDestinationLabel_HubStringsNameOnlyTheKind(t *testing.T) {
+	// A bech32 hub string has no substring that's safe to reveal (it's one
+	// TLV-encoded blob including a spending secret) — unlike an NWC URI,
+	// nothing here should ever echo any piece of the raw value.
+	for _, raw := range []string{
+		"cashhub1qqsxyzsomefakepayloadthatlookslikebech32qqq",
+		"circlehub1qqsxyzsomefakepayloadthatlookslikebech32qqq",
+	} {
+		got := safeDestinationLabel(raw)
+		if strings.Contains(got, "qqsxyz") {
+			t.Errorf("safeDestinationLabel(%q) = %q, echoes part of the raw connection string", raw, got)
+		}
+	}
+}
+
+func TestSafeDestinationLabel_UnparseableNWCURIFallsBackSafely(t *testing.T) {
+	got := safeDestinationLabel("nostr+walletconnect://not-a-valid-pubkey")
+	if strings.Contains(got, "not-a-valid-pubkey") {
+		t.Errorf("safeDestinationLabel() = %q, echoes the unparseable raw value", got)
+	}
+}
+
+// TestTruncateInvoiceForDisplay guards against the bug found auditing
+// `redeem --invoice`: destName used to be the literal string "the invoice
+// above", naming a line the command never actually printed in either
+// mode. Unlike safeDestinationLabel's own wallet-connection case, an
+// invoice carries no secret, so this is purely a readability trim, not a
+// redaction — a short invoice is returned whole.
+func TestTruncateInvoiceForDisplay(t *testing.T) {
+	long := "lnbc1" + strings.Repeat("a", 200)
+	got := truncateInvoiceForDisplay(long)
+	if got != long[:12] {
+		t.Errorf("truncateInvoiceForDisplay(long) = %q, want the first 12 chars %q", got, long[:12])
+	}
+	short := "lnbc1x"
+	if got := truncateInvoiceForDisplay(short); got != short {
+		t.Errorf("truncateInvoiceForDisplay(short) = %q, want it returned whole (%q)", got, short)
 	}
 }

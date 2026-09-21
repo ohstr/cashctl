@@ -121,3 +121,74 @@ func TestMinterPubkeyFromToken(t *testing.T) {
 // to nmilat as nipcash.MatchClaim, with equivalent (and, for the
 // already-claimed-recipient case, corrected) coverage in that repo's own
 // nipcash/claim_test.go.
+
+// --- validateClaimedAmount: checkClaimWithCashHub proves an unclaimed
+// recipient exists, but never that the AMOUNT reported for it is sane or
+// consistent with the token's own signed provenance — both gaps a
+// hostile relay (the token's own RelayURLs, dialed automatically) can
+// exploit on nothing more than an attacker-controlled Hub reply.
+
+func TestValidateClaimedAmount_MatchingProvenanceIsAccepted(t *testing.T) {
+	c := testCmdWithFlags(true, false)
+	amount := uint64(5000)
+	minter := "minterpubkey"
+	tok := nipcash.Token{AttestedAmountMillis: &amount}
+	result := &nipcash.CheckClaimResult{AmountMillis: amount, MinterPubkey: &minter}
+	if err := validateClaimedAmount(c, tok, result); err != nil {
+		t.Errorf("validateClaimedAmount() error = %v, want nil (amounts agree)", err)
+	}
+}
+
+func TestValidateClaimedAmount_RejectsMismatchAgainstVerifiedProvenance(t *testing.T) {
+	// The regression test for R2-10: a forged/misbehaving Hub reporting an
+	// amount that disagrees with the token's own cryptographically
+	// verified attestation (MinterPubkey set means nipcashclient.CheckClaim
+	// already confirmed the signature itself, not just that it's present)
+	// must be refused outright, not silently trusted and persisted.
+	c := testCmdWithFlags(true, false)
+	attested := uint64(1000)             // what the token's own signature commits to
+	hubReported := uint64(1_000_000_000) // what a lying Hub claims instead
+	minter := "minterpubkey"
+	tok := nipcash.Token{AttestedAmountMillis: &attested}
+	result := &nipcash.CheckClaimResult{AmountMillis: hubReported, MinterPubkey: &minter}
+	err := validateClaimedAmount(c, tok, result)
+	if err == nil {
+		t.Fatal("validateClaimedAmount() = nil error, want a mismatch rejected")
+	}
+	if !strings.Contains(err.Error(), "1 loki") || !strings.Contains(err.Error(), "1000000 loki") {
+		t.Errorf("validateClaimedAmount() error = %v, want both figures named", err)
+	}
+}
+
+func TestValidateClaimedAmount_UnverifiedProvenanceIsNotCompared(t *testing.T) {
+	// MinterPubkey nil means CheckClaim itself couldn't verify the
+	// signature (or none was ever attached) — comparing against
+	// AttestedAmountMillis in that case would be comparing the Hub's real
+	// answer against a number nothing actually vouches for. A tampered
+	// token's own decode-time display already warns separately (E2-07);
+	// this function's job is narrower: never trust a MISMATCH as evidence
+	// of anything when the "attestation" itself was never confirmed.
+	c := testCmdWithFlags(true, false)
+	attested := uint64(1000)
+	tok := nipcash.Token{AttestedAmountMillis: &attested}
+	result := &nipcash.CheckClaimResult{AmountMillis: 999_999, MinterPubkey: nil}
+	if err := validateClaimedAmount(c, tok, result); err != nil {
+		t.Errorf("validateClaimedAmount() error = %v, want nil (nothing verified to compare against)", err)
+	}
+}
+
+func TestValidateClaimedAmount_RejectsAbsurdlyLargeAmount(t *testing.T) {
+	// The same overflow boundary internal/output.ParseAmount enforces on
+	// typed input (math.MaxInt64 mloki) — here on the network-input side:
+	// an amount beyond it goes negative the moment any downstream
+	// int64(...) cast touches it (FormatAmount's own signature,
+	// ledger.Entry's later use), exactly the "-9223372036854775.-808 loki"
+	// bug a fake Hub could otherwise trigger.
+	c := testCmdWithFlags(true, false)
+	tok := nipcash.Token{}
+	result := &nipcash.CheckClaimResult{AmountMillis: 1<<64 - 1}
+	err := validateClaimedAmount(c, tok, result)
+	if err == nil {
+		t.Fatal("validateClaimedAmount() = nil error, want an absurd amount rejected")
+	}
+}

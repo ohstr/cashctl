@@ -2,12 +2,15 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/ohstr/nmilat/nip47"
 	"github.com/ohstr/nmilat/nipcw"
 	nipcwclient "github.com/ohstr/nmilat/nipcw/client"
+	relayclient "github.com/ohstr/nmilat/relay/client"
 	"github.com/spf13/cobra"
 
 	"github.com/ohstr/cashctl/internal/config"
@@ -16,10 +19,31 @@ import (
 	"github.com/ohstr/cashctl/internal/output"
 )
 
+// isIdentityEventReplayErr reports whether err is the Hub's own replay
+// guard on `join`'s identity proof — nmilat's nipcw/identity.go builds
+// that proof with created_at at whole-second granularity and no nonce, so
+// two join attempts (by the same identity, at the same hub) landing in
+// the same wall-clock second produce byte-identical proofs, and the Hub
+// rejects the second as a replay: BAD_REQUEST, "identity_event has
+// already been used" — indistinguishable by NWC code alone from any other
+// BAD_REQUEST (an over-cap max-amount, a malformed budget-renewal, ...),
+// so this matches on the Hub's own specific message text instead.
+// Confirmed live: neither call actually gets processed when this fires,
+// so retrying once the clock has ticked over is always safe — never a
+// double-join — and recovers the request's real outcome (an allowlist/cap
+// decline, or success) instead of this transport-level collision masking
+// it as a hard, non-retryable failure.
+func isIdentityEventReplayErr(err error) bool {
+	var walletErr *relayclient.WalletError
+	return errors.As(err, &walletErr) && walletErr.Code == "BAD_REQUEST" &&
+		strings.Contains(walletErr.Message, "identity_event") && strings.Contains(walletErr.Message, "already been used")
+}
+
 func newCircleCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "circle",
 		Short: "Join a circle to get a personal Lightning wallet",
+		RunE:  groupRunE,
 	}
 	cmd.AddCommand(newCircleJoinCmd())
 	return cmd
@@ -48,18 +72,49 @@ func newCircleJoinCmd() *cobra.Command {
 // pair (cash_transfer.go): a circlehub1.../NWC URI never parses as a loki
 // amount, so whichever arg does is the max-amount, regardless of which
 // side it's on.
+//
+// When NEITHER side parses as an amount (a malformed one, most often),
+// looksLikeHubArg breaks the tie: exactly one side being hub-shaped means
+// the OTHER side is the (malformed) amount — confirmed live:
+// `join 0.0001 <hub>` used to blame the 232-char hub connection string as
+// "not a valid amount" and echo the whole thing (secret included) back in
+// the error, because the old position-only fallback never checked
+// whether the OTHER argument looked like a hub either. Genuinely
+// ambiguous input (both or neither look hub-shaped) falls back to the
+// documented hub-first order.
 func disambiguateJoinArgs(args []string) (positionalHub, positionalMaxAmount string) {
+	looksLikeAmount := func(s string) bool {
+		_, err := output.ParseAmount(s)
+		return err == nil
+	}
+	looksLikeHubArg := func(s string) bool {
+		switch dial.Sniff(s) {
+		case dial.KindCircleHub, dial.KindCashHub, dial.KindNWCURI:
+			return true
+		default:
+			return false
+		}
+	}
 	switch len(args) {
 	case 1:
-		if _, numErr := output.ParseAmount(args[0]); numErr == nil {
+		if looksLikeAmount(args[0]) {
 			positionalMaxAmount = args[0]
 		} else {
 			positionalHub = args[0]
 		}
 	case 2:
-		if _, numErr := output.ParseAmount(args[0]); numErr == nil {
+		amount0, amount1 := looksLikeAmount(args[0]), looksLikeAmount(args[1])
+		hub0, hub1 := looksLikeHubArg(args[0]), looksLikeHubArg(args[1])
+		switch {
+		case amount0 && !amount1:
 			positionalMaxAmount, positionalHub = args[0], args[1]
-		} else {
+		case amount1 && !amount0:
+			positionalHub, positionalMaxAmount = args[0], args[1]
+		case hub0 && !hub1:
+			positionalHub, positionalMaxAmount = args[0], args[1]
+		case hub1 && !hub0:
+			positionalHub, positionalMaxAmount = args[1], args[0]
+		default:
 			positionalHub, positionalMaxAmount = args[0], args[1]
 		}
 	}
@@ -124,25 +179,48 @@ func runCircleJoin(cmd *cobra.Command, args []string) error {
 
 	var dialErr bool
 	var resp *nipcw.CreateCircleWalletResponse
-	err = WithSpinner(jsonMode, "Joining...", func() error {
-		client, cErr := nipcwclient.Connect(ctx, pairingURI)
-		if cErr != nil {
-			dialErr = true
-			return cErr
-		}
-		defer client.Close()
-		r, cErr := client.CreateCircleWallet(ctx, nipcw.CreateCircleWalletParams{
-			Credential: cred, MaxAmountMillis: maxAmount, Expiry: expiry, BudgetRenewal: budgetRenewal,
+	attemptJoin := func() error {
+		return WithSpinner(jsonMode, "Joining...", func() error {
+			client, cErr := nipcwclient.Connect(ctx, pairingURI)
+			if cErr != nil {
+				dialErr = true
+				return cErr
+			}
+			defer client.Close()
+			r, cErr := client.CreateCircleWallet(ctx, nipcw.CreateCircleWalletParams{
+				Credential: cred, MaxAmountMillis: maxAmount, Expiry: expiry, BudgetRenewal: budgetRenewal,
+			})
+			if cErr != nil {
+				return cErr
+			}
+			resp = r
+			return nil
 		})
-		if cErr != nil {
-			return cErr
-		}
-		resp = r
-		return nil
-	})
+	}
+	err = attemptJoin()
+	if err != nil && !dialErr && isIdentityEventReplayErr(err) {
+		// See isIdentityEventReplayErr's own doc comment: nothing was
+		// actually submitted, so retrying once the clock has ticked over
+		// is safe and (confirmed live) recovers the real outcome — 1.1s
+		// guarantees crossing at least one whole-second boundary from any
+		// starting sub-second offset, matching the proof's own
+		// whole-second granularity.
+		output.Notef(jsonMode, "Retrying — the Hub saw a duplicate identity proof from within the same second...")
+		time.Sleep(1100 * time.Millisecond)
+		dialErr = false
+		err = attemptJoin()
+	}
 	if err != nil {
 		if dialErr {
 			return output.NetworkError(cmd, err)
+		}
+		if isIdentityEventReplayErr(err) {
+			// Still colliding even after the retry (another process
+			// landed on the same fresh second, most likely) — conflict,
+			// not invalid_input: nothing about the request itself was
+			// wrong, and a further retry is exactly the right move.
+			return output.ConflictError(cmd, "", errors.New(
+				"the Hub's identity-proof replay guard rejected two attempts within the same second, even after retrying once — wait a few seconds and run `join` again"))
 		}
 		return classifyNWCErr(cmd, err)
 	}
@@ -161,7 +239,10 @@ func runCircleJoin(cmd *cobra.Command, args []string) error {
 	if wasEmpty {
 		setDefault = jsonMode || Confirm(cmd, true, "This is your first wallet — use it as your default?")
 	} else {
-		setDefault = !jsonMode && Confirm(cmd, false, "Set as your default?")
+		// Same rule as `connect add`: --yes never silently replaces an
+		// existing default.
+		yes, _ := cmd.Flags().GetBool("yes")
+		setDefault = !jsonMode && !yes && Confirm(cmd, false, "Set as your default?")
 	}
 	if setDefault {
 		_ = s.SetDefault(name)
@@ -171,18 +252,39 @@ func runCircleJoin(cmd *cobra.Command, args []string) error {
 	}
 
 	if jsonMode {
-		output.PrintJSON(map[string]any{"wallet": name, "default": setDefault, "response": resp})
+		// Built explicitly rather than embedding resp directly (same fix
+		// as cash_inspect.go's own decode command, and printAndSaveTransferResult's
+		// own CashTransferResult handling): nipcw.CreateCircleWalletResponse
+		// has no JSON tags of its own, so a raw marshal would leak
+		// CamelCase Go field names AND, worse, resp.PairingURI itself —
+		// the new wallet's actual NWC secret, already saved locally under
+		// name and never needed again from output alone.
+		var expiresAt any
+		if resp.ExpiresAt > 0 {
+			expiresAt = time.Unix(resp.ExpiresAt, 0).UTC().Format(time.RFC3339)
+		}
+		output.PrintJSON(map[string]any{
+			"wallet": name, "default": setDefault,
+			"response": map[string]any{
+				"wallet_pubkey":  resp.WalletPubkey,
+				"expires_at":     expiresAt,
+				"fees_ppm":       resp.FeesPpm,
+				"budget_renewal": resp.BudgetRenewal,
+			},
+		})
 		return nil
 	}
 	greeting := "Joined!"
 	if label != "" {
-		greeting = fmt.Sprintf("Joined %q!", label)
+		// label came out of the hub connection string itself — chosen by
+		// whoever set the Hub up, outside cashctl's own control.
+		greeting = fmt.Sprintf("Joined %q!", output.Sanitize(label))
 	}
 	renewal := resp.BudgetRenewal
 	if renewal == "" {
 		renewal = "never"
 	}
-	fmt.Printf("%s New wallet: %s (max %s/%s)\n", greeting, name, output.FormatAmount(int64(maxAmount)), renewal)
+	fmt.Printf("%s New wallet: %s (max %s/%s)\n", greeting, name, output.FormatAmount(int64(maxAmount)), output.Sanitize(renewal))
 	if setDefault {
 		fmt.Printf("Default wallet set to %s.\n", name)
 	} else if !wasEmpty {

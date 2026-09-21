@@ -14,6 +14,7 @@ import (
 
 	"github.com/ohstr/cashctl/internal/config"
 	"github.com/ohstr/cashctl/internal/credential"
+	"github.com/ohstr/cashctl/internal/dial"
 	"github.com/ohstr/cashctl/internal/ledger"
 	"github.com/ohstr/cashctl/internal/output"
 )
@@ -40,6 +41,11 @@ func runCashRedeem(cmd *cobra.Command, args []string) error {
 	jsonMode, _ := cmd.Flags().GetBool("json")
 	explicitInvoice, _ := cmd.Flags().GetString("invoice")
 	intoFlagValue, _ := cmd.Flags().GetString("into")
+	if explicitInvoice != "" {
+		if err := validateInvoiceShape(explicitInvoice); err != nil {
+			return output.InvalidInputError(cmd, explicitInvoice, err)
+		}
+	}
 
 	var positionalInto string
 	if len(args) > 0 {
@@ -48,6 +54,20 @@ func runCashRedeem(cmd *cobra.Command, args []string) error {
 	intoValue, err := resolvePositionalOrFlag(cmd, positionalInto, "into", intoFlagValue)
 	if err != nil {
 		return err
+	}
+	// -c/--connection is the global "use this wallet instead of the default"
+	// flag, and redeem's destination IS "the default wallet" unless told
+	// otherwise — so honor it as the destination. It used to be ignored, so
+	// `redeem -c savings` quietly paid out to the default wallet instead.
+	// Anything ambiguous is refused rather than guessed at: it's real money.
+	if conn, _ := cmd.Flags().GetString("connection"); conn != "" {
+		switch {
+		case explicitInvoice != "":
+			return output.UsageError(cmd, fmt.Errorf("-c/--connection names the wallet to redeem into, but --invoice redeems straight into an invoice — pass one or the other"))
+		case intoValue != "" && intoValue != conn:
+			return output.UsageError(cmd, fmt.Errorf("got both a destination (%q) and -c/--connection (%q) with different values — pass only one", output.Sanitize(intoValue), output.Sanitize(conn)))
+		}
+		intoValue = conn
 	}
 
 	l, err := ledger.Load()
@@ -85,7 +105,13 @@ func runCashRedeem(cmd *cobra.Command, args []string) error {
 	var message string
 	if explicitInvoice != "" {
 		invoice = explicitInvoice
-		destName = "the invoice above"
+		// "the invoice above" used to name a line this command never
+		// actually printed — nothing shows the invoice anywhere before
+		// this prompt/result, in either mode. A bolt11 invoice carries no
+		// secret (it's meant to be shared/paid by anyone), so — unlike
+		// safeDestinationLabel's own wallet-connection case — there's
+		// nothing sensitive about naming a piece of it directly.
+		destName = fmt.Sprintf("invoice %s…", truncateInvoiceForDisplay(explicitInvoice))
 		message = fmt.Sprintf("Redeem into %s?", destName)
 		if entry.AmountMillis != nil {
 			message = fmt.Sprintf("Redeem %s into %s?", output.FormatAmount(int64(*entry.AmountMillis)), destName)
@@ -132,11 +158,14 @@ func runCashRedeem(cmd *cobra.Command, args []string) error {
 		defer destClient.Close()
 		destName = destWalletName
 		message = fmt.Sprintf("Redeem %s into %s?", output.FormatAmount(int64(quote.AmountMillis)), destName)
+		// Linef, not fmt.Println: these are human-only narration — under
+		// --json they used to land on stdout ahead of the result object, so
+		// a script's json.Unmarshal of stdout failed on the first line.
 		if fee := previewSuffix(quote); fee != "" {
-			fmt.Println(fee)
+			output.Notef(jsonMode, "%s", fee)
 		}
 		if w := expiryWarningSuffix(quote.ExpiresAt, "redeem"); w != "" {
-			fmt.Println(w)
+			output.Notef(jsonMode, "%s", w)
 		}
 	}
 	// defaultYes=false: moves real money — never accept on a bare Enter.
@@ -148,7 +177,9 @@ func runCashRedeem(cmd *cobra.Command, args []string) error {
 
 	var result *nipcash.CashRedeemResult
 	err = WithSpinner(jsonMode, "Redeeming...", func() error {
-		r, cErr := sourceClient.CashRedeem(ctx, nipcash.CashRedeemParams{Invoice: invoice, Credential: cred})
+		r, cErr := spendBearerEntry(entry, cred, func(c nipcash.Credential) (*nipcash.CashRedeemResult, error) {
+			return sourceClient.CashRedeem(ctx, nipcash.CashRedeemParams{Invoice: invoice, Credential: c})
+		})
 		if cErr != nil {
 			return cErr
 		}
@@ -156,7 +187,7 @@ func runCashRedeem(cmd *cobra.Command, args []string) error {
 		return nil
 	})
 	if err != nil {
-		return classifyNWCErr(cmd, err)
+		return classifyCashTokenNWCErr(cmd, err)
 	}
 
 	_ = l.SetStatus(entry.ID, ledger.StatusRedeemed)
@@ -165,13 +196,33 @@ func runCashRedeem(cmd *cobra.Command, args []string) error {
 	} else {
 		l.AppendHistory("redeem", fmt.Sprintf("redeemed into %s", destName))
 	}
-	_ = l.Save()
+	// Unlike consolidate/transfer, there's no new token to lose here — the
+	// cash was paid out for real (result.Preimage proves it) and no longer
+	// exists to recover. What a failed Save leaves wrong is purely local
+	// bookkeeping: this entry stays "held" and gets offered again by a
+	// later pick/redeem, so that mismatch has to be reported, not hidden
+	// behind an exit-0 "Redeemed" that implies the ledger agrees.
+	if err := l.Save(); err != nil {
+		return reportUnsavedResult(cmd, err, "Redeem",
+			fmt.Sprintf("The payment went through (preimage: %s) — this entry will incorrectly keep showing as held until you remove or reconcile it.", result.Preimage))
+	}
 
 	if jsonMode {
-		output.PrintJSON(map[string]any{
-			"redeemed_token": entry.ID, "to_wallet": destName,
-			"fee_mloki": result.FeesPaid, "preimage": result.Preimage,
-		})
+		payload := map[string]any{
+			"redeemed_token": entry.ID,
+			"fee_mloki":      result.FeesPaid, "preimage": result.Preimage,
+		}
+		// Distinct field, not a repurposed "to_wallet": destName here
+		// names an invoice, not a registered wallet — and unlike
+		// destName's own truncated display form, the raw invoice isn't
+		// secret, so a --json consumer gets the whole thing, not 12 chars
+		// of it.
+		if explicitInvoice != "" {
+			payload["to_invoice"] = explicitInvoice
+		} else {
+			payload["to_wallet"] = destName
+		}
+		output.PrintJSON(payload)
 		return nil
 	}
 	fmt.Printf("Redeemed → %s.\n", destName)
@@ -252,13 +303,13 @@ func pickHeldToken(cmd *cobra.Command, held []ledger.Entry) (*ledger.Entry, erro
 		return nil, tooManyErr()
 	}
 
-	output.Linef(false, "You hold %d cash tokens:", len(held))
+	output.Notef(false, "You hold %d cash tokens:", len(held))
 	for i, e := range held {
 		amount := "unknown amount"
 		if e.AmountMillis != nil {
 			amount = output.FormatAmount(int64(*e.AmountMillis))
 		}
-		output.Linef(false, "  %d) %s   received %s", i+1, amount, formatReceivedDate(e.ReceivedAt))
+		output.Notef(false, "  %d) %s   received %s", i+1, amount, formatReceivedDate(e.ReceivedAt))
 	}
 	choice, err := PromptLine(fmt.Sprintf("Which one? [1-%d] ", len(held)))
 	if err != nil {
@@ -314,13 +365,66 @@ func resolveDestWallet(cmd *cobra.Command, into string) (name, value string, err
 		if c, ok := s.Find(into); ok {
 			return c.Name, c.Value, nil
 		}
-		return into, into, nil
+		// Not a registered name, so it has to be a raw connection string — and
+		// if it isn't one of those either it can never work: the caller's own
+		// mistake (not_found), not a network failure to retry.
+		if err := validateConnectionValue(into); err != nil {
+			return "", "", unusableConnectionError(cmd, into)
+		}
+		// into isn't a registered name — a raw connection string, passed
+		// directly. destName (the first return value) reaches the confirm
+		// prompt, --json's to_wallet, and wallet history — using the raw
+		// string itself there used to mean printing and PERSISTING the
+		// destination wallet's own spending secret every time someone
+		// redeemed into an unregistered wallet. value (the actual dial
+		// target) still needs the raw string; only the display half changes.
+		return safeDestinationLabel(into), into, nil
 	}
 	c, ok := s.DefaultConnection()
 	if !ok {
-		return "", "", output.NotFoundError(cmd, "", fmt.Errorf(noWalletConfiguredMsg+"\n  Or redeem straight into an invoice from any other wallet app: cashctl redeem --invoice <bolt11>"))
+		return "", "", output.NotFoundError(cmd, "", errors.New(noWalletMessage()+"\n  Or redeem straight into an invoice from any other wallet app: cashctl redeem --invoice <bolt11>"))
 	}
 	return c.Name, c.Value, nil
+}
+
+// truncateInvoiceForDisplay renders enough of a bolt11 invoice string to
+// be recognizable in a prompt/result line without dumping the whole
+// (often 200+ char) thing — purely a readability trim, not a secrecy one
+// (see its own call site's comment).
+func truncateInvoiceForDisplay(invoice string) string {
+	const n = 12
+	if len(invoice) <= n {
+		return invoice
+	}
+	return invoice[:n]
+}
+
+// safeDestinationLabel derives a display-safe name for an unregistered
+// destination string passed directly to redeem's `[wallet]`/`--into` —
+// never the raw string itself, which (whatever kind it is) always carries
+// a spending secret: an NWC URI's own secret= query value, or the
+// equivalent embedded in a bech32 hub string's TLV encoding (same
+// sensitivity as config.Connection.Value — see its own doc comment).
+// Only an NWC URI has a genuinely separable non-secret piece worth
+// showing (its wallet pubkey, plain in the host); a bech32 hub string
+// encodes everything as one blob with no substring safe to reveal, so
+// those fall back to naming just the connection kind. A caller that never
+// registers the destination finds out it doesn't dial from the failure
+// that follows, not from what got printed here first.
+func safeDestinationLabel(raw string) string {
+	switch dial.Sniff(raw) {
+	case dial.KindNWCURI:
+		if info, err := nip47.ParsePairingURI(raw); err == nil && len(info.WalletPubkey) >= 8 {
+			return "wallet " + info.WalletPubkey[:8] + "…"
+		}
+		return "a wallet connection"
+	case dial.KindCashHub:
+		return "a Cash Hub connection"
+	case dial.KindCircleHub:
+		return "a Circle Hub connection"
+	default:
+		return "the given connection"
+	}
 }
 
 // resolveAmount returns entry's known amount, or discovers it live via
@@ -337,15 +441,24 @@ func resolveAmount(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entry, so
 		return 0, output.RuntimeError(cmd, err)
 	}
 	// CheckClaim tries pubkey then bearer live; no need to pre-decide.
+	// Bounded, unlike a bare context.Background() (a real hang bug this
+	// specific call had: with no deadline at all, a relay that accepts the
+	// connection but never answers left `cashctl redeem`/`transfer`/
+	// `consolidate` — every caller of resolveAmount — stuck forever,
+	// confirmed live at 400+s; every other network call in this package
+	// already bounds itself the same way).
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
 	myPubHex, _ := localPubKeyHex(cmd)
-	result, err := sourceClient.CheckClaim(context.Background(), tok, myPubHex)
+	result, err := sourceClient.CheckClaim(ctx, tok, myPubHex)
 	if errors.Is(err, nipcash.ErrClaimNotFound) {
 		return 0, output.NotFoundError(cmd, entry.ID, fmt.Errorf("couldn't determine this token's amount — check `cashctl wallet show`, or that it's still valid"))
 	}
 	if err != nil {
-		return 0, classifyNWCErr(cmd, err)
+		return 0, classifyCashTokenNWCErr(cmd, err)
 	}
 	entry.AmountMillis = &result.AmountMillis
+	entry.ExpiresAt = result.ExpiresAt
 	_ = l.SetVerified(entry.ID, true)
 	return result.AmountMillis, nil
 }
@@ -380,15 +493,20 @@ func resolveRedeemQuote(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entr
 	if err != nil {
 		return redeemQuote{}, output.RuntimeError(cmd, err)
 	}
+	// Bounded for the same reason resolveAmount's own identical call is —
+	// see its doc comment.
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
 	myPubHex, _ := localPubKeyHex(cmd)
-	result, err := sourceClient.CheckClaim(context.Background(), tok, myPubHex)
+	result, err := sourceClient.CheckClaim(ctx, tok, myPubHex)
 	if errors.Is(err, nipcash.ErrClaimNotFound) {
 		return redeemQuote{}, output.NotFoundError(cmd, entry.ID, fmt.Errorf("couldn't determine this token's amount — check `cashctl wallet show`, or that it's still valid"))
 	}
 	if err != nil {
-		return redeemQuote{}, classifyNWCErr(cmd, err)
+		return redeemQuote{}, classifyCashTokenNWCErr(cmd, err)
 	}
 	entry.AmountMillis = &result.AmountMillis
+	entry.ExpiresAt = result.ExpiresAt
 	_ = l.SetVerified(entry.ID, true)
 	return redeemQuote{
 		AmountMillis:        result.AmountMillis,

@@ -2,7 +2,9 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/ohstr/cashctl/internal/appdir"
@@ -26,10 +28,27 @@ func TestConnection_JSONFieldNames(t *testing.T) {
 	if err := json.Unmarshal(data, &got); err != nil {
 		t.Fatalf("json.Unmarshal() error = %v", err)
 	}
-	for _, key := range []string{"name", "value", "added_at", "last_known_balance_mloki", "last_known_balance_at"} {
+	for _, key := range []string{"name", "added_at", "last_known_balance_mloki", "last_known_balance_at"} {
 		if _, ok := got[key]; !ok {
 			t.Errorf("marshaled Connection is missing snake_case key %q: %s", key, data)
 		}
+	}
+}
+
+// TestConnection_JSONOmitsValue is the regression test for a real secret
+// leak: `connect list`/`wallet show` embed a whole []Connection directly
+// into --json output, so a plain json tag on Value put every registered
+// wallet's own pairing secret (an NWC URI's secret=, or the equivalent
+// embedded in a bech32 hub string) in the documented way to list wallets.
+// Text mode never showed it either — --json must not, on the same value.
+func TestConnection_JSONOmitsValue(t *testing.T) {
+	c := Connection{Name: "work", Value: "nostr+walletconnect://pub?relay=wss://x&secret=deadbeef", AddedAt: "t"}
+	data, err := json.Marshal(c)
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	if strings.Contains(string(data), "deadbeef") || strings.Contains(string(data), "\"value\"") {
+		t.Errorf("marshaled Connection leaks Value: %s", data)
 	}
 }
 
@@ -280,5 +299,141 @@ func TestSave_FilePermissions(t *testing.T) {
 	}
 	if perm := info.Mode().Perm(); perm != 0600 {
 		t.Errorf("cashctl.db permissions = %o, want 0600", perm)
+	}
+}
+
+// --- Save is a diff against what Load read, not a wholesale rewrite: two
+// processes' Load-mutate-Save cycles must not erase each other's work.
+
+func mustLoad(t *testing.T) *Store {
+	t.Helper()
+	s, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	return s
+}
+
+func mustSave(t *testing.T, s *Store) {
+	t.Helper()
+	if err := s.Save(); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+}
+
+func names(s *Store) []string {
+	var out []string
+	for _, c := range s.Connections {
+		out = append(out, c.Name)
+	}
+	return out
+}
+
+func TestSave_ConcurrentDisjointAddsDoNotClobber(t *testing.T) {
+	// Both loaded the same (empty) state before either saved — the old
+	// DELETE-everything-and-reinsert Save let whichever went second erase
+	// the other's connection outright.
+	withTempConfigDir(t)
+	a, b := mustLoad(t), mustLoad(t)
+	if err := a.Add("alpha", "nostr+walletconnect://alpha"); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Add("bravo", "nostr+walletconnect://bravo"); err != nil {
+		t.Fatal(err)
+	}
+	mustSave(t, a)
+	mustSave(t, b)
+
+	got := names(mustLoad(t))
+	if len(got) != 2 || got[0] != "alpha" || got[1] != "bravo" {
+		t.Errorf("connections after two concurrent adds = %v, want [alpha bravo]", got)
+	}
+}
+
+func TestSave_ConcurrentSameNameAddIsADuplicateNotAnOverwrite(t *testing.T) {
+	withTempConfigDir(t)
+	a, b := mustLoad(t), mustLoad(t)
+	if err := a.Add("work", "nostr+walletconnect://first"); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Add("work", "nostr+walletconnect://second"); err != nil {
+		t.Fatal(err)
+	}
+	mustSave(t, a)
+	if err := b.Save(); !errors.Is(err, ErrDuplicateName) {
+		t.Fatalf("second Save() of the same name = %v, want ErrDuplicateName", err)
+	}
+	c, _ := mustLoad(t).Find("work")
+	if c == nil || c.Value != "nostr+walletconnect://first" {
+		t.Errorf("the first writer's value was overwritten: %+v", c)
+	}
+}
+
+func TestSave_UnchangedStoreDoesNotResurrectAConnectionAnotherProcessRemoved(t *testing.T) {
+	withTempConfigDir(t)
+	seed := mustLoad(t)
+	_ = seed.Add("gone", "nostr+walletconnect://gone")
+	mustSave(t, seed)
+
+	a, b := mustLoad(t), mustLoad(t)
+	a.Remove("gone")
+	mustSave(t, a)
+	mustSave(t, b) // b never touched anything: must be a no-op, not a re-insert
+
+	if got := names(mustLoad(t)); len(got) != 0 {
+		t.Errorf("connections = %v, want none — the stale, unchanged Save resurrected a removed connection", got)
+	}
+}
+
+func TestSave_RemoveOnlyDeletesWhatItLoaded(t *testing.T) {
+	withTempConfigDir(t)
+	seed := mustLoad(t)
+	_ = seed.Add("old", "nostr+walletconnect://old")
+	mustSave(t, seed)
+
+	a, b := mustLoad(t), mustLoad(t)
+	_ = b.Add("fresh", "nostr+walletconnect://fresh")
+	mustSave(t, b)
+	a.Remove("old")
+	mustSave(t, a)
+
+	got := names(mustLoad(t))
+	if len(got) != 1 || got[0] != "fresh" {
+		t.Errorf("connections = %v, want [fresh] — removing 'old' must not take a concurrent add with it", got)
+	}
+}
+
+func TestSave_DefaultOnlyTouchedWhenThisProcessChangedIt(t *testing.T) {
+	withTempConfigDir(t)
+	seed := mustLoad(t)
+	_ = seed.Add("x", "nostr+walletconnect://x")
+	_ = seed.Add("y", "nostr+walletconnect://y")
+	_ = seed.SetDefault("x")
+	mustSave(t, seed)
+
+	a, b := mustLoad(t), mustLoad(t)
+	_ = b.SetDefault("y")
+	mustSave(t, b)
+	_ = a.Add("z", "nostr+walletconnect://z") // a never touched the default
+	mustSave(t, a)
+
+	if got := mustLoad(t).Default; got != "y" {
+		t.Errorf("Default = %q, want y — a stale process reasserted the default it had loaded", got)
+	}
+}
+
+func TestSave_ChangedBalanceIsPersistedAndSurvivesRepeatedSaves(t *testing.T) {
+	withTempConfigDir(t)
+	s := mustLoad(t)
+	_ = s.Add("w", "nostr+walletconnect://w")
+	mustSave(t, s)
+
+	s.SetLastKnownBalance("w", 42_000)
+	mustSave(t, s)
+	mustSave(t, s) // a second Save of the same Store must diff against the first
+
+	c, _ := mustLoad(t).Find("w")
+	if c == nil || c.LastKnownBalanceMloki == nil || *c.LastKnownBalanceMloki != 42_000 {
+		t.Errorf("balance not persisted: %+v", c)
 	}
 }

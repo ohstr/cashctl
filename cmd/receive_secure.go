@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/ohstr/nmilat/nipcash"
@@ -30,6 +31,14 @@ type protectedStatus struct {
 	// ordinary failed-protect case, this likely means the entry was
 	// never really spendable at all.
 	LikelyWrongSecret bool
+	// PendingSecretUnresolved is set when Status is "failed" and the
+	// failure was a transport-level one (timeout, dropped connection) with
+	// no definitive answer from the Hub — the rekey may have landed
+	// anyway. The candidate secret is safely on disk regardless (see
+	// protectRekeyOnly's own doc comment) and resolveCredential tries it
+	// automatically on the next spend of this entry — this is never a
+	// dead end the way LikelyWrongSecret's case is.
+	PendingSecretUnresolved bool
 }
 
 func (s protectedStatus) json() map[string]any {
@@ -45,6 +54,9 @@ func (s protectedStatus) json() map[string]any {
 	}
 	if s.LikelyWrongSecret {
 		out["likely_wrong_secret"] = true
+	}
+	if s.PendingSecretUnresolved {
+		out["pending_secret_unresolved"] = true
 	}
 	return out
 }
@@ -72,7 +84,16 @@ func protectBearerReceipt(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.En
 	if !isBearer {
 		return protectedStatus{Status: "not_applicable"}, entry
 	}
-	if !Confirm(cmd, true, "Shared as bearer — still spendable by whoever has the code. Protect it now?") {
+	// defaultYes=true is intentional here, unlike a money-moving prompt:
+	// declining leaves the holding MORE exposed (still shared), not less —
+	// an unattended --yes/--json/EOF receive protecting by default is the
+	// safe direction, same reasoning as auto-securing at all. What the
+	// audit that found this actually flagged: the prompt itself never
+	// explained the mechanism, so even the interactive path left a human
+	// agreeing to something opaque — fixed by naming it plainly, not by
+	// flipping the default.
+	if !Confirm(cmd, true, "Shared as bearer — still spendable by whoever has the code. Protect it now? "+
+		"(re-keys it so the old code stops working; may also merge with any other holdings from the same issuer)") {
 		return protectedStatus{Status: "declined"}, entry
 	}
 
@@ -88,31 +109,42 @@ func protectBearerReceipt(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.En
 		return protectedStatus{Status: "failed", Error: err.Error()}, entry
 	}
 
+	// The no-merge case gets its own, write-ahead-safe path (see its own
+	// doc comment on why) rather than nipcashclient.RekeyBearerSlice.
+	// The merge case still needs RekeyBearerSlice's own multi-step
+	// composite (an interim reassignment onto a pubkey identity, THEN a
+	// consolidate) — its own fresh secret is generated deep inside that
+	// call, not accessible to persist ahead of time without reimplementing
+	// the composite here, which would risk the exact class of interop bug
+	// this same call already has server-side (see docs/private's audit of
+	// this Hub's "decrypt delivery" failures on this path).
+	if len(consolidateWith) == 0 {
+		return protectRekeyOnly(cmd, l, entry, jsonMode)
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
+	myPubHex, err := localPubKeyHex(cmd)
+	if err != nil {
+		printProtectFailure(jsonMode, err)
+		return protectedStatus{Status: "failed", Error: err.Error()}, entry
+	}
+	cred, err := localCashCredential(cmd)
+	if err != nil {
+		printProtectFailure(jsonMode, err)
+		return protectedStatus{Status: "failed", Error: err.Error()}, entry
+	}
 	params := nipcashclient.RekeyBearerSliceParams{
 		BearerSlice: nipcash.Source{
 			WalletPubkey: entry.WalletPubkey,
 			Amount:       *entry.AmountMillis,
 			Credential:   nipcash.BySecret(entry.BearerSecret),
 		},
-		MintSignature: entry.MinterPubkey != nil,
-	}
-	if len(consolidateWith) > 0 {
-		myPubHex, err := localPubKeyHex(cmd)
-		if err != nil {
-			printProtectFailure(jsonMode, err)
-			return protectedStatus{Status: "failed", Error: err.Error()}, entry
-		}
-		cred, err := localCashCredential(cmd)
-		if err != nil {
-			printProtectFailure(jsonMode, err)
-			return protectedStatus{Status: "failed", Error: err.Error()}, entry
-		}
-		params.InterimIdentity = nipcash.Pubkey(myPubHex)
-		params.InterimCredential = cred
-		params.ConsolidateWith = consolidateWith
+		MintSignature:     entry.MinterPubkey != nil,
+		InterimIdentity:   nipcash.Pubkey(myPubHex),
+		InterimCredential: cred,
+		ConsolidateWith:   consolidateWith,
 	}
 
 	var dialErr bool
@@ -143,12 +175,41 @@ func protectBearerReceipt(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.En
 			// didn't finish. Apply that real effect before reporting the
 			// failure, per the save-immediately rule: never leave the
 			// ledger mismatched with the last wire call that actually
-			// succeeded.
+			// succeeded. A failure of THIS save is the harder case: the
+			// Hub-side effect is real and, unlike the ordinary path below,
+			// there is no pending-secret trail to fall back on for a
+			// reassign-to-pubkey (not bearer) interim step — report it
+			// plainly rather than pretending Save() always works.
 			entry.BearerSecret = ""
 			entry.IdentityRequired = ptrTo(true)
-			_ = l.Save()
-			printProtectPartialFailure(jsonMode, err)
-			return protectedStatus{Status: "failed", Error: err.Error()}, entry
+			// No longer bearer-mode at all — reassigned to the local
+			// identity's own pubkey — so "shared vs protected" no longer
+			// applies (see Entry.BearerProtection's own doc comment: empty
+			// means n/a, the same as any other pubkey-mode entry).
+			entry.BearerProtection = ""
+			// The interim's own follow-up consolidate merges entry
+			// alongside consolidateWithIDs — if ITS failure is the same
+			// decrypt-family ambiguity cash_consolidate.go's own direct
+			// path can hit (isAmbiguousDeliveryErr's doc comment), those
+			// other, already-held sources may be consumed too. Reconcile
+			// the same way that path does: ask each source's own token,
+			// independently, whether the Hub still has a claim for it.
+			reportErr := err
+			if isAmbiguousDeliveryErr(err) {
+				if gone := reconcileAmbiguousSources(cmd, l, consolidateWithIDs); len(gone) > 0 {
+					reportErr = fmt.Errorf("%w (confirmed consumed on the Hub despite the unreadable reply: %s — marked accordingly so they won't be offered again, though the merged result itself could not be recovered)",
+						err, strings.Join(gone, ", "))
+				} else {
+					reportErr = warnAmbiguousDelivery(err, consolidateWithIDs)
+				}
+			}
+			if saveErr := l.Save(); saveErr != nil {
+				reportErr = fmt.Errorf("%w (and saving that locally also failed: %v — the ledger may still show the old, now-dead secret)", reportErr, saveErr)
+				printProtectPartialFailure(jsonMode, reportErr)
+				return protectedStatus{Status: "failed", Error: reportErr.Error()}, entry
+			}
+			printProtectPartialFailure(jsonMode, reportErr)
+			return protectedStatus{Status: "failed", Error: reportErr.Error()}, entry
 		}
 		wrongSecret := isWrongSecretDecline(err)
 		if wrongSecret {
@@ -157,19 +218,6 @@ func protectBearerReceipt(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.En
 			printProtectFailure(jsonMode, err)
 		}
 		return protectedStatus{Status: "failed", Error: err.Error(), LikelyWrongSecret: wrongSecret}, entry
-	}
-
-	if result.NewToken == "" {
-		entry.BearerSecret = result.NewSecret
-		l.AppendHistory("secure", "re-keyed this cash so the shared code can no longer spend it")
-		if err := l.Save(); err != nil {
-			printProtectFailure(jsonMode, err)
-			return protectedStatus{Status: "failed", Error: err.Error()}, entry
-		}
-		if !jsonMode {
-			fmt.Println("Protected.")
-		}
-		return protectedStatus{Status: "rekeyed"}, entry
 	}
 
 	for _, id := range consolidateWithIDs {
@@ -190,6 +238,7 @@ func protectBearerReceipt(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.En
 		AmountMillis:     &result.AmountMillis,
 		Verified:         true,
 		MinterPubkey:     newMinterPubkey,
+		BearerProtection: ledger.BearerProtected,
 	})
 	if addErr != nil {
 		printProtectFailure(jsonMode, addErr)
@@ -204,6 +253,110 @@ func protectBearerReceipt(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.En
 		fmt.Printf("Protected and merged %d holding(s) into %s.\n", len(consolidateWithIDs), output.FormatAmount(int64(result.AmountMillis)))
 	}
 	return protectedStatus{Status: "consolidated", ConsolidatedWith: consolidateWithIDs, FinalEntryID: newEntry.ID}, newEntry
+}
+
+// protectRekeyOnly is protectBearerReceipt's no-merge path: re-key entry's
+// bearer secret in place, without going through nipcashclient.RekeyBearerSlice.
+//
+// A bearer target's secret is generated purely locally — NIP-CASH §Bearer
+// Slices: the caller supplies only a one-way commitment over the wire, the
+// secret itself never crosses it — so there is no reason to let placing the
+// call be the difference between "the new secret exists on disk" and "the
+// new secret exists only in this process's own memory, gone the instant it
+// dies." nipcash.NewBearerTarget() is generated here, in cashctl's own
+// code, and entry.PendingBearerSecret is saved BEFORE the call — the same
+// write-ahead discipline a database uses for its own log.
+//
+// Once persisted, a kill or lost response can leave the outcome genuinely
+// ambiguous: NIP-CASH has no read-only way to ask the Hub which of two
+// candidate secrets it accepted (nipcashclient.CheckClaim's own doc
+// comment — a bearer match only proves *some* recipient exists, never
+// *which* secret). resolveCredential's own fallback resolves that
+// ambiguity the only way the protocol allows: by trying the pending secret
+// on the entry's next real spend attempt if the usual one is declined.
+func protectRekeyOnly(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entry, jsonMode bool) (protectedStatus, *ledger.Entry) {
+	bt := nipcash.NewBearerTarget()
+	entry.PendingBearerSecret = bt.Secret()
+	if err := l.Save(); err != nil {
+		// Nothing has been sent to the Hub yet — entry.BearerSecret is
+		// still the only real secret, so this is an ordinary failure.
+		entry.PendingBearerSecret = ""
+		printProtectFailure(jsonMode, err)
+		return protectedStatus{Status: "failed", Error: err.Error()}, entry
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	var dialErr bool
+	var result *nipcash.CashTransferResult
+	err := WithSpinner(jsonMode, "Protecting...", func() error {
+		client, cErr := nipcashclient.Connect(ctx, entry.Token)
+		if cErr != nil {
+			dialErr = true
+			return cErr
+		}
+		defer client.Close()
+		r, cErr := client.CashTransfer(ctx, nipcash.CashTransferParams{
+			Credential:    nipcash.BySecret(entry.BearerSecret),
+			To:            bt,
+			CurrentAmount: *entry.AmountMillis,
+			MintSignature: entry.MinterPubkey != nil,
+		})
+		if cErr != nil {
+			return cErr
+		}
+		result = r
+		return nil
+	})
+	if err != nil {
+		var walletErr *relayclient.WalletError
+		// A dial failure never reached the Hub at all; a *WalletError is
+		// the Hub actually answering with a real decline. Either way, the
+		// call is DEFINITELY known not to have taken effect — safe to
+		// retract the pending secret and keep reporting the old one.
+		if dialErr || errors.As(err, &walletErr) {
+			entry.PendingBearerSecret = ""
+			_ = l.Save() // best-effort tidy-up; entry.BearerSecret itself is unchanged either way
+			wrongSecret := isWrongSecretDecline(err)
+			if wrongSecret {
+				printProtectFailureWrongSecret(jsonMode, err)
+			} else {
+				printProtectFailure(jsonMode, err)
+			}
+			return protectedStatus{Status: "failed", Error: err.Error(), LikelyWrongSecret: wrongSecret}, entry
+		}
+		// Ambiguous: a transport-level failure (timeout, dropped
+		// connection) with no definitive answer from the Hub. Leave
+		// PendingBearerSecret exactly as already saved above — don't
+		// touch it either way — so resolveCredential can try it on the
+		// next real spend of this entry.
+		printProtectAmbiguousFailure(jsonMode, err)
+		return protectedStatus{Status: "failed", Error: err.Error(), PendingSecretUnresolved: true}, entry
+	}
+	_ = result // the Hub never returns the secret itself for this call — see CashTransferResult's own doc comment; bt.Secret() IS the new secret
+
+	entry.BearerSecret = bt.Secret()
+	entry.PendingBearerSecret = ""
+	entry.BearerProtection = ledger.BearerProtected
+	l.AppendHistory("secure", "re-keyed this cash so the shared code can no longer spend it")
+	if err := l.Save(); err != nil {
+		// The rekey is CONFIRMED (the call above returned no error) — but
+		// this save's own failure is harmless data-safety-wise: SQLite
+		// commits l.save()'s whole batch atomically (internal/ledger.Save's
+		// own doc comment), so a failed commit here leaves the row exactly
+		// as the write-ahead save above left it — BearerSecret still the
+		// OLD value, PendingBearerSecret still bt.Secret() — which is
+		// exactly the state resolveCredential's fallback already knows how
+		// to recover from. Report it the same way as the ambiguous case
+		// above rather than inventing a third message for what is, from
+		// disk's point of view, the identical situation.
+		printProtectAmbiguousFailure(jsonMode, err)
+		return protectedStatus{Status: "failed", Error: err.Error(), PendingSecretUnresolved: true}, entry
+	}
+	if !jsonMode {
+		fmt.Println("Protected.")
+	}
+	return protectedStatus{Status: "rekeyed"}, entry
 }
 
 // buildConsolidateWith finds other held, consolidation-eligible entries
@@ -240,6 +393,19 @@ func printProtectFailure(jsonMode bool, err error) {
 		return
 	}
 	fmt.Printf("Received, but protecting failed (%v) — still shared. Retry: `cashctl consolidate --to bearer-target`.\n", err)
+}
+
+// printProtectAmbiguousFailure is printProtectFailure's counterpart for a
+// transport-level failure with no definitive answer from the Hub — unlike
+// the ordinary case, this is never a dead end: the candidate secret this
+// attempt generated is already safely on disk, and the next real spend of
+// this entry (redeem/transfer/consolidate) tries it automatically if the
+// usual secret is declined (see resolveCredential's own doc comment).
+func printProtectAmbiguousFailure(jsonMode bool, err error) {
+	if jsonMode {
+		return
+	}
+	fmt.Printf("Received, but couldn't confirm protecting worked (%v) — it may have gone through anyway. No action needed: your next spend of this cash tries both possibilities automatically.\n", err)
 }
 
 // printProtectFailureWrongSecret is printProtectFailure's counterpart for

@@ -3,6 +3,7 @@ package cmd
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"syscall"
@@ -32,7 +33,9 @@ func Confirm(cmd *cobra.Command, defaultYes bool, message string) bool {
 	if defaultYes {
 		suffix = "[Y/n]"
 	}
-	fmt.Printf("%s %s ", message, suffix)
+	// stderr, like every prompt (ssh, sudo, git): stdout carries only what a
+	// command produced, so `cashctl ... > out` never captures the question.
+	fmt.Fprintf(os.Stderr, "%s %s ", message, suffix)
 	line, _ := stdin.ReadString('\n')
 	line = strings.ToLower(strings.TrimSpace(line))
 	if line == "" {
@@ -44,16 +47,25 @@ func Confirm(cmd *cobra.Command, defaultYes bool, message string) bool {
 // spinnerFrames animates WithSpinner's "waiting on the network" indicator.
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
-// WithSpinner runs fn while animating message on stdout — cashctl's shared
+// WithSpinner runs fn while animating message on stderr — cashctl's shared
 // "waiting on a network call" UX, so every command that blocks on one
 // (`receive`'s mandatory Hub check, ...) looks the same rather than each
-// command inventing its own. A no-op wrapper under --json, same as Linef:
-// a JSON consumer only wants the final structured result, never narration
-// mixed into the stream it's parsing. The spinner goroutine is fully
-// stopped (not just signaled) before returning, so its own writes can
-// never race with whatever the caller prints right after.
+// command inventing its own. Progress narration goes to stderr always
+// (AGENTS.md), and only animates when stderr is a real terminal: redirected
+// to a file or a pipe, the \r-and-erase frames are just noise in a log. A
+// no-op wrapper under --json, same as Notef: a JSON consumer only wants the
+// final structured result. The spinner goroutine is fully stopped (not just
+// signaled) before returning, so its own writes can never race with
+// whatever the caller prints right after.
 func WithSpinner(jsonMode bool, message string, fn func() error) error {
-	if jsonMode {
+	return withSpinner(os.Stderr, !jsonMode && term.IsTerminal(int(os.Stderr.Fd())), message, fn)
+}
+
+// withSpinner is WithSpinner with its output and on/off decision injected,
+// so the animation's own behavior (frames written, goroutine stopped before
+// return) stays unit-testable without a real terminal.
+func withSpinner(w io.Writer, animate bool, message string, fn func() error) error {
+	if !animate {
 		return fn()
 	}
 	stop := make(chan struct{})
@@ -63,27 +75,27 @@ func WithSpinner(jsonMode bool, message string, fn func() error) error {
 		ticker := time.NewTicker(100 * time.Millisecond)
 		defer ticker.Stop()
 		frame := 0
-		fmt.Printf("\r%s %s", spinnerFrames[0], message)
+		_, _ = fmt.Fprintf(w, "\r%s %s", spinnerFrames[0], message)
 		for {
 			select {
 			case <-stop:
 				return
 			case <-ticker.C:
 				frame++
-				fmt.Printf("\r%s %s", spinnerFrames[frame%len(spinnerFrames)], message)
+				_, _ = fmt.Fprintf(w, "\r%s %s", spinnerFrames[frame%len(spinnerFrames)], message)
 			}
 		}
 	}()
 	err := fn()
 	close(stop)
 	<-stopped
-	fmt.Print("\r\033[K")
+	_, _ = fmt.Fprint(w, "\r\033[K")
 	return err
 }
 
 // PromptLine asks for a single line of free-text input.
 func PromptLine(message string) (string, error) {
-	fmt.Print(message)
+	fmt.Fprint(os.Stderr, message)
 	line, err := stdin.ReadString('\n')
 	if err != nil {
 		return "", err
@@ -103,9 +115,9 @@ func ResolveVaultPassword(jsonMode bool) (string, error) {
 	if jsonMode {
 		return "", fmt.Errorf("vault password required: set NCLI_VAULT_PASSWORD (no interactive prompt under --json)")
 	}
-	fmt.Print("Vault password: ")
+	fmt.Fprint(os.Stderr, "Vault password: ")
 	pw, err := term.ReadPassword(int(syscall.Stdin))
-	fmt.Println()
+	fmt.Fprintln(os.Stderr)
 	if err != nil {
 		return "", err
 	}

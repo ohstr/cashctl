@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"time"
 
 	"modernc.org/sqlite"
@@ -25,6 +26,12 @@ const (
 	StatusRedeemed     = "redeemed"
 	StatusTransferred  = "transferred"
 	StatusConsolidated = "consolidated"
+)
+
+// BearerProtection values — see Entry.BearerProtection's own doc comment.
+const (
+	BearerShared    = "shared"
+	BearerProtected = "protected"
 )
 
 // Entry is one cash token cashctl knows about. WalletPubkey/Secret/RelayURLs/
@@ -72,6 +79,21 @@ type Entry struct {
 	// strictly worse than leaking Secret.
 	BearerSecret string `json:"-"`
 
+	// PendingBearerSecret is a not-yet-confirmed replacement for
+	// BearerSecret, written BEFORE the wire call that's meant to make it
+	// the real one (see cmd/receive_secure.go's protectBearerReceipt) —
+	// generating a bearer target's secret is a purely local operation
+	// (NIP-CASH §Bearer Slices: only a commitment ever goes over the
+	// wire), so it's known before the call is even placed. A kill or lost
+	// response during that call leaves this genuinely ambiguous — NIP-CASH
+	// has no read-only way to ask the Hub which of the two secrets it
+	// accepted (nipcashclient.CheckClaim's own doc comment: a bearer match
+	// only proves *some* recipient exists, never *which* secret) — so
+	// resolveCredential retries a decline with this value instead of
+	// trusting BearerSecret alone. Empty once reconciled either way. Same
+	// leak sensitivity as BearerSecret itself.
+	PendingBearerSecret string `json:"-"`
+
 	// Connection-key mode reference — set only when the user has told
 	// cashctl this token is connection-key-bound (not derivable from the
 	// token itself; IdentityRequired only says a proof is needed, not
@@ -83,12 +105,57 @@ type Entry struct {
 
 	// MinterPubkey is set only when the token carries a mint_signature that
 	// VerifyProvenance confirms as valid (nil otherwise — an unsigned or
-	// invalidly-signed token has no trustworthy minter identity). Populated
-	// once, at receive time, from the same VerifyProvenance call already
-	// made for display (see cash_receive.go's printCashBill) — this is
-	// cash-selection's only client-side signal for "these held tokens came
-	// from the same minter" (docs/ux-review.md Part 2).
+	// invalidly-signed token has no recoverable minter identity at all).
+	// "Valid" here is deliberately narrow: VerifyProvenance uses ECDSA
+	// signature RECOVERY (ecdsa.RecoverCompact), not verification against
+	// any known/trusted key — it proves the signature is internally
+	// self-consistent with WalletPubkey+AttestedAmountMillis and recovers
+	// WHICH pubkey produced it, never that the recovered pubkey is a Hub
+	// cashctl (or its user) has any reason to trust. Anyone can mint-sign
+	// their own token with a disposable key and get MinterPubkey set to
+	// that key, "valid" and all — this field is a same-signer grouping
+	// signal, not an authenticity guarantee (see formatMinterStatus's own
+	// doc comment in cmd/decode.go for the exact user-facing wording this
+	// constrains). Populated once, at receive time, from the same
+	// VerifyProvenance call already made for display (see
+	// cash_receive.go's printCashBill) — this is cash-selection's only
+	// client-side signal for "these held tokens were signed by the same
+	// key" (docs/ux-review.md Part 2).
+	//
+	// A token cashctl itself derives from verified ones (a split's
+	// remainder, a consolidate's merged output) is a brand-new wallet no
+	// mint signature can verify against, so it INHERITS its sources'
+	// minter instead (cmd's sharedMinter) — still nil unless every source
+	// was verified and they all agree.
 	MinterPubkey *string `json:"minter_pubkey,omitempty"`
+
+	// ExpiresAt is the Hub-side redemption deadline (unix seconds) as of
+	// the most recent live check — receive's own mandatory CheckClaim, or
+	// a later resolveAmount/resolveRedeemQuote refresh — nil if never
+	// learned (e.g. a split remainder cashctl minted itself, which has no
+	// CheckClaim call of its own until something needs its amount). Not
+	// re-verified continuously: a token can expire on the Hub between one
+	// command and the next without this field changing, but it's the only
+	// local signal `balance` has to keep an expired-and-worthless token
+	// out of the total without a live round trip per held token on every
+	// call.
+	ExpiresAt *int64 `json:"expires_at,omitempty"`
+
+	// BearerProtection reports whether a bearer-mode entry's BearerSecret
+	// is exclusively known to this ledger (BearerProtected, re-keyed by
+	// cmd/receive_secure.go's protectBearerReceipt/protectRekeyOnly or a
+	// later manual `wallet protect`) or still the one embedded in the
+	// original token/gift string, spendable by anyone else who was shown
+	// it too (BearerShared) — the whole reason `receive` offers to
+	// protect a bearer gift automatically. Empty ("") for a pubkey-mode
+	// entry, where this concept doesn't apply at all: no bearer secret,
+	// nothing to protect. Set once at receive time (BearerShared for
+	// every bearer-mode entry, whatever happens to the automatic protect
+	// offer next) and updated to BearerProtected on a successful re-key —
+	// before this field existed, a declined/failed protect left the exact
+	// same Entry shape as a genuinely protected one, with no way to tell
+	// them apart later (`wallet show`, `wallet history`, ...).
+	BearerProtection string `json:"bearer_protection,omitempty"`
 }
 
 // HistoryEntry is one line of cashctl's local action log (`cashctl wallet
@@ -130,11 +197,11 @@ type Ledger struct {
 
 // Load reads every entry and history line from cashctl.db, returning an
 // empty (not nil) *Ledger if neither table has any rows yet. Retried on a
-// transient SQLITE_BUSY (see withBusyRetry) — store.Open's own schema
+// transient SQLITE_BUSY (see store.WithBusyRetry) — store.Open's own schema
 // migration is a write and can collide with a concurrent process's Save.
 func Load() (*Ledger, error) {
 	var l *Ledger
-	err := withBusyRetry(func() error {
+	err := store.WithBusyRetry(func() error {
 		var err error
 		l, err = load()
 		return err
@@ -163,21 +230,31 @@ func load() (*Ledger, error) {
 	// guarantee the old JSON-array storage always gave for free.
 	rows, err := db.Query(`SELECT id, token, wallet_pubkey, minter_pubkey, secret, relay_urls,
 		identity_required, amount_millis, received_at, verified, status, bearer_secret,
-		connection_key_platform, connection_key_external_id, attestation_event_id, ia_pubkey
+		connection_key_platform, connection_key_external_id, attestation_event_id, ia_pubkey,
+		pending_bearer_secret, expires_at, bearer_protection
 		FROM entries ORDER BY rowid`)
 	if err != nil {
 		return nil, fmt.Errorf("cashctl.db: reading entries: %w", err)
 	}
 	for rows.Next() {
 		var e Entry
-		var relayURLs sql.NullString
-		var identityRequired, amountMillis sql.NullInt64
+		var relayURLs, pendingBearerSecret, bearerProtection sql.NullString
+		var identityRequired, amountMillis, expiresAt sql.NullInt64
 		if err := rows.Scan(&e.ID, &e.Token, &e.WalletPubkey, &e.MinterPubkey, &e.Secret, &relayURLs,
 			&identityRequired, &amountMillis, &e.ReceivedAt, &e.Verified, &e.Status, &e.BearerSecret,
-			&e.ConnectionKeyPlatform, &e.ConnectionKeyExternalID, &e.AttestationEventID, &e.IAPubkey); err != nil {
+			&e.ConnectionKeyPlatform, &e.ConnectionKeyExternalID, &e.AttestationEventID, &e.IAPubkey,
+			&pendingBearerSecret, &expiresAt, &bearerProtection); err != nil {
 			_ = rows.Close()
 			return nil, fmt.Errorf("cashctl.db: reading entries: %w", err)
 		}
+		// sql.NullString, not a plain string like BearerSecret's own scan
+		// above: every row's bearer_secret has been through this code's own
+		// Save (never legacy-NULL), but pending_bearer_secret/bearer_protection
+		// are columns ADDED after rows already existed (store.addColumnsIfMissing)
+		// — those rows genuinely have SQL NULL here, which Scan can't take
+		// directly into a plain string.
+		e.PendingBearerSecret = pendingBearerSecret.String
+		e.BearerProtection = bearerProtection.String
 		if relayURLs.Valid && relayURLs.String != "" {
 			if err := json.Unmarshal([]byte(relayURLs.String), &e.RelayURLs); err != nil {
 				_ = rows.Close()
@@ -191,6 +268,10 @@ func load() (*Ledger, error) {
 		if amountMillis.Valid {
 			v := uint64(amountMillis.Int64)
 			e.AmountMillis = &v
+		}
+		if expiresAt.Valid {
+			v := expiresAt.Int64
+			e.ExpiresAt = &v
 		}
 		l.Entries = append(l.Entries, e)
 	}
@@ -250,7 +331,7 @@ func load() (*Ledger, error) {
 // actually knows it changed, so two processes touching disjoint entries no
 // longer stomp each other — see docs/private/audit-round2-race-adversarial.md.
 //
-// Retried on a transient SQLITE_BUSY (see withBusyRetry) — without that,
+// Retried on a transient SQLITE_BUSY (see store.WithBusyRetry) — without that,
 // two processes landing their commit within the same few milliseconds can
 // both fail outright with "database is locked" (reproduced live, see
 // docs/private/audit-round3-race-adversarial-followup.md), which for a
@@ -258,7 +339,7 @@ func load() (*Ledger, error) {
 // real, already-moved money with zero local record of it — the same
 // blast radius as the original lost-update bug, via a different mechanism.
 func (l *Ledger) Save() error {
-	return withBusyRetry(l.save)
+	return store.WithBusyRetry(l.save)
 }
 
 // save is Save's single, non-retrying attempt.
@@ -299,10 +380,15 @@ func (l *Ledger) save() error {
 		if e.AmountMillis != nil {
 			amountMillis = sql.NullInt64{Int64: int64(*e.AmountMillis), Valid: true}
 		}
+		var expiresAt sql.NullInt64
+		if e.ExpiresAt != nil {
+			expiresAt = sql.NullInt64{Int64: *e.ExpiresAt, Valid: true}
+		}
 		_, err := tx.Exec(`INSERT INTO entries (id, token, wallet_pubkey, minter_pubkey, secret, relay_urls,
 			identity_required, amount_millis, received_at, verified, status, bearer_secret,
-			connection_key_platform, connection_key_external_id, attestation_event_id, ia_pubkey)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			connection_key_platform, connection_key_external_id, attestation_event_id, ia_pubkey,
+			pending_bearer_secret, expires_at, bearer_protection)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(id) DO UPDATE SET
 				token = excluded.token, wallet_pubkey = excluded.wallet_pubkey,
 				minter_pubkey = excluded.minter_pubkey, secret = excluded.secret,
@@ -312,10 +398,14 @@ func (l *Ledger) save() error {
 				bearer_secret = excluded.bearer_secret,
 				connection_key_platform = excluded.connection_key_platform,
 				connection_key_external_id = excluded.connection_key_external_id,
-				attestation_event_id = excluded.attestation_event_id, ia_pubkey = excluded.ia_pubkey`,
+				attestation_event_id = excluded.attestation_event_id, ia_pubkey = excluded.ia_pubkey,
+				pending_bearer_secret = excluded.pending_bearer_secret,
+				expires_at = excluded.expires_at,
+				bearer_protection = excluded.bearer_protection`,
 			e.ID, e.Token, e.WalletPubkey, e.MinterPubkey, e.Secret, relayURLs,
 			identityRequired, amountMillis, e.ReceivedAt, e.Verified, e.Status, e.BearerSecret,
-			e.ConnectionKeyPlatform, e.ConnectionKeyExternalID, e.AttestationEventID, e.IAPubkey)
+			e.ConnectionKeyPlatform, e.ConnectionKeyExternalID, e.AttestationEventID, e.IAPubkey,
+			e.PendingBearerSecret, expiresAt, e.BearerProtection)
 		if err != nil {
 			// entries.id collisions are handled by ON CONFLICT above — the
 			// only other constraint this table has is token's own UNIQUE,
@@ -383,53 +473,29 @@ func entriesEqual(a, b Entry) bool {
 	return reflect.DeepEqual(a, b)
 }
 
-// isSQLiteBusy reports whether err is a transient SQLITE_BUSY ("database is
-// locked") — the failure mode load/save can hit when another process (or,
-// within this package's own tests, another goroutine) holds cashctl.db's
-// write lock at the exact same instant. internal/store.Open sets no
-// busy_timeout and every Load/Save gets its own fresh connection, so with
-// no retry this fails immediately instead of waiting the lock out. 5 ==
-// SQLITE_BUSY, sqlite3.h's own stable numeric code; masked with 0xff so an
-// extended busy sub-code (e.g. SQLITE_BUSY_SNAPSHOT) still matches, since
-// those share the low byte with the primary code.
-func isSQLiteBusy(err error) bool {
-	var sqliteErr *sqlite.Error
-	return errors.As(err, &sqliteErr) && sqliteErr.Code()&0xff == 5
-}
-
-// isSQLiteConstraint reports whether err is a SQLITE_CONSTRAINT failure
-// (any flavor — UNIQUE, NOT NULL, ...; masked with 0xff same as
-// isSQLiteBusy). 19 == SQLITE_CONSTRAINT, sqlite3.h's own stable numeric
-// code. Only entries.save's own insert calls this, where entries.id
-// collisions are already handled by ON CONFLICT — the only constraint
-// that can still fail there is token's own UNIQUE, so this doesn't need
-// to (and via the driver's plain error code, can't cheaply) distinguish
-// further.
+// isSQLiteConstraint reports whether err is SPECIFICALLY a UNIQUE
+// constraint violation — 2067 == SQLITE_CONSTRAINT_UNIQUE, sqlite3.h's own
+// stable extended result code (the driver's *sqlite.Error.Code() returns
+// the full extended code, e.g. also SQLITE_IOERR's own many sub-codes
+// elsewhere in this package's ErrorCodeString map — not just the coarse
+// primary code masked with 0xff, which would conflate this with every
+// other constraint flavor SQLite has: NOT NULL, CHECK, FOREIGN KEY, and —
+// confirmed live — a trigger's own RAISE(ABORT, ...), all of which share
+// the exact same primary code 19). entries.save's own insert calls this,
+// where entries.id collisions are already handled by ON CONFLICT — the
+// only constraint that can still fail there is token's own UNIQUE — but
+// the check has to actually SAY that specifically, not just "some
+// constraint fired": a caught-but-misclassified failure of a different
+// kind (a future CHECK constraint, an operator-added trigger, or — this
+// package's own withBusyRetry aside — any local write failure that
+// happens to surface through SQLite's constraint machinery) would
+// otherwise be silently reported as ErrAlreadyHeld below, telling the
+// caller its money is safely held under a completely different name than
+// what actually went wrong.
 func isSQLiteConstraint(err error) bool {
 	var sqliteErr *sqlite.Error
-	return errors.As(err, &sqliteErr) && sqliteErr.Code()&0xff == 19
-}
-
-// withBusyRetry runs op, retrying a bounded number of times on a transient
-// isSQLiteBusy error before giving up and returning it. SQLite's write lock
-// is only ever held for the length of one transaction commit — a handful of
-// local INSERTs, no network I/O inside it — so a short backoff is enough to
-// let a concurrent process's own load/save clear. Retrying the WHOLE
-// operation (not just one statement) is safe: on any error, save's own
-// transaction is rolled back (defer tx.Rollback()) before this wrapper ever
-// sees it, so a retried attempt starts from a clean slate, and save's
-// upserts/append-only history writes are themselves idempotent — replaying
-// a successful one is a no-op modulo re-deriving the same values.
-func withBusyRetry(op func() error) error {
-	const maxAttempts = 25
-	var err error
-	for attempt := 0; attempt < maxAttempts; attempt++ {
-		if err = op(); err == nil || !isSQLiteBusy(err) {
-			return err
-		}
-		time.Sleep(time.Duration(2+attempt) * time.Millisecond)
-	}
-	return err
+	const sqliteConstraintUnique = 2067
+	return errors.As(err, &sqliteErr) && sqliteErr.Code() == sqliteConstraintUnique
 }
 
 // ErrAlreadyHeld is returned by Add when token has already been recorded.
@@ -438,8 +504,13 @@ var ErrAlreadyHeld = errors.New("this token is already in your ledger")
 // FindByToken looks up an entry by its original token string — used to
 // reject re-receiving the same token twice.
 func (l *Ledger) FindByToken(token string) (*Entry, bool) {
+	// Case-insensitive (see Add's own doc comment on why): a caller pasting
+	// the uppercase spelling of an already-held token still matches it,
+	// rather than looking like a brand new one. EqualFold rather than
+	// lowercasing both sides so rows saved before Add started normalizing
+	// (stored exactly as pasted) still match too.
 	for i := range l.Entries {
-		if l.Entries[i].Token == token {
+		if strings.EqualFold(l.Entries[i].Token, token) {
 			return &l.Entries[i], true
 		}
 	}
@@ -470,10 +541,41 @@ func (l *Ledger) Held() []Entry {
 }
 
 // Add records a new entry, generating a short local ID and setting
-// ReceivedAt/Status/Verified. Rejects a token already in the ledger.
+// ReceivedAt/Status/Verified. Rejects a token already HELD — a token
+// that's already in the ledger but no longer held (transferred, redeemed,
+// consolidated away) instead REACTIVATES that same row (see below) rather
+// than being rejected outright.
+//
+// e.Token is normalized to lowercase before either check: bech32 (BIP-173)
+// is single-case by construction — a real encoder never mixes case — but
+// case-INsensitive to decode, so the uppercase spelling of an already-held
+// token is the exact same token, not a second one. Comparing/storing raw
+// let it slip through as a distinct entry, silently doubling the token's
+// counted balance.
 func (l *Ledger) Add(e Entry) (*Entry, error) {
-	if _, ok := l.FindByToken(e.Token); ok {
-		return nil, ErrAlreadyHeld
+	e.Token = strings.ToLower(e.Token)
+	if existing, ok := l.FindByToken(e.Token); ok {
+		if existing.Status == StatusHeld {
+			return nil, ErrAlreadyHeld
+		}
+		// The exact same token string came back — the one way this
+		// happens legitimately is a full-amount transfer, which
+		// reassigns a wallet's identity IN PLACE (NIP-CASH §Transferring
+		// and Splitting a Slice) rather than minting a new token string,
+		// so the very same string can genuinely be received again later
+		// by whoever it comes back to. entries.token is UNIQUE in the
+		// schema (rightly so — one wallet, one token string, however
+		// many times its identity changes hands), so this reactivates
+		// the SAME row (keeping its ID, so history/status transitions
+		// recorded before this stay attributable) instead of trying to
+		// INSERT a second one for it, which the schema would reject
+		// regardless of what this in-memory check decided.
+		id := existing.ID
+		e.ID = id
+		e.ReceivedAt = nowRFC3339()
+		e.Status = StatusHeld
+		*existing = e
+		return existing, nil
 	}
 	e.ID = l.newID()
 	e.ReceivedAt = nowRFC3339()

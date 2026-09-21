@@ -276,7 +276,7 @@ func TestPickMinterGroups_NeverPrintsRawID(t *testing.T) {
 		"minter-a": {groupableEntry("tok-a", "minter-a", 1000), groupableEntry("tok-b", "minter-a", 1000)},
 		"minter-b": {groupableEntry("tok-c", "minter-b", 500), groupableEntry("tok-d", "minter-b", 500)},
 	}
-	printed := withCapturedStdout(func() {
+	printed := withCapturedOutput(func() {
 		_, _ = pickMinterGroups(cmd, groups)
 	})
 	if strings.Contains(printed, "tok-") {
@@ -315,7 +315,7 @@ func TestDoCashConsolidate_SucceedsOnFirstCandidate(t *testing.T) {
 
 	cmd := &cobra.Command{}
 	l := &ledger.Ledger{}
-	newEntry, gotExpiresAt, err := doCashConsolidate(cmd, l, []string{"dial-a", "dial-b"}, nil, []string{"tok-a", "tok-b"}, testTarget())
+	newEntry, gotExpiresAt, err := doCashConsolidate(cmd, l, []string{"dial-a", "dial-b"}, nil, []string{"tok-a", "tok-b"}, testTarget(), true)
 	if err != nil {
 		t.Fatalf("doCashConsolidate() error = %v", err)
 	}
@@ -345,7 +345,7 @@ func TestDoCashConsolidate_RetriesOnExpiredThenSucceeds(t *testing.T) {
 
 	cmd := &cobra.Command{}
 	l := &ledger.Ledger{}
-	newEntry, _, err := doCashConsolidate(cmd, l, []string{"dial-expired", "dial-healthy"}, nil, nil, testTarget())
+	newEntry, _, err := doCashConsolidate(cmd, l, []string{"dial-expired", "dial-healthy"}, nil, nil, testTarget(), true)
 	if err != nil {
 		t.Fatalf("doCashConsolidate() error = %v, want success via the healthy sibling", err)
 	}
@@ -371,7 +371,7 @@ func TestDoCashConsolidate_AllCandidatesExpiredFailsClassified(t *testing.T) {
 
 	cmd := &cobra.Command{}
 	l := &ledger.Ledger{}
-	newEntry, expiresAt, err := doCashConsolidate(cmd, l, []string{"a", "b", "c"}, nil, nil, testTarget())
+	newEntry, expiresAt, err := doCashConsolidate(cmd, l, []string{"a", "b", "c"}, nil, nil, testTarget(), true)
 	if err == nil {
 		t.Fatal("doCashConsolidate() error = nil, want the real EXPIRED error once every candidate is exhausted")
 	}
@@ -400,7 +400,7 @@ func TestDoCashConsolidate_NonExpiredFailureStopsImmediately(t *testing.T) {
 
 	cmd := &cobra.Command{}
 	l := &ledger.Ledger{}
-	_, _, err := doCashConsolidate(cmd, l, []string{"a", "b"}, nil, nil, testTarget())
+	_, _, err := doCashConsolidate(cmd, l, []string{"a", "b"}, nil, nil, testTarget(), true)
 	if err == nil {
 		t.Fatal("doCashConsolidate() error = nil, want the RESTRICTED failure")
 	}
@@ -423,7 +423,7 @@ func TestDoCashConsolidate_ZeroDialCandidatesErrors(t *testing.T) {
 
 	cmd := &cobra.Command{}
 	l := &ledger.Ledger{}
-	newEntry, expiresAt, err := doCashConsolidate(cmd, l, nil, nil, nil, testTarget())
+	newEntry, expiresAt, err := doCashConsolidate(cmd, l, nil, nil, nil, testTarget(), true)
 	if err == nil {
 		t.Fatal("doCashConsolidate(no dial candidates) = nil error, want an error instead of a silent (nil, nil, nil) 'success'")
 	}
@@ -432,5 +432,90 @@ func TestDoCashConsolidate_ZeroDialCandidatesErrors(t *testing.T) {
 	}
 	if calls != 0 {
 		t.Errorf("attemptCashConsolidateFn called %d times, want 0", calls)
+	}
+}
+
+// TestDoCashConsolidate_ThirdPartyPubkeyTargetNotSavedToLedger locks in the
+// "must not save someone else's gift" guard doCashConsolidate's own doc
+// comment describes (cash_consolidate.go: "the caller doesn't own the
+// resulting wallet and can't redeem it themselves, so it must not be saved
+// as one of the caller's own held tokens") — every other doCashConsolidate
+// test in this file passes isSelfTarget=true, so this exact branch
+// (isSelfTarget=false, a real pubkey target) had no unit coverage at all
+// before this test: a regression here (e.g. the isSelfTarget||isBearerTarget
+// check getting inverted or dropped) would have shipped silently, leaving a
+// consolidate-to-a-third-party phantom-save the caller's own held funds.
+func TestDoCashConsolidate_ThirdPartyPubkeyTargetNotSavedToLedger(t *testing.T) {
+	withFakeAttemptCashConsolidate(t, func(dialToken string, sources []nipcash.Source, target nipcash.Target) (*nipcash.CashConsolidateResult, error) {
+		return &nipcash.CashConsolidateResult{AmountMillis: 3000, NewWalletToken: "gift-token", NewWalletPubkey: "gift-pub"}, nil
+	})
+
+	cmd := &cobra.Command{}
+	l := &ledger.Ledger{}
+	newEntry, _, err := doCashConsolidate(cmd, l, []string{"dial-a"}, nil, []string{"tok-a", "tok-b"}, testTarget(), false)
+	if err != nil {
+		t.Fatalf("doCashConsolidate() error = %v", err)
+	}
+	// Still returned, for display/hand-off to the recipient — just not
+	// persisted as one of the caller's own.
+	if newEntry == nil || newEntry.Token != "gift-token" {
+		t.Fatalf("newEntry = %+v, want the gift token (still returned for hand-off)", newEntry)
+	}
+	if len(l.Entries) != 0 {
+		t.Errorf("l.Entries = %+v, want empty — a non-self, non-bearer consolidate target must never be saved as the caller's own held token", l.Entries)
+	}
+	if _, ok := l.FindByToken("gift-token"); ok {
+		t.Error("the gift token was found in the caller's own ledger — it belongs to the recipient, not the caller")
+	}
+}
+
+// --- sharedMinter: what a derived token (a split's remainder, a
+// consolidate's merged output) inherits as its MinterPubkey. Must never
+// claim a minter that wasn't verified for every source.
+
+func TestSharedMinter(t *testing.T) {
+	a, b := "minter-a", "minter-b"
+	cases := []struct {
+		name    string
+		entries []ledger.Entry
+		want    *string
+	}{
+		{"all verified and agree", []ledger.Entry{{MinterPubkey: &a}, {MinterPubkey: &a}}, &a},
+		{"single verified source", []ledger.Entry{{MinterPubkey: &b}}, &b},
+		{"one unverified source poisons it", []ledger.Entry{{MinterPubkey: &a}, {}}, nil},
+		{"different minters", []ledger.Entry{{MinterPubkey: &a}, {MinterPubkey: &b}}, nil},
+		{"no entries", nil, nil},
+	}
+	for _, c := range cases {
+		got := sharedMinter(c.entries)
+		switch {
+		case got == nil && c.want == nil:
+		case got == nil || c.want == nil || *got != *c.want:
+			t.Errorf("%s: sharedMinter() = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+func TestSharedMinter_ReturnsACopy(t *testing.T) {
+	// The result must not alias a source entry's own pointer: the derived
+	// entry outlives (and is saved independently of) its sources.
+	a := "minter-a"
+	entries := []ledger.Entry{{MinterPubkey: &a}}
+	got := sharedMinter(entries)
+	if got == entries[0].MinterPubkey {
+		t.Error("sharedMinter() returned the source entry's own pointer, want an independent copy")
+	}
+}
+
+func TestSharedMinterOfIDs(t *testing.T) {
+	l := &ledger.Ledger{}
+	m := "minter-a"
+	e1, _ := l.Add(ledger.Entry{Token: "t1", MinterPubkey: &m})
+	e2, _ := l.Add(ledger.Entry{Token: "t2", MinterPubkey: &m})
+	if got := sharedMinterOfIDs(l, []string{e1.ID, e2.ID}); got == nil || *got != m {
+		t.Errorf("sharedMinterOfIDs() = %v, want %q", got, m)
+	}
+	if got := sharedMinterOfIDs(l, []string{e1.ID, "no-such-id"}); got != nil {
+		t.Errorf("sharedMinterOfIDs() with an unknown id = %v, want nil", *got)
 	}
 }

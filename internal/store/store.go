@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	_ "modernc.org/sqlite"
 
@@ -51,7 +52,10 @@ CREATE TABLE IF NOT EXISTS entries (
 	connection_key_platform    TEXT,
 	connection_key_external_id TEXT,
 	attestation_event_id       TEXT,
-	ia_pubkey                  TEXT
+	ia_pubkey                  TEXT,
+	pending_bearer_secret      TEXT,
+	expires_at                 INTEGER,
+	bearer_protection          TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_entries_status_minter ON entries(status, minter_pubkey);
 
@@ -71,6 +75,19 @@ func Path() (string, error) {
 		return "", err
 	}
 	return filepath.Join(dir, "cashctl.db"), nil
+}
+
+// sqliteDSN builds the SQLite URI for the database at path. The driver
+// hands "file:" DSNs to SQLite in URI mode, where '?' starts the query
+// string, '#' starts a fragment and '%' introduces an escape — so a
+// --config-dir containing any of them (a perfectly legal directory name)
+// used to have its path silently truncated or mangled: the database was
+// created at a different location than the one chmod'd afterwards, with
+// default permissions, and init failed. Only those three characters need
+// escaping; everything else in a path is literal in URI mode.
+func sqliteDSN(path string) string {
+	esc := strings.NewReplacer("%", "%25", "?", "%3F", "#", "%23").Replace(path)
+	return "file:" + esc + "?_pragma=busy_timeout(5000)"
 }
 
 // Open opens (creating and migrating if needed) cashctl's single local
@@ -94,11 +111,15 @@ func Open() (*sql.DB, error) {
 	// fail outright — confirmed live and under `go test -race`, where the
 	// race detector's own overhead widens that window enough to turn a rare
 	// case into a routine one.
-	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=busy_timeout(5000)")
+	db, err := sql.Open("sqlite", sqliteDSN(path))
 	if err != nil {
 		return nil, err
 	}
 	if _, err := db.Exec(schema); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("cashctl.db schema migration: %w", err)
+	}
+	if err := addColumnsIfMissing(db); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("cashctl.db schema migration: %w", err)
 	}
@@ -107,4 +128,71 @@ func Open() (*sql.DB, error) {
 		return nil, err
 	}
 	return db, nil
+}
+
+// addedColumns lists every column added to an existing table after that
+// table's own CREATE TABLE IF NOT EXISTS above first shipped — that clause
+// is a no-op against a database from before the column existed, so it has
+// to be ALTERed in separately. ALTER TABLE ADD COLUMN is instant and safe
+// here (nullable, no default, so SQLite never rewrites existing rows) —
+// nothing more elaborate than this loop is needed unless a future column
+// needs backfilling.
+var addedColumns = []struct{ table, column, ddl string }{
+	// pending_bearer_secret: a rekey/protect step generates the new bearer
+	// secret client-side before ever placing the wire call (see
+	// cmd/receive_secure.go's own doc comment) — persisting it here first
+	// means a kill mid-call loses at most a retry, never the secret itself.
+	{"entries", "pending_bearer_secret", `ALTER TABLE entries ADD COLUMN pending_bearer_secret TEXT`},
+	// expires_at: the Hub-side redemption deadline (nipcash.CheckClaimResult
+	// .ExpiresAt, unix seconds), cached at receive time so `balance` can
+	// exclude an expired held token from the total without a live re-check
+	// per token on every call — before this column existed there was
+	// nowhere to persist it, so an expired-but-still-`held` token kept
+	// counting as spendable money forever.
+	{"entries", "expires_at", `ALTER TABLE entries ADD COLUMN expires_at INTEGER`},
+	// bearer_protection: "" (unset/n/a), "shared" (a bearer-mode entry's
+	// secret is still the one embedded in the original token/gift string
+	// — anyone else shown it can spend it too), or "protected" (re-keyed
+	// by protectBearerReceipt/protectRekeyOnly, exclusively known to this
+	// ledger). Before this column existed there was no way to tell the
+	// two apart after the fact — a declined/failed protect left the same
+	// BearerSecret shape as a genuinely re-keyed one.
+	{"entries", "bearer_protection", `ALTER TABLE entries ADD COLUMN bearer_protection TEXT`},
+}
+
+// addColumnsIfMissing applies addedColumns' migrations exactly once each,
+// keyed off PRAGMA table_info rather than sniffing the "duplicate column"
+// error text — errors.Is has nothing to match here (modernc.org/sqlite
+// doesn't export a typed error for it), and pragma_table_info is the
+// direct, unambiguous way to ask "does this column exist" instead.
+func addColumnsIfMissing(db *sql.DB) error {
+	present := map[[2]string]bool{}
+	for _, c := range addedColumns {
+		rows, err := db.Query(`SELECT name FROM pragma_table_info(?)`, c.table)
+		if err != nil {
+			return fmt.Errorf("inspecting table %s: %w", c.table, err)
+		}
+		for rows.Next() {
+			var name string
+			if err := rows.Scan(&name); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			present[[2]string{c.table, name}] = true
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		_ = rows.Close()
+	}
+	for _, c := range addedColumns {
+		if present[[2]string{c.table, c.column}] {
+			continue
+		}
+		if _, err := db.Exec(c.ddl); err != nil {
+			return fmt.Errorf("adding %s.%s: %w", c.table, c.column, err)
+		}
+	}
+	return nil
 }

@@ -6,6 +6,7 @@ func newCashCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "cash",
 		Short: "Receive, redeem, transfer, and consolidate cash tokens",
+		RunE:  groupRunE,
 	}
 	cmd.AddCommand(
 		newCashReceiveCmd(),

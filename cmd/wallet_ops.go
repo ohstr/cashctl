@@ -45,7 +45,7 @@ func newWalletBudgetCmd() *cobra.Command {
 			}
 			fmt.Printf("used:    %s\n", output.FormatAmount(budget.UsedBudgetMloki))
 			fmt.Printf("total:   %s\n", output.FormatAmount(budget.TotalBudgetMloki))
-			fmt.Printf("renewal: %s\n", budget.RenewalPeriod)
+			fmt.Printf("renewal: %s\n", output.Sanitize(budget.RenewalPeriod))
 			if budget.RenewsAt != nil {
 				fmt.Printf("renews:  %s\n", time.Unix(*budget.RenewsAt, 0).UTC().Format(time.RFC3339))
 			}
@@ -110,6 +110,25 @@ func newWalletPayCmd() *cobra.Command {
 		Args:    output.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			jsonMode, _ := cmd.Flags().GetBool("json")
+			if err := validateInvoiceShape(args[0]); err != nil {
+				return output.InvalidInputError(cmd, args[0], err)
+			}
+			// pay used to move money the instant the invoice's shape checked
+			// out — no confirmation at all, unlike every other command that
+			// spends real funds — so --yes/--json had nothing to skip.
+			// bolt11AmountMloki is best-effort: an amountless invoice (legal
+			// BOLT11) or a decode miss just falls back to a plain prompt
+			// rather than blocking pay over a preview-only detail the
+			// wallet's own PayInvoice call will validate for real anyway.
+			message := "Pay this Lightning invoice?"
+			if amount, aErr := bolt11AmountMloki(args[0]); aErr == nil && amount != nil {
+				message = fmt.Sprintf("Pay %s via this Lightning invoice?", output.FormatAmount(*amount))
+			}
+			// defaultYes=false: moves real money — never accept on a bare Enter.
+			if !Confirm(cmd, false, message) {
+				fmt.Println("Cancelled.")
+				return nil
+			}
 			var result *nip47.PayInvoiceResult
 			var dialErr bool
 			err := WithSpinner(jsonMode, "Paying...", func() error {
@@ -184,11 +203,19 @@ func newWalletListTxCmd() *cobra.Command {
 				return classifyNWCErr(cmd, err)
 			}
 			if jsonMode {
+				result.Transactions = output.NonNil(result.Transactions)
 				output.PrintJSON(result)
 				return nil
 			}
 			for _, tx := range result.Transactions {
-				fmt.Printf("%-9s %-9s %12s %s\n", tx.Type, tx.State, output.FormatAmount(tx.AmountMloki), tx.Description)
+				// Description is a counterparty-chosen invoice memo —
+				// outside cashctl's own control, same as every other
+				// Sanitize call site in this package. Type/State too, on
+				// the same "anything from a wallet reply" principle, cheap
+				// insurance against a misbehaving wallet.
+				fmt.Printf("%-9s %-9s %12s %s\n",
+					output.Sanitize(tx.Type), output.Sanitize(tx.State),
+					output.FormatAmount(tx.AmountMloki), output.Sanitize(tx.Description))
 			}
 			return nil
 		},
