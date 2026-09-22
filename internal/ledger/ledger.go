@@ -28,10 +28,10 @@ const (
 	StatusConsolidated = "consolidated"
 )
 
-// BearerProtection values — see Entry.BearerProtection's own doc comment.
+// CashProtection values — see Entry.CashProtection's own doc comment.
 const (
-	BearerShared    = "shared"
-	BearerProtected = "protected"
+	CashShared    = "shared"
+	CashProtected = "protected"
 )
 
 // Entry is one cash token cashctl knows about. WalletPubkey/Secret/RelayURLs/
@@ -47,8 +47,8 @@ type Entry struct {
 	WalletPubkey string `json:"wallet_pubkey"`
 	// Secret is the token's own type-2 TLV field: the NWC connection
 	// secret. It lets cashctl dial the wallet (list-recipients, decode,
-	// ...) but is NEVER sufficient to redeem/transfer a bearer slice —
-	// see BearerSecret's own doc comment (NIP-CASH.md's Redemption
+	// ...) but is NEVER sufficient to redeem/transfer a cash-mode slice —
+	// see CashSecret's own doc comment (NIP-CASH.md's Redemption
 	// Metadata section covers this distinction in full). json:"-": this
 	// Entry is embedded directly into --json output in several places
 	// (wallet show's held_tokens, receive's entry, transfer's
@@ -64,40 +64,40 @@ type Entry struct {
 	Verified         bool     `json:"verified"`
 	Status           string   `json:"status"`
 
-	// BearerSecret is the actual spending credential for a bearer-mode
+	// CashSecret is the actual spending credential for a cash-mode
 	// token — a value that exists only in mint_cash's own response,
 	// returned exactly once, and can never be derived from the token
 	// itself (unlike every other cached field on this Entry). Always set
-	// for a bearer-mode entry: `cashctl receive` requires the secret
-	// embedded in the token itself (`<token>#<bearer_secret>`) and
+	// for a cash-mode entry: `cashctl receive` requires the secret
+	// embedded in the token itself (`<token>#<cash_secret>`) and
 	// degrades to a read-only report — never saving anything — for a
-	// bearer-mode token pasted without one, so an entry with
+	// cash-mode token pasted without one, so an entry with
 	// IdentityRequired false is guaranteed to carry its spending secret
-	// already — no later `--as bearer:<secret>` override needed.
+	// already — no later `--as cash:<secret>` override needed.
 	// json:"-": see Secret's own doc comment above — this is the actual
-	// spending credential for a bearer slice, so leaking it here would be
+	// spending credential for a cash-mode slice, so leaking it here would be
 	// strictly worse than leaking Secret.
-	BearerSecret string `json:"-"`
+	CashSecret string `json:"-"`
 
-	// PendingBearerSecret is a not-yet-confirmed replacement for
-	// BearerSecret, written BEFORE the wire call that's meant to make it
-	// the real one (see cmd/receive_secure.go's protectBearerReceipt) —
-	// generating a bearer target's secret is a purely local operation
-	// (NIP-CASH §Bearer Slices: only a commitment ever goes over the
+	// PendingCashSecret is a not-yet-confirmed replacement for
+	// CashSecret, written BEFORE the wire call that's meant to make it
+	// the real one (see cmd/receive_secure.go's protectCashReceipt) —
+	// generating a cash-mode target's secret is a purely local operation
+	// (NIP-CASH §Cash-Mode Slices: only a commitment ever goes over the
 	// wire), so it's known before the call is even placed. A kill or lost
 	// response during that call leaves this genuinely ambiguous — NIP-CASH
 	// has no read-only way to ask the Hub which of the two secrets it
-	// accepted (nipcashclient.CheckClaim's own doc comment: a bearer match
+	// accepted (nipcashclient.CheckClaim's own doc comment: a cash-mode match
 	// only proves *some* recipient exists, never *which* secret) — so
 	// resolveCredential retries a decline with this value instead of
-	// trusting BearerSecret alone. Empty once reconciled either way. Same
-	// leak sensitivity as BearerSecret itself.
-	PendingBearerSecret string `json:"-"`
+	// trusting CashSecret alone. Empty once reconciled either way. Same
+	// leak sensitivity as CashSecret itself.
+	PendingCashSecret string `json:"-"`
 
 	// Connection-key mode reference — set only when the user has told
 	// cashctl this token is connection-key-bound (not derivable from the
 	// token itself; IdentityRequired only says a proof is needed, not
-	// which mode). Empty for pubkey- and bearer-mode tokens.
+	// which mode). Empty for pubkey- and cash-mode tokens.
 	ConnectionKeyPlatform   string `json:"connection_key_platform,omitempty"`
 	ConnectionKeyExternalID string `json:"connection_key_external_id,omitempty"`
 	AttestationEventID      string `json:"attestation_event_id,omitempty"`
@@ -141,21 +141,21 @@ type Entry struct {
 	// call.
 	ExpiresAt *int64 `json:"expires_at,omitempty"`
 
-	// BearerProtection reports whether a bearer-mode entry's BearerSecret
-	// is exclusively known to this ledger (BearerProtected, re-keyed by
-	// cmd/receive_secure.go's protectBearerReceipt/protectRekeyOnly or a
+	// CashProtection reports whether a cash-mode entry's CashSecret
+	// is exclusively known to this ledger (CashProtected, re-keyed by
+	// cmd/receive_secure.go's protectCashReceipt/protectRekeyOnly or a
 	// later manual `wallet protect`) or still the one embedded in the
 	// original token/gift string, spendable by anyone else who was shown
-	// it too (BearerShared) — the whole reason `receive` offers to
-	// protect a bearer gift automatically. Empty ("") for a pubkey-mode
-	// entry, where this concept doesn't apply at all: no bearer secret,
-	// nothing to protect. Set once at receive time (BearerShared for
-	// every bearer-mode entry, whatever happens to the automatic protect
-	// offer next) and updated to BearerProtected on a successful re-key —
+	// it too (CashShared) — the whole reason `receive` offers to
+	// protect a cash gift automatically. Empty ("") for a pubkey-mode
+	// entry, where this concept doesn't apply at all: no cash secret,
+	// nothing to protect. Set once at receive time (CashShared for
+	// every cash-mode entry, whatever happens to the automatic protect
+	// offer next) and updated to CashProtected on a successful re-key —
 	// before this field existed, a declined/failed protect left the exact
 	// same Entry shape as a genuinely protected one, with no way to tell
 	// them apart later (`wallet show`, `wallet history`, ...).
-	BearerProtection string `json:"bearer_protection,omitempty"`
+	CashProtection string `json:"cash_protection,omitempty"`
 }
 
 // HistoryEntry is one line of cashctl's local action log (`cashctl wallet
@@ -229,32 +229,32 @@ func load() (*Ledger, error) {
 	// reliably preserving the exact order Save wrote them in — the same
 	// guarantee the old JSON-array storage always gave for free.
 	rows, err := db.Query(`SELECT id, token, wallet_pubkey, minter_pubkey, secret, relay_urls,
-		identity_required, amount_millis, received_at, verified, status, bearer_secret,
+		identity_required, amount_millis, received_at, verified, status, cash_secret,
 		connection_key_platform, connection_key_external_id, attestation_event_id, ia_pubkey,
-		pending_bearer_secret, expires_at, bearer_protection
+		pending_cash_secret, expires_at, cash_protection
 		FROM entries ORDER BY rowid`)
 	if err != nil {
 		return nil, fmt.Errorf("cashctl.db: reading entries: %w", err)
 	}
 	for rows.Next() {
 		var e Entry
-		var relayURLs, pendingBearerSecret, bearerProtection sql.NullString
+		var relayURLs, pendingCashSecret, cashProtection sql.NullString
 		var identityRequired, amountMillis, expiresAt sql.NullInt64
 		if err := rows.Scan(&e.ID, &e.Token, &e.WalletPubkey, &e.MinterPubkey, &e.Secret, &relayURLs,
-			&identityRequired, &amountMillis, &e.ReceivedAt, &e.Verified, &e.Status, &e.BearerSecret,
+			&identityRequired, &amountMillis, &e.ReceivedAt, &e.Verified, &e.Status, &e.CashSecret,
 			&e.ConnectionKeyPlatform, &e.ConnectionKeyExternalID, &e.AttestationEventID, &e.IAPubkey,
-			&pendingBearerSecret, &expiresAt, &bearerProtection); err != nil {
+			&pendingCashSecret, &expiresAt, &cashProtection); err != nil {
 			_ = rows.Close()
 			return nil, fmt.Errorf("cashctl.db: reading entries: %w", err)
 		}
-		// sql.NullString, not a plain string like BearerSecret's own scan
-		// above: every row's bearer_secret has been through this code's own
-		// Save (never legacy-NULL), but pending_bearer_secret/bearer_protection
+		// sql.NullString, not a plain string like CashSecret's own scan
+		// above: every row's cash_secret has been through this code's own
+		// Save (never legacy-NULL), but pending_cash_secret/cash_protection
 		// are columns ADDED after rows already existed (store.addColumnsIfMissing)
 		// — those rows genuinely have SQL NULL here, which Scan can't take
 		// directly into a plain string.
-		e.PendingBearerSecret = pendingBearerSecret.String
-		e.BearerProtection = bearerProtection.String
+		e.PendingCashSecret = pendingCashSecret.String
+		e.CashProtection = cashProtection.String
 		if relayURLs.Valid && relayURLs.String != "" {
 			if err := json.Unmarshal([]byte(relayURLs.String), &e.RelayURLs); err != nil {
 				_ = rows.Close()
@@ -385,9 +385,9 @@ func (l *Ledger) save() error {
 			expiresAt = sql.NullInt64{Int64: *e.ExpiresAt, Valid: true}
 		}
 		_, err := tx.Exec(`INSERT INTO entries (id, token, wallet_pubkey, minter_pubkey, secret, relay_urls,
-			identity_required, amount_millis, received_at, verified, status, bearer_secret,
+			identity_required, amount_millis, received_at, verified, status, cash_secret,
 			connection_key_platform, connection_key_external_id, attestation_event_id, ia_pubkey,
-			pending_bearer_secret, expires_at, bearer_protection)
+			pending_cash_secret, expires_at, cash_protection)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(id) DO UPDATE SET
 				token = excluded.token, wallet_pubkey = excluded.wallet_pubkey,
@@ -395,17 +395,17 @@ func (l *Ledger) save() error {
 				relay_urls = excluded.relay_urls, identity_required = excluded.identity_required,
 				amount_millis = excluded.amount_millis, received_at = excluded.received_at,
 				verified = excluded.verified, status = excluded.status,
-				bearer_secret = excluded.bearer_secret,
+				cash_secret = excluded.cash_secret,
 				connection_key_platform = excluded.connection_key_platform,
 				connection_key_external_id = excluded.connection_key_external_id,
 				attestation_event_id = excluded.attestation_event_id, ia_pubkey = excluded.ia_pubkey,
-				pending_bearer_secret = excluded.pending_bearer_secret,
+				pending_cash_secret = excluded.pending_cash_secret,
 				expires_at = excluded.expires_at,
-				bearer_protection = excluded.bearer_protection`,
+				cash_protection = excluded.cash_protection`,
 			e.ID, e.Token, e.WalletPubkey, e.MinterPubkey, e.Secret, relayURLs,
-			identityRequired, amountMillis, e.ReceivedAt, e.Verified, e.Status, e.BearerSecret,
+			identityRequired, amountMillis, e.ReceivedAt, e.Verified, e.Status, e.CashSecret,
 			e.ConnectionKeyPlatform, e.ConnectionKeyExternalID, e.AttestationEventID, e.IAPubkey,
-			e.PendingBearerSecret, expiresAt, e.BearerProtection)
+			e.PendingCashSecret, expiresAt, e.CashProtection)
 		if err != nil {
 			// entries.id collisions are handled by ON CONFLICT above — the
 			// only other constraint this table has is token's own UNIQUE,

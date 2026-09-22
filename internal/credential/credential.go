@@ -24,11 +24,11 @@ import (
 //
 //	pubkey:<privkey>
 //	connection-key:<privkey>,<platform>,<external-id>,<attestation-file>
-//	bearer:<secret>
+//	cash:<secret>
 func ParseCash(s string) (nipcash.Credential, error) {
 	prefix, rest, ok := strings.Cut(s, ":")
 	if !ok {
-		return nil, fmt.Errorf("credential must be pubkey:<privkey>, connection-key:<privkey>,<platform>,<external-id>,<attestation-file>, or bearer:<secret>")
+		return nil, fmt.Errorf("credential must be pubkey:<privkey>, connection-key:<privkey>,<platform>,<external-id>,<attestation-file>, or cash:<secret>")
 	}
 	switch prefix {
 	case "pubkey":
@@ -36,9 +36,9 @@ func ParseCash(s string) (nipcash.Credential, error) {
 			return nil, fmt.Errorf("pubkey: credential is missing a private key")
 		}
 		return nipcash.BySigning(rest), nil
-	case "bearer":
+	case "cash":
 		if rest == "" {
-			return nil, fmt.Errorf("bearer: credential is missing a secret")
+			return nil, fmt.Errorf("cash: credential is missing a secret")
 		}
 		return nipcash.BySecret(rest), nil
 	case "connection-key":
@@ -52,7 +52,7 @@ func ParseCash(s string) (nipcash.Credential, error) {
 		}
 		return nipcash.BySigningConnectionKey(privKey, nipIC.WebIdentity(platform), externalID, attestation), nil
 	default:
-		return nil, fmt.Errorf("unknown credential kind %q (want pubkey, connection-key, or bearer)", prefix)
+		return nil, fmt.Errorf("unknown credential kind %q (want pubkey, connection-key, or cash)", prefix)
 	}
 }
 
@@ -72,6 +72,13 @@ func ParseCircle(s string) (nipcw.Credential, error) {
 // resolved on the way to it.
 type ResolvedTarget struct {
 	Target nipcash.Target
+	// Kind classifies Target's shape — cash_transfer/cash_consolidate's
+	// own user-facing commands use this to pick their "as cash"/"as
+	// identity cash"/"as web identity cash" wording without reaching into
+	// nipcash's own unexported concrete types (namedIdentity is the same
+	// Go type for both a pubkey and a connection-key target; only the
+	// package that built it, here, knows which).
+	Kind TargetKind
 	// Input is exactly what the user typed.
 	Input string
 	// Resolved is "" when Input already *is* the canonical form (hex,
@@ -81,6 +88,31 @@ type ResolvedTarget struct {
 	// (e.g. a NIP-05 lookup, or the resolved connection target below).
 	Resolved string
 }
+
+// TargetKind is ResolvedTarget's own classification of what it carries —
+// see its doc comment for why this exists instead of a type switch on
+// Target itself.
+type TargetKind int
+
+const (
+	// TargetKindPubkey is a native Nostr identity: a hex pubkey, npub1...,
+	// or a NIP-05 identifier (name@domain) resolved down to its pubkey.
+	// The zero value: callers that build a ResolvedTarget without setting
+	// Kind (every test fixture predating this field) land here rather than
+	// on TargetKindCash, since cash-mode detection elsewhere is done by
+	// type-asserting Target itself (*nipcash.CashTarget), never by Kind
+	// — so an unset Kind can only ever under-specify a named target, never
+	// misrender a real cash-mode one.
+	TargetKindPubkey TargetKind = iota
+	// TargetKindConnection is a platform-vouched Web Identity with no
+	// Nostr keypair of its own yet: connection:<platform>:<external-id>:
+	// <ia-pubkey>, or a resolved nconnection1....
+	TargetKindConnection
+	// TargetKindCash is a not-yet-realized cash-mode target (the "cash"
+	// keyword — no destination was given at all), redeemable by whoever
+	// ends up holding the resulting cash.
+	TargetKindCash
+)
 
 // NeedsIAError is returned by ParseTarget for a syntactically valid
 // nconnection1... string. nconnection deliberately never carries an
@@ -140,32 +172,33 @@ func resolveIdentityString(s string) (hexPubkey string, viaNIP05 bool, err error
 //
 //	pubkey:<hex>
 //	connection:<platform>:<external-id>:<ia-pubkey>
-//	bearer-target
+//	cash
 //
 // The prefixed forms keep working exactly as before — this is additive
 // sniffing in front of the existing parser, not a replacement of it.
 func ParseTarget(s string) (ResolvedTarget, error) {
-	if s == "bearer-target" {
-		target := nipcash.NewBearerTarget()
+	if s == "cash" {
+		target := nipcash.NewCashTarget()
 		// The wire request only ever carries a one-way commitment of this
-		// secret (NIP-CASH §Bearer Slices: "the caller supplies the
+		// secret (NIP-CASH §Cash-Mode Slices: "the caller supplies the
 		// commitment themselves") — the secret itself exists nowhere else
 		// once this call returns. Losing it here is equivalent to losing
-		// the funds, same as any other bearer note, so it MUST be
+		// the funds, same as any other cash note, so it MUST be
 		// surfaced via Resolved rather than silently discarded — the
 		// caller shows it before/alongside committing, exactly like any
 		// other value this field carries. Deliberately doesn't say
-		// whether it's shown again later: `consolidate --to bearer-target`
+		// whether it's shown again later: `consolidate --to cash`
 		// (self-securing) stores it in the caller's own ledger entry and
-		// never re-displays it raw; `transfer`'s own bearer case (a gift
+		// never re-displays it raw; `transfer`'s own cash-mode case (a gift
 		// to someone else) *does* re-display it, combined with the
 		// resulting token, once the call completes — a caller-specific
 		// claim this shared parser has no way to make accurately for both.
 		secret := target.Secret()
 		return ResolvedTarget{
 			Target:   target,
+			Kind:     TargetKindCash,
 			Input:    s,
-			Resolved: fmt.Sprintf("Generated a bearer secret: %s", secret),
+			Resolved: fmt.Sprintf("Generated a cash secret: %s", secret),
 		}, nil
 	}
 	if isHexPubkey(s) || strings.HasPrefix(s, "npub1") || looksLikeNIP05(s) {
@@ -173,7 +206,7 @@ func ParseTarget(s string) (ResolvedTarget, error) {
 		if err != nil {
 			return ResolvedTarget{}, err
 		}
-		rt := ResolvedTarget{Target: nipcash.Pubkey(hexPub), Input: s}
+		rt := ResolvedTarget{Target: nipcash.Pubkey(hexPub), Kind: TargetKindPubkey, Input: s}
 		if viaNIP05 {
 			rt.Resolved = fmt.Sprintf("pubkey %s", hexPub)
 		}
@@ -188,22 +221,22 @@ func ParseTarget(s string) (ResolvedTarget, error) {
 	}
 	prefix, rest, ok := strings.Cut(s, ":")
 	if !ok {
-		return ResolvedTarget{}, fmt.Errorf("target must be a hex pubkey, npub1..., a NIP-05 identifier (name@domain), an nconnection1..., pubkey:<hex>, connection:<platform>:<external-id>:<ia-pubkey>, or bearer-target")
+		return ResolvedTarget{}, fmt.Errorf("target must be a hex pubkey, npub1..., a NIP-05 identifier (name@domain), an nconnection1..., pubkey:<hex>, connection:<platform>:<external-id>:<ia-pubkey>, or cash")
 	}
 	switch prefix {
 	case "pubkey":
 		if rest == "" {
 			return ResolvedTarget{}, fmt.Errorf("pubkey: target is missing a hex pubkey")
 		}
-		return ResolvedTarget{Target: nipcash.Pubkey(rest), Input: s}, nil
+		return ResolvedTarget{Target: nipcash.Pubkey(rest), Kind: TargetKindPubkey, Input: s}, nil
 	case "connection":
 		parts := strings.Split(rest, ":")
 		if len(parts) != 3 {
 			return ResolvedTarget{}, fmt.Errorf("connection: target needs platform:external-id:ia-pubkey, got %d field(s)", len(parts))
 		}
-		return ResolvedTarget{Target: nipcash.ConnectionKey(nipIC.WebIdentity(parts[0]), parts[1], parts[2]), Input: s}, nil
+		return ResolvedTarget{Target: nipcash.ConnectionKey(nipIC.WebIdentity(parts[0]), parts[1], parts[2]), Kind: TargetKindConnection, Input: s}, nil
 	default:
-		return ResolvedTarget{}, fmt.Errorf("unknown target kind %q (want pubkey, connection, or bearer-target)", prefix)
+		return ResolvedTarget{}, fmt.Errorf("unknown target kind %q (want pubkey, connection, or cash)", prefix)
 	}
 }
 
@@ -227,6 +260,7 @@ func ResolveConnectionTarget(originalInput string, key nipIC.ConnectionKey, plat
 	}
 	return ResolvedTarget{
 		Target:   nipcash.ResolvedConnectionKey(key, platform, iaHex),
+		Kind:     TargetKindConnection,
 		Input:    originalInput,
 		Resolved: fmt.Sprintf("%s connection; Identity Authority: %s", platformLabel, iaDisplay),
 	}, nil
@@ -248,7 +282,7 @@ func ResolveConnectionTarget(originalInput string, key nipIC.ConnectionKey, plat
 // target (an npub) and the OTHER argument was the actually-malformed
 // amount.
 func LooksLikeTarget(s string) bool {
-	if s == "bearer-target" {
+	if s == "cash" {
 		return true
 	}
 	if isHexPubkey(s) || strings.HasPrefix(s, "npub1") || looksLikeNIP05(s) {

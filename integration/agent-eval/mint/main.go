@@ -5,12 +5,12 @@
 // recorded in a state file so `mint sweep` can reclaim it. Not part of
 // cashctl itself; run with `go run` or a built copy, never shipped.
 //
-//	mint token       --agent A [--hub L] (--for <hex|npub> | --bearer) [--amount MLOKI]
+//	mint token       --agent A [--hub L] (--for <hex|npub> | --cash) [--amount MLOKI]
 //	                 [--signed] [--expires-in SECS] [--fee-ppm N] [--min-transfer MLOKI]
 //	mint invoice     --agent A [--hub L] --amount LOKI
 //	mint nwc-wallet  --agent A [--kind plain|pay|signer]
 //	mint circle-hub  --agent A [--allow <hex|npub>]... [--max-exp-secs N] [--fees-ppm N] [--expired]
-//	mint fake        --agent A --kind cash-hub|circle-hub|nwc|nconnection|token|token-bearer|token-pubkey|token-signed
+//	mint fake        --agent A --kind cash-hub|circle-hub|nwc|nconnection|token|token-cash|token-pubkey|token-signed
 //	mint status      --agent A
 //	mint sweep       [--agent A]
 //
@@ -129,7 +129,7 @@ func cmdToken(a *admin, st *state, args []string) {
 	agent := fs.String("agent", "", "agent name (required)")
 	label := fs.String("hub", "default", "hub label: same label = same hub = same minter")
 	forPub := fs.String("for", "", "recipient pubkey (hex or npub) for a pubkey-mode token")
-	bearer := fs.Bool("bearer", false, "mint a bearer token instead")
+	cashMode := fs.Bool("cash", false, "mint a cash-mode token instead")
 	amount := fs.Uint64("amount", 50_000, "amount in mloki")
 	signed := fs.Bool("signed", false, "request a mint signature (best effort server-side)")
 	expires := fs.Int("expires-in", 0, "per-mint expiry seconds (0 = hub ceiling)")
@@ -138,8 +138,8 @@ func cmdToken(a *admin, st *state, args []string) {
 	must(fs.Parse(args))
 	ag := agentFor(st, *agent)
 
-	if (*forPub == "") == !*bearer {
-		fatalf("token: pass exactly one of --for <pubkey> or --bearer")
+	if (*forPub == "") == !*cashMode {
+		fatalf("token: pass exactly one of --for <pubkey> or --cash")
 	}
 	if *amount == 0 || *amount > maxTokenMloki {
 		fatalf("token: amount must be 1..%d mloki (quota)", maxTokenMloki)
@@ -178,7 +178,7 @@ func cmdToken(a *admin, st *state, args []string) {
 	defer client.Close()
 
 	target := nipcash.Anyone()
-	if !*bearer {
+	if !*cashMode {
 		target = nipcash.Pubkey(toHex(*forPub))
 	}
 	res, err := client.MintCash(ctx, nipcash.MintCashParams{
@@ -190,12 +190,12 @@ func cmdToken(a *admin, st *state, args []string) {
 	ag.MintedMloki += *amount
 
 	out := map[string]any{"cash_token": res.CashToken, "hub": *label, "hub_app_id": hub.AppID, "amount_millis": *amount}
-	if *bearer {
-		if len(res.Recipients) != 1 || res.Recipients[0].BearerSecret == "" {
-			fatalf("token: hub returned no bearer secret: %+v", res.Recipients)
+	if *cashMode {
+		if len(res.Recipients) != 1 || res.Recipients[0].CashSecret == "" {
+			fatalf("token: hub returned no cash secret: %+v", res.Recipients)
 		}
-		out["bearer_secret"] = res.Recipients[0].BearerSecret
-		out["gift"] = res.CashToken + "#" + res.Recipients[0].BearerSecret
+		out["cash_secret"] = res.Recipients[0].CashSecret
+		out["gift"] = res.CashToken + "#" + res.Recipients[0].CashSecret
 	}
 	printJSON(out)
 }
@@ -322,7 +322,7 @@ func cmdCircle(a *admin, st *state, args []string) {
 func cmdFake(args []string) {
 	fs := flag.NewFlagSet("fake", flag.ExitOnError)
 	_ = fs.String("agent", "", "agent name (accepted for wrapper symmetry)")
-	kind := fs.String("kind", "", "cash-hub | circle-hub | nwc | nconnection | token | token-bearer | token-pubkey | token-signed")
+	kind := fs.String("kind", "", "cash-hub | circle-hub | nwc | nconnection | token | token-cash | token-pubkey | token-signed")
 	must(fs.Parse(args))
 	rnd := func() string {
 		b := make([]byte, 32)
@@ -354,7 +354,7 @@ func cmdFake(args []string) {
 		out["value"] = tok(nil)
 	case "token-pubkey":
 		out["value"] = tok(&yes)
-	case "token-bearer":
+	case "token-cash":
 		out["value"] = tok(&no)
 	case "token-signed":
 		priv, pub := btcec.PrivKeyFromBytes([]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32})

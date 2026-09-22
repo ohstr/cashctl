@@ -106,13 +106,13 @@ or with a real user's own cashctl/ncli state:
   retry never corrupts the ledger (no duplicate history entry, no
   resurrected held token).
 - `TestCashTransfer_ToBearerTarget_SecretMustBeRecoverable` — transfers to
-  `bearer-target` and confirms the freshly-generated bearer secret is
+  `cash` and confirms the freshly-generated bearer secret is
   actually recoverable from the response, by extracting it and redeeming
   with it for real. Caught a second real bug during development: the wire
   request only ever carries a one-way commitment of that secret
   (NIP-CASH §Bearer Slices), and `ParseTarget` generated the real secret
   and then simply discarded it once the function returned — every
-  `transfer bearer-target` (and `consolidate --to bearer-target`, sharing
+  `transfer cash` (and `consolidate --to cash`, sharing
   the same code path) was moving funds into a bearer note nobody, not
   even the sender, could ever recover. Fixed by surfacing it through the
   same `Resolved`/`target_resolved` mechanism every other resolved

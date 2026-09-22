@@ -20,9 +20,10 @@ and [Circle wallets](https://github.com/flokiorg/lokihub/blob/main/docs/nips/NIP
 - [`cashctl init`](#cashctl-init) — Set up your identity and, optionally, a wallet
 - [`cashctl wallet show/history/use`](#cashctl-wallet-show) — Show your identity, registered wallets, and local action history
 - [`cashctl wallet balance`](#cashctl-wallet-balance) — Sums every wallet's balance plus unredeemed held tokens into one figure
-- [`cashctl wallet protect`](#cashctl-wallet-protect) — Re-key a still-shared bearer holding so the original code can no longer spend it
+- [`cashctl wallet protect`](#cashctl-wallet-protect) — Re-key a still-shared bearer holding so the original secret can no longer spend it
 - [`cashctl wallet <op>`](#cashctl-wallet-op) — Run ordinary NWC operations against whichever wallet is current
 - [`cashctl connect add/list/use/rm`](#cashctl-connect-addlistuserm) — Register an NWC connection: a plain Lightning wallet you already have
+- [`cashctl version`](#cashctl-version) — Print the cashctl version
 
 `cashctl` mints nothing itself — minting is the Cash Hub operator's own tooling.
 
@@ -83,7 +84,7 @@ by shape:
 cashctl transfer 5                                 # no recipient — get a cash string to hand anyone
 cashctl transfer npub1w0lxfr9...                    # transfer it all
 cashctl transfer 3 alice@example.com                # split off 3, keep the rest as a new token
-cashctl transfer bearer-target
+cashctl transfer cash
 cashctl transfer connection:<platform>:<external-id>:<ia-pubkey>
 cashctl transfer nconnection1... --ia ia@example.com
 ```
@@ -121,6 +122,10 @@ cashctl decode lokicash1...       # local-only, includes mint-signature verifica
 cashctl decode lokicash1... --check  # also cross-checks against the Hub
 ```
 
+Without `--check`, an interactive session asks whether to run it (default
+**no** — no network call at all unless you opt in); `--json` never prompts
+and just skips it.
+
 ## `cashctl receive`
 
 "Cash-in" a token.
@@ -146,7 +151,7 @@ pasted without it just gets inspected and checked, never saved.
 under a fresh secret (defaults to yes; always proceeds under
 `--yes`/`--json`) and merged with any other cash you hold from the same
 issuer. A failure here doesn't fail the receive — retry later with
-`cashctl consolidate --to bearer-target`.
+`cashctl consolidate --to cash`.
 
 ## `cashctl redeem`
 
@@ -199,8 +204,10 @@ entry. Use the verbose `<token>:<amount-loki>:<credential>` form
 (`--sources` only) for a source that isn't in your local ledger; the IDs
 themselves are visible via `cashctl wallet show --json`; plain-text
 `wallet show` never prints them (see `cashctl consolidate --help`).
-`--to` defaults to your own identity; `--to bearer-target` merges into a
-fresh, anonymous bearer note instead (needs Hub support).
+`--to` defaults to your own identity; `--to cash` merges into a
+fresh, anonymous bearer note instead (needs Hub support). An
+`nconnection1...` `--to` target needs `--ia <identity>` (hex or NIP-05) to
+resolve its Identity Authority, same as `transfer`.
 
 ## `cashctl cash list-recipients`
 
@@ -285,7 +292,7 @@ Your unified balance.
 
 ```sh
 cashctl wallet balance             # one number: every wallet + every held token, summed
-cashctl wallet balance --breakdown # itemized, per-wallet/per-token
+cashctl wallet balance --breakdown # itemized, per-wallet/per-token (short: -v)
 cashctl wallet balance --from work # just one wallet or held token
 ```
 
@@ -293,15 +300,19 @@ An expired wallet can't be queried live. `balance` falls back to the
 last-known figure from your most recent successful check, marked
 `stranded` (`[expired]` in text mode).
 
+`cashctl balance` is also available as a top-level shortcut for `wallet
+balance`.
+
 ## `cashctl wallet protect`
 
-Re-key a bearer holding that's still shared, so the original code can no
+Re-key a bearer holding that's still shared, so the original secret can no
 longer spend it. `receive` does this automatically; use this if that was
 declined or failed.
 
 ```sh
 cashctl wallet protect         # picks the holding for you
 cashctl wallet protect <id>    # a specific held token (see `wallet show --json`)
+cashctl wallet protect --token <id>  # same, by flag
 ```
 
 ## `cashctl wallet <op>`
@@ -334,6 +345,14 @@ cashctl connect use work
 cashctl connect rm work
 ```
 
+## `cashctl version`
+
+Print the cashctl version.
+
+```sh
+cashctl version
+```
+
 ## Agent skills
 
 For coding agents: [AGENTS.md](AGENTS.md) points to the matching skill
@@ -351,7 +370,8 @@ npx skills add ohstr/cashctl --all -y
 State lives under `$XDG_CONFIG_HOME/cashctl` (or `~/.config/cashctl` on
 Linux/macOS) in a single SQLite database, `cashctl.db` (0600 — it can hold
 a plaintext identity key and bearer-mode spending secrets). Override the
-location with `--config-dir`.
+location with `--config-dir`. Set `NO_COLOR` to disable ANSI color on
+stderr.
 
 **Breaking, if you used a pre-release build**: `cashctl.db` replaces the
 three flat JSON files (`identity.json`, `connections.json`, `ledger.json`)
@@ -361,6 +381,9 @@ won't see them anymore.
 
 If you point `init` at an [ncli](https://github.com/ohstr/ncli) vault,
 `cashctl` only reads it. Your vault stays at its own usual path, unaffected.
+Set `NCLI_VAULT_PASSWORD` to unlock it non-interactively — needed for
+`init` and other vault-backed commands run without a TTY (scripted/agentic
+use).
 
 ## Docker
 

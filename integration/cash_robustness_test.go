@@ -58,38 +58,38 @@ func TestCashReceive_WhitespacePaddedTokenParsesBeforeNetworkCall(t *testing.T) 
 }
 
 // TestDecode_DoubledHashInGiftStringSplitsOnFirstHash documents
-// SplitBearerSliceString's behavior for a mangled gift string with an
+// SplitCashSliceString's behavior for a mangled gift string with an
 // extra "#": splits on the first one only, treating the rest as one
 // opaque secret value.
 func TestDecode_DoubledHashInGiftStringSplitsOnFirstHash(t *testing.T) {
 	f := newFixture(t)
 	f.mustJSON("wallet", "init")
 
-	bearer := false
-	token := fakeCashToken(t, &bearer)
+	cashMode := false
+	token := fakeCashToken(t, &cashMode)
 	secret := fakeHex32(t)
 	combined := token + "#" + secret + "#unexpected-trailing-garbage"
 
 	resp := f.mustJSON("decode", combined)
-	if present, _ := resp["embedded_bearer_secret_present"].(bool); !present {
-		t.Errorf("decode (doubled '#' gift string): embedded_bearer_secret_present = %v, want true", resp["embedded_bearer_secret_present"])
+	if present, _ := resp["embedded_cash_secret_present"].(bool); !present {
+		t.Errorf("decode (doubled '#' gift string): embedded_cash_secret_present = %v, want true", resp["embedded_cash_secret_present"])
 	}
 	if wp, _ := resp["wallet_pubkey"].(string); wp == "" {
 		t.Errorf("decode (doubled '#' gift string): empty wallet_pubkey — the token half before the first '#' must still decode cleanly: %v", resp)
 	}
 	res := f.run("decode", combined)
 	if strings.Contains(res.Stdout, secret) {
-		t.Errorf("decode leaked part of the bearer secret into stdout: %s", res.Stdout)
+		t.Errorf("decode leaked part of the cash secret into stdout: %s", res.Stdout)
 	}
 }
 
-// TestCashReceive_TruncatedBearerSecretSucceedsButIsUnspendable captures
+// TestCashReceive_TruncatedCashSecretSucceedsButIsUnspendable captures
 // a protocol-documented gotcha, not a cashctl bug: CheckClaim only
-// proves *some* unclaimed bearer recipient exists, never that this
+// proves *some* unclaimed cash-mode recipient exists, never that this
 // specific secret is valid. A truncated secret still makes `receive`
 // report success and save a held entry — but it's unspendable. This test
 // proves both halves: receive "succeeds," and a real spend then fails.
-func TestCashReceive_TruncatedBearerSecretSucceedsButIsUnspendable(t *testing.T) {
+func TestCashReceive_TruncatedCashSecretSucceedsButIsUnspendable(t *testing.T) {
 	cfg, err := LoadConfig("")
 	if err != nil {
 		t.Skipf("skipping: could not load integration config (%v) — see integration/README.md", err)
@@ -108,11 +108,11 @@ func TestCashReceive_TruncatedBearerSecretSucceedsButIsUnspendable(t *testing.T)
 	})
 	cancel()
 	if err != nil {
-		t.Fatalf("mint_cash (bearer): %v", err)
+		t.Fatalf("mint_cash (cash): %v", err)
 	}
-	realSecret := mintResult.Recipients[0].BearerSecret
+	realSecret := mintResult.Recipients[0].CashSecret
 	if len(realSecret) < 32 {
-		t.Fatalf("real bearer secret unexpectedly short (%d chars), can't truncate meaningfully: %q", len(realSecret), realSecret)
+		t.Fatalf("real cash secret unexpectedly short (%d chars), can't truncate meaningfully: %q", len(realSecret), realSecret)
 	}
 	truncatedSecret := realSecret[:len(realSecret)/2]
 
@@ -122,10 +122,10 @@ func TestCashReceive_TruncatedBearerSecretSucceedsButIsUnspendable(t *testing.T)
 	receiveResp := f.mustJSON("receive", mintResult.CashToken+"#"+truncatedSecret)
 	entry, _ := receiveResp["entry"].(map[string]any)
 	if entry == nil {
-		t.Fatalf("receive (truncated bearer secret): expected a saved entry (CheckClaim only verifies the allocation exists, not the secret) — got: %v", receiveResp)
+		t.Fatalf("receive (truncated cash secret): expected a saved entry (CheckClaim only verifies the allocation exists, not the secret) — got: %v", receiveResp)
 	}
 	if amt, _ := entry["amount_millis"].(float64); uint64(amt) != amountMillis {
-		t.Errorf("receive (truncated bearer secret): entry.amount_millis = %v, want %d", entry["amount_millis"], amountMillis)
+		t.Errorf("receive (truncated cash secret): entry.amount_millis = %v, want %d", entry["amount_millis"], amountMillis)
 	}
 	if n := heldCount(t, f); n != 1 {
 		t.Fatalf("expected 1 held token after receive, got %d", n)
@@ -136,10 +136,10 @@ func TestCashReceive_TruncatedBearerSecretSucceedsButIsUnspendable(t *testing.T)
 	// receive_secure.go's isWrongSecretDecline.
 	secured, _ := receiveResp["secured"].(map[string]any)
 	if status, _ := secured["status"].(string); status != "failed" {
-		t.Errorf("receive (truncated bearer secret): secured.status = %q, want \"failed\" (the rekey attempt must also fail with the wrong secret): %v", status, secured)
+		t.Errorf("receive (truncated cash secret): secured.status = %q, want \"failed\" (the rekey attempt must also fail with the wrong secret): %v", status, secured)
 	}
 	if likely, _ := secured["likely_wrong_secret"].(bool); !likely {
-		t.Errorf("receive (truncated bearer secret): secured.likely_wrong_secret = %v, want true — cashctl should recognize a NOT_FOUND decline here as a wrong-secret signal, not a generic failure: %v", secured["likely_wrong_secret"], secured)
+		t.Errorf("receive (truncated cash secret): secured.likely_wrong_secret = %v, want true — cashctl should recognize a NOT_FOUND decline here as a wrong-secret signal, not a generic failure: %v", secured["likely_wrong_secret"], secured)
 	}
 
 	// The decisive check: this "held" money must not actually be
@@ -153,7 +153,7 @@ func TestCashReceive_TruncatedBearerSecretSucceedsButIsUnspendable(t *testing.T)
 	}
 	redeemRes := f.run("redeem", "--invoice", invoice.Invoice, "--yes")
 	if redeemRes.ExitCode == 0 {
-		t.Fatalf("redeeming with a truncated bearer secret unexpectedly succeeded — either the secret wasn't actually truncated, or the Hub doesn't validate it at spend time: %s", redeemRes.Stdout)
+		t.Fatalf("redeeming with a truncated cash secret unexpectedly succeeded — either the secret wasn't actually truncated, or the Hub doesn't validate it at spend time: %s", redeemRes.Stdout)
 	}
 	t.Logf("redeem with truncated secret failed as expected: %s", redeemRes.Stderr)
 

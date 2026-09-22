@@ -37,8 +37,8 @@ func TestParseCash_Pubkey(t *testing.T) {
 	}
 }
 
-func TestParseCash_Bearer(t *testing.T) {
-	cred, err := ParseCash("bearer:some-secret")
+func TestParseCash_Cash(t *testing.T) {
+	cred, err := ParseCash("cash:some-secret")
 	if err != nil {
 		t.Fatalf("ParseCash() error = %v", err)
 	}
@@ -54,7 +54,7 @@ func TestParseCash_Errors(t *testing.T) {
 	}{
 		{"no colon", "pubkey-no-colon"},
 		{"empty pubkey", "pubkey:"},
-		{"empty bearer", "bearer:"},
+		{"empty cash", "cash:"},
 		{"unknown kind", "carrier-pigeon:abc"},
 		{"connection-key wrong field count", "connection-key:abc,discord"},
 		{"connection-key empty field", "connection-key:abc,,482910,file.json"},
@@ -127,7 +127,7 @@ func TestParseCircle_Pubkey(t *testing.T) {
 }
 
 func TestParseCircle_RejectsNonPubkeyModes(t *testing.T) {
-	tests := []string{"bearer:secret", "connection-key:a,b,c,d", "pubkey:", "no-colon-at-all"}
+	tests := []string{"cash:secret", "connection-key:a,b,c,d", "pubkey:", "no-colon-at-all"}
 	for _, in := range tests {
 		if _, err := ParseCircle(in); err == nil {
 			t.Errorf("ParseCircle(%q) = nil error, want an error (NIP-CW has only pubkey mode)", in)
@@ -163,19 +163,19 @@ func TestParseTarget_Connection(t *testing.T) {
 	}
 }
 
-func TestParseTarget_BearerTarget_GeneratesFreshSecretEachTime(t *testing.T) {
-	t1, err := ParseTarget("bearer-target")
+func TestParseTarget_CashTarget_GeneratesFreshSecretEachTime(t *testing.T) {
+	t1, err := ParseTarget("cash")
 	if err != nil {
 		t.Fatalf("ParseTarget() error = %v", err)
 	}
-	t2, err := ParseTarget("bearer-target")
+	t2, err := ParseTarget("cash")
 	if err != nil {
 		t.Fatalf("ParseTarget() error = %v", err)
 	}
 
 	bt1, ok := t1.Target.(interface{ Secret() string })
 	if !ok {
-		t.Fatal("bearer-target result does not expose Secret()")
+		t.Fatal("cash target result does not expose Secret()")
 	}
 	bt2 := t2.Target.(interface{ Secret() string })
 
@@ -183,26 +183,26 @@ func TestParseTarget_BearerTarget_GeneratesFreshSecretEachTime(t *testing.T) {
 		t.Error("Secret() is empty")
 	}
 	if bt1.Secret() == bt2.Secret() {
-		t.Error("two bearer-target calls produced the same secret — should be fresh each time")
+		t.Error("two cash target calls produced the same secret — should be fresh each time")
 	}
 }
 
-// TestParseTarget_BearerTarget_ResolvedSurfacesSecret guards a real bug:
-// the wire request for a bearer-target transfer only ever carries a
-// one-way commitment of this secret (NIP-CASH §Bearer Slices) — the
+// TestParseTarget_CashTarget_ResolvedSurfacesSecret guards a real bug:
+// the wire request for a cash target transfer only ever carries a
+// one-way commitment of this secret (NIP-CASH §Cash-Mode Slices) — the
 // secret itself exists nowhere else once ParseTarget returns. An earlier
 // version generated it and simply discarded it, making the resulting
 // funds permanently unspendable (caught by a live integration test
 // against a real Hub, redeeming with the secret extracted from this
 // exact field). Resolved is the only place it's recoverable from.
-func TestParseTarget_BearerTarget_ResolvedSurfacesSecret(t *testing.T) {
-	rt, err := ParseTarget("bearer-target")
+func TestParseTarget_CashTarget_ResolvedSurfacesSecret(t *testing.T) {
+	rt, err := ParseTarget("cash")
 	if err != nil {
 		t.Fatalf("ParseTarget() error = %v", err)
 	}
 	bt, ok := rt.Target.(interface{ Secret() string })
 	if !ok {
-		t.Fatal("bearer-target result does not expose Secret()")
+		t.Fatal("cash target result does not expose Secret()")
 	}
 	if rt.Resolved == "" {
 		t.Fatal("Resolved is empty — the generated secret would be lost with no way to recover it")
@@ -480,7 +480,7 @@ func TestLooksLikeTarget(t *testing.T) {
 		in   string
 		want bool
 	}{
-		{"bearer-target", true},
+		{"cash", true},
 		{strings.Repeat("a1", 32), true}, // 64-hex pubkey
 		{"npub1anything", true},          // prefix alone is enough for this shape check
 		{"alice@example.com", true},

@@ -15,8 +15,8 @@ import (
 
 // TestWalletShow_NeverLeaksSecrets confirms wallet show's --json output
 // never echoes back a held entry's actual spending/dialing secrets — the
-// token's own NWC pairing secret, or (for a bearer-mode entry) the real
-// bearer_secret — for both a pubkey-mode and a bearer-mode held token.
+// token's own NWC pairing secret, or (for a cash-mode entry) the real
+// cash_secret — for both a pubkey-mode and a cash-mode held token.
 // ledger.Entry tags both fields for JSON (Secret has no omitempty at
 // all), so this is checked directly against real values, not assumed
 // safe just because printCashBill/decode are careful elsewhere.
@@ -51,27 +51,27 @@ func TestWalletShow_NeverLeaksSecrets(t *testing.T) {
 		Recipients: []nipcash.Allocation{nipcash.Send(nipcash.Anyone(), 15_000)},
 	})
 	if err != nil {
-		t.Fatalf("mint_cash (bearer): %v", err)
+		t.Fatalf("mint_cash (cash): %v", err)
 	}
-	bearerSecret := mintResult.Recipients[0].BearerSecret
-	if res := f.run("receive", mintResult.CashToken+"#"+bearerSecret); res.ExitCode != 0 {
-		t.Fatalf("receive (bearer): exit %d\nstderr: %s", res.ExitCode, res.Stderr)
+	cashSecret := mintResult.Recipients[0].CashSecret
+	if res := f.run("receive", mintResult.CashToken+"#"+cashSecret); res.ExitCode != 0 {
+		t.Fatalf("receive (cash): exit %d\nstderr: %s", res.ExitCode, res.Stderr)
 	}
 
-	// receive's own auto-secure step re-keys this bearer token immediately
-	// (a fresh secret only cashctl now knows) — bearerSecret itself is
+	// receive's own auto-secure step re-keys this cash-mode token immediately
+	// (a fresh secret only cashctl now knows) — cashSecret itself is
 	// already dead by the time wallet show runs below, so this check is
 	// about the ORIGINAL secret specifically never having been echoed
 	// back at any point, not about it still being "the" secret now.
 	res := f.run("wallet", "show")
-	if strings.Contains(res.Stdout, bearerSecret) {
-		t.Errorf("wallet show leaked the bearer_secret into its output: %s", res.Stdout)
+	if strings.Contains(res.Stdout, cashSecret) {
+		t.Errorf("wallet show leaked the cash_secret into its output: %s", res.Stdout)
 	}
 
 	// decode itself never exposes a token's own pairing secret (by
 	// design), so there's no independent value to string-match against
 	// for that field — check structurally instead: no held_tokens entry
-	// may carry a non-empty "secret" or "bearer_secret" field at all.
+	// may carry a non-empty "secret" or "cash_secret" field at all.
 	showResp := f.mustJSON("wallet", "show")
 	held, _ := showResp["held_tokens"].([]any)
 	if len(held) != 2 {
@@ -82,8 +82,8 @@ func TestWalletShow_NeverLeaksSecrets(t *testing.T) {
 		if v, present := entry["secret"]; present && v != "" && v != nil {
 			t.Errorf("wallet show: held_tokens entry leaks a non-empty \"secret\" field: %v", entry)
 		}
-		if v, present := entry["bearer_secret"]; present && v != "" && v != nil {
-			t.Errorf("wallet show: held_tokens entry leaks a non-empty \"bearer_secret\" field: %v", entry)
+		if v, present := entry["cash_secret"]; present && v != "" && v != nil {
+			t.Errorf("wallet show: held_tokens entry leaks a non-empty \"cash_secret\" field: %v", entry)
 		}
 	}
 }
@@ -95,8 +95,8 @@ func TestDecode_NeverLeaksTokenSecret(t *testing.T) {
 	f := newFixture(t)
 	f.mustJSON("wallet", "init")
 
-	bearer := false
-	token := fakeCashToken(t, &bearer)
+	cashMode := false
+	token := fakeCashToken(t, &cashMode)
 	// fakeCashToken's own secret is opaque to this test — decode the
 	// token ourselves via the same SDK to know exactly what to look for.
 	tok, err := nipcash.Decode(token)
@@ -309,10 +309,10 @@ func TestCashConsolidate_ReusingAlreadyConsolidatedSourceRejected(t *testing.T) 
 	}
 }
 
-// TestCashTransfer_ToBearerTarget_SecretMustBeRecoverable transfers a held
-// pubkey-mode token to "bearer-target" — cashctl generates a fresh
-// bearer_secret client-side for this (NIP-CASH §Bearer Slices: unlike
-// mint_cash's bearer recipient, cash_transfer's bearer target does NOT
+// TestCashTransfer_ToCashTarget_SecretMustBeRecoverable transfers a held
+// pubkey-mode token to "cash" — cashctl generates a fresh
+// cash_secret client-side for this (NIP-CASH §Cash-Mode Slices: unlike
+// mint_cash's cash-mode recipient, cash_transfer's cash-mode target does NOT
 // get a wallet-generated secret; the caller supplies the commitment
 // themselves) — and confirms that secret is actually surfaced back to
 // the human/agent, not silently generated and discarded once the NWC
@@ -320,7 +320,7 @@ func TestCashConsolidate_ReusingAlreadyConsolidatedSourceRejected(t *testing.T) 
 // spend — checked by actually redeeming with the secret extracted from
 // transfer's own --json response, proving it's the genuine credential,
 // not merely present-looking output.
-func TestCashTransfer_ToBearerTarget_SecretMustBeRecoverable(t *testing.T) {
+func TestCashTransfer_ToCashTarget_SecretMustBeRecoverable(t *testing.T) {
 	cfg, err := LoadConfig("")
 	if err != nil {
 		t.Skipf("skipping: could not load integration config (%v) — see integration/README.md", err)
@@ -345,10 +345,10 @@ func TestCashTransfer_ToBearerTarget_SecretMustBeRecoverable(t *testing.T) {
 		t.Fatalf("receive: exit %d\nstderr: %s", res.ExitCode, res.Stderr)
 	}
 
-	transferResp := f.mustJSON("transfer", "bearer-target", "--yes")
+	transferResp := f.mustJSON("transfer", "cash", "--yes")
 	resolved, _ := transferResp["target_resolved"].(string)
 	if resolved == "" {
-		t.Fatalf("transfer to bearer-target: target_resolved is empty — the generated bearer secret was never surfaced anywhere, making the transferred funds permanently unspendable: %v", transferResp)
+		t.Fatalf("transfer to cash: target_resolved is empty — the generated cash secret was never surfaced anywhere, making the transferred funds permanently unspendable: %v", transferResp)
 	}
 
 	// Extract the secret and prove it's the real credential: redeem with
@@ -378,7 +378,7 @@ func TestCashTransfer_ToBearerTarget_SecretMustBeRecoverable(t *testing.T) {
 }
 
 // extractHexSecret pulls the first 64-hex-char substring out of s — used
-// to recover a bearer secret from a human-readable "resolves to:"-style
+// to recover a cash secret from a human-readable "resolves to:"-style
 // message without hard-coding its exact wording.
 func extractHexSecret(t *testing.T, s string) string {
 	t.Helper()

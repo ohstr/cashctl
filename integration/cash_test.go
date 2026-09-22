@@ -294,7 +294,7 @@ func TestDecodeCheck_CashToken(t *testing.T) {
 	}
 }
 
-// TestCashInspect_DecodeAndListRecipients mints a bearer cash token, then
+// TestCashInspect_DecodeAndListRecipients mints a cash token, then
 // exercises cashctl's local-only decode and network-backed list-recipients
 // commands against it — the two read-only "inspect a token" entry points
 // (cashctl-plan.md's Cash command tree) that TestCashLifecycle_* doesn't
@@ -318,25 +318,25 @@ func TestCashInspect_DecodeAndListRecipients(t *testing.T) {
 	cashClient := dialCash(t, ctx, hub.PairingUri)
 
 	const amountMillis = uint64(250_000)
-	mintBearer := func() (token, secret string) {
+	mintCash := func() (token, secret string) {
 		t.Helper()
 		result, err := cashClient.MintCash(ctx, nipcash.MintCashParams{
 			Recipients: []nipcash.Allocation{nipcash.Send(nipcash.Anyone(), amountMillis)},
 		})
 		if err != nil {
-			t.Fatalf("mint_cash (bearer): %v", err)
+			t.Fatalf("mint_cash (cash): %v", err)
 		}
-		if len(result.Recipients) != 1 || result.Recipients[0].BearerSecret == "" {
-			t.Fatalf("mint_cash (bearer): expected exactly one recipient with a bearer_secret: %+v", result.Recipients)
+		if len(result.Recipients) != 1 || result.Recipients[0].CashSecret == "" {
+			t.Fatalf("mint_cash (cash): expected exactly one recipient with a cash_secret: %+v", result.Recipients)
 		}
-		return result.CashToken, result.Recipients[0].BearerSecret
+		return result.CashToken, result.Recipients[0].CashSecret
 	}
 
-	// Two separate bearer mints: a token can only ever be received once per
+	// Two separate cash mints: a token can only ever be received once per
 	// ledger (ledger.ErrAlreadyHeld), so the no-secret negative-path check
 	// below needs its own token, distinct from the one actually redeemed.
-	noSecretToken, _ := mintBearer()
-	token, bearerSecret := mintBearer()
+	noSecretToken, _ := mintCash()
+	token, cashSecret := mintCash()
 
 	// `decode` is a top-level command (cmd/shortcuts.go), not `cash decode`
 	// — `cashctl cash decode` isn't a registered subcommand at all
@@ -362,25 +362,25 @@ func TestCashInspect_DecodeAndListRecipients(t *testing.T) {
 		return ""
 	}
 
-	// The token's own connection secret is NEVER a valid bearer credential
-	// (NIP-CASH.md's Redemption Metadata section) — a bearer-mode token
+	// The token's own connection secret is NEVER a valid cash credential
+	// (NIP-CASH.md's Redemption Metadata section) — a cash-mode token
 	// pasted with no embedded secret degrades to a read-only report
 	// (receive's own Step 0), rather than saving an entry that could never
 	// be spent and only failing later at redeem time. Nothing is saved, so
 	// this token is never held.
 	noSecretResp := f.mustJSON("receive", noSecretToken)
 	if noSecretResp["received"] != false {
-		t.Errorf(`receive (bearer, no embedded secret): got "received" = %v, want false`, noSecretResp["received"])
+		t.Errorf(`receive (cashMode, no embedded secret): got "received" = %v, want false`, noSecretResp["received"])
 	}
 
-	// Now the real flow: receive the combined bearer-slice presentation
-	// ("<token>#<bearer_secret>", NIP-CASH §Presenting a Bearer Slice as
+	// Now the real flow: receive the combined cash-slice presentation
+	// ("<token>#<cash_secret>", NIP-CASH §Presenting a Cash-Mode Slice as
 	// One String), mirroring how a Hub operator actually hands out a
-	// bearer note (token + bearer_secret, conveyed together, out of band —
+	// cash note (token + cash_secret, conveyed together, out of band —
 	// see lokihub's own ConnectAppCard/RevealConnectionDialog for the
 	// reference UX).
-	if res := f.run("receive", token+"#"+bearerSecret); res.ExitCode != 0 {
-		t.Fatalf("receive (combined bearer-slice string): exit %d\nstderr: %s", res.ExitCode, res.Stderr)
+	if res := f.run("receive", token+"#"+cashSecret); res.ExitCode != 0 {
+		t.Fatalf("receive (combined cash-slice string): exit %d\nstderr: %s", res.ExitCode, res.Stderr)
 	}
 	tokenID := entryIDFor(token)
 
@@ -399,18 +399,18 @@ func TestCashInspect_DecodeAndListRecipients(t *testing.T) {
 	}
 	redeemResp := f.mustJSON("redeem", "--token", tokenID, "--invoice", invoiceTx.Invoice, "--yes")
 	if preimage, _ := redeemResp["preimage"].(string); preimage == "" {
-		t.Errorf("redeem (bearer mode): empty preimage: %v", redeemResp)
+		t.Errorf("redeem (cash mode): empty preimage: %v", redeemResp)
 	}
 }
 
-// TestCashReceive_BearerGiftString mints a real bearer slice and receives
-// it as one combined "<token>#<bearer_secret>" gift string (NIP-CASH
-// §Bearer Slices → Presenting a Bearer Slice as One String) — no --secret
+// TestCashReceive_CashGiftString mints a real cash-mode slice and receives
+// it as one combined "<token>#<cash_secret>" gift string (NIP-CASH
+// §Cash-Mode Slices → Presenting a Cash-Mode Slice as One String) — no --secret
 // flag at all — proving the auto-extraction actually works end to end
 // against a real Hub, not just in isolation. Redeems it afterward to
 // confirm the extracted secret is the genuine spending credential, not
 // merely accepted and then unusable.
-func TestCashReceive_BearerGiftString(t *testing.T) {
+func TestCashReceive_CashGiftString(t *testing.T) {
 	cfg, err := LoadConfig("")
 	if err != nil {
 		t.Skipf("skipping: could not load integration config (%v) — see integration/README.md", err)
@@ -433,12 +433,12 @@ func TestCashReceive_BearerGiftString(t *testing.T) {
 		Recipients: []nipcash.Allocation{nipcash.Send(nipcash.Anyone(), amountMillis)},
 	})
 	if err != nil {
-		t.Fatalf("mint_cash (bearer): %v", err)
+		t.Fatalf("mint_cash (cash): %v", err)
 	}
-	if len(mintResult.Recipients) != 1 || mintResult.Recipients[0].BearerSecret == "" {
-		t.Fatalf("mint_cash (bearer): expected exactly one recipient with a bearer_secret: %+v", mintResult.Recipients)
+	if len(mintResult.Recipients) != 1 || mintResult.Recipients[0].CashSecret == "" {
+		t.Fatalf("mint_cash (cash): expected exactly one recipient with a cash_secret: %+v", mintResult.Recipients)
 	}
-	giftString := mintResult.CashToken + "#" + mintResult.Recipients[0].BearerSecret
+	giftString := mintResult.CashToken + "#" + mintResult.Recipients[0].CashSecret
 
 	receiveResp := f.mustJSON("receive", giftString)
 	entry, _ := receiveResp["entry"].(map[string]any)
@@ -487,7 +487,7 @@ func TestRedeem_NoWalletConfigured(t *testing.T) {
 
 	// pubkey mode, deliberately: this test is isolating resolveDestWallet's
 	// own not_found path specifically, which sits behind resolveCredential
-	// in runCashRedeem — a bearer-mode token without --secret would trip
+	// in runCashRedeem — a cash-mode token without --secret would trip
 	// resolveCredential's own (correct, and separately tested by
 	// TestCashInspect_DecodeAndListRecipients) usage error first, never
 	// reaching the code path this test exists to check.
@@ -530,7 +530,7 @@ func TestRedeem_InvoiceFlagBypassesNoWalletCheck(t *testing.T) {
 	}
 
 	// pubkey mode, deliberately — see TestRedeem_NoWalletConfigured's own
-	// comment: a bearer token without --secret would trip
+	// comment: a cash-mode token without --secret would trip
 	// resolveCredential's usage error before ever reaching the
 	// resolveDestWallet bypass this test exists to check.
 	token := mintPubkeyToken(t, admin, myPubHex, 50_000)
@@ -609,7 +609,7 @@ func TestCashTransfer_Full(t *testing.T) {
 	// identity reassignment (NIP-CASH §Transferring and Splitting a Slice:
 	// "pubkey or connection_key -> reassigned in place: same wallet, same
 	// connection") — no new wallet is minted, so new_wallet_token/
-	// new_wallet_pubkey are correctly empty here (only a bearer target, or
+	// new_wallet_pubkey are correctly empty here (only a cash-mode target, or
 	// a multi-recipient-history wallet, spins off a new one). Verify via
 	// the ORIGINAL token's own connection instead.
 	if nwt, _ := transferResp["new_wallet_token"].(string); nwt != "" {

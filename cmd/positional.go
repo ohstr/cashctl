@@ -21,7 +21,7 @@ func resolvePositionalOrFlag(cmd *cobra.Command, positional, flagName, flagValue
 	positional = strings.TrimSpace(positional)
 	flagValue = strings.TrimSpace(flagValue)
 	if positional != "" && flagValue != "" && positional != flagValue {
-		return "", output.UsageError(cmd, fmt.Errorf(
+		return "", output.InvocationError(cmd, fmt.Errorf(
 			"got both a positional argument (%q) and --%s (%q) with different values — pass only one", positional, flagName, flagValue))
 	}
 	if positional != "" {
@@ -44,7 +44,7 @@ func resolvePositionalOrFlagAmount(cmd *cobra.Command, positional, flagName, fla
 		return 0, nil
 	}
 	if positional != "" && flagValue != "" && positional != flagValue {
-		return 0, output.UsageError(cmd, fmt.Errorf(
+		return 0, output.InvocationError(cmd, fmt.Errorf(
 			"got both a positional amount (%q) and --%s (%q) with different values — pass only one", positional, flagName, flagValue))
 	}
 	raw := positional

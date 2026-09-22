@@ -115,9 +115,9 @@ func TestRedactSecretInput(t *testing.T) {
 			want:  "pubkey:<redacted>",
 		},
 		{
-			name:  "bearer credential redacts the secret",
-			input: "bearer:deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
-			want:  "bearer:<redacted>",
+			name:  "cash credential redacts the secret",
+			input: "cash:deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+			want:  "cash:<redacted>",
 		},
 		{
 			name:  "connection-key credential redacts only the leading privkey",
@@ -167,7 +167,7 @@ func TestRedactSecretInput(t *testing.T) {
 			want:  "nostr+walletconnect://" + strings.Repeat("a1", 32) + "?relay=wss%3A%2F%2Fx.invalid&secret=<redacted>",
 		},
 		{
-			name:  "a bearer gift string's #secret half is redacted, the token half is not",
+			name:  "a cash gift string's #secret half is redacted, the token half is not",
 			input: "lokicash1qypqxpq9qcrsszg2pvxq6rs0zqg3zyg3zygs9qypqxpq#" + strings.Repeat("c3", 32),
 			want:  "lokicash1qypqxpq9qcrsszg2pvxq6rs0zqg3zyg3zygs9qypqxpq#<redacted>",
 		},
@@ -206,14 +206,21 @@ func TestArgsValidators(t *testing.T) {
 		if ExitCode(err) != 2 {
 			t.Errorf("ExitCode = %d, want 2 (usage)", ExitCode(err))
 		}
+		if !AsCLIError(err).ShowUsage {
+			t.Error("ShowUsage = false, want true — a wrong arg count is InvocationError's canonical case")
+		}
 	})
 	t.Run("MaximumNArgs", func(t *testing.T) {
 		v := MaximumNArgs(1)
 		if err := v(newTestCmd(), []string{"a"}); err != nil {
 			t.Errorf("unexpected error: %v", err)
 		}
-		if err := v(newTestCmd(), []string{"a", "b"}); err == nil {
+		err := v(newTestCmd(), []string{"a", "b"})
+		if err == nil {
 			t.Error("expected error for too many args")
+		}
+		if !AsCLIError(err).ShowUsage {
+			t.Error("ShowUsage = false, want true")
 		}
 	})
 	t.Run("MinimumNArgs", func(t *testing.T) {
@@ -221,16 +228,24 @@ func TestArgsValidators(t *testing.T) {
 		if err := v(newTestCmd(), []string{"a"}); err != nil {
 			t.Errorf("unexpected error: %v", err)
 		}
-		if err := v(newTestCmd(), []string{}); err == nil {
+		err := v(newTestCmd(), []string{})
+		if err == nil {
 			t.Error("expected error for too few args")
+		}
+		if !AsCLIError(err).ShowUsage {
+			t.Error("ShowUsage = false, want true")
 		}
 	})
 	t.Run("NoArgs", func(t *testing.T) {
 		if err := NoArgs(newTestCmd(), []string{}); err != nil {
 			t.Errorf("unexpected error: %v", err)
 		}
-		if err := NoArgs(newTestCmd(), []string{"a"}); err == nil {
+		err := NoArgs(newTestCmd(), []string{"a"})
+		if err == nil {
 			t.Error("expected error for unexpected arg")
+		}
+		if !AsCLIError(err).ShowUsage {
+			t.Error("ShowUsage = false, want true")
 		}
 	})
 }
@@ -466,6 +481,154 @@ func TestUsageError_NeverPrintsHelpText(t *testing.T) {
 	})
 	if len(printed) != 0 {
 		t.Errorf("UsageError() wrote %q to stdout, want nothing", printed)
+	}
+}
+
+// TestInvocationError_SetsShowUsageOnFreshError guards InvocationError's
+// whole reason to exist: a genuinely malformed-invocation error (wrong arg
+// count, missing/conflicting flag, ...) must carry ShowUsage so EmitError
+// knows to append the "--help" pointer, while a plain UsageError (the
+// "funds are fragmented"-style runtime refusal TestUsageError_
+// NeverPrintsHelpText guards) must not.
+func TestInvocationError_SetsShowUsageOnFreshError(t *testing.T) {
+	cmd := newTestCmd()
+
+	invocation := AsCLIError(InvocationError(cmd, errors.New("accepts 1 arg(s), received 0")))
+	if !invocation.ShowUsage {
+		t.Error("InvocationError: ShowUsage = false, want true")
+	}
+	if invocation.Code != CodeUsage {
+		t.Errorf("InvocationError: Code = %q, want %q", invocation.Code, CodeUsage)
+	}
+
+	plain := AsCLIError(UsageError(cmd, errors.New("funds are fragmented across separate Hubs")))
+	if plain.ShowUsage {
+		t.Error("UsageError: ShowUsage = true, want false — must stay terse for a runtime refusal wearing the usage code")
+	}
+}
+
+// TestInvocationError_DoesNotReclassifyExistingError mirrors
+// TestWrapCLIError_PreservesExistingClassification for the ShowUsage flag
+// specifically: calling InvocationError on an error already classified as
+// something else (e.g. a lower-level NotFoundError bubbling up through a
+// caller that wraps it) must not retroactively mark it as a usage mistake
+// with a help pointer — the Code == CodeUsage guard in InvocationError's
+// own doc comment is what this proves.
+func TestInvocationError_DoesNotReclassifyExistingError(t *testing.T) {
+	cmd := newTestCmd()
+	original := NotFoundError(cmd, "abc", errors.New("no such wallet"))
+
+	rewrapped := InvocationError(cmd, original)
+
+	ce := AsCLIError(rewrapped)
+	if ce.Code != CodeNotFound {
+		t.Errorf("Code = %q, want unchanged %q", ce.Code, CodeNotFound)
+	}
+	if ce.ShowUsage {
+		t.Error("ShowUsage = true, want false — a passthrough of an existing non-usage classification must not gain a help pointer")
+	}
+}
+
+// TestEmitError_TextModeShowsFullHelpWhenSet is InvocationError's effect
+// proven at EmitError's own boundary — the actual stderr text a human sees
+// for a malformed invocation: the usual "Error: ..." line first, then the
+// command's own full --help content right below it (same content
+// `cashctl <cmd> --help` prints, reused via cmd.Help() — see EmitError's
+// own doc comment on why), redirected to stderr rather than cobra's own
+// stdout default.
+func TestEmitError_TextModeShowsFullHelpWhenSet(t *testing.T) {
+	cmd := &cobra.Command{
+		Use:     "test <arg>",
+		Short:   "a test command",
+		Example: "  cashctl test foo",
+		// RunE must be set — cobra's help template only renders the
+		// Usage/Flags/Examples block when Runnable() is true (or the
+		// command has subcommands); every real cashctl command has one, a
+		// bare *cobra.Command{} in a test does not unless set explicitly.
+		RunE: func(cmd *cobra.Command, args []string) error { return nil },
+	}
+	cmd.Flags().Bool("json", false, "")
+	cmd.Flags().String("widget", "", "a made-up flag only this test's help block should contain")
+	err := InvocationError(cmd, errors.New("accepts 1 arg(s), received 0"))
+
+	stderr := string(captureStderr(t, func() { EmitError(cmd, err) }))
+
+	if !strings.Contains(stderr, "Error: accepts 1 arg(s), received 0") {
+		t.Errorf("stderr = %q, want the usual \"Error: ...\" line, unchanged", stderr)
+	}
+	if !strings.Contains(stderr, "Usage:\n  test <arg> [flags]") {
+		t.Errorf("stderr = %q, want the command's own Usage line", stderr)
+	}
+	if !strings.Contains(stderr, "a test command") {
+		t.Errorf("stderr = %q, want the command's own Short description", stderr)
+	}
+	if !strings.Contains(stderr, "cashctl test foo") {
+		t.Errorf("stderr = %q, want the command's own Examples block — this is the FULL help, not a short synopsis", stderr)
+	}
+	if !strings.Contains(stderr, "--widget string") {
+		t.Errorf("stderr = %q, want the full Flags block, including a flag with no relation to the error itself", stderr)
+	}
+	// Ordering: the error must stay the most prominent (first) line,
+	// matching every CLI's own convention — everything else (the full help
+	// block) comes after it.
+	msgIdx := strings.Index(stderr, "accepts 1 arg(s), received 0")
+	helpIdx := strings.Index(stderr, "a test command")
+	if msgIdx < 0 || helpIdx < 0 || msgIdx > helpIdx {
+		t.Errorf("stderr = %q, want the message before the help block", stderr)
+	}
+}
+
+// TestEmitError_TextModeShowUsage_StdoutStaysEmpty guards the contract
+// EmitError's own doc comment leans on: cmd.Help() defaults to writing to
+// stdout, and EmitError must redirect it (cmd.SetOut) to stderr instead —
+// AGENTS.md's "narration/errors to stderr always, never stdout" holds even
+// though this reuses cobra's own --help machinery, which wasn't written
+// with that contract in mind.
+func TestEmitError_TextModeShowUsage_StdoutStaysEmpty(t *testing.T) {
+	cmd := &cobra.Command{Use: "test", Short: "a test command"}
+	cmd.Flags().Bool("json", false, "")
+	err := InvocationError(cmd, errors.New("accepts 1 arg(s), received 0"))
+
+	stdout := captureStdout(t, func() {
+		_ = captureStderr(t, func() { EmitError(cmd, err) })
+	})
+	if len(stdout) != 0 {
+		t.Errorf("EmitError wrote %q to stdout, want nothing — the full help block must go to stderr", stdout)
+	}
+}
+
+// TestEmitError_TextModeNoPointerWithoutShowUsage is
+// TestUsageError_NeverPrintsHelpText's counterpart at EmitError's boundary:
+// a plain UsageError (ShowUsage false) must print exactly what it always
+// has, no pointer appended.
+func TestEmitError_TextModeNoPointerWithoutShowUsage(t *testing.T) {
+	cmd := newTestCmd()
+	err := UsageError(cmd, errors.New("funds are fragmented across separate Hubs"))
+
+	stderr := string(captureStderr(t, func() { EmitError(cmd, err) }))
+
+	if strings.TrimSpace(stderr) != "Error: funds are fragmented across separate Hubs" {
+		t.Errorf("stderr = %q, want just the error line, no pointer", stderr)
+	}
+}
+
+// TestEmitError_JSONModeNeverShowsUsagePointerEvenWhenSet: --json's single-
+// structured-document-on-stderr contract must hold even for an
+// InvocationError — an agent has no use for a human-facing pointer mixed
+// into (or after) its JSON error report.
+func TestEmitError_JSONModeNeverShowsUsagePointerEvenWhenSet(t *testing.T) {
+	cmd := newTestCmd()
+	_ = cmd.Flags().Set("json", "true")
+	err := InvocationError(cmd, errors.New("accepts 1 arg(s), received 0"))
+
+	stderr := captureStderr(t, func() { EmitError(cmd, err) })
+
+	var payload map[string]any
+	if jsonErr := json.Unmarshal(stderr, &payload); jsonErr != nil {
+		t.Fatalf("EmitError's --json output didn't parse as JSON: %v\noutput: %s", jsonErr, stderr)
+	}
+	if strings.Contains(string(stderr), "--help") {
+		t.Errorf("stderr = %q, want no help-pointer text anywhere in --json output", stderr)
 	}
 }
 

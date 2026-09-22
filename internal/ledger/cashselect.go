@@ -148,7 +148,7 @@ func SumAmounts(entries []Entry) uint64 {
 }
 
 // GroupableForConsolidation returns the subset of held eligible to be
-// grouped for auto-consolidation: pubkey-mode (not bearer-, not
+// grouped for auto-consolidation: pubkey-mode (not cash-mode, not
 // connection-key-bound — cash_consolidate only accepts pubkey-identified
 // sources) with a known MinterPubkey (the only client-side "same minter"
 // signal cashctl has) and a known amount (nothing to sum otherwise).
@@ -158,8 +158,8 @@ func GroupableForConsolidation(held []Entry) []Entry {
 		if e.AmountMillis == nil || e.MinterPubkey == nil {
 			continue
 		}
-		isBearer := e.IdentityRequired != nil && !*e.IdentityRequired
-		if isBearer || e.ConnectionKeyPlatform != "" {
+		isCash := e.IdentityRequired != nil && !*e.IdentityRequired
+		if isCash || e.ConnectionKeyPlatform != "" {
 			continue
 		}
 		out = append(out, e)

@@ -5,7 +5,9 @@ cash tokens and [NIP-CW](https://github.com/flokiorg/lokihub/blob/main/docs/nips
 circle wallets.
 Assume the `cashctl` binary is already on `PATH`. State (identity, registered
 wallets, held tokens) lives under `$XDG_CONFIG_HOME/cashctl`, overridable with
-`--config-dir`.
+`--config-dir`. `NCLI_VAULT_PASSWORD` unlocks an ncli vault-sourced identity
+non-interactively (no TTY to prompt from — needed for `init`/vault-backed
+commands run unattended). `NO_COLOR` disables ANSI color on stderr.
 
 ## Commands
 
@@ -17,9 +19,10 @@ wallets, held tokens) lives under `$XDG_CONFIG_HOME/cashctl`, overridable with
 | `cashctl wallet show` | Your identity, registered wallets, and held cash tokens |
 | `cashctl wallet history` | Local action log (receive/redeem/transfer/consolidate) |
 | `cashctl wallet use <name>` / `cashctl connect use <name>` | Switch your default wallet |
-| `cashctl wallet balance [--breakdown] [--from <name>]` | Unified balance: every wallet's live balance + every held token's value |
+| `cashctl wallet balance [--breakdown\|-v] [--from <name>]` | Unified balance: every wallet's live balance + every held token's value |
+| `cashctl wallet protect [id] [--token <id>]` | Re-key a still-shared bearer holding so the original code can no longer spend it — `receive` does this automatically; use this if that was declined or failed |
 | `cashctl wallet get-info` / `budget` / `invoice <amount>` / `pay <invoice>` / `list-tx` / `sign-message <msg>` | Ordinary NIP-47 calls against the current wallet |
-| `cashctl invoice <amount>` / `cashctl pay <invoice>` | Top-level shortcuts for `wallet invoice`/`wallet pay` |
+| `cashctl invoice <amount>` / `cashctl pay <invoice>` / `cashctl balance` | Top-level shortcuts for `wallet invoice`/`wallet pay`/`wallet balance` |
 | `cashctl connect add <name> <connection>` / `list` / `rm <name>` | Register/list/remove any other NWC connection |
 | `cashctl decode <string> [--check]` | Inspect any cash token, Circle Hub connection (`circlehub1...`), or NWC URI locally, no network call; `--check` opts into a read-only Hub check (cash token: matching recipient; circle hub: can we join) |
 | `cashctl receive <token>` | Decode a cash token, print its details, then cross-check it against the Cash Hub before adding it to your wallet — refuses anything that doesn't check out. A bearer-mode token's `bearer_secret` must be embedded, `<token>#<bearer_secret>` (NIP-CASH's combined bearer-slice presentation) — pasted bare, it degrades to a read-only report instead of erroring. A saved bearer-mode receipt is then offered automatic protecting: re-keyed under a fresh secret (and merged with any other same-issuer holding), reported under `"secured"` |
@@ -32,7 +35,7 @@ wallets, held tokens) lives under `$XDG_CONFIG_HOME/cashctl`, overridable with
 A `--to`/positional target (`transfer`, `consolidate`) needs no prefix for
 the common case — a bare 64-hex pubkey, `npub1...`, a NIP-05 identifier
 (`name@domain`, resolved live via the domain's `/.well-known/nostr.json`),
-or an `nconnection1...` are all sniffed by shape. `bearer-target` is a
+or an `nconnection1...` are all sniffed by shape. `cash` is a
 literal keyword. The explicit, scripted/advanced forms keep working for
 what unprefixed sniffing can't cover: `pubkey:<hex>`,
 `connection:<platform>:<external-id>:<ia-pubkey>`.
@@ -51,7 +54,7 @@ output (empty string when nothing needed resolving).
 `--as`'s credential syntax is unchanged and always needs its prefix (never
 auto-detected — a bare hex string is genuinely ambiguous between a private
 key and a bearer secret, so guessing isn't safe here the way it is for a
-public target): `pubkey:<hex-or-privkey>`, `bearer:<secret>`,
+public target): `pubkey:<hex-or-privkey>`, `cash:<secret>`,
 `connection-key:<privkey>,<platform>,<external-id>,<attestation-file>`
 (redeem/transfer only).
 
@@ -62,10 +65,13 @@ document under `--json`; progress narration and errors go to **stderr**
 always, never stdout — a script parsing stdout never has to distinguish a
 success shape from a failure shape on the same stream. `--json`, `-c/
 --connection`, `--yes`, and `--config-dir` are global flags declared once
-on the root command. `--yes` (or `--json`, which implies it) skips
-confirmation prompts. Every command is JSON-only-on-request (human text by
-default, `--json` for the machine shape) — there is no command that is
-JSON-only always.
+on the root command — except `-c/--connection`, which `receive`,
+`transfer`, `consolidate`, `cash list-recipients`, and `decode` reject
+outright (`usage`, exit 2): none of them ever dial a registered wallet, so
+there's nothing for it to override. `--yes` (or `--json`, which implies
+it) skips confirmation prompts. Every command is JSON-only-on-request
+(human text by default, `--json` for the machine shape) — there is no
+command that is JSON-only always.
 
 **Failures**: exactly one top-level error report, always on stderr — a
 plain `Error: ...` line by default, or `{"error", "code", "retryable",
@@ -83,7 +89,7 @@ plain `Error: ...` line by default, or `{"error", "code", "retryable",
 
 `input`, when present, is the single specific value that caused the
 failure — **never** raw secret material: an `nsec1...`-shaped or bare
-64-hex-char value is redacted to `""`, and a `pubkey:<privkey>`/`bearer:
+64-hex-char value is redacted to `""`, and a `pubkey:<privkey>`/`cash:
 <secret>`/`connection-key:<privkey>,...` credential string has just its
 secret component blanked (`pubkey:<redacted>`, etc.), keeping the rest of
 the string legible in the error. `retryable` lets an agent decide whether
@@ -103,8 +109,8 @@ This repo ships example-driven guidance in `skills/`, one file per area:
 - Setting up an identity, managing wallets, making ordinary Lightning
   calls, or decoding any token/connection string locally (`init`,
   `wallet ...`, `connect ...`, `decode`) → `skills/cashctl-wallet/SKILL.md`
-- Receiving, redeeming, transferring, or consolidating NIP-CASH tokens
-  (`receive`, `redeem`, `transfer`, `consolidate`, `cash ...`) →
-  `skills/cashctl-cash/SKILL.md`
+- Receiving, redeeming, transferring, or consolidating NIP-CASH tokens, or
+  re-keying a still-shared bearer holding (`receive`, `redeem`, `transfer`,
+  `consolidate`, `cash ...`, `wallet protect`) → `skills/cashctl-cash/SKILL.md`
 - Joining a circle for a personal wallet (`join`, `circle join`) →
   `skills/cashctl-circle/SKILL.md`

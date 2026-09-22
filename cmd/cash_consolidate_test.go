@@ -75,7 +75,7 @@ func TestResolveConsolidateSources_BothGivenErrors(t *testing.T) {
 
 // groupableEntry builds a pubkey-mode, consolidation-eligible held entry
 // (ledger.GroupableForConsolidation's own contract: known amount, known
-// minter, not bearer, not connection-key-bound) for a given minter.
+// minter, not cashMode, not connection-key-bound) for a given minter.
 func groupableEntry(id, minter string, amountMillis uint64) ledger.Entry {
 	return ledger.Entry{
 		ID:           id,
@@ -144,16 +144,16 @@ func TestMergeableMinterGroups_MixOfSingletonAndGroupableExcludesSingleton(t *te
 	}
 }
 
-func TestMergeableMinterGroups_BearerAndConnectionKeyEntriesExcluded(t *testing.T) {
-	bearer := groupableEntry("tok-a", "minter-a", 1000)
-	bearer.IdentityRequired = ptrTo(false)
+func TestMergeableMinterGroups_CashAndConnectionKeyEntriesExcluded(t *testing.T) {
+	cashMode := groupableEntry("tok-a", "minter-a", 1000)
+	cashMode.IdentityRequired = ptrTo(false)
 	connKey := groupableEntry("tok-b", "minter-a", 1000)
 	connKey.ConnectionKeyPlatform = "some-platform"
-	held := []ledger.Entry{bearer, connKey, groupableEntry("tok-c", "minter-a", 1000)}
+	held := []ledger.Entry{cashMode, connKey, groupableEntry("tok-c", "minter-a", 1000)}
 
 	got := mergeableMinterGroups(held)
 	if len(got) != 0 {
-		t.Errorf("mergeableMinterGroups() = %v, want empty (bearer/connection-key entries aren't groupable, leaving only 1 eligible entry for minter-a)", got)
+		t.Errorf("mergeableMinterGroups() = %v, want empty (cash/connection-key entries aren't groupable, leaving only 1 eligible entry for minter-a)", got)
 	}
 }
 
@@ -442,7 +442,7 @@ func TestDoCashConsolidate_ZeroDialCandidatesErrors(t *testing.T) {
 // as one of the caller's own held tokens") — every other doCashConsolidate
 // test in this file passes isSelfTarget=true, so this exact branch
 // (isSelfTarget=false, a real pubkey target) had no unit coverage at all
-// before this test: a regression here (e.g. the isSelfTarget||isBearerTarget
+// before this test: a regression here (e.g. the isSelfTarget||isCashTarget
 // check getting inverted or dropped) would have shipped silently, leaving a
 // consolidate-to-a-third-party phantom-save the caller's own held funds.
 func TestDoCashConsolidate_ThirdPartyPubkeyTargetNotSavedToLedger(t *testing.T) {
@@ -462,7 +462,7 @@ func TestDoCashConsolidate_ThirdPartyPubkeyTargetNotSavedToLedger(t *testing.T) 
 		t.Fatalf("newEntry = %+v, want the gift token (still returned for hand-off)", newEntry)
 	}
 	if len(l.Entries) != 0 {
-		t.Errorf("l.Entries = %+v, want empty — a non-self, non-bearer consolidate target must never be saved as the caller's own held token", l.Entries)
+		t.Errorf("l.Entries = %+v, want empty — a non-self, identity-bound consolidate target must never be saved as the caller's own held token", l.Entries)
 	}
 	if _, ok := l.FindByToken("gift-token"); ok {
 		t.Error("the gift token was found in the caller's own ledger — it belongs to the recipient, not the caller")

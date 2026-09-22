@@ -1,6 +1,6 @@
 ---
 name: cashctl-wallet
-description: Set up a cashctl identity and default wallet (`cashctl init`), manage registered NWC connections (`cashctl connect add/list/use/rm`, `cashctl wallet use`), inspect identity/wallets/history (`cashctl wallet show/history`), check a unified balance across every wallet and held cash token (`cashctl wallet balance`), make ordinary NIP-47 calls against the current wallet (`cashctl wallet get-info/budget/invoice/pay/list-tx/sign-message`), and locally decode any cash token, Circle Hub connection, or NWC URI (`cashctl decode`). Use when setting up cashctl for the first time, registering a plain Lightning wallet connection, switching the default wallet, checking balance/budget, paying/creating a Lightning invoice, or inspecting a pasted token/connection string before acting on it.
+description: Set up a cashctl identity and default wallet (`cashctl init`), manage registered NWC connections (`cashctl connect add/list/use/rm`, `cashctl wallet use`), inspect identity/wallets/history (`cashctl wallet show/history`), check a unified balance across every wallet and held cash token (`cashctl wallet balance`, also available as the top-level shortcut `cashctl balance`), make ordinary NIP-47 calls against the current wallet (`cashctl wallet get-info/budget/invoice/pay/list-tx/sign-message`), and locally decode any cash token, Circle Hub connection, or NWC URI (`cashctl decode`). Use when setting up cashctl for the first time, registering a plain Lightning wallet connection, switching the default wallet, checking balance/budget, paying/creating a Lightning invoice, or inspecting a pasted token/connection string before acting on it.
 license: Unlicense
 ---
 
@@ -16,6 +16,10 @@ Self-contained by design — update by hand if flags/schemas change. -->
 cashctl init            # interactive: offers an existing ncli vault entry, or generates one
 cashctl init --json      # scripted: always generates fresh, skips the wallet-connection offer
 ```
+
+Set `NCLI_VAULT_PASSWORD` to unlock an existing ncli vault entry
+non-interactively (no TTY to prompt from — needed for scripted/agentic
+`init` runs against a vault-sourced identity).
 
 Idempotent: re-running it just reports `{"already_configured": true}`
 (`--json`) or a one-line message (text mode) rather than erasing/
@@ -57,7 +61,7 @@ cashctl wallet history --json  # {"history": [{"at","action","detail"}, ...]}
 
 ```sh
 cashctl wallet balance --json                # {"total_mloki", "stranded_mloki", "breakdown"}
-cashctl wallet balance --breakdown --json    # same, always includes the itemized "breakdown" array
+cashctl wallet balance --breakdown --json    # same, always includes the itemized "breakdown" array (short: -v)
 cashctl wallet balance --from work --json    # one wallet/token only: {"name","amount_mloki",...}
 ```
 
@@ -69,6 +73,9 @@ one declining with the NIP-47 `EXPIRED` code specifically, which falls
 back to the last-known cached figure, marked `"stranded": true` — so an
 expired wallet's balance is never just invisible, but is clearly flagged
 as no longer money-moving.
+
+`cashctl balance` is also available as a top-level shortcut for `wallet
+balance` — identical flags and output.
 
 ## `cashctl wallet get-info` / `budget` / `invoice` / `pay` / `list-tx` / `sign-message`
 

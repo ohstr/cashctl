@@ -93,7 +93,7 @@ func TestCashConsolidate_PartialSubsetLeavesRestUntouched(t *testing.T) {
 // not just checking consolidate's own reported new_entry.
 //
 // Currently failing on purpose (left failing rather than skipped, same
-// convention as TestMultiParty_BearerRegiftChain_AtoBtoC's own doc
+// convention as TestMultiParty_CashRegiftChain_AtoBtoC's own doc
 // comment): the cash_consolidate call itself fails with "nipcash: decrypt
 // delivery: invalid MAC" — a NIP-44 response-decryption failure at the
 // generic NIP-47 transport layer (nipcash/client.CashConsolidate is a
@@ -102,7 +102,7 @@ func TestCashConsolidate_PartialSubsetLeavesRestUntouched(t *testing.T) {
 // wrong). Every OTHER consolidate/transfer path this suite exercises to a
 // real third-party pubkey goes through cash_transfer instead (this is the
 // only test calling cash_consolidate --to a pubkey OTHER than the
-// caller's own identity or bearer-target) and succeeds, which narrows
+// caller's own identity or cash) and succeeds, which narrows
 // this specifically to cash_consolidate's own handling of a non-self
 // pubkey target — most likely the Hub encrypting its response to the
 // wrong key. Reproduced consistently across repeated runs (once also saw

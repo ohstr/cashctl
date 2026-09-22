@@ -11,16 +11,16 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// These tests cover the fix for a real fund-loss bug: protectBearerReceipt
-// generates a bearer target's replacement secret purely locally (NIP-CASH
+// These tests cover the fix for a real fund-loss bug: protectCashReceipt
+// generates a cash-mode target's replacement secret purely locally (NIP-CASH
 // never returns it — only a one-way commitment ever crosses the wire), so
-// it can and now does persist that candidate as PendingBearerSecret BEFORE
+// it can and now does persist that candidate as PendingCashSecret BEFORE
 // placing the wire call that's meant to confirm it. A kill or lost response
 // during that call can leave genuinely ambiguous which of the two secrets
 // the Hub actually accepted — NIP-CASH has no read-only way to ask
 // (nipcashclient.CheckClaim's own doc comment) — so cashctl can only find
 // out by trying: resolveCredential's callers (redeem, transfer) retry once
-// with PendingBearerSecret when the usual secret is declined as wrong.
+// with PendingCashSecret when the usual secret is declined as wrong.
 //
 // Reproducing the exact kill-timing race against a live Hub is inherently
 // flaky (a ~250ms window in a ~400ms operation, per the campaign's own
@@ -29,11 +29,11 @@ import (
 // behind, whichever secret really won — and confirm cashctl recovers the
 // funds from it either way.
 
-// currentBearerSecret reads entryID's live bearer_secret column directly —
-// receive's own --json output never includes it (Entry.BearerSecret is
+// currentCashSecret reads entryID's live cash_secret column directly —
+// receive's own --json output never includes it (Entry.CashSecret is
 // json:"-"), so this is the only way a test can learn the real secret
 // protect just established.
-func currentBearerSecret(t *testing.T, f *fixture, entryID string) string {
+func currentCashSecret(t *testing.T, f *fixture, entryID string) string {
 	t.Helper()
 	db, err := sql.Open("sqlite", "file:"+filepath.Join(f.configDir, "cashctl.db"))
 	if err != nil {
@@ -41,24 +41,24 @@ func currentBearerSecret(t *testing.T, f *fixture, entryID string) string {
 	}
 	defer db.Close()
 	var secret string
-	if err := db.QueryRow(`SELECT bearer_secret FROM entries WHERE id = ?`, entryID).Scan(&secret); err != nil {
-		t.Fatalf("querying bearer_secret: %v", err)
+	if err := db.QueryRow(`SELECT cash_secret FROM entries WHERE id = ?`, entryID).Scan(&secret); err != nil {
+		t.Fatalf("querying cash_secret: %v", err)
 	}
 	return secret
 }
 
-// corruptBearerSecret opens f's cashctl.db directly and rewrites the given
-// held entry's bearer_secret/pending_bearer_secret columns — simulating the
+// corruptCashSecret opens f's cashctl.db directly and rewrites the given
+// held entry's cash_secret/pending_cash_secret columns — simulating the
 // on-disk state left by an interrupted protect step, without needing to
 // actually race a kill against the network.
-func corruptBearerSecret(t *testing.T, f *fixture, entryID, bearerSecret, pendingSecret string) {
+func corruptCashSecret(t *testing.T, f *fixture, entryID, cashSecret, pendingSecret string) {
 	t.Helper()
 	db, err := sql.Open("sqlite", "file:"+filepath.Join(f.configDir, "cashctl.db"))
 	if err != nil {
 		t.Fatalf("open cashctl.db directly: %v", err)
 	}
 	defer db.Close()
-	res, err := db.Exec(`UPDATE entries SET bearer_secret = ?, pending_bearer_secret = ? WHERE id = ?`, bearerSecret, pendingSecret, entryID)
+	res, err := db.Exec(`UPDATE entries SET cash_secret = ?, pending_cash_secret = ? WHERE id = ?`, cashSecret, pendingSecret, entryID)
 	if err != nil {
 		t.Fatalf("corrupt entries row: %v", err)
 	}
@@ -67,14 +67,14 @@ func corruptBearerSecret(t *testing.T, f *fixture, entryID, bearerSecret, pendin
 	}
 }
 
-// receiveAndScrambleBearerSecret receives gift (protect runs normally,
+// receiveAndScrambleCashSecret receives gift (protect runs normally,
 // under --json, and rekeys it to a fresh, genuinely live secret), then
-// simulates an interrupted rekey's on-disk aftermath: bearer_secret is
+// simulates an interrupted rekey's on-disk aftermath: cash_secret is
 // overwritten with a dead value, and the real, still-live secret protect
-// just established is moved into pending_bearer_secret instead — exactly
+// just established is moved into pending_cash_secret instead — exactly
 // the shape a kill between protectRekeyOnly's write-ahead save and its own
 // final promotion leaves behind, regardless of which save actually landed.
-func receiveAndScrambleBearerSecret(t *testing.T, f *fixture, gift string) (id string) {
+func receiveAndScrambleCashSecret(t *testing.T, f *fixture, gift string) (id string) {
 	t.Helper()
 	recv := f.mustJSON("receive", gift)
 	secured, _ := recv["secured"].(map[string]any)
@@ -82,15 +82,15 @@ func receiveAndScrambleBearerSecret(t *testing.T, f *fixture, gift string) (id s
 		t.Fatalf("secured.status = %v, want rekeyed (test fixture assumption)", secured)
 	}
 	id = entryID(t, recv["entry"])
-	real := currentBearerSecret(t, f, id)
-	corruptBearerSecret(t, f, id, strings.Repeat("d", 64), real)
+	real := currentCashSecret(t, f, id)
+	corruptCashSecret(t, f, id, strings.Repeat("d", 64), real)
 	return id
 }
 
 // TestPendingSecretFallback_RedeemRecoversWhenPendingSecretIsTheRealOne is
-// the direct regression test: an entry whose bearer_secret column is stale
+// the direct regression test: an entry whose cash_secret column is stale
 // (the OLD, now-dead secret an interrupted rekey retired) but whose
-// pending_bearer_secret column holds the secret the Hub actually accepted
+// pending_cash_secret column holds the secret the Hub actually accepted
 // must still redeem for real, not report "wrong secret" and give up.
 func TestPendingSecretFallback_RedeemRecoversWhenPendingSecretIsTheRealOne(t *testing.T) {
 	admin := adminOrSkip(t)
@@ -98,12 +98,12 @@ func TestPendingSecretFallback_RedeemRecoversWhenPendingSecretIsTheRealOne(t *te
 	f := newFixture(t)
 
 	const amount = uint64(8_000)
-	receiveAndScrambleBearerSecret(t, f, mintBearerGift(t, hub, amount))
+	receiveAndScrambleCashSecret(t, f, mintCashGift(t, hub, amount))
 
 	inv := makeHubInvoice(t, hub, amount)
 	res := f.run("redeem", "--invoice", inv, "--yes")
 	if res.ExitCode != 0 {
-		t.Fatalf("redeem with a dead bearer_secret but a live pending_bearer_secret: exit %d — the fallback did not recover the real secret\nstdout: %s\nstderr: %s",
+		t.Fatalf("redeem with a dead cash_secret but a live pending_cash_secret: exit %d — the fallback did not recover the real secret\nstdout: %s\nstderr: %s",
 			res.ExitCode, res.Stdout, res.Stderr)
 	}
 	out := mustDecodeJSON(t, "redeem", res.Stdout)
@@ -120,17 +120,17 @@ func TestPendingSecretFallback_TransferRecoversWhenPendingSecretIsTheRealOne(t *
 	hub := setUpCashHub(t, admin)
 	f := newFixture(t)
 
-	receiveAndScrambleBearerSecret(t, f, mintBearerGift(t, hub, 6_000))
+	receiveAndScrambleCashSecret(t, f, mintCashGift(t, hub, 6_000))
 
 	res := f.run("transfer", fakeHex32(t), "--yes")
 	if res.ExitCode != 0 {
-		t.Fatalf("transfer with a dead bearer_secret but a live pending_bearer_secret: exit %d — the fallback did not recover the real secret\nstdout: %s\nstderr: %s",
+		t.Fatalf("transfer with a dead cash_secret but a live pending_cash_secret: exit %d — the fallback did not recover the real secret\nstdout: %s\nstderr: %s",
 			res.ExitCode, res.Stdout, res.Stderr)
 	}
 }
 
 // TestPendingSecretFallback_DoesNotMaskAGenuinelyWrongSecret confirms the
-// fallback isn't a blanket "ignore bearer_secret" escape hatch: when
+// fallback isn't a blanket "ignore cash_secret" escape hatch: when
 // NEITHER value is live any more (both genuinely wrong/spent), the spend
 // must still fail, with the original decline reported.
 func TestPendingSecretFallback_DoesNotMaskAGenuinelyWrongSecret(t *testing.T) {
@@ -138,9 +138,9 @@ func TestPendingSecretFallback_DoesNotMaskAGenuinelyWrongSecret(t *testing.T) {
 	hub := setUpCashHub(t, admin)
 	f := newFixture(t)
 
-	recv := f.mustJSON("receive", mintBearerGift(t, hub, 4_000))
+	recv := f.mustJSON("receive", mintCashGift(t, hub, 4_000))
 	id := entryID(t, recv["entry"])
-	corruptBearerSecret(t, f, id, strings.Repeat("1", 64), strings.Repeat("2", 64))
+	corruptCashSecret(t, f, id, strings.Repeat("1", 64), strings.Repeat("2", 64))
 
 	res := f.run("transfer", fakeHex32(t), "--yes")
 	if res.ExitCode == 0 {
@@ -152,15 +152,15 @@ func TestPendingSecretFallback_DoesNotMaskAGenuinelyWrongSecret(t *testing.T) {
 }
 
 // TestReceive_ProtectRekeyOnly_HappyPath_LeavesNoPendingSecret pins the
-// unchanged common case: a normal, uninterrupted protect leaves BearerSecret
-// as the fresh secret and PendingBearerSecret empty — the write-ahead field
+// unchanged common case: a normal, uninterrupted protect leaves CashSecret
+// as the fresh secret and PendingCashSecret empty — the write-ahead field
 // is write-only scaffolding for the interrupted case, invisible otherwise.
 func TestReceive_ProtectRekeyOnly_HappyPath_LeavesNoPendingSecret(t *testing.T) {
 	admin := adminOrSkip(t)
 	hub := setUpCashHub(t, admin)
 	f := newFixture(t)
 
-	recv := f.mustJSON("receive", mintBearerGift(t, hub, 5_000))
+	recv := f.mustJSON("receive", mintCashGift(t, hub, 5_000))
 	secured, _ := recv["secured"].(map[string]any)
 	if secured["status"] != "rekeyed" {
 		t.Fatalf("secured.status = %v, want rekeyed", secured)
@@ -172,10 +172,10 @@ func TestReceive_ProtectRekeyOnly_HappyPath_LeavesNoPendingSecret(t *testing.T) 
 	}
 	defer db.Close()
 	var pending sql.NullString
-	if err := db.QueryRow(`SELECT pending_bearer_secret FROM entries WHERE id = ?`, entryID(t, recv["entry"])).Scan(&pending); err != nil {
-		t.Fatalf("querying pending_bearer_secret: %v", err)
+	if err := db.QueryRow(`SELECT pending_cash_secret FROM entries WHERE id = ?`, entryID(t, recv["entry"])).Scan(&pending); err != nil {
+		t.Fatalf("querying pending_cash_secret: %v", err)
 	}
 	if pending.Valid && pending.String != "" {
-		t.Errorf("pending_bearer_secret = %q after an uninterrupted protect, want empty", pending.String)
+		t.Errorf("pending_cash_secret = %q after an uninterrupted protect, want empty", pending.String)
 	}
 }

@@ -139,7 +139,7 @@ func runCircleJoin(cmd *cobra.Command, args []string) error {
 	// hub is a classified UsageError — see cash_consolidate.go's own
 	// comment on --sources for why.
 	if hub == "" {
-		return output.UsageError(cmd, fmt.Errorf("a Circle Hub connection is required — pass it directly (cashctl join <hub-connection>) or via --hub"))
+		return output.InvocationError(cmd, fmt.Errorf("a Circle Hub connection is required — pass it directly (cashctl join <hub-connection>) or via --hub"))
 	}
 	maxAmount, err := resolvePositionalOrFlagAmount(cmd, positionalMaxAmount, "max-amount", maxAmountFlag)
 	if err != nil {
@@ -153,7 +153,7 @@ func runCircleJoin(cmd *cobra.Command, args []string) error {
 	// missing cap fails fast, locally, instead of round-tripping to the
 	// Hub for the same rejection.
 	if maxAmount == 0 {
-		return output.UsageError(cmd, fmt.Errorf("a max amount is required — pass it directly (cashctl join <hub-connection> <amount>) or via --max-amount"))
+		return output.InvocationError(cmd, fmt.Errorf("a max amount is required — pass it directly (cashctl join <hub-connection> <amount>) or via --max-amount"))
 	}
 
 	pairingURI, label, err := resolveHubConnection(cmd, hub)

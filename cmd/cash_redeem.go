@@ -33,7 +33,7 @@ func newCashRedeemCmd() *cobra.Command {
 	cmd.Flags().String("token", "", "which held token to redeem (auto-picked if you only hold one)")
 	cmd.Flags().String("into", "", "which wallet to redeem into (defaults to your default wallet)")
 	cmd.Flags().String("invoice", "", "redeem straight into this external invoice")
-	cmd.Flags().String("as", "", "override credential (pubkey:<priv> | connection-key:... | bearer:<secret>)")
+	cmd.Flags().String("as", "", "override credential (pubkey:<priv> | connection-key:... | cash:<secret>)")
 	return cmd
 }
 
@@ -63,9 +63,9 @@ func runCashRedeem(cmd *cobra.Command, args []string) error {
 	if conn, _ := cmd.Flags().GetString("connection"); conn != "" {
 		switch {
 		case explicitInvoice != "":
-			return output.UsageError(cmd, fmt.Errorf("-c/--connection names the wallet to redeem into, but --invoice redeems straight into an invoice — pass one or the other"))
+			return output.InvocationError(cmd, fmt.Errorf("-c/--connection names the wallet to redeem into, but --invoice redeems straight into an invoice — pass one or the other"))
 		case intoValue != "" && intoValue != conn:
-			return output.UsageError(cmd, fmt.Errorf("got both a destination (%q) and -c/--connection (%q) with different values — pass only one", output.Sanitize(intoValue), output.Sanitize(conn)))
+			return output.InvocationError(cmd, fmt.Errorf("got both a destination (%q) and -c/--connection (%q) with different values — pass only one", output.Sanitize(intoValue), output.Sanitize(conn)))
 		}
 		intoValue = conn
 	}
@@ -177,7 +177,7 @@ func runCashRedeem(cmd *cobra.Command, args []string) error {
 
 	var result *nipcash.CashRedeemResult
 	err = WithSpinner(jsonMode, "Redeeming...", func() error {
-		r, cErr := spendBearerEntry(entry, cred, func(c nipcash.Credential) (*nipcash.CashRedeemResult, error) {
+		r, cErr := spendCashEntry(entry, cred, func(c nipcash.Credential) (*nipcash.CashRedeemResult, error) {
 			return sourceClient.CashRedeem(ctx, nipcash.CashRedeemParams{Invoice: invoice, Credential: c})
 		})
 		if cErr != nil {
@@ -323,9 +323,9 @@ func pickHeldToken(cmd *cobra.Command, held []ledger.Entry) (*ledger.Entry, erro
 }
 
 // resolveCredential resolves the credential to redeem/transfer with:
-// --as overrides everything; a bearer-mode token uses its stored
-// BearerSecret — `cashctl receive` refuses to save a bearer-mode entry
-// without one (see ledger.Entry.BearerSecret's own doc comment), so any
+// --as overrides everything; a cash-mode token uses its stored
+// CashSecret — `cashctl receive` refuses to save a cash-mode entry
+// without one (see ledger.Entry.CashSecret's own doc comment), so any
 // entry reaching this point is guaranteed to have it; a connection-key-
 // bound token currently requires an explicit --as (re-deriving a fresh
 // live attestation automatically is a known gap — see ledger.Entry's own
@@ -340,10 +340,10 @@ func resolveCredential(cmd *cobra.Command, entry *ledger.Entry) (nipcash.Credent
 		return cred, nil
 	}
 	if entry.IdentityRequired != nil && !*entry.IdentityRequired {
-		return nipcash.BySecret(entry.BearerSecret), nil
+		return nipcash.BySecret(entry.CashSecret), nil
 	}
 	if entry.ConnectionKeyPlatform != "" {
-		return nil, output.UsageError(cmd, fmt.Errorf(
+		return nil, output.InvocationError(cmd, fmt.Errorf(
 			"this token is connection-key-bound — pass --as connection-key:<privkey>,%s,%s,<attestation-file>",
 			entry.ConnectionKeyPlatform, entry.ConnectionKeyExternalID))
 	}
@@ -440,7 +440,7 @@ func resolveAmount(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entry, so
 	if err != nil {
 		return 0, output.RuntimeError(cmd, err)
 	}
-	// CheckClaim tries pubkey then bearer live; no need to pre-decide.
+	// CheckClaim tries pubkey then cash mode live; no need to pre-decide.
 	// Bounded, unlike a bare context.Background() (a real hang bug this
 	// specific call had: with no deadline at all, a relay that accepts the
 	// connection but never answers left `cashctl redeem`/`transfer`/

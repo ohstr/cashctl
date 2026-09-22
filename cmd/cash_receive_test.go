@@ -13,10 +13,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// The former TestValidateBearerSecret lived here — validateBearerSecret
-// and the --secret flag it guarded are both gone now: a bearer-mode
+// The former TestValidateCashSecret lived here — validateCashSecret
+// and the --secret flag it guarded are both gone now: a cash-mode
 // receive requires the secret to be embedded in the token itself
-// (<token>#<bearer_secret>) or it degrades to a read-only check instead
+// (<token>#<cash_secret>) or it degrades to a read-only check instead
 // of erroring (cash_receive.go's own Step 0).
 
 // TestRunCashReceive_NoEmbeddedSecret_JSONMode covers Step 0's

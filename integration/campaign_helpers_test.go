@@ -29,9 +29,9 @@ func adminOrSkip(t *testing.T) *adminClient {
 	return admin
 }
 
-// mintBearerGift mints a bearer token from hub and returns the shareable
-// "<token>#<bearer_secret>" gift string, the form `cashctl receive` takes.
-func mintBearerGift(t *testing.T, hub adminCreateAppResponse, amountMillis uint64) string {
+// mintCashGift mints a cash-mode token from hub and returns the shareable
+// "<token>#<cash_secret>" gift string, the form `cashctl receive` takes.
+func mintCashGift(t *testing.T, hub adminCreateAppResponse, amountMillis uint64) string {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -40,12 +40,12 @@ func mintBearerGift(t *testing.T, hub adminCreateAppResponse, amountMillis uint6
 		Recipients: []nipcash.Allocation{nipcash.Send(nipcash.Anyone(), amountMillis)},
 	})
 	if err != nil {
-		t.Fatalf("mint_cash (bearer): %v", err)
+		t.Fatalf("mint_cash (cash): %v", err)
 	}
-	if len(result.Recipients) != 1 || result.Recipients[0].BearerSecret == "" {
-		t.Fatalf("mint_cash (bearer): expected exactly one recipient with a bearer_secret: %+v", result.Recipients)
+	if len(result.Recipients) != 1 || result.Recipients[0].CashSecret == "" {
+		t.Fatalf("mint_cash (cash): expected exactly one recipient with a cash_secret: %+v", result.Recipients)
 	}
-	return result.CashToken + "#" + result.Recipients[0].BearerSecret
+	return result.CashToken + "#" + result.Recipients[0].CashSecret
 }
 
 // makeHubInvoice has hub's own NWC connection make an invoice for exactly
@@ -68,7 +68,7 @@ func makeHubInvoice(t *testing.T, hub adminCreateAppResponse, amountMillis uint6
 func assertNoIdentityDemand(t *testing.T, step string, res result) {
 	t.Helper()
 	if strings.Contains(res.Stderr, "cashctl init") || strings.Contains(res.Stdout, "cashctl init") {
-		t.Fatalf("%s: demanded a local identity from a bearer-only wallet (exit %d)\nstdout: %s\nstderr: %s", step, res.ExitCode, res.Stdout, res.Stderr)
+		t.Fatalf("%s: demanded a local identity from a cash-mode-only wallet (exit %d)\nstdout: %s\nstderr: %s", step, res.ExitCode, res.Stdout, res.Stderr)
 	}
 }
 

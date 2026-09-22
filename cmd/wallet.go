@@ -53,6 +53,37 @@ func identityNpub() (string, error) {
 	return nip19.EncodePublicKey(pubHex)
 }
 
+// cashModeLabel renders which of the three cash modes e is held in —
+// "cash"/"identity cash"/"web identity cash", the same vocabulary
+// cash_transfer's own confirm/result messages use — plus cash mode's
+// own shared/protected sub-state (see Entry.CashProtection's own doc
+// comment): "shared" means the spending secret is still whatever was
+// embedded in the received token/gift string, spendable by anyone else
+// who was shown it too — the whole reason `receive` offers to protect a
+// cash gift automatically, and the one status here money can actually
+// be at risk from, not just informational the way verified/unverified
+// is. Identity cash and web identity cash have no such sub-state: once
+// reassigned to a specific pubkey/connection identity, only that
+// identity's own key can ever spend it.
+func cashModeLabel(e ledger.Entry) string {
+	switch e.CashProtection {
+	case ledger.CashShared:
+		return "cash (shared — anyone with this can spend it; `cashctl wallet protect " + e.ID + "` fixes this)"
+	case ledger.CashProtected:
+		return "cash (protected)"
+	}
+	if e.IdentityRequired != nil && !*e.IdentityRequired {
+		// Cash-mode with no CashProtection recorded (data saved before
+		// that field existed) — still cash, just without a shared/protected
+		// read to report.
+		return "cash"
+	}
+	if e.ConnectionKeyPlatform != "" {
+		return "web identity cash"
+	}
+	return "identity cash"
+}
+
 func newWalletShowCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "show",
@@ -62,8 +93,8 @@ func newWalletShowCmd() *cobra.Command {
 			jsonMode, _ := cmd.Flags().GetBool("json")
 
 			// Identity is OPTIONAL here, unlike everywhere else it's
-			// loaded: a bearer-only wallet (never run `init`, and never
-			// needs to — receive/transfer/redeem of a bearer-mode entry
+			// loaded: a cash-mode-only wallet (never run `init`, and never
+			// needs to — receive/transfer/redeem of a cash-mode entry
 			// all work without one) still holds real wallets/tokens worth
 			// listing. Only a genuine identity.Load failure OTHER than
 			// "none configured yet" is still a real error.
@@ -109,7 +140,7 @@ func newWalletShowCmd() *cobra.Command {
 			if npub != "" {
 				fmt.Printf("Identity: %s (%s)\n", npub, source)
 			} else {
-				fmt.Println("No local identity configured yet — bearer-mode holdings below still work fine without one. Run `cashctl init` if you need a pubkey-mode identity.")
+				fmt.Println("No local identity configured yet — cash holdings below still work fine without one. Run `cashctl init` if you need a pubkey-mode identity.")
 			}
 			fmt.Println()
 			if s.IsEmpty() {
@@ -139,20 +170,7 @@ func newWalletShowCmd() *cobra.Command {
 				if !e.Verified {
 					status = "unverified"
 				}
-				// bearer-mode only (e.BearerProtection is "" — n/a — for a
-				// pubkey-mode entry, see its own doc comment): "shared"
-				// means the spending secret is still whatever was embedded
-				// in the received token/gift string, spendable by anyone
-				// else who was shown it too — the whole reason `receive`
-				// offers to protect a bearer gift automatically, and the
-				// one status here money can actually be at risk from, not
-				// just informational the way verified/unverified is.
-				switch e.BearerProtection {
-				case ledger.BearerShared:
-					status += ", bearer (shared — still spendable by anyone with the code; `cashctl wallet protect " + e.ID + "` fixes this)"
-				case ledger.BearerProtected:
-					status += ", bearer (protected)"
-				}
+				status += ", " + cashModeLabel(e)
 				fmt.Printf("  %d) %s   received %s   %s\n", i+1, amount, formatReceivedDate(e.ReceivedAt), status)
 			}
 			return nil

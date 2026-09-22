@@ -21,7 +21,7 @@ func newCashReceiveCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "receive <token>",
 		Short: `"Cash-in" a token: verify and add it to your wallet`,
-		Long:  `Verifies a cash token against the Hub before saving it. A bearer token needs its secret embedded as "<token>#<secret>".`,
+		Long:  `Verifies a cash token against the Hub before saving it. A cash-mode token needs its secret embedded as "<token>#<secret>".`,
 		Example: `  cashctl receive lokicash1...
   cashctl receive lokicash1...#deadbeef`,
 		Args: output.ExactArgs(1),
@@ -38,7 +38,7 @@ func runCashReceive(cmd *cobra.Command, args []string) error {
 	// Trimmed: dial.Sniff trims for its own classification but the raw
 	// string would otherwise still reach nipcash.Decode, which rejects a
 	// stray leading/trailing space as invalid bech32.
-	input, embeddedSecret := nipcash.SplitBearerSliceString(strings.TrimSpace(args[0]))
+	input, embeddedSecret := nipcash.SplitCashSliceString(strings.TrimSpace(args[0]))
 
 	switch dial.Sniff(input) {
 	case dial.KindCircleHub:
@@ -63,16 +63,16 @@ func runCashReceive(cmd *cobra.Command, args []string) error {
 	// best-effort hint that can go stale (NIP-CASH §Redemption Metadata)
 	// — an embedded secret is checked too since it's unambiguous either
 	// way. The save further down never trusts this guess: it uses
-	// result.IsBearer, CheckClaim's own live answer.
-	isBearer := (tok.IdentityRequired != nil && !*tok.IdentityRequired) || embeddedSecret != ""
+	// result.IsCash, CheckClaim's own live answer.
+	isCash := (tok.IdentityRequired != nil && !*tok.IdentityRequired) || embeddedSecret != ""
 
-	// Step 0: a bearer token with no embedded secret carries nothing this
+	// Step 0: a cash-mode token with no embedded secret carries nothing this
 	// command can act on — degrade to exactly decode --check's own
 	// contract (read, optionally cross-check live, never save, never
 	// propose securing) rather than erroring. This is an expected
 	// outcome, not a usage mistake.
-	if isBearer && embeddedSecret == "" {
-		printCashBill(jsonMode, tok, isBearer)
+	if isCash && embeddedSecret == "" {
+		printCashBill(jsonMode, tok, isCash)
 		if shouldRunCheck(cmd, jsonMode, false, "Verify online?") {
 			checkResult, checkErr := checkClaimOnce(cmd, input, tok)
 			if !jsonMode {
@@ -105,7 +105,7 @@ func runCashReceive(cmd *cobra.Command, args []string) error {
 		return output.ConflictError(cmd, input, ledger.ErrAlreadyHeld)
 	}
 
-	printCashBill(jsonMode, tok, isBearer)
+	printCashBill(jsonMode, tok, isCash)
 
 	result, err := checkClaimWithCashHub(cmd, input, tok)
 	if err != nil {
@@ -119,24 +119,24 @@ func runCashReceive(cmd *cobra.Command, args []string) error {
 		Token:        input,
 		WalletPubkey: tok.WalletPubkey,
 		Secret:       tok.Secret,
-		BearerSecret: embeddedSecret,
+		CashSecret:   embeddedSecret,
 		RelayURLs:    tok.RelayURLs,
-		// result.IsBearer, not tok.IdentityRequired or the guess above:
+		// result.IsCash, not tok.IdentityRequired or the guess above:
 		// this drives every later operation on the entry, so it should
 		// carry CheckClaim's live answer, not a pre-network guess.
-		IdentityRequired: ptrTo(!result.IsBearer),
+		IdentityRequired: ptrTo(!result.IsCash),
 		AmountMillis:     &result.AmountMillis,
 		Verified:         true,
 		MinterPubkey:     result.MinterPubkey,
 		ExpiresAt:        result.ExpiresAt,
 	}
-	if result.IsBearer {
+	if result.IsCash {
 		// Shared, not yet protected: this is the secret exactly as it
 		// arrived in the token/gift string, still spendable by anyone else
-		// who was shown it too. protectBearerReceipt (below, after this
-		// entry is saved) flips it to BearerProtected on a successful
-		// re-key — see ledger.Entry.BearerProtection's own doc comment.
-		entry.BearerProtection = ledger.BearerShared
+		// who was shown it too. protectCashReceipt (below, after this
+		// entry is saved) flips it to CashProtected on a successful
+		// re-key — see ledger.Entry.CashProtection's own doc comment.
+		entry.CashProtection = ledger.CashShared
 	}
 
 	added, err := l.Add(entry)
@@ -166,8 +166,8 @@ func runCashReceive(cmd *cobra.Command, args []string) error {
 		fmt.Printf("Received %s.\n", output.FormatAmount(int64(result.AmountMillis)))
 	}
 
-	// result.IsBearer, not the pre-check guess above.
-	protected, finalEntry := protectBearerReceipt(cmd, l, added, result.IsBearer)
+	// result.IsCash, not the pre-check guess above.
+	protected, finalEntry := protectCashReceipt(cmd, l, added, result.IsCash)
 
 	if jsonMode {
 		// JSON key stays "secured" — an intentional, unchanged part of the
@@ -180,18 +180,18 @@ func runCashReceive(cmd *cobra.Command, args []string) error {
 // printCashBill prints a token's details before receive commits to
 // anything — the human gets to see what they're about to accept, in the
 // same moment cashctl is about to go check it's real. Never prints Secret
-// or the bearer secret: this is display, not a way to extract a working
+// or the cash secret: this is display, not a way to extract a working
 // credential (see decode.go's own "pairing secret is never included"
 // rule).
-func printCashBill(jsonMode bool, tok nipcash.Token, isBearer bool) {
+func printCashBill(jsonMode bool, tok nipcash.Token, isCash bool) {
 	output.Notef(jsonMode, "Cash bill:")
 	output.Notef(jsonMode, "  wallet_pubkey: %s", tok.WalletPubkey)
 	if len(tok.RelayURLs) > 0 {
 		output.Notef(jsonMode, "  relays: %s", joinStrings(tok.RelayURLs))
 	}
 	switch {
-	case isBearer:
-		output.Notef(jsonMode, "  identity: bearer-mode")
+	case isCash:
+		output.Notef(jsonMode, "  identity: cash-mode")
 	case tok.IdentityRequired != nil:
 		output.Notef(jsonMode, "  identity: requires proof")
 	default:
@@ -231,7 +231,7 @@ func minterPubkeyFromToken(tok nipcash.Token) *string {
 // recipient matching this token's identity — refuses the token outright:
 // nothing gets saved, ever, on the strength of the token string alone.
 // Always passes its own local pubkey (best-effort): CheckClaim tries
-// both pubkey and bearer live, so the caller doesn't need to guess.
+// both pubkey and cash mode live, so the caller doesn't need to guess.
 // validateClaimedAmount is the second half of "refuses anything that
 // doesn't check out" (this file's own package doc comment): checkClaimWithCashHub
 // only proves a matching, unclaimed recipient exists — it never checks
@@ -307,7 +307,7 @@ func checkClaimWithCashHub(cmd *cobra.Command, input string, tok nipcash.Token) 
 	return nil, classifyCashTokenNWCErr(cmd, err)
 }
 
-// checkClaimOnce is Step 0's optional, non-fatal check for a bearer token
+// checkClaimOnce is Step 0's optional, non-fatal check for a cash-mode token
 // with no embedded secret — same underlying CheckClaim call as
 // checkClaimWithCashHub, but never classified into a hard CLIError:
 // there's nothing to save regardless of what this reports, so the
