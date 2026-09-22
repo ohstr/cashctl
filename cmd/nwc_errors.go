@@ -53,7 +53,7 @@ func classifyCashTokenNWCErr(cmd *cobra.Command, err error) error {
 // There is deliberately no attempt here to go further and DECIDE that
 // the sources were consumed (e.g. marking them accordingly): the SDK
 // exposes no signal more specific than this message for cash_consolidate
-// (unlike RekeyBearerSlice/TransferFromSources' own typed
+// (unlike RekeyCashSlice/TransferFromSources' own typed
 // PartialProgressError for their composite calls), so guessing either
 // way is worse than saying plainly that it's unknown — guessing
 // "consumed" when it wasn't would lock a caller out of genuinely

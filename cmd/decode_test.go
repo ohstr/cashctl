@@ -107,7 +107,7 @@ func TestShouldRunCheck_TextModeWithoutFlagHonorsExplicitYes(t *testing.T) {
 	}
 }
 
-func TestShouldCheckCashToken_BearerTokenAlwaysPromptsRegardlessOfIdentity(t *testing.T) {
+func TestShouldCheckCashToken_CashTokenAlwaysPromptsRegardlessOfIdentity(t *testing.T) {
 	tmp := t.TempDir()
 	appdir.SetOverride(tmp)
 	t.Cleanup(func() { appdir.SetOverride("") })
@@ -119,7 +119,7 @@ func TestShouldCheckCashToken_BearerTokenAlwaysPromptsRegardlessOfIdentity(t *te
 	// only comes back true if shouldRunCheck's Confirm() actually ran.
 	withStdin(t, "y\n")
 	if got := shouldCheckCashToken(c, false, false, true); !got {
-		t.Errorf("shouldCheckCashToken(bearer token, no identity, explicit y) = false, want true (it must actually prompt, not skip)")
+		t.Errorf("shouldCheckCashToken(cash-mode token, no identity, explicit y) = false, want true (it must actually prompt, not skip)")
 	}
 }
 

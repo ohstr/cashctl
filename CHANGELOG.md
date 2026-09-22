@@ -1,5 +1,13 @@
 # Changelog
 
+## [Unreleased]
+
+- **Breaking:** NIP-CASH's "bearer" mode is now "cash mode" on the wire, so this release needs a Hub that speaks the renamed protocol (lokihub 0.5.0-rc.6 or later). Older Hubs reject its cash-mode requests.
+- **Breaking:** two `--json` keys are renamed: `bearer_protection` becomes `cash_protection` (`wallet show`, `receive`, `transfer`, `consolidate`), and `decode`'s `embedded_bearer_secret_present` becomes `embedded_cash_secret_present`.
+- The ledger migrates itself the first time this version opens it: the `bearer_secret`, `pending_bearer_secret` and `bearer_protection` columns are renamed to `cash_secret`, `pending_cash_secret` and `cash_protection`. Stored values, including every spending secret, are carried across untouched, and held tokens stay spendable.
+- Downgrading afterwards is not supported: an older cashctl stops with "no such column: bearer_secret" rather than reading a half-renamed ledger. It could not reach a renamed Hub anyway.
+- Bumped `nmilat` to the cash-mode API (`NewCashTarget`, `RekeyCashSlice`, `CashSecret`, `IsCash`).
+
 ## [0.3.0] ([#7](https://github.com/ohstr/cashctl/pull/7))
 
 - New `wallet protect [id]` re-keys a still-shared bearer holding when `receive`'s auto-protect was declined or failed.

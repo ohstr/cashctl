@@ -112,7 +112,7 @@ func TestListings_DoNotPrintWalletConnectionSecret(t *testing.T) {
 // error class — not_found, exit 4 (AGENTS.md lists "no wallet configured
 // yet" there) — whichever thing is missing. A missing identity used to come
 // back as `internal`, exit 1, from `join`. (`wallet show` deliberately works
-// without an identity now: a bearer-only wallet has none.)
+// without an identity now: a cash-mode-only wallet has none.)
 func TestErrors_MissingIdentity_SameClassEverywhere(t *testing.T) {
 	f := newFixture(t) // never initialised: no identity, no wallet
 	noIdentity := f.run("join", fakeCircleHubConnection(t), "10")
@@ -257,7 +257,7 @@ func TestContract_TextModeErrorsGoToStderrOnly(t *testing.T) {
 }
 
 // Everything the compiled binary writes under its config dir holds secrets
-// (plaintext identity key, bearer secrets, wallet URIs): no file may be
+// (plaintext identity key, cash secrets, wallet URIs): no file may be
 // group/world accessible, even under a permissive umask, and neither may a
 // directory the binary itself created.
 func TestConfigDir_BinaryCreatedFilesArePrivate(t *testing.T) {
@@ -317,7 +317,7 @@ func TestErrors_InputNeverEchoesConnectionSecrets(t *testing.T) {
 	}
 }
 
-// A bearer gift (token#secret) or a Circle Hub connection string mis-pasted
+// A cash gift (token#secret) or a Circle Hub connection string mis-pasted
 // into `join` must not echo its own secret back — same class as
 // TestErrors_InputNeverEchoesConnectionSecrets, different positional
 // argument and a different secret shape (a gift's #<secret> suffix,
@@ -330,7 +330,7 @@ func TestErrors_JoinMisPaste_DoesNotEchoSecrets(t *testing.T) {
 
 	res := f.run("join", gift, "10")
 	if strings.Contains(res.Stderr, secret) {
-		t.Errorf("join <bearer gift> echoed the secret:\nstderr: %s", res.Stderr)
+		t.Errorf("join <cash gift> echoed the secret:\nstderr: %s", res.Stderr)
 	}
 }
 

@@ -6,18 +6,18 @@ import (
 	"github.com/ohstr/cashctl/internal/ledger"
 )
 
-// spendBearerEntry places a single wire call that spends entry — with
+// spendCashEntry places a single wire call that spends entry — with
 // cred, resolveCredential's own choice — and, if entry carries a
-// not-yet-reconciled PendingBearerSecret (see cmd/receive_secure.go's own
+// not-yet-reconciled PendingCashSecret (see cmd/receive_secure.go's own
 // doc comment on how one gets there: a protect step that couldn't confirm
 // whether its rekey landed before failing) and the call declines
 // specifically as a wrong-secret NOT_FOUND, retries once with the pending
 // secret instead.
 //
 // This is the only place cashctl can ever actually learn which of two
-// candidate bearer secrets an interrupted rekey left live — NIP-CASH has
+// candidate cash secrets an interrupted rekey left live — NIP-CASH has
 // no read-only way to ask (nipcashclient.CheckClaim's own doc comment: a
-// bearer match only proves *some* recipient exists, never *which* secret)
+// cash-mode match only proves *some* recipient exists, never *which* secret)
 // — so it happens here, at the point an entry is genuinely about to be
 // spent, rather than as a separate "reconcile" step nothing else in
 // cashctl calls unprompted.
@@ -29,16 +29,16 @@ import (
 //
 // place is called with the credential to use; T is whatever result type
 // the specific wire method returns (CashRedeemResult, CashTransferResult,
-// ...). Never second-guesses an explicit --as override or a non-bearer
+// ...). Never second-guesses an explicit --as override or a identity-bound
 // entry — resolveCredential already priced those in before cred ever
-// reached here, and PendingBearerSecret is only ever set on a genuinely
-// bearer-mode entry to begin with.
-func spendBearerEntry[T any](entry *ledger.Entry, cred nipcash.Credential, place func(nipcash.Credential) (T, error)) (T, error) {
+// reached here, and PendingCashSecret is only ever set on a genuinely
+// cash-mode entry to begin with.
+func spendCashEntry[T any](entry *ledger.Entry, cred nipcash.Credential, place func(nipcash.Credential) (T, error)) (T, error) {
 	result, err := place(cred)
-	if err == nil || entry.PendingBearerSecret == "" || entry.PendingBearerSecret == entry.BearerSecret || !isWrongSecretDecline(err) {
+	if err == nil || entry.PendingCashSecret == "" || entry.PendingCashSecret == entry.CashSecret || !isWrongSecretDecline(err) {
 		return result, err
 	}
-	pending := entry.PendingBearerSecret
+	pending := entry.PendingCashSecret
 	retryResult, retryErr := place(nipcash.BySecret(pending))
 	if retryErr != nil {
 		// The FIRST decline is the one worth reporting — a second guess's
@@ -46,7 +46,7 @@ func spendBearerEntry[T any](entry *ledger.Entry, cred nipcash.Credential, place
 		// wrong-secret signal, now for a genuinely-wrong pending value).
 		return result, err
 	}
-	entry.BearerSecret = pending
-	entry.PendingBearerSecret = ""
+	entry.CashSecret = pending
+	entry.PendingCashSecret = ""
 	return retryResult, nil
 }

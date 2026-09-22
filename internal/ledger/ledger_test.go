@@ -261,7 +261,7 @@ func TestSaveAndLoad_IdentityRequiredFalseRoundTrip(t *testing.T) {
 		t.Fatalf("Load() error = %v", err)
 	}
 	no := false
-	if _, err := l.Add(Entry{Token: "lokicash1bearer", IdentityRequired: &no}); err != nil {
+	if _, err := l.Add(Entry{Token: "lokicash1cash", IdentityRequired: &no}); err != nil {
 		t.Fatalf("Add() error = %v", err)
 	}
 	if _, err := l.Add(Entry{Token: "lokicash1unspecified"}); err != nil {
@@ -275,12 +275,12 @@ func TestSaveAndLoad_IdentityRequiredFalseRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() (reloaded) error = %v", err)
 	}
-	bearer, _ := reloaded.FindByToken("lokicash1bearer")
-	if bearer.IdentityRequired == nil {
+	cashMode, _ := reloaded.FindByToken("lokicash1cash")
+	if cashMode.IdentityRequired == nil {
 		t.Fatal("IdentityRequired = nil after reload, want a non-nil pointer to false")
 	}
-	if *bearer.IdentityRequired != false {
-		t.Errorf("IdentityRequired = %v, want false", *bearer.IdentityRequired)
+	if *cashMode.IdentityRequired != false {
+		t.Errorf("IdentityRequired = %v, want false", *cashMode.IdentityRequired)
 	}
 	unspecified, _ := reloaded.FindByToken("lokicash1unspecified")
 	if unspecified.IdentityRequired != nil {
@@ -507,7 +507,7 @@ func TestSave_FilePermissions(t *testing.T) {
 	withTempConfigDir(t)
 
 	l, _ := Load()
-	_, _ = l.Add(Entry{Token: "lokicash1bearer", Secret: "a-bearer-secret-is-money"})
+	_, _ = l.Add(Entry{Token: "lokicash1cash", Secret: "a-cash-secret-is-money"})
 	if err := l.Save(); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
@@ -767,21 +767,21 @@ func TestSave_ManyDisjointConcurrentWritersAllSucceed(t *testing.T) {
 	}
 }
 
-// TestSaveAndLoad_PendingBearerSecretRoundTrip covers the write-ahead field
+// TestSaveAndLoad_PendingCashSecretRoundTrip covers the write-ahead field
 // a rekey/protect step persists before its own wire call (see
-// cmd/receive_secure.go) — must survive a reload exactly like BearerSecret
+// cmd/receive_secure.go) — must survive a reload exactly like CashSecret
 // itself, and stay empty (not corrupted into some sentinel) when never set.
-func TestSaveAndLoad_PendingBearerSecretRoundTrip(t *testing.T) {
+func TestSaveAndLoad_PendingCashSecretRoundTrip(t *testing.T) {
 	withTempConfigDir(t)
 
 	l, err := Load()
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if _, err := l.Add(Entry{Token: "lokicash1pending", BearerSecret: "old-secret", PendingBearerSecret: "new-secret"}); err != nil {
+	if _, err := l.Add(Entry{Token: "lokicash1pending", CashSecret: "old-secret", PendingCashSecret: "new-secret"}); err != nil {
 		t.Fatalf("Add() error = %v", err)
 	}
-	if _, err := l.Add(Entry{Token: "lokicash1nopending", BearerSecret: "only-secret"}); err != nil {
+	if _, err := l.Add(Entry{Token: "lokicash1nopending", CashSecret: "only-secret"}); err != nil {
 		t.Fatalf("Add() error = %v", err)
 	}
 	if err := l.Save(); err != nil {
@@ -793,15 +793,15 @@ func TestSaveAndLoad_PendingBearerSecretRoundTrip(t *testing.T) {
 		t.Fatalf("Load() (reloaded) error = %v", err)
 	}
 	pending, _ := reloaded.FindByToken("lokicash1pending")
-	if pending.PendingBearerSecret != "new-secret" {
-		t.Errorf("PendingBearerSecret = %q, want %q", pending.PendingBearerSecret, "new-secret")
+	if pending.PendingCashSecret != "new-secret" {
+		t.Errorf("PendingCashSecret = %q, want %q", pending.PendingCashSecret, "new-secret")
 	}
-	if pending.BearerSecret != "old-secret" {
-		t.Errorf("BearerSecret = %q, want %q (unchanged until reconciled)", pending.BearerSecret, "old-secret")
+	if pending.CashSecret != "old-secret" {
+		t.Errorf("CashSecret = %q, want %q (unchanged until reconciled)", pending.CashSecret, "old-secret")
 	}
 	noPending, _ := reloaded.FindByToken("lokicash1nopending")
-	if noPending.PendingBearerSecret != "" {
-		t.Errorf("PendingBearerSecret = %q, want empty (never set)", noPending.PendingBearerSecret)
+	if noPending.PendingCashSecret != "" {
+		t.Errorf("PendingCashSecret = %q, want empty (never set)", noPending.PendingCashSecret)
 	}
 }
 
@@ -843,22 +843,22 @@ func TestSaveAndLoad_ExpiresAtRoundTrip(t *testing.T) {
 	}
 }
 
-// TestSaveAndLoad_BearerProtectionRoundTrip covers the shared-vs-protected
+// TestSaveAndLoad_CashProtectionRoundTrip covers the shared-vs-protected
 // marker (see cmd/receive_secure.go, wallet.go's own `wallet show`) — must
 // survive a reload exactly, and stay "" (n/a) for a pubkey-mode entry that
 // never set it at all, the same shape ExpiresAt's own round-trip test
 // guards for a different field.
-func TestSaveAndLoad_BearerProtectionRoundTrip(t *testing.T) {
+func TestSaveAndLoad_CashProtectionRoundTrip(t *testing.T) {
 	withTempConfigDir(t)
 
 	l, err := Load()
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if _, err := l.Add(Entry{Token: "lokicash1shared", BearerProtection: BearerShared}); err != nil {
+	if _, err := l.Add(Entry{Token: "lokicash1shared", CashProtection: CashShared}); err != nil {
 		t.Fatalf("Add() error = %v", err)
 	}
-	if _, err := l.Add(Entry{Token: "lokicash1protected", BearerProtection: BearerProtected}); err != nil {
+	if _, err := l.Add(Entry{Token: "lokicash1protected", CashProtection: CashProtected}); err != nil {
 		t.Fatalf("Add() error = %v", err)
 	}
 	if _, err := l.Add(Entry{Token: "lokicash1pubkeymode"}); err != nil {
@@ -873,15 +873,15 @@ func TestSaveAndLoad_BearerProtectionRoundTrip(t *testing.T) {
 		t.Fatalf("Load() (reloaded) error = %v", err)
 	}
 	shared, _ := reloaded.FindByToken("lokicash1shared")
-	if shared.BearerProtection != BearerShared {
-		t.Errorf("BearerProtection = %q, want %q", shared.BearerProtection, BearerShared)
+	if shared.CashProtection != CashShared {
+		t.Errorf("CashProtection = %q, want %q", shared.CashProtection, CashShared)
 	}
 	protected, _ := reloaded.FindByToken("lokicash1protected")
-	if protected.BearerProtection != BearerProtected {
-		t.Errorf("BearerProtection = %q, want %q", protected.BearerProtection, BearerProtected)
+	if protected.CashProtection != CashProtected {
+		t.Errorf("CashProtection = %q, want %q", protected.CashProtection, CashProtected)
 	}
 	pubkeyMode, _ := reloaded.FindByToken("lokicash1pubkeymode")
-	if pubkeyMode.BearerProtection != "" {
-		t.Errorf("BearerProtection = %q, want empty (never set)", pubkeyMode.BearerProtection)
+	if pubkeyMode.CashProtection != "" {
+		t.Errorf("CashProtection = %q, want empty (never set)", pubkeyMode.CashProtection)
 	}
 }

@@ -62,7 +62,7 @@ func fakeCircleHubConnection(t *testing.T) string {
 
 // fakeCashToken encodes a syntactically valid, never-dialed cash token —
 // identityRequired nil/true/false lets a caller build the unspecified,
-// pubkey-mode, or bearer-mode shape without touching any network.
+// pubkey-mode, or cash-mode shape without touching any network.
 func fakeCashToken(t *testing.T, identityRequired *bool) string {
 	t.Helper()
 	tok, err := nipcash.Encode(nipcash.Token{
@@ -147,31 +147,31 @@ func TestCircleJoin_MisPasteCashHub(t *testing.T) {
 	}
 }
 
-// TestCashReceive_BearerWithoutEmbeddedSecretDegradesToReadOnly is a
-// regression test for receive's Step 0: --secret is gone (a bearer-mode
+// TestCashReceive_CashWithoutEmbeddedSecretDegradesToReadOnly is a
+// regression test for receive's Step 0: --secret is gone (a cash-mode
 // token's spending secret must arrive embedded in the token itself,
-// "<token>#<bearer_secret>"), so a bearer-mode token pasted bare
+// "<token>#<cash_secret>"), so a cash-mode token pasted bare
 // (identity_required: false, no "#") is no longer a usage error at all —
 // it degrades to a read-only report, same contract as `decode --check`.
 // Nothing here is dialed (the relay URL is fake, and --json always skips
 // the optional live check unless --check is explicit), and nothing gets
 // saved to the ledger.
-func TestCashReceive_BearerWithoutEmbeddedSecretDegradesToReadOnly(t *testing.T) {
+func TestCashReceive_CashWithoutEmbeddedSecretDegradesToReadOnly(t *testing.T) {
 	f := newFixture(t)
 	f.mustJSON("wallet", "init")
 
-	bearer := false
-	resp := f.mustJSON("receive", fakeCashToken(t, &bearer))
+	cashMode := false
+	resp := f.mustJSON("receive", fakeCashToken(t, &cashMode))
 	if resp["received"] != false {
-		t.Errorf(`receive bearer token with no embedded secret: got "received" = %v, want false`, resp["received"])
+		t.Errorf(`receive cash-mode token with no embedded secret: got "received" = %v, want false`, resp["received"])
 	}
 	if resp["reason"] != "no_embedded_secret" {
-		t.Errorf(`receive bearer token with no embedded secret: got "reason" = %v, want "no_embedded_secret"`, resp["reason"])
+		t.Errorf(`receive cash-mode token with no embedded secret: got "reason" = %v, want "no_embedded_secret"`, resp["reason"])
 	}
 
 	showResp := f.mustJSON("wallet", "show")
 	if held, _ := showResp["held_tokens"].([]any); len(held) != 0 {
-		t.Errorf("a bearer token with no embedded secret must not be saved, but wallet show reports: %v", held)
+		t.Errorf("a cash-mode token with no embedded secret must not be saved, but wallet show reports: %v", held)
 	}
 }
 
@@ -183,8 +183,8 @@ func TestDecode_NoCheckStaysLocal(t *testing.T) {
 	f := newFixture(t)
 	f.mustJSON("wallet", "init")
 
-	bearer := false
-	cashResp := f.mustJSON("decode", fakeCashToken(t, &bearer))
+	cashMode := false
+	cashResp := f.mustJSON("decode", fakeCashToken(t, &cashMode))
 	if _, present := cashResp["check"]; present {
 		t.Errorf("decode (no --check) on a cash token must not include a check field: %v", cashResp)
 	}
@@ -218,8 +218,8 @@ func TestDecode_MintSignatureVerification(t *testing.T) {
 		t.Errorf("decode (signed token): attested_amount_millis = %v, want %d", resp["attested_amount_millis"], amountMillis)
 	}
 
-	bearer := false
-	unsignedResp := f.mustJSON("decode", fakeCashToken(t, &bearer))
+	cashMode := false
+	unsignedResp := f.mustJSON("decode", fakeCashToken(t, &cashMode))
 	if _, present := unsignedResp["mint_signature_valid"]; present {
 		t.Errorf("decode (unsigned token): must not include mint_signature_valid at all: %v", unsignedResp)
 	}
@@ -261,24 +261,24 @@ func TestDecode_MintSignatureVerification_TextModeDoesNotOverclaimTrust(t *testi
 	}
 }
 
-// TestDecode_BearerGiftString confirms decode splits NIP-CASH's optional
-// "<token>#<bearer_secret>" gift-string presentation (§Bearer Slices →
-// Presenting a Bearer Slice as One String) before decoding — entirely
-// local, a fake bearer token and a fake secret never touch a network —
+// TestDecode_CashGiftString confirms decode splits NIP-CASH's optional
+// "<token>#<cash_secret>" gift-string presentation (§Cash-Mode Slices →
+// Presenting a Cash-Mode Slice as One String) before decoding — entirely
+// local, a fake cash-mode token and a fake secret never touch a network —
 // and reports only that a secret was present, never its value, in either
 // output mode. A token with no "#" at all must decode exactly as before.
-func TestDecode_BearerGiftString(t *testing.T) {
+func TestDecode_CashGiftString(t *testing.T) {
 	f := newFixture(t)
 	f.mustJSON("wallet", "init")
 
-	bearer := false
-	token := fakeCashToken(t, &bearer)
+	cashMode := false
+	token := fakeCashToken(t, &cashMode)
 	secret := fakeHex32(t)
 	combined := token + "#" + secret
 
 	resp := f.mustJSON("decode", combined)
-	if present, _ := resp["embedded_bearer_secret_present"].(bool); !present {
-		t.Errorf("decode (gift string): embedded_bearer_secret_present = %v, want true: %v", resp["embedded_bearer_secret_present"], resp)
+	if present, _ := resp["embedded_cash_secret_present"].(bool); !present {
+		t.Errorf("decode (gift string): embedded_cash_secret_present = %v, want true: %v", resp["embedded_cash_secret_present"], resp)
 	}
 	if wp, _ := resp["wallet_pubkey"].(string); wp == "" {
 		t.Errorf("decode (gift string): empty wallet_pubkey, splitting broke the token half: %v", resp)
@@ -290,13 +290,13 @@ func TestDecode_BearerGiftString(t *testing.T) {
 	// prints only "embedded", never the value).
 	res := f.run("decode", combined)
 	if strings.Contains(res.Stdout, secret) {
-		t.Errorf("decode (gift string) leaked the bearer secret into stdout: %s", res.Stdout)
+		t.Errorf("decode (gift string) leaked the cash secret into stdout: %s", res.Stdout)
 	}
 
 	// No "#" at all: must decode exactly as before, no false positive.
 	plainResp := f.mustJSON("decode", token)
-	if _, present := plainResp["embedded_bearer_secret_present"]; present {
-		t.Errorf("decode (plain token, no gift string): must not report embedded_bearer_secret_present at all: %v", plainResp)
+	if _, present := plainResp["embedded_cash_secret_present"]; present {
+		t.Errorf("decode (plain token, no gift string): must not report embedded_cash_secret_present at all: %v", plainResp)
 	}
 }
 

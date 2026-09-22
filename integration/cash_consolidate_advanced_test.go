@@ -93,7 +93,7 @@ func TestCashConsolidate_PartialSubsetLeavesRestUntouched(t *testing.T) {
 // not just checking consolidate's own reported new_entry.
 //
 // Currently failing on purpose (left failing rather than skipped, same
-// convention as TestMultiParty_BearerRegiftChain_AtoBtoC's own doc
+// convention as TestMultiParty_CashRegiftChain_AtoBtoC's own doc
 // comment): the cash_consolidate call itself fails with "nipcash: decrypt
 // delivery: invalid MAC" — a NIP-44 response-decryption failure at the
 // generic NIP-47 transport layer (nipcash/client.CashConsolidate is a

@@ -12,7 +12,7 @@ import (
 // entryRecoveryString is the exact string a human needs to reach e again —
 // the bare token for a pubkey/connection-key entry (the local identity
 // already controls it), or the combined <token>#<secret> gift for a
-// bearer one (nothing else grants access to it at all). Used only when a
+// cash-mode one (nothing else grants access to it at all). Used only when a
 // Hub-side mutation succeeded but persisting its result locally then
 // failed — the money is real and reachable, but about to become
 // undiscoverable the instant this process exits unless it's printed now.
@@ -20,8 +20,8 @@ func entryRecoveryString(e *ledger.Entry) string {
 	if e == nil || e.Token == "" {
 		return ""
 	}
-	if e.BearerSecret != "" {
-		return e.Token + "#" + e.BearerSecret
+	if e.CashSecret != "" {
+		return e.Token + "#" + e.CashSecret
 	}
 	return e.Token
 }

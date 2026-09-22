@@ -77,7 +77,7 @@ func TestOpen_IsIdempotent(t *testing.T) {
 }
 
 // TestOpen_MigratesPreExistingDatabaseMissingNewColumn simulates a
-// cashctl.db created before pending_bearer_secret existed (an old
+// cashctl.db created before pending_cash_secret existed (an old
 // CREATE TABLE IF NOT EXISTS run, before that column was ever added to the
 // schema) — Open must add it via ALTER TABLE rather than silently leaving
 // it missing (CREATE TABLE IF NOT EXISTS is a no-op against an
@@ -93,9 +93,9 @@ func TestOpen_MigratesPreExistingDatabaseMissingNewColumn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pre-create db: %v", err)
 	}
-	oldSchema := strings.Replace(schema, ",\n\tpending_bearer_secret      TEXT", "", 1)
+	oldSchema := strings.Replace(schema, ",\n\tpending_cash_secret      TEXT", "", 1)
 	if oldSchema == schema {
-		t.Fatal("test fixture bug: pending_bearer_secret line not found in schema to strip")
+		t.Fatal("test fixture bug: pending_cash_secret line not found in schema to strip")
 	}
 	if _, err := pre.Exec(oldSchema); err != nil {
 		t.Fatalf("apply old schema: %v", err)
@@ -114,11 +114,11 @@ func TestOpen_MigratesPreExistingDatabaseMissingNewColumn(t *testing.T) {
 	defer func() { _ = db.Close() }()
 
 	var got sql.NullString
-	if err := db.QueryRow(`SELECT pending_bearer_secret FROM entries WHERE id = 'tok-1'`).Scan(&got); err != nil {
+	if err := db.QueryRow(`SELECT pending_cash_secret FROM entries WHERE id = 'tok-1'`).Scan(&got); err != nil {
 		t.Fatalf("querying the migrated column: %v", err)
 	}
 	if got.Valid {
-		t.Errorf("pending_bearer_secret = %q, want NULL for a pre-existing row", got.String)
+		t.Errorf("pending_cash_secret = %q, want NULL for a pre-existing row", got.String)
 	}
 
 	// A second Open() (the ordinary "every command opens the db" case)
@@ -174,9 +174,9 @@ func TestOpen_MigratesPreExistingDatabaseMissingExpiresAt(t *testing.T) {
 	}
 }
 
-// TestOpen_MigratesPreExistingDatabaseMissingBearerProtection is the same
-// scenario for bearer_protection.
-func TestOpen_MigratesPreExistingDatabaseMissingBearerProtection(t *testing.T) {
+// TestOpen_MigratesPreExistingDatabaseMissingCashProtection is the same
+// scenario for cash_protection.
+func TestOpen_MigratesPreExistingDatabaseMissingCashProtection(t *testing.T) {
 	withTempConfigDir(t)
 
 	p, err := Path()
@@ -187,9 +187,9 @@ func TestOpen_MigratesPreExistingDatabaseMissingBearerProtection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pre-create db: %v", err)
 	}
-	oldSchema := strings.Replace(schema, ",\n\tbearer_protection          TEXT", "", 1)
+	oldSchema := strings.Replace(schema, ",\n\tcash_protection          TEXT", "", 1)
 	if oldSchema == schema {
-		t.Fatal("test fixture bug: bearer_protection line not found in schema to strip")
+		t.Fatal("test fixture bug: cash_protection line not found in schema to strip")
 	}
 	if _, err := pre.Exec(oldSchema); err != nil {
 		t.Fatalf("apply old schema: %v", err)
@@ -203,16 +203,16 @@ func TestOpen_MigratesPreExistingDatabaseMissingBearerProtection(t *testing.T) {
 
 	db, err := Open()
 	if err != nil {
-		t.Fatalf("Open() on a pre-existing DB missing bearer_protection: error = %v", err)
+		t.Fatalf("Open() on a pre-existing DB missing cash_protection: error = %v", err)
 	}
 	defer func() { _ = db.Close() }()
 
 	var got sql.NullString
-	if err := db.QueryRow(`SELECT bearer_protection FROM entries WHERE id = 'tok-1'`).Scan(&got); err != nil {
+	if err := db.QueryRow(`SELECT cash_protection FROM entries WHERE id = 'tok-1'`).Scan(&got); err != nil {
 		t.Fatalf("querying the migrated column: %v", err)
 	}
 	if got.Valid {
-		t.Errorf("bearer_protection = %q, want NULL for a pre-existing row", got.String)
+		t.Errorf("cash_protection = %q, want NULL for a pre-existing row", got.String)
 	}
 }
 

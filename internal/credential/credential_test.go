@@ -189,7 +189,7 @@ func TestParseTarget_BearerTarget_GeneratesFreshSecretEachTime(t *testing.T) {
 
 // TestParseTarget_BearerTarget_ResolvedSurfacesSecret guards a real bug:
 // the wire request for a bearer-target transfer only ever carries a
-// one-way commitment of this secret (NIP-CASH §Bearer Slices) — the
+// one-way commitment of this secret (NIP-CASH §Cash-Mode Slices) — the
 // secret itself exists nowhere else once ParseTarget returns. An earlier
 // version generated it and simply discarded it, making the resulting
 // funds permanently unspendable (caught by a live integration test

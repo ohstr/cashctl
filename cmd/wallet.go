@@ -93,8 +93,8 @@ func newWalletShowCmd() *cobra.Command {
 			jsonMode, _ := cmd.Flags().GetBool("json")
 
 			// Identity is OPTIONAL here, unlike everywhere else it's
-			// loaded: a bearer-only wallet (never run `init`, and never
-			// needs to — receive/transfer/redeem of a bearer-mode entry
+			// loaded: a cash-mode-only wallet (never run `init`, and never
+			// needs to — receive/transfer/redeem of a cash-mode entry
 			// all work without one) still holds real wallets/tokens worth
 			// listing. Only a genuine identity.Load failure OTHER than
 			// "none configured yet" is still a real error.

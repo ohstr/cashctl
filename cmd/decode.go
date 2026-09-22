@@ -49,7 +49,7 @@ import (
 // pitch is no network by default) — see shouldRunCheck. --json never
 // prompts (an agent has no terminal to answer from): it only checks when
 // --check is passed, exactly as before. A cash token needing an identity
-// proof (not bearer-mode) is
+// proof (not cash-mode) is
 // never prompted for at all when no local identity is configured — the
 // check would have nothing to match against — decode just says so instead
 // of asking a question it already knows the answer to.
@@ -68,8 +68,8 @@ func newDecodeCmd() *cobra.Command {
 			}
 			jsonMode, _ := cmd.Flags().GetBool("json")
 			check, _ := cmd.Flags().GetBool("check")
-			// Split before sniffing: NIP-CASH's "<token>#<bearer_secret>"
-			// combined presentation (§Presenting a Bearer Slice as One
+			// Split before sniffing: NIP-CASH's "<token>#<cash_secret>"
+			// combined presentation (§Presenting a Cash-Mode Slice as One
 			// String) wouldn't decode as bech32 at all otherwise. A string
 			// with no "#" is unaffected.
 			// Trimmed before splitting: dial.Sniff trims internally for its
@@ -78,7 +78,7 @@ func newDecodeCmd() *cobra.Command {
 			// still reach the actual decoder below, which rejects it
 			// outright as invalid bech32 — confusing given Sniff itself
 			// would've happily recognized it.
-			value, embeddedSecret := nipcash.SplitBearerSliceString(strings.TrimSpace(args[0]))
+			value, embeddedSecret := nipcash.SplitCashSliceString(strings.TrimSpace(args[0]))
 
 			switch dial.Sniff(value) {
 			case dial.KindCashToken:
@@ -102,14 +102,14 @@ func newDecodeCmd() *cobra.Command {
 	return cmd
 }
 
-func decodeCashToken(cmd *cobra.Command, value string, jsonMode, check, hasEmbeddedBearerSecret bool) error {
+func decodeCashToken(cmd *cobra.Command, value string, jsonMode, check, hasEmbeddedCashSecret bool) error {
 	tok, err := nipcash.Decode(value)
 	if err != nil {
 		return output.InvalidInputError(cmd, value, err)
 	}
 	// See cash_receive.go: tok.IdentityRequired can go stale, an embedded
-	// bearer_secret overrides it.
-	isBearer := (tok.IdentityRequired != nil && !*tok.IdentityRequired) || hasEmbeddedBearerSecret
+	// cash_secret overrides it.
+	isCash := (tok.IdentityRequired != nil && !*tok.IdentityRequired) || hasEmbeddedCashSecret
 
 	if !jsonMode {
 		fmt.Println("type: cash_token")
@@ -119,8 +119,8 @@ func decodeCashToken(cmd *cobra.Command, value string, jsonMode, check, hasEmbed
 			fmt.Printf("identity_required: %v\n", *tok.IdentityRequired)
 		}
 		printMintSignatureStatus(tok)
-		if hasEmbeddedBearerSecret {
-			fmt.Println("bearer_secret: embedded — `cashctl receive` uses it automatically")
+		if hasEmbeddedCashSecret {
+			fmt.Println("cash_secret: embedded — `cashctl receive` uses it automatically")
 		}
 	}
 
@@ -137,8 +137,8 @@ func decodeCashToken(cmd *cobra.Command, value string, jsonMode, check, hasEmbed
 	}
 	// Presence only, never the value itself — decode never echoes a
 	// working spending credential (this file's own doc comment).
-	if hasEmbeddedBearerSecret {
-		out["embedded_bearer_secret_present"] = true
+	if hasEmbeddedCashSecret {
+		out["embedded_cash_secret_present"] = true
 	}
 	if tok.HasProvenance() {
 		out["mint_signature"] = fmt.Sprintf("%x", tok.MintSignature)
@@ -150,7 +150,7 @@ func decodeCashToken(cmd *cobra.Command, value string, jsonMode, check, hasEmbed
 		}
 	}
 
-	if shouldCheckCashToken(cmd, jsonMode, check, isBearer) {
+	if shouldCheckCashToken(cmd, jsonMode, check, isCash) {
 		result := checkCashTokenAgainstHub(cmd, jsonMode, value, tok)
 		if jsonMode {
 			out["check"] = result
@@ -296,18 +296,18 @@ func shouldRunCheck(cmd *cobra.Command, jsonMode, checkFlag bool, prompt string)
 }
 
 // shouldCheckCashToken wraps shouldRunCheck with one more guard specific to
-// cash tokens: a token requiring an identity proof (not bearer-mode) can
+// cash tokens: a token requiring an identity proof (not cash-mode) can
 // only ever match the Hub's list_recipients response against a local
 // pubkey — if no local identity is configured at all, that match can never
 // succeed, so asking "want to check?" would just be asking a question
 // whose answer is already "it can't." Skipped silently under --json/--yes/
 // an explicit --check, same as shouldRunCheck itself — this only changes
-// the interactive-prompt path. isBearer is the caller's own corrected
-// determination (decodeCashToken's own isBearer), not re-derived from the
+// the interactive-prompt path. isCash is the caller's own corrected
+// determination (decodeCashToken's own isCash), not re-derived from the
 // token here.
-func shouldCheckCashToken(cmd *cobra.Command, jsonMode, checkFlag bool, isBearer bool) bool {
+func shouldCheckCashToken(cmd *cobra.Command, jsonMode, checkFlag bool, isCash bool) bool {
 	if !jsonMode && !cmd.Flags().Changed("check") {
-		if !isBearer {
+		if !isCash {
 			if exists, _ := identity.Exists(); !exists {
 				output.Notef(false, "Skipping check — no local identity (run `cashctl init`).")
 				return false
@@ -343,7 +343,7 @@ func checkCashTokenAgainstHub(cmd *cobra.Command, jsonMode bool, value string, t
 		}
 		defer client.Close()
 
-		// CheckClaim tries pubkey then bearer live; no need to pre-decide.
+		// CheckClaim tries pubkey then cash mode live; no need to pre-decide.
 		myPubHex, _ := localPubKeyHex(cmd)
 		result, err := client.CheckClaim(ctx, tok, myPubHex)
 		if errors.Is(err, nipcash.ErrClaimNotFound) {

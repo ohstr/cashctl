@@ -10,13 +10,13 @@ import (
 // Edge cases in `transfer` found by the campaign's E3 executor and
 // re-verified here against the live hub.
 
-// A bearer gift is only spendable by someone who is handed the token AND its
+// A cash gift is only spendable by someone who is handed the token AND its
 // secret. When the whole token is transferred (a full transfer reassigns the
 // wallet IN PLACE, so there is no new token), the command must still hand the
 // sender the complete "<token>#<secret>" string — in --json as cash_to_send,
 // and in text mode on screen. Today it prints neither, so the sender has
 // given the money to a secret nobody was told.
-func TestTransfer_FullTokenToBearerTarget_GiftStringIsHandedBack(t *testing.T) {
+func TestTransfer_FullTokenToCashTarget_GiftStringIsHandedBack(t *testing.T) {
 	admin := adminOrSkip(t)
 	hub := setUpCashHub(t, admin)
 	f := newFixture(t)
@@ -40,7 +40,7 @@ func TestTransfer_FullTokenToBearerTarget_GiftStringIsHandedBack(t *testing.T) {
 		t.Fatalf("text transfer: exit %d\nstderr: %s", res.ExitCode, res.Stderr)
 	}
 	if !hex64Re.MatchString(res.Stdout) {
-		t.Errorf("text mode: transferred the whole token to a bearer target but never showed the secret (or any gift string) — the recipient can't be given anything:\n%s", res.Stdout)
+		t.Errorf("text mode: transferred the whole token to a cash-mode target but never showed the secret (or any gift string) — the recipient can't be given anything:\n%s", res.Stdout)
 	}
 }
 
@@ -115,7 +115,7 @@ func TestConsolidate_FailureDoesNotLeaveConsumedSourcesHeld(t *testing.T) {
 
 	res := f.run("consolidate", "--sources", srcs[0].id+","+srcs[1].id, "--to", "cash", "--yes")
 	if res.ExitCode == 0 {
-		t.Skip("consolidate to a bearer target succeeded on this hub; the partial-failure path can't be exercised")
+		t.Skip("consolidate to a cash-mode target succeeded on this hub; the partial-failure path can't be exercised")
 	}
 	for _, s := range srcs {
 		// decode --check asks the Hub whether this token still has a live
@@ -136,7 +136,7 @@ func TestConsolidate_FailureDoesNotLeaveConsumedSourcesHeld(t *testing.T) {
 	}
 }
 
-// `transfer <amount>` with NO target defaults to a bearer note (see
+// `transfer <amount>` with NO target defaults to a cash note (see
 // runCashTransfer's own doc comment: "just an amount, share the result with
 // whoever"). When that amount happens to equal the whole held token, the
 // call takes the SAME full-transfer-to-cash path as

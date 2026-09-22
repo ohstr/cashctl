@@ -178,9 +178,9 @@ func resolveIdentityString(s string) (hexPubkey string, viaNIP05 bool, err error
 // sniffing in front of the existing parser, not a replacement of it.
 func ParseTarget(s string) (ResolvedTarget, error) {
 	if s == "cash" {
-		target := nipcash.NewBearerTarget()
+		target := nipcash.NewCashTarget()
 		// The wire request only ever carries a one-way commitment of this
-		// secret (NIP-CASH §Bearer Slices: "the caller supplies the
+		// secret (NIP-CASH §Cash-Mode Slices: "the caller supplies the
 		// commitment themselves") — the secret itself exists nowhere else
 		// once this call returns. Losing it here is equivalent to losing
 		// the funds, same as any other bearer note, so it MUST be

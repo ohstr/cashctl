@@ -2,7 +2,7 @@
 // harness (bin/run.sh's prepare_r1 step): mint_cash is a wallet-side NIP-47
 // call over Nostr, not a REST admin-API endpoint, so unlike every other
 // fixture this harness provisions (plain bash + curl against lokihub's
-// admin API), minting an actual bearer cash token needs a real NWC dial —
+// admin API), minting an actual cash token needs a real NWC dial —
 // this program is that one Go-shaped exception. Not part of cashctl itself;
 // run with `go run`, never built/shipped.
 //
