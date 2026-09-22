@@ -63,7 +63,7 @@ func nostrEntityMessage(hrp string) string {
 // nothing has moved when this fires.
 func rejectConnectionFlag(cmd *cobra.Command) error {
 	if c, _ := cmd.Flags().GetString("connection"); c != "" {
-		return output.UsageError(cmd, fmt.Errorf(
+		return output.InvocationError(cmd, fmt.Errorf(
 			"-c/--connection doesn't apply to `%s` — it never uses a registered wallet (cash tokens are spent through their own Hub). Remove the flag",
 			cmd.CommandPath()))
 	}

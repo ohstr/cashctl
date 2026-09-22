@@ -48,7 +48,7 @@ func classifyRootErr(cmd *cobra.Command, err error) error {
 	if cmd != nil && jsonRequested(os.Args[1:]) {
 		_ = cmd.Flags().Set("json", "true")
 	}
-	return output.UsageError(cmd, err)
+	return output.InvocationError(cmd, err)
 }
 
 // jsonRequested reports whether args turn --json on, the way cobra itself

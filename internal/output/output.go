@@ -190,6 +190,23 @@ func EmitError(cmd *cobra.Command, err error) {
 		msg = fmt.Sprintf("%s (%s)", msg, ce.RawMessage)
 	}
 	fmt.Fprintf(os.Stderr, "%s %s\n", errorPrefix(isColorTerminal(os.Stderr)), msg)
+	// ShowUsage (InvocationError, see its own doc comment): a genuine
+	// malformed-invocation error — wrong arg count, unknown flag/command, a
+	// missing or conflicting flag — follows the "Error: ..." line with the
+	// command's own full --help content — the same content
+	// `cashctl <cmd> --help` prints, reused via cmd.Help() rather than
+	// hand-duplicating cobra's own template, redirected to stderr
+	// (cmd.SetOut) to keep AGENTS.md's "narration/errors to stderr always"
+	// contract — a plain --help invocation (exit 0, not an error) is
+	// unaffected and still goes to stdout via cobra's own default. Never
+	// for every CodeUsage error (funds-fragmented and friends stay exactly
+	// as terse as before) and never in --json mode (handled by the early
+	// return above; an agent has no use for any of this human framing).
+	if ce.ShowUsage && cmd != nil {
+		fmt.Fprintln(os.Stderr)
+		cmd.SetOut(os.Stderr)
+		_ = cmd.Help()
+	}
 }
 
 // errorPrefix returns "Error:", wrapped in ANSI red when colored is true —

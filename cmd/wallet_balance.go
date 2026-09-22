@@ -44,7 +44,7 @@ func runWalletBalance(cmd *cobra.Command, args []string) error {
 	// wallet and printed a total that looked like savings' alone.
 	if conn, _ := cmd.Flags().GetString("connection"); conn != "" {
 		if from != "" && from != conn {
-			return output.UsageError(cmd, fmt.Errorf("got both --from (%q) and -c/--connection (%q) with different values — pass only one", output.Sanitize(from), output.Sanitize(conn)))
+			return output.InvocationError(cmd, fmt.Errorf("got both --from (%q) and -c/--connection (%q) with different values — pass only one", output.Sanitize(from), output.Sanitize(conn)))
 		}
 		from = conn
 	}

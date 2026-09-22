@@ -73,7 +73,7 @@ type Entry struct {
 	// degrades to a read-only report — never saving anything — for a
 	// bearer-mode token pasted without one, so an entry with
 	// IdentityRequired false is guaranteed to carry its spending secret
-	// already — no later `--as bearer:<secret>` override needed.
+	// already — no later `--as cash:<secret>` override needed.
 	// json:"-": see Secret's own doc comment above — this is the actual
 	// spending credential for a bearer slice, so leaking it here would be
 	// strictly worse than leaking Secret.

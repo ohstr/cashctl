@@ -310,7 +310,7 @@ func TestCashConsolidate_ReusingAlreadyConsolidatedSourceRejected(t *testing.T) 
 }
 
 // TestCashTransfer_ToBearerTarget_SecretMustBeRecoverable transfers a held
-// pubkey-mode token to "bearer-target" — cashctl generates a fresh
+// pubkey-mode token to "cash" — cashctl generates a fresh
 // bearer_secret client-side for this (NIP-CASH §Bearer Slices: unlike
 // mint_cash's bearer recipient, cash_transfer's bearer target does NOT
 // get a wallet-generated secret; the caller supplies the commitment
@@ -345,10 +345,10 @@ func TestCashTransfer_ToBearerTarget_SecretMustBeRecoverable(t *testing.T) {
 		t.Fatalf("receive: exit %d\nstderr: %s", res.ExitCode, res.Stderr)
 	}
 
-	transferResp := f.mustJSON("transfer", "bearer-target", "--yes")
+	transferResp := f.mustJSON("transfer", "cash", "--yes")
 	resolved, _ := transferResp["target_resolved"].(string)
 	if resolved == "" {
-		t.Fatalf("transfer to bearer-target: target_resolved is empty — the generated bearer secret was never surfaced anywhere, making the transferred funds permanently unspendable: %v", transferResp)
+		t.Fatalf("transfer to cash: target_resolved is empty — the generated bearer secret was never surfaced anywhere, making the transferred funds permanently unspendable: %v", transferResp)
 	}
 
 	// Extract the secret and prove it's the real credential: redeem with

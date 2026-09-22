@@ -36,7 +36,7 @@ func TestChain_BearerOnlyWallet_NoIdentity_SplitsRespentThenRedeemed(t *testing.
 	remaining := start
 	for i := 1; i <= 3; i++ {
 		step := fmt.Sprintf("transfer 1 (#%d)", i)
-		res := f.run("transfer", "1", "--yes") // amount only -> bearer-target
+		res := f.run("transfer", "1", "--yes") // amount only -> cash
 		assertNoIdentityDemand(t, step, res)
 		if res.ExitCode != 0 {
 			t.Fatalf("%s: exit %d\nstdout: %s\nstderr: %s", step, res.ExitCode, res.Stdout, res.Stderr)
@@ -203,7 +203,7 @@ func TestChain_BearerToPubkeyToBearer_RoundTrip(t *testing.T) {
 	orig := mintPubkeyTokenFromHub(t, hub, aHex, amount)
 	a.mustJSON("receive", orig)
 
-	gifted := a.mustJSON("transfer", "bearer-target", "--yes") // whole token, pubkey -> bearer
+	gifted := a.mustJSON("transfer", "cash", "--yes") // whole token, pubkey -> bearer
 	secret := extractHexSecret(t, gifted["target_resolved"].(string))
 	gift := recipientTokenFromTransfer(gifted, orig) + "#" + secret
 

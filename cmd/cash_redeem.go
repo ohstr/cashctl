@@ -33,7 +33,7 @@ func newCashRedeemCmd() *cobra.Command {
 	cmd.Flags().String("token", "", "which held token to redeem (auto-picked if you only hold one)")
 	cmd.Flags().String("into", "", "which wallet to redeem into (defaults to your default wallet)")
 	cmd.Flags().String("invoice", "", "redeem straight into this external invoice")
-	cmd.Flags().String("as", "", "override credential (pubkey:<priv> | connection-key:... | bearer:<secret>)")
+	cmd.Flags().String("as", "", "override credential (pubkey:<priv> | connection-key:... | cash:<secret>)")
 	return cmd
 }
 
@@ -63,9 +63,9 @@ func runCashRedeem(cmd *cobra.Command, args []string) error {
 	if conn, _ := cmd.Flags().GetString("connection"); conn != "" {
 		switch {
 		case explicitInvoice != "":
-			return output.UsageError(cmd, fmt.Errorf("-c/--connection names the wallet to redeem into, but --invoice redeems straight into an invoice — pass one or the other"))
+			return output.InvocationError(cmd, fmt.Errorf("-c/--connection names the wallet to redeem into, but --invoice redeems straight into an invoice — pass one or the other"))
 		case intoValue != "" && intoValue != conn:
-			return output.UsageError(cmd, fmt.Errorf("got both a destination (%q) and -c/--connection (%q) with different values — pass only one", output.Sanitize(intoValue), output.Sanitize(conn)))
+			return output.InvocationError(cmd, fmt.Errorf("got both a destination (%q) and -c/--connection (%q) with different values — pass only one", output.Sanitize(intoValue), output.Sanitize(conn)))
 		}
 		intoValue = conn
 	}
@@ -343,7 +343,7 @@ func resolveCredential(cmd *cobra.Command, entry *ledger.Entry) (nipcash.Credent
 		return nipcash.BySecret(entry.BearerSecret), nil
 	}
 	if entry.ConnectionKeyPlatform != "" {
-		return nil, output.UsageError(cmd, fmt.Errorf(
+		return nil, output.InvocationError(cmd, fmt.Errorf(
 			"this token is connection-key-bound — pass --as connection-key:<privkey>,%s,%s,<attestation-file>",
 			entry.ConnectionKeyPlatform, entry.ConnectionKeyExternalID))
 	}

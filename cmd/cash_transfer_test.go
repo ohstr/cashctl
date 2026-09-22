@@ -126,12 +126,12 @@ func TestResolveTarget_PlainTargetUnaffected(t *testing.T) {
 
 func TestShouldPrintResolvedTarget_BearerTargetIsFalse(t *testing.T) {
 	c := newTestTransferCmd()
-	rt, err := resolveTarget(c, "bearer-target")
+	rt, err := resolveTarget(c, "cash")
 	if err != nil {
-		t.Fatalf("resolveTarget(bearer-target) error = %v", err)
+		t.Fatalf("resolveTarget(cash) error = %v", err)
 	}
 	if rt.Resolved == "" {
-		t.Fatal("resolveTarget(bearer-target) Resolved is empty — the generated secret would be unrecoverable (see credential.go's own ParseTarget)")
+		t.Fatal("resolveTarget(cash) Resolved is empty — the generated secret would be unrecoverable (see credential.go's own ParseTarget)")
 	}
 	if shouldPrintResolvedTarget(rt) {
 		t.Error("shouldPrintResolvedTarget(bearer target) = true, want false — the secret shouldn't be printed before anything is confirmed")
@@ -569,7 +569,7 @@ func TestDisambiguateTransferArgs_SingleNonNumericArgIsTarget(t *testing.T) {
 	for _, arg := range []string{
 		"alice@example.com",
 		"a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
-		"bearer-target",
+		"cash",
 		"nconnection1qqs2u2jj",
 	} {
 		to, amount := disambiguateTransferArgs([]string{arg})
@@ -665,7 +665,7 @@ func TestPrintAndSaveTransferResult_BearerTargetAssemblesCashToSend(t *testing.T
 	result := &nipcash.CashTransferResult{AmountMillis: 500, NewWalletToken: "new-sent-token"}
 
 	captured := withCapturedStdout(func() {
-		if err := printAndSaveTransferResult(c, l, result, 500, "bearer-target", target, nil, ledger.Entry{}, ""); err != nil {
+		if err := printAndSaveTransferResult(c, l, result, 500, "cash", target, nil, ledger.Entry{}, ""); err != nil {
 			t.Fatalf("printAndSaveTransferResult() error = %v", err)
 		}
 	})
@@ -690,7 +690,7 @@ func TestPrintAndSaveTransferResult_BearerTargetHumanModeShowsCashString(t *test
 	result := &nipcash.CashTransferResult{AmountMillis: 500, NewWalletToken: "new-sent-token"}
 
 	captured := withCapturedStdout(func() {
-		if err := printAndSaveTransferResult(c, l, result, 500, "bearer-target", target, nil, ledger.Entry{}, ""); err != nil {
+		if err := printAndSaveTransferResult(c, l, result, 500, "cash", target, nil, ledger.Entry{}, ""); err != nil {
 			t.Fatalf("printAndSaveTransferResult() error = %v", err)
 		}
 	})
@@ -699,8 +699,12 @@ func TestPrintAndSaveTransferResult_BearerTargetHumanModeShowsCashString(t *test
 	if !strings.Contains(captured, want) {
 		t.Errorf("printed output = %q, want it to contain the combined cash string %q", captured, want)
 	}
-	if strings.Contains(captured, "bearer-target") {
-		t.Errorf("printed output = %q, want the literal \"bearer-target\" placeholder never shown to the human", captured)
+	// The handoff value belongs on its own "cashctl receive <...>" line,
+	// never appended to a sentence — a trailing character glued directly
+	// onto it (a period, in an earlier version of this message) risks
+	// getting copied along and corrupting it.
+	if !strings.Contains(captured, "cashctl receive "+want) {
+		t.Errorf("printed output = %q, want %q on its own \"cashctl receive\" line", captured, want)
 	}
 }
 
@@ -748,7 +752,7 @@ func TestPrintAndSaveTransferResult_BearerTargetNoNewTokenFallsBackToOriginal(t 
 	result := &nipcash.CashTransferResult{AmountMillis: 500}
 
 	captured := withCapturedStdout(func() {
-		if err := printAndSaveTransferResult(c, l, result, 500, "bearer-target", target, nil, ledger.Entry{}, "original-token"); err != nil {
+		if err := printAndSaveTransferResult(c, l, result, 500, "cash", target, nil, ledger.Entry{}, "original-token"); err != nil {
 			t.Fatalf("printAndSaveTransferResult() error = %v", err)
 		}
 	})
@@ -776,7 +780,7 @@ func TestPrintAndSaveTransferResult_BearerTargetNothingToFallBackTo(t *testing.T
 	result := &nipcash.CashTransferResult{AmountMillis: 500}
 
 	captured := withCapturedStdout(func() {
-		if err := printAndSaveTransferResult(c, l, result, 500, "bearer-target", target, nil, ledger.Entry{}, ""); err != nil {
+		if err := printAndSaveTransferResult(c, l, result, 500, "cash", target, nil, ledger.Entry{}, ""); err != nil {
 			t.Fatalf("printAndSaveTransferResult() error = %v", err)
 		}
 	})
@@ -812,7 +816,7 @@ func TestPrintAndSaveTransferResult_BearerRemainderStaysSpendableWithoutIdentity
 	source := ledger.Entry{IdentityRequired: ptrTo(false), BearerSecret: strings.Repeat("c3", 32)}
 
 	withCapturedStdout(func() {
-		if err := printAndSaveTransferResult(c, l, result, 1, "bearer-target", target, nil, credentialModeOf(source), ""); err != nil {
+		if err := printAndSaveTransferResult(c, l, result, 1, "cash", target, nil, credentialModeOf(source), ""); err != nil {
 			t.Fatalf("printAndSaveTransferResult() error = %v", err)
 		}
 	})

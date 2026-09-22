@@ -31,7 +31,7 @@ group. Pass IDs/--sources for exact control instead (see "cashctl wallet
 show --json" for the IDs — plain-text "wallet show" never prints them).`,
 		Example: `  cashctl consolidate
   cashctl consolidate tok-a tok-b
-  cashctl consolidate --sources tok-a,tok-b --to bearer-target`,
+  cashctl consolidate --sources tok-a,tok-b --to cash`,
 		Args: cobra.ArbitraryArgs,
 		RunE: runCashConsolidate,
 	}
@@ -69,7 +69,7 @@ func runCashConsolidate(cmd *cobra.Command, args []string) error {
 	if len(args) > 0 || sourcesFlag != "" {
 		items, err := resolveConsolidateSources(args, sourcesFlag, l.Held())
 		if err != nil {
-			return output.UsageError(cmd, err)
+			return output.InvocationError(cmd, err)
 		}
 		result, err := consolidateItems(cmd, l, items, toFlag, jsonMode, yesFlag)
 		if err != nil {
@@ -616,7 +616,7 @@ func doCashConsolidate(cmd *cobra.Command, l *ledger.Ledger, dialCandidates []st
 			// §Bearer Slices: the caller supplies the commitment, the node
 			// never mints/returns a secret) — discarding it here would be
 			// the exact same fund-loss bug already found and fixed for
-			// transfer's own bearer-target path.
+			// transfer's own cash (bearer) path.
 			if bt, ok := target.(*nipcash.BearerTarget); ok {
 				newLedgerEntry.BearerSecret = bt.Secret()
 				newLedgerEntry.IdentityRequired = ptrTo(false)

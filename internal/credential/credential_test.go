@@ -38,7 +38,7 @@ func TestParseCash_Pubkey(t *testing.T) {
 }
 
 func TestParseCash_Bearer(t *testing.T) {
-	cred, err := ParseCash("bearer:some-secret")
+	cred, err := ParseCash("cash:some-secret")
 	if err != nil {
 		t.Fatalf("ParseCash() error = %v", err)
 	}
@@ -54,7 +54,7 @@ func TestParseCash_Errors(t *testing.T) {
 	}{
 		{"no colon", "pubkey-no-colon"},
 		{"empty pubkey", "pubkey:"},
-		{"empty bearer", "bearer:"},
+		{"empty cash", "cash:"},
 		{"unknown kind", "carrier-pigeon:abc"},
 		{"connection-key wrong field count", "connection-key:abc,discord"},
 		{"connection-key empty field", "connection-key:abc,,482910,file.json"},
@@ -127,7 +127,7 @@ func TestParseCircle_Pubkey(t *testing.T) {
 }
 
 func TestParseCircle_RejectsNonPubkeyModes(t *testing.T) {
-	tests := []string{"bearer:secret", "connection-key:a,b,c,d", "pubkey:", "no-colon-at-all"}
+	tests := []string{"cash:secret", "connection-key:a,b,c,d", "pubkey:", "no-colon-at-all"}
 	for _, in := range tests {
 		if _, err := ParseCircle(in); err == nil {
 			t.Errorf("ParseCircle(%q) = nil error, want an error (NIP-CW has only pubkey mode)", in)
@@ -164,11 +164,11 @@ func TestParseTarget_Connection(t *testing.T) {
 }
 
 func TestParseTarget_BearerTarget_GeneratesFreshSecretEachTime(t *testing.T) {
-	t1, err := ParseTarget("bearer-target")
+	t1, err := ParseTarget("cash")
 	if err != nil {
 		t.Fatalf("ParseTarget() error = %v", err)
 	}
-	t2, err := ParseTarget("bearer-target")
+	t2, err := ParseTarget("cash")
 	if err != nil {
 		t.Fatalf("ParseTarget() error = %v", err)
 	}
@@ -196,7 +196,7 @@ func TestParseTarget_BearerTarget_GeneratesFreshSecretEachTime(t *testing.T) {
 // against a real Hub, redeeming with the secret extracted from this
 // exact field). Resolved is the only place it's recoverable from.
 func TestParseTarget_BearerTarget_ResolvedSurfacesSecret(t *testing.T) {
-	rt, err := ParseTarget("bearer-target")
+	rt, err := ParseTarget("cash")
 	if err != nil {
 		t.Fatalf("ParseTarget() error = %v", err)
 	}
@@ -480,7 +480,7 @@ func TestLooksLikeTarget(t *testing.T) {
 		in   string
 		want bool
 	}{
-		{"bearer-target", true},
+		{"cash", true},
 		{strings.Repeat("a1", 32), true}, // 64-hex pubkey
 		{"npub1anything", true},          // prefix alone is enough for this shape check
 		{"alice@example.com", true},

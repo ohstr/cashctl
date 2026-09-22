@@ -27,7 +27,7 @@ import (
 // populated); a full (non-split) transfer may instead reassign the SAME
 // underlying wallet connection in place (new_wallet_token empty) — see
 // cash_security_test.go's TestCashTransfer_ToBearerTarget_SecretMustBeRecoverable,
-// which reconnects to the ORIGINAL token string after a full bearer-target
+// which reconnects to the ORIGINAL token string after a full cash
 // transfer. sourceToken is the entry the transfer acted on, used as the
 // fallback for the in-place case either way.
 func recipientTokenFromTransfer(resp map[string]any, sourceToken string) string {
@@ -61,7 +61,7 @@ func heldCount(t *testing.T, f *fixture) int {
 // OWN embedded identity_required flag — exactly the field NIP-CASH
 // §Redemption Metadata calls "a best-effort hint... NOT a live
 // guarantee," explicitly warning it goes stale after exactly this
-// scenario (a full transfer to bearer-target reassigns the SAME wallet in
+// scenario (a full transfer to cash reassigns the SAME wallet in
 // place, per cash_transfer.go's own TransferFromSources comment — the
 // token A hands to B still says identity_required:true from its original
 // pubkey-mode mint). Fixed by changing CheckClaim's own signature to take
@@ -95,10 +95,10 @@ func TestMultiParty_BearerRegiftChain_AtoBtoC(t *testing.T) {
 		t.Fatalf("A receive: exit %d\nstderr: %s", res.ExitCode, res.Stderr)
 	}
 
-	aTransfer := a.mustJSON("transfer", "bearer-target", "--yes")
+	aTransfer := a.mustJSON("transfer", "cash", "--yes")
 	aResolved, _ := aTransfer["target_resolved"].(string)
 	if aResolved == "" {
-		t.Fatalf("A transfer bearer-target: target_resolved empty, secret never surfaced: %v", aTransfer)
+		t.Fatalf("A transfer cash: target_resolved empty, secret never surfaced: %v", aTransfer)
 	}
 	giftToB := recipientTokenFromTransfer(aTransfer, original) + "#" + extractHexSecret(t, aResolved)
 	if heldCount(t, a) != 0 {
@@ -121,10 +121,10 @@ func TestMultiParty_BearerRegiftChain_AtoBtoC(t *testing.T) {
 	bOwnToken, _ := bEntry["token"].(string)
 
 	const regiftAmount = uint64(20_000)
-	bTransfer := b.mustJSON("transfer", "bearer-target", lokiArg(int64(regiftAmount)), "--yes")
+	bTransfer := b.mustJSON("transfer", "cash", lokiArg(int64(regiftAmount)), "--yes")
 	bResolved, _ := bTransfer["target_resolved"].(string)
 	if bResolved == "" {
-		t.Fatalf("B transfer (regift split) bearer-target: target_resolved empty: %v", bTransfer)
+		t.Fatalf("B transfer (regift split) cash: target_resolved empty: %v", bTransfer)
 	}
 	remaining, _ := bTransfer["remaining_amount_millis"].(float64)
 	if uint64(remaining) != originalAmount-regiftAmount {

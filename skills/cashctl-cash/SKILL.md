@@ -60,10 +60,10 @@ in place), `{"status": "consolidated", "consolidated_with": [...],
 "declined"}`, or `{"status": "not_applicable"}` (not a bearer-mode
 receive). A wire failure here reports `{"status": "failed", "error":
 "..."}` but never fails `receive` itself — the cash is already genuinely
-yours; retry protecting later with `cashctl wallet protect [id]`
-(re-keys a single still-shared holding in place; `consolidate --to
-bearer-target` needs 2+ sources). Because the secret is always captured — and kept current
-— up front, `redeem`/`transfer` never need a `--as bearer:<secret>`
+yours; retry protecting later with `cashctl wallet protect [id]` (or
+`--token <id>`, same effect — re-keys a single still-shared holding in
+place; `consolidate --to cash` needs 2+ sources). Because the secret is always captured — and kept current
+— up front, `redeem`/`transfer` never need a `--as cash:<secret>`
 override for a held token.
 
 ## `cashctl redeem` — cash it out
@@ -102,7 +102,7 @@ live against the domain's own `/.well-known/nostr.json`), or an
 ```sh
 cashctl transfer npub1w0lxfr9... --json                     # send it all
 cashctl transfer 3 alice@example.com --json                  # split off 3, keep the rest as a new held token
-cashctl transfer bearer-target --json
+cashctl transfer cash --json
 cashctl transfer connection:<platform>:<external-id>:<ia-pubkey> --json
 cashctl transfer nconnection1... --ia ia@example.com --json  # or hex — see below
 ```
@@ -154,12 +154,15 @@ cashctl consolidate --sources tok-a1b2,lokicash1...:5:pubkey:<privkey> --to pubk
 Positional IDs, or `--sources` comma-separated: a bare ID already in your
 ledger (amount/credential resolved automatically), or the verbose
 `<token>:<amount-loki>:<credential>` form (`--sources` only) for a source that
-isn't held locally — only `pubkey:`/`bearer:` credentials work in that
+isn't held locally — only `pubkey:`/`cash:` credentials work in that
 verbose form (a `connection-key:` value has its own embedded commas,
 ambiguous in this shorthand — receive it into your ledger first instead).
 IDs are discoverable via `cashctl wallet show --json`'s `held_tokens`
 array — plain-text `wallet show` deliberately never prints them.
-Needs at least 2 sources per call.
+Needs at least 2 sources per call. Like `transfer`, an `nconnection1...`
+`--to` target needs `--ia <identity>` (hex pubkey or NIP-05) to resolve
+its Identity Authority — an interactive session prompts for it if
+missing, a `--json`/`--yes` call gets `code: "usage"` naming `--ia`.
 
 With neither positional IDs nor `--sources` given: only same-minter
 tokens can actually be merged, so cashctl groups held tokens by minter
@@ -171,7 +174,7 @@ were actually processed: exactly one (the common case) returns the same
 explicit-sources form always has; more than one returns
 `{"consolidated": [{"new_entry", "expires_at", "target_resolved"}, ...]}`
 instead — check which key is present rather than assuming one shape.
-`--to` defaults to your own identity; `--to bearer-target` merges into a
+`--to` defaults to your own identity; `--to cash` merges into a
 fresh, anonymous bearer note instead (same keyword `transfer` uses) —
 requires a Hub that accepts a bearer `cash_consolidate` target.
 

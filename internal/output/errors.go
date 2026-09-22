@@ -64,12 +64,17 @@ var retryableCodes = map[ErrorCode]bool{
 // too — a human reading "The wallet hit an internal error. Try again."
 // with no other detail used to have no way to tell a genuinely transient
 // decline from a permanent one dumped into the same catch-all bucket.
+// ShowUsage, when true, tells EmitError to append a short "run --help"
+// pointer after the error line in text mode — see InvocationError's own
+// doc comment for which CodeUsage errors this applies to and why not all
+// of them.
 type CLIError struct {
 	Err        error
 	Code       ErrorCode
 	Input      string
 	NWCCode    string
 	RawMessage string
+	ShowUsage  bool
 }
 
 func (e *CLIError) Error() string { return e.Err.Error() }
@@ -127,6 +132,37 @@ func silence(cmd *cobra.Command) {
 func UsageError(cmd *cobra.Command, err error) error {
 	silence(cmd)
 	return wrapCLIError(CodeUsage, "", err)
+}
+
+// InvocationError is UsageError, but additionally marks the error so
+// EmitError follows the usual "Error: ..." line with the command's own
+// full --help content in text mode — Usage, Examples, Flags, all of it,
+// the same as `cashctl <cmd> --help` prints. Never in --json mode (an
+// agent doesn't need any of this human framing, and it would break
+// --json's single-document-on-stderr contract). Reserved for cases that
+// are unambiguously "you invoked this wrong" in the mechanical sense — a
+// bad argument count, an unknown flag/command, a missing required flag,
+// two conflicting ways of supplying the same value — never for a
+// CodeUsage error that's actually a legitimate runtime refusal wearing the
+// usage exit code for other reasons (transfer's "funds are fragmented",
+// consolidate's "needs at least 2 sources", an invalid interactive
+// numbered-list pick, ...), which stay exactly as terse as before, no help
+// appended. See UsageError's own doc comment on why CodeUsage covers both
+// and why a help dump on every one of them was noise more often than
+// useful — this only widens that back out for the subset where it's
+// actually actionable.
+//
+// The Code == CodeUsage guard matters when err is already a *CLIError
+// classified as something else (wrapCLIError's own "don't reclassify"
+// rule, see TestWrapCLIError_PreservesExistingClassification) — this must
+// not flip ShowUsage on a passthrough that was never reclassified as usage
+// at all.
+func InvocationError(cmd *cobra.Command, err error) error {
+	wrapped := UsageError(cmd, err)
+	if ce, ok := wrapped.(*CLIError); ok && ce.Code == CodeUsage {
+		ce.ShowUsage = true
+	}
+	return wrapped
 }
 
 // InvalidInputError classifies err as CodeInvalidInput — input doesn't
@@ -201,7 +237,7 @@ func AsCLIError(err error) *CLIError {
 func ExactArgs(n int) cobra.PositionalArgs {
 	return func(cmd *cobra.Command, args []string) error {
 		if len(args) != n {
-			return UsageError(cmd, fmt.Errorf("accepts %d arg(s), received %d", n, len(args)))
+			return InvocationError(cmd, fmt.Errorf("accepts %d arg(s), received %d", n, len(args)))
 		}
 		return nil
 	}
@@ -210,7 +246,7 @@ func ExactArgs(n int) cobra.PositionalArgs {
 func MaximumNArgs(n int) cobra.PositionalArgs {
 	return func(cmd *cobra.Command, args []string) error {
 		if len(args) > n {
-			return UsageError(cmd, fmt.Errorf("accepts at most %d arg(s), received %d", n, len(args)))
+			return InvocationError(cmd, fmt.Errorf("accepts at most %d arg(s), received %d", n, len(args)))
 		}
 		return nil
 	}
@@ -219,7 +255,7 @@ func MaximumNArgs(n int) cobra.PositionalArgs {
 func MinimumNArgs(n int) cobra.PositionalArgs {
 	return func(cmd *cobra.Command, args []string) error {
 		if len(args) < n {
-			return UsageError(cmd, fmt.Errorf("requires at least %d arg(s), received %d", n, len(args)))
+			return InvocationError(cmd, fmt.Errorf("requires at least %d arg(s), received %d", n, len(args)))
 		}
 		return nil
 	}
@@ -227,7 +263,7 @@ func MinimumNArgs(n int) cobra.PositionalArgs {
 
 func NoArgs(cmd *cobra.Command, args []string) error {
 	if len(args) > 0 {
-		return UsageError(cmd, fmt.Errorf("accepts no arguments, received %d", len(args)))
+		return InvocationError(cmd, fmt.Errorf("accepts no arguments, received %d", len(args)))
 	}
 	return nil
 }
@@ -235,7 +271,7 @@ func NoArgs(cmd *cobra.Command, args []string) error {
 // secretLikePattern matches cashctl's own raw-secret-shaped inputs, as a
 // STANDALONE value: a bech32 nsec1... key, or a bare 64-character hex
 // string (a raw privkey/secret, as used directly in
-// pubkey:<privkey>/bearer:<secret> credential strings — see
+// pubkey:<privkey>/cash:<secret> credential strings — see
 // internal/credential). Case-insensitive and tolerant of surrounding
 // whitespace: a value copy-pasted with a stray leading space or typed in
 // uppercase is exactly as secret as the canonical form, and treating it
@@ -247,13 +283,13 @@ func NoArgs(cmd *cobra.Command, args []string) error {
 var secretLikePattern = regexp.MustCompile(`(?i)^\s*(nsec1[a-z0-9]+|[0-9a-f]{64})\s*$`)
 
 // credentialPrefixPattern finds cashctl's own credential-string prefixes
-// (bearer:/pubkey:/connection-key:) ANYWHERE in a string, case/space-
+// (cash:/pubkey:/connection-key:) ANYWHERE in a string, case/space-
 // insensitively — not just as the whole string. A --sources
 // <token>:<amount>:<credential> entry embeds one after two other
 // colon-separated fields; matching only at position 0 (the previous
 // behavior) let a bad amount there report the ENTIRE entry, private key
 // included, since redaction never even looked past the first colon.
-var credentialPrefixPattern = regexp.MustCompile(`(?i)\b(bearer|pubkey|connection-key)\s*:\s*(\S+)`)
+var credentialPrefixPattern = regexp.MustCompile(`(?i)\b(cash|pubkey|connection-key)\s*:\s*(\S+)`)
 
 // secretBearingBech32Pattern matches a bech32 CONNECTION string —
 // cashhub1/circlehub1/nconnection1 — deliberately NOT a cash-token HRP
@@ -274,16 +310,16 @@ var secretBearingBech32Pattern = regexp.MustCompile(`(?i)\b(cashhub|circlehub|nc
 // nip47.ParsePairingURI).
 var nwcSecretPattern = regexp.MustCompile(`(?i)([?&]secret=)[0-9a-f]+`)
 
-// giftSecretPattern matches the "#<secret>" half of a bearer gift string
+// giftSecretPattern matches the "#<secret>" half of a cash gift string
 // (<token>#<bearer_secret>, NIP-CASH's combined presentation) — the exact
 // shape internal/dial's own SplitBearerSliceString parses.
 var giftSecretPattern = regexp.MustCompile(`#[0-9a-fA-F]{64}\b`)
 
 // RedactSecretInput scrubs every secret-shaped substring it recognizes out
 // of s — a raw nsec1/64-hex value (redacted
-// entirely), a bearer:/pubkey:/connection-key: credential (its secret
+// entirely), a cash:/pubkey:/connection-key: credential (its secret
 // component blanked, wherever in s it appears), an NWC URI's own secret=
-// value, a bearer gift string's #<secret> half, or a Hub/token bech32
+// value, a cash gift string's #<secret> half, or a Hub/token bech32
 // string (redacted entirely, HRP kept) — so a command's own error/--json
 // output never echoes spendable material back out, however it was
 // embedded in what the user typed. Returns s unchanged if none apply.

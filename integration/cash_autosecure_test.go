@@ -91,7 +91,7 @@ func TestCashReceive_AutoSecuresBearerReceipt_NoOtherHoldings(t *testing.T) {
 // TestWalletProtect_ManuallyProtectsADeclinedBearerReceipt is the live
 // evidence for the fix to "a single unprotected bearer holding can never
 // be re-protected later": the documented recovery,
-// `consolidate --to bearer-target`, needs 2+ sources and can't re-key one
+// `consolidate --to cash`, needs 2+ sources and can't re-key one
 // holding alone — `wallet protect` (cmd/wallet_protect.go) reuses the
 // exact same protectRekeyOnly logic `receive`'s own automatic offer uses,
 // just triggered manually for a holding that missed it. Also proves

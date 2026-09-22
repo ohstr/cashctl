@@ -14,18 +14,18 @@ import (
 // a standalone action, for the one case `receive`'s own automatic offer
 // can't reach: a bearer holding that was received unprotected (the offer
 // was declined, or the attempt failed) and is still shared — spendable by
-// anyone else who was shown the same code. The documented recovery,
-// `consolidate --to bearer-target`, needs 2+ sources and can't re-key a
+// anyone else who was shown the same secret. The documented recovery,
+// `consolidate --to cash`, needs 2+ sources and can't re-key a
 // single holding alone ("needs at least 2 sources, got 1"); this can,
 // since it's the exact same single-source re-key `receive` already runs,
 // just triggered manually instead of automatically.
 func newWalletProtectCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "protect [id]",
-		Short: "Re-key a still-shared bearer holding so the original code can no longer spend it",
+		Short: "Re-key a still-shared bearer holding so the original secret can no longer spend it",
 		Long: `Re-keys a bearer-mode holding's spending secret in place — the same protection ` +
 			"`receive` offers automatically for a fresh bearer gift, for a holding that missed it " +
-			"(declined, or the attempt failed) and is still shared with anyone who has the original code.",
+			"(declined, or the attempt failed) and is still shared with anyone who has the original secret.",
 		Example: `  cashctl wallet protect
   cashctl wallet protect <id>`,
 		Args: output.MaximumNArgs(1),

@@ -27,15 +27,15 @@ func TestTransfer_FullTokenToBearerTarget_GiftStringIsHandedBack(t *testing.T) {
 
 	tokenJSON := mintPubkeyTokenFromHub(t, hub, pub, 30_000)
 	f.mustJSON("receive", tokenJSON)
-	out := f.mustJSON("transfer", "bearer-target", "--yes")
+	out := f.mustJSON("transfer", "cash", "--yes")
 	if gift, _ := out["cash_to_send"].(string); !strings.Contains(gift, "#") {
-		t.Errorf("--json: a full transfer to bearer-target returned no cash_to_send gift string (new_wallet_token=%q); the secret is only inside target_resolved prose: %v",
+		t.Errorf("--json: a full transfer to cash returned no cash_to_send gift string (new_wallet_token=%q); the secret is only inside target_resolved prose: %v",
 			out["new_wallet_token"], out)
 	}
 
 	tokenText := mintPubkeyTokenFromHub(t, hub, pub, 30_000)
 	f.mustJSON("receive", tokenText)
-	res := f.runInteractive("y\n", "transfer", "bearer-target")
+	res := f.runInteractive("y\n", "transfer", "cash")
 	if res.ExitCode != 0 {
 		t.Fatalf("text transfer: exit %d\nstderr: %s", res.ExitCode, res.Stderr)
 	}
@@ -113,7 +113,7 @@ func TestConsolidate_FailureDoesNotLeaveConsumedSourcesHeld(t *testing.T) {
 		srcs = append(srcs, src{entryID(t, entry), entry["token"].(string)})
 	}
 
-	res := f.run("consolidate", "--sources", srcs[0].id+","+srcs[1].id, "--to", "bearer-target", "--yes")
+	res := f.run("consolidate", "--sources", srcs[0].id+","+srcs[1].id, "--to", "cash", "--yes")
 	if res.ExitCode == 0 {
 		t.Skip("consolidate to a bearer target succeeded on this hub; the partial-failure path can't be exercised")
 	}
@@ -139,7 +139,7 @@ func TestConsolidate_FailureDoesNotLeaveConsumedSourcesHeld(t *testing.T) {
 // `transfer <amount>` with NO target defaults to a bearer note (see
 // runCashTransfer's own doc comment: "just an amount, share the result with
 // whoever"). When that amount happens to equal the whole held token, the
-// call takes the SAME full-transfer-to-bearer-target path as
+// call takes the SAME full-transfer-to-cash path as
 // TestTransfer_FullTokenToBearerTarget_GiftStringIsHandedBack above — so it
 // must hand back the same gift string. A partial amount already does; only
 // the exact-whole-token case is at risk of silently reusing the "amount

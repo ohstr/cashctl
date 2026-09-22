@@ -75,7 +75,7 @@ func TestErrors_AsCredential_Malformed_DoesNotEchoSecret(t *testing.T) {
 	f := newFixture(t)
 	f.mustJSON("wallet", "init")
 	secret := fakeHex32(t)
-	for _, as := range []string{"bearer:" + secret + "\n", "pubkey:" + secret + ",extra", "connection-key:" + secret + ",only-two"} {
+	for _, as := range []string{"cash:" + secret + "\n", "pubkey:" + secret + ",extra", "connection-key:" + secret + ",only-two"} {
 		res := f.run("transfer", "1", "--as", as, "--yes")
 		if strings.Contains(res.Stderr, secret) || strings.Contains(res.Stdout, secret) {
 			t.Errorf("--as %q: the credential secret was echoed:\n%s", strings.ReplaceAll(as, secret, "<secret>"), res.Stderr)
@@ -151,6 +151,62 @@ func TestContract_BareGroupCommand_IsUsageError(t *testing.T) {
 				t.Errorf("`cashctl --json %s`: stdout must stay empty on a usage error, got %q", group, res.Stdout)
 			}
 		}
+	}
+}
+
+// TestContract_InvocationErrors_ShowFullHelp verifies the UX for a
+// genuinely malformed invocation — here, a missing required positional
+// argument: the usual "Error: ..." line, followed by the command's own
+// full --help content (same as `cashctl decode --help` prints, just
+// redirected to stderr instead of cobra's own stdout default), in text
+// mode only. Never under --json (an agent has no use for any of this human
+// framing, and mixing it into stderr would break the single-structured-
+// document contract TestContract_TextModeErrorsGoToStderrOnly/others
+// already pin). This is InvocationError's contract
+// (internal/output/errors.go) — deliberately narrower than every CodeUsage
+// error: a runtime refusal that merely shares the usage exit code
+// (transfer's "funds are fragmented", consolidate's "needs at least 2
+// sources", ...) must keep the plain "Error: ..." line with no help
+// appended (see UsageError's own doc comment) — not exercised here since
+// those need live held tokens/a Hub, out of scope for this offline file;
+// covered instead by internal/output's own unit tests.
+func TestContract_InvocationErrors_ShowFullHelp(t *testing.T) {
+	f := newFixture(t)
+
+	textRes := f.rawRun("--config-dir", f.configDir, "decode")
+	if textRes.ExitCode != 2 {
+		t.Fatalf("cashctl decode (no arg): exit %d, want 2 (usage)", textRes.ExitCode)
+	}
+	if !strings.Contains(textRes.Stderr, "Error: accepts 1 arg(s), received 0") {
+		t.Errorf("cashctl decode (no arg): stderr = %q, want the usual \"Error: ...\" line, unchanged", textRes.Stderr)
+	}
+	if !strings.Contains(textRes.Stderr, "Usage:\n  cashctl decode <string> [flags]") {
+		t.Errorf("cashctl decode (no arg): stderr = %q, want the command's own Usage line", textRes.Stderr)
+	}
+	if !strings.Contains(textRes.Stderr, "--check") {
+		t.Errorf("cashctl decode (no arg): stderr = %q, want the full Flags block (--check), not just a short synopsis", textRes.Stderr)
+	}
+	if !strings.Contains(textRes.Stderr, "Global Flags:") {
+		t.Errorf("cashctl decode (no arg): stderr = %q, want the Global Flags section too — this is the same content --help prints", textRes.Stderr)
+	}
+	// Ordering: the error must stay the most prominent (first) line,
+	// matching every CLI's own convention — the help block comes after it.
+	msgIdx := strings.Index(textRes.Stderr, "accepts 1 arg(s), received 0")
+	usageIdx := strings.Index(textRes.Stderr, "Usage:")
+	if msgIdx < 0 || usageIdx < 0 || msgIdx > usageIdx {
+		t.Errorf("cashctl decode (no arg): stderr = %q, want the message before the help block", textRes.Stderr)
+	}
+
+	jsonRes := f.rawRun("--json", "--config-dir", f.configDir, "decode")
+	if jsonRes.ExitCode != 2 {
+		t.Fatalf("cashctl --json decode (no arg): exit %d, want 2 (usage)", jsonRes.ExitCode)
+	}
+	if strings.Contains(jsonRes.Stderr, "--help") || strings.Contains(jsonRes.Stderr, "Usage:") {
+		t.Errorf("cashctl --json decode (no arg): stderr = %q, want no help/usage framing under --json", jsonRes.Stderr)
+	}
+	var body map[string]any
+	if err := json.Unmarshal([]byte(jsonRes.Stderr), &body); err != nil {
+		t.Fatalf("cashctl --json decode (no arg): stderr is not valid JSON: %v\nstderr: %s", err, jsonRes.Stderr)
 	}
 }
 

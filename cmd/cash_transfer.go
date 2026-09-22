@@ -28,7 +28,7 @@ func newCashTransferCmd() *cobra.Command {
 		RunE: runCashTransfer,
 	}
 	cmd.Flags().String("token", "", "which held token to transfer (auto-picked if you only hold one)")
-	cmd.Flags().String("to", "", "recipient — hex pubkey, npub1..., name@domain, nconnection1..., bearer-target, or pubkey:/connection: forms")
+	cmd.Flags().String("to", "", "recipient — hex pubkey, npub1..., name@domain, nconnection1..., cash, or pubkey:/connection: forms")
 	cmd.Flags().String("amount", "", fmt.Sprintf("how much to send, in %s — omitted sends the whole held token", output.CurrencyUnit))
 	cmd.Flags().String("as", "", "override credential")
 	cmd.Flags().String("ia", "", "Identity Authority to trust (hex pubkey or name@domain) for an nconnection1... target that doesn't specify one")
@@ -57,7 +57,7 @@ func resolveTarget(cmd *cobra.Command, s string) (credential.ResolvedTarget, err
 		jsonMode, _ := cmd.Flags().GetBool("json")
 		yesFlag, _ := cmd.Flags().GetBool("yes")
 		if jsonMode || yesFlag {
-			return credential.ResolvedTarget{}, output.UsageError(cmd, needsIA)
+			return credential.ResolvedTarget{}, output.InvocationError(cmd, needsIA)
 		}
 		platform := string(needsIA.Platform)
 		if platform == "" {
@@ -69,7 +69,7 @@ func resolveTarget(cmd *cobra.Command, s string) (credential.ResolvedTarget, err
 		}
 		iaIdentity = strings.TrimSpace(line)
 		if iaIdentity == "" {
-			return credential.ResolvedTarget{}, output.UsageError(cmd, needsIA)
+			return credential.ResolvedTarget{}, output.InvocationError(cmd, needsIA)
 		}
 	}
 
@@ -78,6 +78,46 @@ func resolveTarget(cmd *cobra.Command, s string) (credential.ResolvedTarget, err
 		return credential.ResolvedTarget{}, output.InvalidInputError(cmd, iaIdentity, err)
 	}
 	return resolved, nil
+}
+
+// targetClause renders how a transfer's destination reads inside a
+// sentence: "as cash" for a bearer target (no destination was ever given,
+// so the result is redeemable by whoever ends up holding it), or "to
+// <toValue> as identity cash" / "to <toValue> as web identity cash" for a
+// resolved recipient — matching whichever Kind credential.ParseTarget/
+// ResolveConnectionTarget assigned. "Cash"/"identity cash"/"web identity
+// cash" deliberately avoid the word "token" (or any other developer-facing
+// jargon) in every user-facing message: the string this all builds up to
+// (recipientToken, or the combined bearer <token>#<secret>) is real,
+// spendable money, not a code — see printAndSaveTransferResult's own
+// framing of it. Shared by the plain transfer path and
+// transferWithAutoConsolidate so both name the destination identically.
+func targetClause(toValue string, kind credential.TargetKind) string {
+	switch kind {
+	case credential.TargetKindConnection:
+		return fmt.Sprintf("to %s as web identity cash", toValue)
+	case credential.TargetKindBearer:
+		return "as cash"
+	default:
+		return fmt.Sprintf("to %s as identity cash", toValue)
+	}
+}
+
+// transferConfirmMessage renders the plain (non-auto-consolidate)
+// transfer's own confirm prompt. Only the bearer case spells out what "as
+// cash" actually means (anyone who ends up holding it can redeem it): a
+// named destination is self-explanatory ("to alice@example.com"), but a
+// destination-less transfer is the one place a first-time user could
+// otherwise agree to "Transfer 55 loki as cash?" without realizing that
+// creates a single, one-shot, unrecoverable value they alone are
+// responsible for handing off (see printAndSaveTransferResult's own
+// "save this now" framing on the result side of the same transfer).
+func transferConfirmMessage(sendAmount uint64, toValue string, kind credential.TargetKind) string {
+	amt := output.FormatAmount(int64(sendAmount))
+	if kind == credential.TargetKindBearer {
+		return fmt.Sprintf("Transfer %s as cash — anyone holding it can redeem it. Continue?", amt)
+	}
+	return fmt.Sprintf("Transfer %s %s?", amt, targetClause(toValue, kind))
 }
 
 // shouldPrintResolvedTarget decides whether a resolved target's Resolved
@@ -239,14 +279,9 @@ func transferWithAutoConsolidate(cmd *cobra.Command, l *ledger.Ledger, group []l
 	jsonMode, _ := cmd.Flags().GetBool("json")
 	yesFlag, _ := cmd.Flags().GetBool("yes")
 
-	displayTarget := toValue
-	if _, ok := target.Target.(*nipcash.BearerTarget); ok {
-		displayTarget = "whoever holds this"
-	}
-
 	sum := ledger.SumAmounts(group)
-	message := fmt.Sprintf("Consolidate %d tokens (%s) then send %s to %s?",
-		len(group), output.FormatAmount(int64(sum)), output.FormatAmount(int64(sendAmount)), displayTarget)
+	message := fmt.Sprintf("Consolidate %d tokens (%s) then send %s %s?",
+		len(group), output.FormatAmount(int64(sum)), output.FormatAmount(int64(sendAmount)), targetClause(toValue, target.Kind))
 	if !jsonMode && !yesFlag {
 		// Best-effort, interactive-only — see fetchExpiresAt's own doc
 		// comment on why this applies here too, not just to cash_redeem.
@@ -522,7 +557,7 @@ func markSourcesConsolidated(l *ledger.Ledger, sourceIDs []string, amountMillis 
 // be spendable the same way the source was.
 func printAndSaveTransferResult(cmd *cobra.Command, l *ledger.Ledger, transferResult *nipcash.CashTransferResult, sentAmount uint64, toValue string, target credential.ResolvedTarget, consolidatedFrom []string, remainderMode ledger.Entry, originalToken string) error {
 	jsonMode, _ := cmd.Flags().GetBool("json")
-	l.AppendHistory("transfer", fmt.Sprintf("transferred %s to %s", output.FormatAmount(int64(sentAmount)), toValue))
+	l.AppendHistory("transfer", fmt.Sprintf("transferred %s %s", output.FormatAmount(int64(sentAmount)), targetClause(toValue, target.Kind)))
 
 	var remainderEntry *ledger.Entry
 	if transferResult.RemainderWalletToken != "" {
@@ -555,16 +590,13 @@ func printAndSaveTransferResult(cmd *cobra.Command, l *ledger.Ledger, transferRe
 	// For a bearer target there's no recipient identity — the recipient
 	// is whoever holds the combined token#secret string, so that's what
 	// gets displayed/returned in its place. toValue itself (the literal
-	// "bearer-target"/user input) still goes to AppendHistory above
-	// unchanged — only this display/--json substitution uses the
-	// assembled string.
+	// "cash"/user input) still goes to AppendHistory above unchanged —
+	// only this display/--json substitution uses the assembled string.
 	_, isBearer := target.Target.(*nipcash.BearerTarget)
-	displayTo := toValue
 	var cashToSend string
 	if isBearer && recipientToken != "" {
 		bt := target.Target.(*nipcash.BearerTarget)
 		cashToSend = fmt.Sprintf("%s#%s", recipientToken, bt.Secret())
-		displayTo = cashToSend
 	}
 
 	if err := l.Save(); err != nil {
@@ -620,9 +652,23 @@ func printAndSaveTransferResult(cmd *cobra.Command, l *ledger.Ledger, transferRe
 	// narrated here. Same reasoning as the pre-transfer confirm message:
 	// this is wallet mechanism, not something the user decided, and it's
 	// always visible afterward via `cashctl wallet show`/`wallet balance`.
-	fmt.Printf("Transferred %s to %s.\n", output.FormatAmount(int64(sentAmount)), displayTo)
-	if !isBearer && recipientToken != "" {
-		fmt.Printf("Give this to them: %s (they run: cashctl receive %s)\n", recipientToken, recipientToken)
+	//
+	// The handoff value — cashToSend or recipientToken — always gets its
+	// own line, never appended to a sentence: it's what `cashctl receive`
+	// takes verbatim, and anything trailing it directly (a period, in an
+	// earlier version of this message) risks getting copied along and
+	// corrupting it.
+	switch {
+	case isBearer && cashToSend != "":
+		fmt.Printf("Transferred %s as cash. Save this now, it won't be shown again:\ncashctl receive %s\n",
+			output.FormatAmount(int64(sentAmount)), cashToSend)
+	case isBearer:
+		fmt.Printf("Transferred %s as cash.\n", output.FormatAmount(int64(sentAmount)))
+	default:
+		fmt.Printf("Transferred %s %s.\n", output.FormatAmount(int64(sentAmount)), targetClause(toValue, target.Kind))
+		if recipientToken != "" {
+			fmt.Printf("Give this to them: cashctl receive %s\n", recipientToken)
+		}
 	}
 	return nil
 }
@@ -652,7 +698,7 @@ func credentialModeOf(src ledger.Entry) ledger.Entry {
 // disambiguateTransferArgs decides which of transfer's up-to-2 positional
 // args is the target and which is the amount — sniffed by shape, not
 // position: every real target (hex pubkey, npub1..., a name@domain,
-// nconnection1..., "bearer-target", or the pubkey:/connection: forms)
+// nconnection1..., "cash", or the pubkey:/connection: forms)
 // fails output.ParseAmount, so anything that parses as a loki amount
 // (whole or fractional, e.g. "500" or "0.5") can only ever be the amount.
 // This is what lets `cashctl transfer 500` (no target at all) work instead
@@ -741,15 +787,15 @@ func runCashTransfer(cmd *cobra.Command, args []string) error {
 		// an input that was never a meaningful request to send anything.
 		return output.UsageError(cmd, fmt.Errorf("amount must be greater than 0 (omit it entirely to send the whole held token)"))
 	}
-	// No target given at all, but an amount was: default to a bearer note
-	// instead of erroring — "just an amount, share the result with
-	// whoever" is a complete, valid request, not a usage mistake. An
-	// explicit --to/positional target still always wins when given.
+	// No target given at all, but an amount was: default to cash instead
+	// of erroring — "just an amount, share the result with whoever" is a
+	// complete, valid request, not a usage mistake. An explicit --to/
+	// positional target still always wins when given.
 	if toValue == "" {
 		if amountFlag == 0 {
-			return output.UsageError(cmd, fmt.Errorf("a destination is required — pass it directly (cashctl transfer <target>) or via --to"))
+			return output.InvocationError(cmd, fmt.Errorf("a destination is required — pass it directly (cashctl transfer <target>) or via --to"))
 		}
-		toValue = "bearer-target"
+		toValue = "cash"
 	}
 
 	target, err := resolveTarget(cmd, toValue)
@@ -866,17 +912,12 @@ func runCashTransfer(cmd *cobra.Command, args []string) error {
 		})
 	}
 
-	displayTarget := toValue
-	if _, ok := target.Target.(*nipcash.BearerTarget); ok {
-		displayTarget = "whoever holds this"
-	}
-
 	var splitAmount *uint64
 	sentAmount := amount
 	sendAmount := amount
 	if amountFlag > 0 {
 		if amountFlag > amount {
-			return output.UsageError(cmd, fmt.Errorf("can't send %s to %s — held token only has %s", output.FormatAmount(int64(amountFlag)), displayTarget, output.FormatAmount(int64(amount))))
+			return output.UsageError(cmd, fmt.Errorf("can't send %s %s — held token only has %s", output.FormatAmount(int64(amountFlag)), targetClause(toValue, target.Kind), output.FormatAmount(int64(amount))))
 		}
 		splitAmount = &amountFlag
 		sentAmount = amountFlag
@@ -886,7 +927,7 @@ func runCashTransfer(cmd *cobra.Command, args []string) error {
 	// mechanism, not a decision — same as a Bitcoin wallet not asking
 	// "keep the change?" before spending a UTXO bigger than the payment.
 	// The confirmation only ever names what's actually being sent.
-	message := fmt.Sprintf("Transfer %s to %s?", output.FormatAmount(int64(sendAmount)), displayTarget)
+	message := transferConfirmMessage(sendAmount, toValue, target.Kind)
 	if w := expiryWarningSuffix(expiresAt, "transfer"); w != "" {
 		output.Notef(jsonMode, "%s", w)
 	}

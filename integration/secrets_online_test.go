@@ -61,7 +61,7 @@ func TestWalletShow_WorksForBearerOnlyWalletWithoutIdentity(t *testing.T) {
 	}
 }
 
-// `consolidate --to bearer-target` generates a fresh bearer secret. It must
+// `consolidate --to cash` generates a fresh bearer secret. It must
 // not be printed before the user has confirmed anything (transfer already
 // suppresses it; consolidate's copy of the same line does not).
 func TestConsolidate_ToBearerTarget_DoesNotPrintSecretBeforeConfirm(t *testing.T) {
@@ -75,9 +75,9 @@ func TestConsolidate_ToBearerTarget_DoesNotPrintSecretBeforeConfirm(t *testing.T
 	id1 := entryID(t, f.mustJSON("receive", mintPubkeyTokenFromHub(t, hub, pub, 30_000))["entry"])
 	id2 := entryID(t, f.mustJSON("receive", mintPubkeyTokenFromHub(t, hub, pub, 30_000))["entry"])
 
-	res := f.runInteractive("n\n", "consolidate", "--sources", id1+","+id2, "--to", "bearer-target")
+	res := f.runInteractive("n\n", "consolidate", "--sources", id1+","+id2, "--to", "cash")
 	if hex64Re.MatchString(res.Stdout) || hex64Re.MatchString(res.Stderr) {
-		t.Errorf("consolidate --to bearer-target printed the freshly generated bearer secret before the user confirmed (answered n):\n%s", res.Stdout)
+		t.Errorf("consolidate --to cash printed the freshly generated bearer secret before the user confirmed (answered n):\n%s", res.Stdout)
 	}
 	if n := heldCount(t, f); n != 2 {
 		t.Errorf("declining must leave both tokens held, got %d", n)

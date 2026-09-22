@@ -92,8 +92,8 @@ func protectBearerReceipt(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.En
 	// explained the mechanism, so even the interactive path left a human
 	// agreeing to something opaque — fixed by naming it plainly, not by
 	// flipping the default.
-	if !Confirm(cmd, true, "Shared as bearer — still spendable by whoever has the code. Protect it now? "+
-		"(re-keys it so the old code stops working; may also merge with any other holdings from the same issuer)") {
+	if !Confirm(cmd, true, "This cash is still shared — anyone holding it can spend it.\n"+
+		"Protect it now? (re-keys it; may also merge holdings from the same issuer)") {
 		return protectedStatus{Status: "declined"}, entry
 	}
 
@@ -338,7 +338,7 @@ func protectRekeyOnly(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entry,
 	entry.BearerSecret = bt.Secret()
 	entry.PendingBearerSecret = ""
 	entry.BearerProtection = ledger.BearerProtected
-	l.AppendHistory("secure", "re-keyed this cash so the shared code can no longer spend it")
+	l.AppendHistory("secure", "re-keyed this cash so the shared secret can no longer spend it")
 	if err := l.Save(); err != nil {
 		// The rekey is CONFIRMED (the call above returned no error) — but
 		// this save's own failure is harmless data-safety-wise: SQLite
@@ -392,7 +392,7 @@ func printProtectFailure(jsonMode bool, err error) {
 	if jsonMode {
 		return
 	}
-	fmt.Printf("Received, but protecting failed (%v) — still shared. Retry: `cashctl consolidate --to bearer-target`.\n", err)
+	fmt.Printf("Received, but protecting failed (%v) — still shared. Retry: `cashctl consolidate --to cash`.\n", err)
 }
 
 // printProtectAmbiguousFailure is printProtectFailure's counterpart for a
@@ -405,7 +405,7 @@ func printProtectAmbiguousFailure(jsonMode bool, err error) {
 	if jsonMode {
 		return
 	}
-	fmt.Printf("Received, but couldn't confirm protecting worked (%v) — it may have gone through anyway. No action needed: your next spend of this cash tries both possibilities automatically.\n", err)
+	fmt.Printf("Received, but couldn't confirm protecting worked (%v).\nMay have worked anyway — no action needed, your next spend tries both.\n", err)
 }
 
 // printProtectFailureWrongSecret is printProtectFailure's counterpart for
@@ -424,5 +424,5 @@ func printProtectPartialFailure(jsonMode bool, err error) {
 	if jsonMode {
 		return
 	}
-	fmt.Printf("Received — old code is dead, merge failed partway (%v). Finish: `cashctl consolidate --to bearer-target`.\n", err)
+	fmt.Printf("Received — old secret is dead, merge failed partway (%v). Finish: `cashctl consolidate --to cash`.\n", err)
 }
