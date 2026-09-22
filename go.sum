@@ -63,8 +63,6 @@ github.com/ncruces/go-strftime v1.0.0 h1:HMFp8mLCTPp341M/ZnA4qaf7ZlsbTc+miZjCLOF
 github.com/ncruces/go-strftime v1.0.0/go.mod h1:Fwc5htZGVVkseilnfgOVb9mKy6w1naJmn9CehxcKcls=
 github.com/ohstr/ncli v0.4.6 h1:FZ61/MbOSyGNSiGtkvn5aR+eeJ+GamGOx9iUKasObkE=
 github.com/ohstr/ncli v0.4.6/go.mod h1:ufTqnOXExD9sXBS4lF+1k2hoOz8hV0wTXCEGqFXxkIo=
-github.com/ohstr/nmilat v0.3.1 h1:XCxcXyrmC9wlAehhwBzhwqGwDXmt6vV7/B5CstdoRfw=
-github.com/ohstr/nmilat v0.3.1/go.mod h1:+6B0CT40RAJmnZESl1sBukc07RkdyPn5/EQ8ROVof0Y=
 github.com/ohstr/nmilat v0.3.2-0.20260922122018-fc1060cd2232 h1:oJNm+TNtY4LtKDmwSt/lJXse7PGAEdcla0NXR7WGkxI=
 github.com/ohstr/nmilat v0.3.2-0.20260922122018-fc1060cd2232/go.mod h1:+6B0CT40RAJmnZESl1sBukc07RkdyPn5/EQ8ROVof0Y=
 github.com/pelletier/go-toml/v2 v2.2.3 h1:YmeHyLY8mFWbdkNWwpr+qIL2bEqT0o95WSdkNHvL12M=
