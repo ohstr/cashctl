@@ -140,7 +140,7 @@ func TestConsolidate_FailureDoesNotLeaveConsumedSourcesHeld(t *testing.T) {
 // runCashTransfer's own doc comment: "just an amount, share the result with
 // whoever"). When that amount happens to equal the whole held token, the
 // call takes the SAME full-transfer-to-cash path as
-// TestTransfer_FullTokenToBearerTarget_GiftStringIsHandedBack above — so it
+// TestTransfer_FullTokenToCashTarget_GiftStringIsHandedBack above — so it
 // must hand back the same gift string. A partial amount already does; only
 // the exact-whole-token case is at risk of silently reusing the "amount
 // omitted" full-transfer code path with nothing to show for it.

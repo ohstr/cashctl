@@ -148,7 +148,7 @@ func TestShouldCheckCashToken_IdentityRequiredWithLocalIdentityPrompts(t *testin
 	}
 
 	c := newTestDecodeCmd()
-	withStdin(t, "y\n") // see BearerTokenAlwaysPrompts... for why not a bare Enter
+	withStdin(t, "y\n") // see CashTokenAlwaysPrompts... for why not a bare Enter
 	if got := shouldCheckCashToken(c, false, false, false); !got {
 		t.Errorf("shouldCheckCashToken(identity-required, local identity configured, explicit y) = false, want true (it must actually prompt, not skip)")
 	}

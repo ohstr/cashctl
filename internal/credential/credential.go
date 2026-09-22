@@ -99,19 +99,19 @@ const (
 	// or a NIP-05 identifier (name@domain) resolved down to its pubkey.
 	// The zero value: callers that build a ResolvedTarget without setting
 	// Kind (every test fixture predating this field) land here rather than
-	// on TargetKindBearer, since bearer detection elsewhere is done by
-	// type-asserting Target itself (*nipcash.BearerTarget), never by Kind
+	// on TargetKindCash, since cash-mode detection elsewhere is done by
+	// type-asserting Target itself (*nipcash.CashTarget), never by Kind
 	// — so an unset Kind can only ever under-specify a named target, never
-	// misrender a real bearer one.
+	// misrender a real cash-mode one.
 	TargetKindPubkey TargetKind = iota
 	// TargetKindConnection is a platform-vouched Web Identity with no
 	// Nostr keypair of its own yet: connection:<platform>:<external-id>:
 	// <ia-pubkey>, or a resolved nconnection1....
 	TargetKindConnection
-	// TargetKindBearer is a not-yet-realized bearer target (the "cash"
+	// TargetKindCash is a not-yet-realized cash-mode target (the "cash"
 	// keyword — no destination was given at all), redeemable by whoever
 	// ends up holding the resulting cash.
-	TargetKindBearer
+	TargetKindCash
 )
 
 // NeedsIAError is returned by ParseTarget for a syntactically valid
@@ -183,22 +183,22 @@ func ParseTarget(s string) (ResolvedTarget, error) {
 		// secret (NIP-CASH §Cash-Mode Slices: "the caller supplies the
 		// commitment themselves") — the secret itself exists nowhere else
 		// once this call returns. Losing it here is equivalent to losing
-		// the funds, same as any other bearer note, so it MUST be
+		// the funds, same as any other cash note, so it MUST be
 		// surfaced via Resolved rather than silently discarded — the
 		// caller shows it before/alongside committing, exactly like any
 		// other value this field carries. Deliberately doesn't say
 		// whether it's shown again later: `consolidate --to cash`
 		// (self-securing) stores it in the caller's own ledger entry and
-		// never re-displays it raw; `transfer`'s own bearer case (a gift
+		// never re-displays it raw; `transfer`'s own cash-mode case (a gift
 		// to someone else) *does* re-display it, combined with the
 		// resulting token, once the call completes — a caller-specific
 		// claim this shared parser has no way to make accurately for both.
 		secret := target.Secret()
 		return ResolvedTarget{
 			Target:   target,
-			Kind:     TargetKindBearer,
+			Kind:     TargetKindCash,
 			Input:    s,
-			Resolved: fmt.Sprintf("Generated a bearer secret: %s", secret),
+			Resolved: fmt.Sprintf("Generated a cash secret: %s", secret),
 		}, nil
 	}
 	if isHexPubkey(s) || strings.HasPrefix(s, "npub1") || looksLikeNIP05(s) {

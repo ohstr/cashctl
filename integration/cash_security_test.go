@@ -309,10 +309,10 @@ func TestCashConsolidate_ReusingAlreadyConsolidatedSourceRejected(t *testing.T) 
 	}
 }
 
-// TestCashTransfer_ToBearerTarget_SecretMustBeRecoverable transfers a held
+// TestCashTransfer_ToCashTarget_SecretMustBeRecoverable transfers a held
 // pubkey-mode token to "cash" — cashctl generates a fresh
 // cash_secret client-side for this (NIP-CASH §Cash-Mode Slices: unlike
-// mint_cash's bearer recipient, cash_transfer's bearer target does NOT
+// mint_cash's cash-mode recipient, cash_transfer's cash-mode target does NOT
 // get a wallet-generated secret; the caller supplies the commitment
 // themselves) — and confirms that secret is actually surfaced back to
 // the human/agent, not silently generated and discarded once the NWC
@@ -348,7 +348,7 @@ func TestCashTransfer_ToCashTarget_SecretMustBeRecoverable(t *testing.T) {
 	transferResp := f.mustJSON("transfer", "cash", "--yes")
 	resolved, _ := transferResp["target_resolved"].(string)
 	if resolved == "" {
-		t.Fatalf("transfer to cash: target_resolved is empty — the generated bearer secret was never surfaced anywhere, making the transferred funds permanently unspendable: %v", transferResp)
+		t.Fatalf("transfer to cash: target_resolved is empty — the generated cash secret was never surfaced anywhere, making the transferred funds permanently unspendable: %v", transferResp)
 	}
 
 	// Extract the secret and prove it's the real credential: redeem with

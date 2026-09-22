@@ -332,7 +332,7 @@ func TestCashInspect_DecodeAndListRecipients(t *testing.T) {
 		return result.CashToken, result.Recipients[0].CashSecret
 	}
 
-	// Two separate bearer mints: a token can only ever be received once per
+	// Two separate cash mints: a token can only ever be received once per
 	// ledger (ledger.ErrAlreadyHeld), so the no-secret negative-path check
 	// below needs its own token, distinct from the one actually redeemed.
 	noSecretToken, _ := mintCash()
@@ -373,14 +373,14 @@ func TestCashInspect_DecodeAndListRecipients(t *testing.T) {
 		t.Errorf(`receive (cashMode, no embedded secret): got "received" = %v, want false`, noSecretResp["received"])
 	}
 
-	// Now the real flow: receive the combined bearer-slice presentation
+	// Now the real flow: receive the combined cash-slice presentation
 	// ("<token>#<cash_secret>", NIP-CASH §Presenting a Cash-Mode Slice as
 	// One String), mirroring how a Hub operator actually hands out a
 	// cash note (token + cash_secret, conveyed together, out of band —
 	// see lokihub's own ConnectAppCard/RevealConnectionDialog for the
 	// reference UX).
 	if res := f.run("receive", token+"#"+cashSecret); res.ExitCode != 0 {
-		t.Fatalf("receive (combined bearer-slice string): exit %d\nstderr: %s", res.ExitCode, res.Stderr)
+		t.Fatalf("receive (combined cash-slice string): exit %d\nstderr: %s", res.ExitCode, res.Stderr)
 	}
 	tokenID := entryIDFor(token)
 

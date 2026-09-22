@@ -55,25 +55,25 @@ func identityNpub() (string, error) {
 
 // cashModeLabel renders which of the three cash modes e is held in —
 // "cash"/"identity cash"/"web identity cash", the same vocabulary
-// cash_transfer's own confirm/result messages use — plus bearer-mode's
-// own shared/protected sub-state (see Entry.BearerProtection's own doc
+// cash_transfer's own confirm/result messages use — plus cash mode's
+// own shared/protected sub-state (see Entry.CashProtection's own doc
 // comment): "shared" means the spending secret is still whatever was
 // embedded in the received token/gift string, spendable by anyone else
 // who was shown it too — the whole reason `receive` offers to protect a
-// bearer gift automatically, and the one status here money can actually
+// cash gift automatically, and the one status here money can actually
 // be at risk from, not just informational the way verified/unverified
 // is. Identity cash and web identity cash have no such sub-state: once
 // reassigned to a specific pubkey/connection identity, only that
 // identity's own key can ever spend it.
 func cashModeLabel(e ledger.Entry) string {
-	switch e.BearerProtection {
-	case ledger.BearerShared:
+	switch e.CashProtection {
+	case ledger.CashShared:
 		return "cash (shared — anyone with this can spend it; `cashctl wallet protect " + e.ID + "` fixes this)"
-	case ledger.BearerProtected:
+	case ledger.CashProtected:
 		return "cash (protected)"
 	}
 	if e.IdentityRequired != nil && !*e.IdentityRequired {
-		// Bearer-mode with no BearerProtection recorded (data saved before
+		// Cash-mode with no CashProtection recorded (data saved before
 		// that field existed) — still cash, just without a shared/protected
 		// read to report.
 		return "cash"

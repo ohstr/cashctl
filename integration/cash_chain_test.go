@@ -11,7 +11,7 @@ import (
 // The flows in this file are CHAINS: the output of one command is spent
 // again by the next. Single-step tests (a split happens; the remainder
 // exists) can't see a remainder that is saved but not actually spendable —
-// which is how a cash-mode split remainder, saved without its bearer
+// which is how a cash-mode split remainder, saved without its cash
 // secret, shipped: the FIRST spend worked, the SECOND asked the user to run
 // `cashctl init`. Every chain here spends what the previous step left.
 
@@ -203,7 +203,7 @@ func TestChain_CashToPubkeyToCash_RoundTrip(t *testing.T) {
 	orig := mintPubkeyTokenFromHub(t, hub, aHex, amount)
 	a.mustJSON("receive", orig)
 
-	gifted := a.mustJSON("transfer", "cash", "--yes") // whole token, pubkey -> bearer
+	gifted := a.mustJSON("transfer", "cash", "--yes") // whole token, pubkey -> cash
 	secret := extractHexSecret(t, gifted["target_resolved"].(string))
 	gift := recipientTokenFromTransfer(gifted, orig) + "#" + secret
 
@@ -214,7 +214,7 @@ func TestChain_CashToPubkeyToCash_RoundTrip(t *testing.T) {
 	bEntry, _ := bRecv["entry"].(map[string]any)
 	bToken, _ := bEntry["token"].(string)
 
-	back := b.mustJSON("transfer", aHex, "--yes") // whole token, bearer -> A's pubkey
+	back := b.mustJSON("transfer", aHex, "--yes") // whole token, cash -> A's pubkey
 	aToken := recipientTokenFromTransfer(back, bToken)
 	got := a.mustJSON("receive", aToken)
 	if amt := mloki(got["entry"].(map[string]any), "amount_millis"); amt != amount {

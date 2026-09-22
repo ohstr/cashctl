@@ -81,14 +81,14 @@ func resolveTarget(cmd *cobra.Command, s string) (credential.ResolvedTarget, err
 }
 
 // targetClause renders how a transfer's destination reads inside a
-// sentence: "as cash" for a bearer target (no destination was ever given,
+// sentence: "as cash" for a cash-mode target (no destination was ever given,
 // so the result is redeemable by whoever ends up holding it), or "to
 // <toValue> as identity cash" / "to <toValue> as web identity cash" for a
 // resolved recipient — matching whichever Kind credential.ParseTarget/
 // ResolveConnectionTarget assigned. "Cash"/"identity cash"/"web identity
 // cash" deliberately avoid the word "token" (or any other developer-facing
 // jargon) in every user-facing message: the string this all builds up to
-// (recipientToken, or the combined bearer <token>#<secret>) is real,
+// (recipientToken, or the combined cash-mode <token>#<secret>) is real,
 // spendable money, not a code — see printAndSaveTransferResult's own
 // framing of it. Shared by the plain transfer path and
 // transferWithAutoConsolidate so both name the destination identically.
@@ -96,7 +96,7 @@ func targetClause(toValue string, kind credential.TargetKind) string {
 	switch kind {
 	case credential.TargetKindConnection:
 		return fmt.Sprintf("to %s as web identity cash", toValue)
-	case credential.TargetKindBearer:
+	case credential.TargetKindCash:
 		return "as cash"
 	default:
 		return fmt.Sprintf("to %s as identity cash", toValue)
@@ -104,7 +104,7 @@ func targetClause(toValue string, kind credential.TargetKind) string {
 }
 
 // transferConfirmMessage renders the plain (non-auto-consolidate)
-// transfer's own confirm prompt. Only the bearer case spells out what "as
+// transfer's own confirm prompt. Only the cash-mode case spells out what "as
 // cash" actually means (anyone who ends up holding it can redeem it): a
 // named destination is self-explanatory ("to alice@example.com"), but a
 // destination-less transfer is the one place a first-time user could
@@ -114,7 +114,7 @@ func targetClause(toValue string, kind credential.TargetKind) string {
 // "save this now" framing on the result side of the same transfer).
 func transferConfirmMessage(sendAmount uint64, toValue string, kind credential.TargetKind) string {
 	amt := output.FormatAmount(int64(sendAmount))
-	if kind == credential.TargetKindBearer {
+	if kind == credential.TargetKindCash {
 		return fmt.Sprintf("Transfer %s as cash — anyone holding it can redeem it. Continue?", amt)
 	}
 	return fmt.Sprintf("Transfer %s %s?", amt, targetClause(toValue, kind))
@@ -549,7 +549,7 @@ func markSourcesConsolidated(l *ledger.Ledger, sourceIDs []string, amountMillis 
 // Getting this wrong is a fund-loss bug, not a display nit: printing
 // nothing here for that case means the transfer's whole result — the
 // wallet's new owner has no way to ever spend it — cannot be recovered
-// from output alone, for BOTH bearer and pubkey/npub/connection targets.
+// from output alone, for BOTH cash-mode and pubkey/npub/connection targets.
 //
 // remainderMode carries the credential-mode fields (see credentialModeOf)
 // the remainder entry, if any, is saved with — cash_transfer leaves a

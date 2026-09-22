@@ -103,7 +103,7 @@ func TestSelectForAmount_ConsolidatedSumExactMatch(t *testing.T) {
 func TestSelectForAmount_ExcludesCashAndConnectionKeyFromGrouping(t *testing.T) {
 	nonCash := false
 	held := []Entry{
-		{ID: "tok-bearer", AmountMillis: amountPtr(3000), MinterPubkey: minterPtr(minterA), IdentityRequired: &nonCash},
+		{ID: "tok-cash", AmountMillis: amountPtr(3000), MinterPubkey: minterPtr(minterA), IdentityRequired: &nonCash},
 		{ID: "tok-connkey", AmountMillis: amountPtr(3000), MinterPubkey: minterPtr(minterA), ConnectionKeyPlatform: "discord"},
 		{ID: "tok-pubkey", AmountMillis: amountPtr(3000), MinterPubkey: minterPtr(minterA)},
 	}

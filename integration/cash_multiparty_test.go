@@ -26,7 +26,7 @@ import (
 // genuinely new wallet for the sent portion (new_wallet_token is
 // populated); a full (non-split) transfer may instead reassign the SAME
 // underlying wallet connection in place (new_wallet_token empty) — see
-// cash_security_test.go's TestCashTransfer_ToBearerTarget_SecretMustBeRecoverable,
+// cash_security_test.go's TestCashTransfer_ToCashTarget_SecretMustBeRecoverable,
 // which reconnects to the ORIGINAL token string after a full cash
 // transfer. sourceToken is the entry the transfer acted on, used as the
 // fallback for the in-place case either way.
@@ -55,7 +55,7 @@ func heldCount(t *testing.T, f *fixture) int {
 //
 // This test caught a real cross-repo bug during development: B's
 // `receive` step was refused with "no matching recipient," even though
-// list_recipients independently confirmed a real, unclaimed bearer
+// list_recipients independently confirmed a real, unclaimed cash-mode
 // allocation existed. Root-caused to nipcash/client.CheckClaim
 // (nipcash/client/check_claim.go) recomputing isCash from the TOKEN'S
 // OWN embedded identity_required flag — exactly the field NIP-CASH

@@ -312,7 +312,7 @@ var nwcSecretPattern = regexp.MustCompile(`(?i)([?&]secret=)[0-9a-f]+`)
 
 // giftSecretPattern matches the "#<secret>" half of a cash gift string
 // (<token>#<cash_secret>, NIP-CASH's combined presentation) — the exact
-// shape internal/dial's own SplitBearerSliceString parses.
+// shape internal/dial's own SplitCashSliceString parses.
 var giftSecretPattern = regexp.MustCompile(`#[0-9a-fA-F]{64}\b`)
 
 // RedactSecretInput scrubs every secret-shaped substring it recognizes out

@@ -170,7 +170,7 @@ func protectCashReceipt(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entr
 		}
 		var partial *nipcashclient.PartialProgressError
 		if errors.As(err, &partial) && partial.Transferred != nil {
-			// The interim reassignment landed for real — the old bearer
+			// The interim reassignment landed for real — the old cash
 			// secret is already dead, even though consolidation itself
 			// didn't finish. Apply that real effect before reporting the
 			// failure, per the save-immediately rule: never leave the

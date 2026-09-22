@@ -616,7 +616,7 @@ func doCashConsolidate(cmd *cobra.Command, l *ledger.Ledger, dialCandidates []st
 			// §Cash-Mode Slices: the caller supplies the commitment, the node
 			// never mints/returns a secret) — discarding it here would be
 			// the exact same fund-loss bug already found and fixed for
-			// transfer's own cash (bearer) path.
+			// transfer's own cash (cash-mode) path.
 			if bt, ok := target.(*nipcash.CashTarget); ok {
 				newLedgerEntry.CashSecret = bt.Secret()
 				newLedgerEntry.IdentityRequired = ptrTo(false)
