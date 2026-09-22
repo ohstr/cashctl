@@ -105,7 +105,7 @@ expired), `code: "conflict"` (rate-limited, retry), or `code: "internal"`
 
 ```sh
 cashctl decode lokicash1... --json      # {"type":"cash_token","hrp","wallet_pubkey","relays","identity_required",...}
-cashctl decode lokicash1...#deadbeef --json  # bearer combined presentation — adds "embedded_bearer_secret_present":true
+cashctl decode lokicash1...#deadbeef --json  # cash-mode combined presentation — adds "embedded_cash_secret_present":true
 cashctl decode circlehub1... --json     # {"type":"circlehub","hrp","wallet_pubkey","relays","label"}
 cashctl decode nostr+walletconnect://... --json  # {"type":"nwc_uri","wallet_pubkey","relays"}
 cashctl decode lokicash1... --check --json    # adds "check":{"ok","amount_millis"?,"error"?} — a network call
@@ -123,12 +123,12 @@ Hub** connection (`cashhub1...`) gets a specific corrective error instead
 of a decode — cashctl has no mint capability and there's no local decoder
 for that format. **The pairing secret is never included in the output,
 for any of the three shapes** — this is inspection only, never a way to
-extract a working spending/dialing credential. A bearer-mode cash token
-MAY arrive as `<token>#<bearer_secret>` (NIP-CASH's combined
-bearer-slice presentation — `cashctl receive` accepts it directly; there
+extract a working spending/dialing credential. A cash-mode cash token
+MAY arrive as `<token>#<cash_secret>` (NIP-CASH's combined
+cash-mode slice presentation — `cashctl receive` accepts it directly; there
 is no `--secret` flag at all, so this embedded form is the only way a
-bearer token's secret ever reaches `receive`) — decode splits it
-automatically and reports only `embedded_bearer_secret_present: true`,
+cash-mode token's secret ever reaches `receive`) — decode splits it
+automatically and reports only `embedded_cash_secret_present: true`,
 never the secret's value, same rule as the token's own pairing secret.
 
 **`--check` opts into one read-only network round trip** — the only

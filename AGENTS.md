@@ -20,14 +20,14 @@ commands run unattended). `NO_COLOR` disables ANSI color on stderr.
 | `cashctl wallet history` | Local action log (receive/redeem/transfer/consolidate) |
 | `cashctl wallet use <name>` / `cashctl connect use <name>` | Switch your default wallet |
 | `cashctl wallet balance [--breakdown\|-v] [--from <name>]` | Unified balance: every wallet's live balance + every held token's value |
-| `cashctl wallet protect [id] [--token <id>]` | Re-key a still-shared bearer holding so the original code can no longer spend it — `receive` does this automatically; use this if that was declined or failed |
+| `cashctl wallet protect [id] [--token <id>]` | Re-key a still-shared cash-mode holding so the original code can no longer spend it — `receive` does this automatically; use this if that was declined or failed |
 | `cashctl wallet get-info` / `budget` / `invoice <amount>` / `pay <invoice>` / `list-tx` / `sign-message <msg>` | Ordinary NIP-47 calls against the current wallet |
 | `cashctl invoice <amount>` / `cashctl pay <invoice>` / `cashctl balance` | Top-level shortcuts for `wallet invoice`/`wallet pay`/`wallet balance` |
 | `cashctl connect add <name> <connection>` / `list` / `rm <name>` | Register/list/remove any other NWC connection |
 | `cashctl decode <string> [--check]` | Inspect any cash token, Circle Hub connection (`circlehub1...`), or NWC URI locally, no network call; `--check` opts into a read-only Hub check (cash token: matching recipient; circle hub: can we join) |
-| `cashctl receive <token>` | Decode a cash token, print its details, then cross-check it against the Cash Hub before adding it to your wallet — refuses anything that doesn't check out. A bearer-mode token's `bearer_secret` must be embedded, `<token>#<bearer_secret>` (NIP-CASH's combined bearer-slice presentation) — pasted bare, it degrades to a read-only report instead of erroring. A saved bearer-mode receipt is then offered automatic protecting: re-keyed under a fresh secret (and merged with any other same-issuer holding), reported under `"secured"` |
+| `cashctl receive <token>` | Decode a cash token, print its details, then cross-check it against the Cash Hub before adding it to your wallet — refuses anything that doesn't check out. A cash-mode token's `cash_secret` must be embedded, `<token>#<cash_secret>` (NIP-CASH's combined cash-mode slice presentation) — pasted bare, it degrades to a read-only report instead of erroring. A saved cash-mode receipt is then offered automatic protecting: re-keyed under a fresh secret (and merged with any other same-issuer holding), reported under `"secured"` |
 | `cashctl redeem [wallet] [--token <id>] [--invoice <bolt11>] [--as <credential>]` | Redeem a held token into a wallet (positional, or `--into`) or a raw invoice |
-| `cashctl transfer [amount] [target] [--as <credential>]` | Send a held token — amount and target are positional (either order), or `--to`/`--amount`. No target at all defaults to a bearer note (a `<token>#<secret>` string to hand anyone). With an amount and no `--token`, cash selection picks which held token(s) reach it exactly (auto-consolidating a same-minter subset first if no single token covers it) instead of just picking one token to act on |
+| `cashctl transfer [amount] [target] [--as <credential>]` | Send a held token — amount and target are positional (either order), or `--to`/`--amount`. No target at all defaults to a cash note (a `<token>#<secret>` string to hand anyone). With an amount and no `--token`, cash selection picks which held token(s) reach it exactly (auto-consolidating a same-minter subset first if no single token covers it) instead of just picking one token to act on |
 | `cashctl consolidate [id...] [--to <target>]` | Merge several held tokens into one — positional IDs, or `--sources`, for exact control (IDs discoverable via `wallet show --json`; plain-text `wallet show` never prints them). With neither, auto-groups held tokens by minter (only same-minter tokens can merge) and consolidates each group with 2+ tokens — one group proceeds directly, several prompt interactively (or all process under `--json`/`--yes`) |
 | `cashctl cash list-recipients [--token <id>]` | Your allocation + co-recipients of a held token (network) |
 | `cashctl version` | Print the cashctl version |
@@ -53,7 +53,7 @@ output (empty string when nothing needed resolving).
 
 `--as`'s credential syntax is unchanged and always needs its prefix (never
 auto-detected — a bare hex string is genuinely ambiguous between a private
-key and a bearer secret, so guessing isn't safe here the way it is for a
+key and a cash secret, so guessing isn't safe here the way it is for a
 public target): `pubkey:<hex-or-privkey>`, `cash:<secret>`,
 `connection-key:<privkey>,<platform>,<external-id>,<attestation-file>`
 (redeem/transfer only).
@@ -110,7 +110,7 @@ This repo ships example-driven guidance in `skills/`, one file per area:
   calls, or decoding any token/connection string locally (`init`,
   `wallet ...`, `connect ...`, `decode`) → `skills/cashctl-wallet/SKILL.md`
 - Receiving, redeeming, transferring, or consolidating NIP-CASH tokens, or
-  re-keying a still-shared bearer holding (`receive`, `redeem`, `transfer`,
+  re-keying a still-shared cash-mode holding (`receive`, `redeem`, `transfer`,
   `consolidate`, `cash ...`, `wallet protect`) → `skills/cashctl-cash/SKILL.md`
 - Joining a circle for a personal wallet (`join`, `circle join`) →
   `skills/cashctl-circle/SKILL.md`
