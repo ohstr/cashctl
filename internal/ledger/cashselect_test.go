@@ -100,17 +100,17 @@ func TestSelectForAmount_ConsolidatedSumExactMatch(t *testing.T) {
 	}
 }
 
-func TestSelectForAmount_ExcludesBearerAndConnectionKeyFromGrouping(t *testing.T) {
-	nonBearer := false
+func TestSelectForAmount_ExcludesCashAndConnectionKeyFromGrouping(t *testing.T) {
+	nonCash := false
 	held := []Entry{
-		{ID: "tok-bearer", AmountMillis: amountPtr(3000), MinterPubkey: minterPtr(minterA), IdentityRequired: &nonBearer},
+		{ID: "tok-cash", AmountMillis: amountPtr(3000), MinterPubkey: minterPtr(minterA), IdentityRequired: &nonCash},
 		{ID: "tok-connkey", AmountMillis: amountPtr(3000), MinterPubkey: minterPtr(minterA), ConnectionKeyPlatform: "discord"},
 		{ID: "tok-pubkey", AmountMillis: amountPtr(3000), MinterPubkey: minterPtr(minterA)},
 	}
 	// Only tok-pubkey is eligible for grouping; alone it can't reach 5000.
 	_, err := SelectForAmount(held, 5000)
 	if !errors.Is(err, ErrFundsFragmented) {
-		t.Fatalf("SelectForAmount() error = %v, want ErrFundsFragmented (bearer/connection-key entries must be excluded from grouping)", err)
+		t.Fatalf("SelectForAmount() error = %v, want ErrFundsFragmented (cash/connection-key entries must be excluded from grouping)", err)
 	}
 }
 

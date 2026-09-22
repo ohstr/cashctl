@@ -216,9 +216,9 @@ func consolidateItems(cmd *cobra.Command, l *ledger.Ledger, items []string, toFl
 		}
 		target = rt.Target
 		targetResolved = rt.Resolved
-		// shouldPrintResolvedTarget (cash_transfer.go): a bearer target's
+		// shouldPrintResolvedTarget (cash_transfer.go): a cash-mode target's
 		// Resolved carries the freshly generated secret itself — printing
-		// it here, before anything is confirmed, is the exact bearer-
+		// it here, before anything is confirmed, is the exact cash-mode-
 		// target-secret-before-confirm bug already found and fixed for
 		// transfer's own "resolves to:" line. Still returned in --json's
 		// target_resolved either way, same as transfer.
@@ -611,14 +611,14 @@ func doCashConsolidate(cmd *cobra.Command, l *ledger.Ledger, dialCandidates []st
 				// Inherited, not verified against the new wallet itself — see sharedMinter.
 				MinterPubkey: sharedMinterOfIDs(l, localIDs),
 			}
-			// A bearer target's own secret only ever exists in target
+			// A cash-mode target's own secret only ever exists in target
 			// itself — the wire response never carries it (NIP-CASH
-			// §Bearer Slices: the caller supplies the commitment, the node
+			// §Cash-Mode Slices: the caller supplies the commitment, the node
 			// never mints/returns a secret) — discarding it here would be
 			// the exact same fund-loss bug already found and fixed for
-			// transfer's own cash (bearer) path.
-			if bt, ok := target.(*nipcash.BearerTarget); ok {
-				newLedgerEntry.BearerSecret = bt.Secret()
+			// transfer's own cash (cash-mode) path.
+			if bt, ok := target.(*nipcash.CashTarget); ok {
+				newLedgerEntry.CashSecret = bt.Secret()
 				newLedgerEntry.IdentityRequired = ptrTo(false)
 			}
 			// A pubkey/connection_key target other than the caller's own
@@ -627,14 +627,14 @@ func doCashConsolidate(cmd *cobra.Command, l *ledger.Ledger, dialCandidates []st
 			// saved as one of the caller's own held tokens (same rule
 			// cash_transfer's own third-party spin-off already follows:
 			// only ever persists the caller's own remainder, never the
-			// recipient's token). A bearer target keeps the existing
-			// behavior above (BearerSecret set): unlike a pubkey/
+			// recipient's token). A cash-mode target keeps the existing
+			// behavior above (CashSecret set): unlike a pubkey/
 			// connection_key gift, only the caller ever holds that secret,
 			// so it's genuinely theirs to keep track of. newEntry is still
 			// returned for display/hand-off either way, just not added to
-			// l for a non-self, non-bearer target.
-			_, isBearerTarget := target.(*nipcash.BearerTarget)
-			if isSelfTarget || isBearerTarget {
+			// l for a non-self, identity-bound target.
+			_, isCashTarget := target.(*nipcash.CashTarget)
+			if isSelfTarget || isCashTarget {
 				newEntry, _ = l.Add(newLedgerEntry)
 			} else {
 				newEntry = &newLedgerEntry

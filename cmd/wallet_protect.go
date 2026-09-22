@@ -12,7 +12,7 @@ import (
 
 // newWalletProtectCmd exposes protectRekeyOnly (cmd/receive_secure.go) as
 // a standalone action, for the one case `receive`'s own automatic offer
-// can't reach: a bearer holding that was received unprotected (the offer
+// can't reach: a cash-mode holding that was received unprotected (the offer
 // was declined, or the attempt failed) and is still shared — spendable by
 // anyone else who was shown the same secret. The documented recovery,
 // `consolidate --to cash`, needs 2+ sources and can't re-key a
@@ -22,9 +22,9 @@ import (
 func newWalletProtectCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "protect [id]",
-		Short: "Re-key a still-shared bearer holding so the original secret can no longer spend it",
-		Long: `Re-keys a bearer-mode holding's spending secret in place — the same protection ` +
-			"`receive` offers automatically for a fresh bearer gift, for a holding that missed it " +
+		Short: "Re-key a still-shared cash-mode holding so the original secret can no longer spend it",
+		Long: `Re-keys a cash-mode holding's spending secret in place — the same protection ` +
+			"`receive` offers automatically for a fresh cash gift, for a holding that missed it " +
 			"(declined, or the attempt failed) and is still shared with anyone who has the original secret.",
 		Example: `  cashctl wallet protect
   cashctl wallet protect <id>`,
@@ -42,7 +42,7 @@ func runWalletProtect(cmd *cobra.Command, args []string) error {
 		return output.RuntimeError(cmd, err)
 	}
 
-	entry, err := resolveUnprotectedBearerHolding(cmd, l, args)
+	entry, err := resolveUnprotectedCashHolding(cmd, l, args)
 	if err != nil {
 		return err
 	}
@@ -72,14 +72,14 @@ func runWalletProtect(cmd *cobra.Command, args []string) error {
 	}
 }
 
-// resolveUnprotectedBearerHolding is wallet protect's own entry resolver —
+// resolveUnprotectedCashHolding is wallet protect's own entry resolver —
 // mirrors resolveHeldToken's shape (cash_redeem.go: --token flag, then
 // positional, then auto-pick-if-one/prompt-if-many) but scoped to exactly
-// what this command can act on: a bearer-mode holding still
-// ledger.BearerShared. An explicit --token/positional naming anything else
+// what this command can act on: a cash-mode holding still
+// ledger.CashShared. An explicit --token/positional naming anything else
 // (already protected, pubkey-mode, not held at all) gets a specific
 // reason, not a generic "not found."
-func resolveUnprotectedBearerHolding(cmd *cobra.Command, l *ledger.Ledger, args []string) (*ledger.Entry, error) {
+func resolveUnprotectedCashHolding(cmd *cobra.Command, l *ledger.Ledger, args []string) (*ledger.Entry, error) {
 	id, _ := cmd.Flags().GetString("token")
 	if id == "" && len(args) > 0 {
 		id = args[0]
@@ -89,7 +89,7 @@ func resolveUnprotectedBearerHolding(cmd *cobra.Command, l *ledger.Ledger, args 
 		if !ok {
 			return nil, output.NotFoundError(cmd, id, fmt.Errorf("no held token %q", id))
 		}
-		if e.BearerProtection != ledger.BearerShared {
+		if e.CashProtection != ledger.CashShared {
 			return nil, output.ConflictError(cmd, id, errors.New(unprotectableReason(e)))
 		}
 		return e, nil
@@ -97,12 +97,12 @@ func resolveUnprotectedBearerHolding(cmd *cobra.Command, l *ledger.Ledger, args 
 
 	var eligible []ledger.Entry
 	for _, e := range l.Held() {
-		if e.BearerProtection == ledger.BearerShared {
+		if e.CashProtection == ledger.CashShared {
 			eligible = append(eligible, e)
 		}
 	}
 	if len(eligible) == 0 {
-		return nil, output.NotFoundError(cmd, "", errors.New("no unprotected bearer holdings — nothing to protect (see `cashctl wallet show`)"))
+		return nil, output.NotFoundError(cmd, "", errors.New("no unprotected cash-mode holdings — nothing to protect (see `cashctl wallet show`)"))
 	}
 	pickedID := eligible[0].ID
 	if len(eligible) > 1 {
@@ -123,8 +123,8 @@ func resolveUnprotectedBearerHolding(cmd *cobra.Command, l *ledger.Ledger, args 
 }
 
 func unprotectableReason(e *ledger.Entry) string {
-	if e.BearerProtection == ledger.BearerProtected {
+	if e.CashProtection == ledger.CashProtected {
 		return fmt.Sprintf("%q is already protected", e.ID)
 	}
-	return fmt.Sprintf("%q isn't a bearer-mode holding — protecting only applies to a shared bearer secret", e.ID)
+	return fmt.Sprintf("%q isn't a cash-mode holding — protecting only applies to a shared cash secret", e.ID)
 }

@@ -17,7 +17,7 @@ import (
 )
 
 // protectedStatus is receive's own abstracted report of what the automatic
-// protect step did — never named "transfer"/"consolidate"/"bearer_secret"
+// protect step did — never named "transfer"/"consolidate"/"cash_secret"
 // to the user, only the outcome: rekeyed | consolidated | not_applicable |
 // declined | failed. Surfaced under --json alongside "entry".
 type protectedStatus struct {
@@ -26,7 +26,7 @@ type protectedStatus struct {
 	FinalEntryID     string
 	Error            string
 	// LikelyWrongSecret is set when Status is "failed" and the decline
-	// looks like the embedded bearer_secret itself was wrong (NWC code
+	// looks like the embedded cash_secret itself was wrong (NWC code
 	// NOT_FOUND), not a transient network/server issue — unlike an
 	// ordinary failed-protect case, this likely means the entry was
 	// never really spendable at all.
@@ -61,7 +61,7 @@ func (s protectedStatus) json() map[string]any {
 	return out
 }
 
-// isWrongSecretDecline reports whether err looks like a bearer_secret
+// isWrongSecretDecline reports whether err looks like a cash_secret
 // mismatch (NWC code NOT_FOUND) rather than some other failure — NIP-CASH
 // §Redemption Metadata guarantees a wrong secret always declines this way.
 func isWrongSecretDecline(err error) bool {
@@ -69,9 +69,9 @@ func isWrongSecretDecline(err error) bool {
 	return errors.As(err, &walletErr) && walletErr.Code == "NOT_FOUND"
 }
 
-// protectBearerReceipt is receive's automatic follow-up for a freshly
-// received bearer-mode entry: confirm with the user, then re-key it
-// (nipcashclient.RekeyBearerSlice) — optionally consolidating with other
+// protectCashReceipt is receive's automatic follow-up for a freshly
+// received cash-mode entry: confirm with the user, then re-key it
+// (nipcashclient.RekeyCashSlice) — optionally consolidating with other
 // held same-minter tokens — so the original, possibly-shared secret can
 // no longer spend it. Best-effort: a failure here never fails receive
 // itself, since the bill is already genuinely theirs by the time this
@@ -79,9 +79,9 @@ func isWrongSecretDecline(err error) bool {
 // surface and the entry that should now be treated as "the" result of
 // this receive (the same entry for rekeyed/declined/failed/not_applicable,
 // a new one for consolidated).
-func protectBearerReceipt(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entry, isBearer bool) (protectedStatus, *ledger.Entry) {
+func protectCashReceipt(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entry, isCash bool) (protectedStatus, *ledger.Entry) {
 	jsonMode, _ := cmd.Flags().GetBool("json")
-	if !isBearer {
+	if !isCash {
 		return protectedStatus{Status: "not_applicable"}, entry
 	}
 	// defaultYes=true is intentional here, unlike a money-moving prompt:
@@ -110,8 +110,8 @@ func protectBearerReceipt(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.En
 	}
 
 	// The no-merge case gets its own, write-ahead-safe path (see its own
-	// doc comment on why) rather than nipcashclient.RekeyBearerSlice.
-	// The merge case still needs RekeyBearerSlice's own multi-step
+	// doc comment on why) rather than nipcashclient.RekeyCashSlice.
+	// The merge case still needs RekeyCashSlice's own multi-step
 	// composite (an interim reassignment onto a pubkey identity, THEN a
 	// consolidate) — its own fresh secret is generated deep inside that
 	// call, not accessible to persist ahead of time without reimplementing
@@ -135,11 +135,11 @@ func protectBearerReceipt(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.En
 		printProtectFailure(jsonMode, err)
 		return protectedStatus{Status: "failed", Error: err.Error()}, entry
 	}
-	params := nipcashclient.RekeyBearerSliceParams{
-		BearerSlice: nipcash.Source{
+	params := nipcashclient.RekeyCashSliceParams{
+		CashSlice: nipcash.Source{
 			WalletPubkey: entry.WalletPubkey,
 			Amount:       *entry.AmountMillis,
-			Credential:   nipcash.BySecret(entry.BearerSecret),
+			Credential:   nipcash.BySecret(entry.CashSecret),
 		},
 		MintSignature:     entry.MinterPubkey != nil,
 		InterimIdentity:   nipcash.Pubkey(myPubHex),
@@ -148,7 +148,7 @@ func protectBearerReceipt(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.En
 	}
 
 	var dialErr bool
-	var result *nipcashclient.RekeyBearerSliceResult
+	var result *nipcashclient.RekeyCashSliceResult
 	err = WithSpinner(jsonMode, "Protecting...", func() error {
 		client, cErr := nipcashclient.Connect(ctx, entry.Token)
 		if cErr != nil {
@@ -156,7 +156,7 @@ func protectBearerReceipt(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.En
 			return cErr
 		}
 		defer client.Close()
-		r, cErr := client.RekeyBearerSlice(ctx, params)
+		r, cErr := client.RekeyCashSlice(ctx, params)
 		if cErr != nil {
 			return cErr
 		}
@@ -170,7 +170,7 @@ func protectBearerReceipt(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.En
 		}
 		var partial *nipcashclient.PartialProgressError
 		if errors.As(err, &partial) && partial.Transferred != nil {
-			// The interim reassignment landed for real — the old bearer
+			// The interim reassignment landed for real — the old cash
 			// secret is already dead, even though consolidation itself
 			// didn't finish. Apply that real effect before reporting the
 			// failure, per the save-immediately rule: never leave the
@@ -178,15 +178,15 @@ func protectBearerReceipt(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.En
 			// succeeded. A failure of THIS save is the harder case: the
 			// Hub-side effect is real and, unlike the ordinary path below,
 			// there is no pending-secret trail to fall back on for a
-			// reassign-to-pubkey (not bearer) interim step — report it
+			// reassign-to-pubkey (not cashMode) interim step — report it
 			// plainly rather than pretending Save() always works.
-			entry.BearerSecret = ""
+			entry.CashSecret = ""
 			entry.IdentityRequired = ptrTo(true)
-			// No longer bearer-mode at all — reassigned to the local
+			// No longer cash-mode at all — reassigned to the local
 			// identity's own pubkey — so "shared vs protected" no longer
-			// applies (see Entry.BearerProtection's own doc comment: empty
+			// applies (see Entry.CashProtection's own doc comment: empty
 			// means n/a, the same as any other pubkey-mode entry).
-			entry.BearerProtection = ""
+			entry.CashProtection = ""
 			// The interim's own follow-up consolidate merges entry
 			// alongside consolidateWithIDs — if ITS failure is the same
 			// decrypt-family ambiguity cash_consolidate.go's own direct
@@ -233,12 +233,12 @@ func protectBearerReceipt(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.En
 	newEntry, addErr := l.Add(ledger.Entry{
 		Token:            result.NewToken,
 		WalletPubkey:     result.NewWalletPubkey,
-		BearerSecret:     result.NewSecret,
+		CashSecret:       result.NewSecret,
 		IdentityRequired: ptrTo(false),
 		AmountMillis:     &result.AmountMillis,
 		Verified:         true,
 		MinterPubkey:     newMinterPubkey,
-		BearerProtection: ledger.BearerProtected,
+		CashProtection:   ledger.CashProtected,
 	})
 	if addErr != nil {
 		printProtectFailure(jsonMode, addErr)
@@ -255,32 +255,32 @@ func protectBearerReceipt(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.En
 	return protectedStatus{Status: "consolidated", ConsolidatedWith: consolidateWithIDs, FinalEntryID: newEntry.ID}, newEntry
 }
 
-// protectRekeyOnly is protectBearerReceipt's no-merge path: re-key entry's
-// bearer secret in place, without going through nipcashclient.RekeyBearerSlice.
+// protectRekeyOnly is protectCashReceipt's no-merge path: re-key entry's
+// cash secret in place, without going through nipcashclient.RekeyCashSlice.
 //
-// A bearer target's secret is generated purely locally — NIP-CASH §Bearer
+// A cash-mode target's secret is generated purely locally — NIP-CASH §Cash-Mode
 // Slices: the caller supplies only a one-way commitment over the wire, the
 // secret itself never crosses it — so there is no reason to let placing the
 // call be the difference between "the new secret exists on disk" and "the
 // new secret exists only in this process's own memory, gone the instant it
-// dies." nipcash.NewBearerTarget() is generated here, in cashctl's own
-// code, and entry.PendingBearerSecret is saved BEFORE the call — the same
+// dies." nipcash.NewCashTarget() is generated here, in cashctl's own
+// code, and entry.PendingCashSecret is saved BEFORE the call — the same
 // write-ahead discipline a database uses for its own log.
 //
 // Once persisted, a kill or lost response can leave the outcome genuinely
 // ambiguous: NIP-CASH has no read-only way to ask the Hub which of two
 // candidate secrets it accepted (nipcashclient.CheckClaim's own doc
-// comment — a bearer match only proves *some* recipient exists, never
+// comment — a cash-mode match only proves *some* recipient exists, never
 // *which* secret). resolveCredential's own fallback resolves that
 // ambiguity the only way the protocol allows: by trying the pending secret
 // on the entry's next real spend attempt if the usual one is declined.
 func protectRekeyOnly(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entry, jsonMode bool) (protectedStatus, *ledger.Entry) {
-	bt := nipcash.NewBearerTarget()
-	entry.PendingBearerSecret = bt.Secret()
+	bt := nipcash.NewCashTarget()
+	entry.PendingCashSecret = bt.Secret()
 	if err := l.Save(); err != nil {
-		// Nothing has been sent to the Hub yet — entry.BearerSecret is
+		// Nothing has been sent to the Hub yet — entry.CashSecret is
 		// still the only real secret, so this is an ordinary failure.
-		entry.PendingBearerSecret = ""
+		entry.PendingCashSecret = ""
 		printProtectFailure(jsonMode, err)
 		return protectedStatus{Status: "failed", Error: err.Error()}, entry
 	}
@@ -297,7 +297,7 @@ func protectRekeyOnly(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entry,
 		}
 		defer client.Close()
 		r, cErr := client.CashTransfer(ctx, nipcash.CashTransferParams{
-			Credential:    nipcash.BySecret(entry.BearerSecret),
+			Credential:    nipcash.BySecret(entry.CashSecret),
 			To:            bt,
 			CurrentAmount: *entry.AmountMillis,
 			MintSignature: entry.MinterPubkey != nil,
@@ -315,8 +315,8 @@ func protectRekeyOnly(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entry,
 		// call is DEFINITELY known not to have taken effect — safe to
 		// retract the pending secret and keep reporting the old one.
 		if dialErr || errors.As(err, &walletErr) {
-			entry.PendingBearerSecret = ""
-			_ = l.Save() // best-effort tidy-up; entry.BearerSecret itself is unchanged either way
+			entry.PendingCashSecret = ""
+			_ = l.Save() // best-effort tidy-up; entry.CashSecret itself is unchanged either way
 			wrongSecret := isWrongSecretDecline(err)
 			if wrongSecret {
 				printProtectFailureWrongSecret(jsonMode, err)
@@ -327,7 +327,7 @@ func protectRekeyOnly(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entry,
 		}
 		// Ambiguous: a transport-level failure (timeout, dropped
 		// connection) with no definitive answer from the Hub. Leave
-		// PendingBearerSecret exactly as already saved above — don't
+		// PendingCashSecret exactly as already saved above — don't
 		// touch it either way — so resolveCredential can try it on the
 		// next real spend of this entry.
 		printProtectAmbiguousFailure(jsonMode, err)
@@ -335,17 +335,17 @@ func protectRekeyOnly(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entry,
 	}
 	_ = result // the Hub never returns the secret itself for this call — see CashTransferResult's own doc comment; bt.Secret() IS the new secret
 
-	entry.BearerSecret = bt.Secret()
-	entry.PendingBearerSecret = ""
-	entry.BearerProtection = ledger.BearerProtected
+	entry.CashSecret = bt.Secret()
+	entry.PendingCashSecret = ""
+	entry.CashProtection = ledger.CashProtected
 	l.AppendHistory("secure", "re-keyed this cash so the shared secret can no longer spend it")
 	if err := l.Save(); err != nil {
 		// The rekey is CONFIRMED (the call above returned no error) — but
 		// this save's own failure is harmless data-safety-wise: SQLite
 		// commits l.save()'s whole batch atomically (internal/ledger.Save's
 		// own doc comment), so a failed commit here leaves the row exactly
-		// as the write-ahead save above left it — BearerSecret still the
-		// OLD value, PendingBearerSecret still bt.Secret() — which is
+		// as the write-ahead save above left it — CashSecret still the
+		// OLD value, PendingCashSecret still bt.Secret() — which is
 		// exactly the state resolveCredential's fallback already knows how
 		// to recover from. Report it the same way as the ambiguous case
 		// above rather than inventing a third message for what is, from

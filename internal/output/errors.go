@@ -295,7 +295,7 @@ var credentialPrefixPattern = regexp.MustCompile(`(?i)\b(cash|pubkey|connection-
 // cashhub1/circlehub1/nconnection1 — deliberately NOT a cash-token HRP
 // (lokicash1, satscash1, ...): a held cash token is meant to be shown
 // (cashctl prints/returns it routinely, e.g. ledger.Entry.Token's own
-// plain json tag, unlike Secret/BearerSecret's json:"-"), whereas a Hub or
+// plain json tag, unlike Secret/CashSecret's json:"-"), whereas a Hub or
 // pairing connection string is something a user only ever mis-pastes into
 // the wrong command, never something they're meant to hand back out — and
 // every one of these encodes its own dialing secret as a single
@@ -311,8 +311,8 @@ var secretBearingBech32Pattern = regexp.MustCompile(`(?i)\b(cashhub|circlehub|nc
 var nwcSecretPattern = regexp.MustCompile(`(?i)([?&]secret=)[0-9a-f]+`)
 
 // giftSecretPattern matches the "#<secret>" half of a cash gift string
-// (<token>#<bearer_secret>, NIP-CASH's combined presentation) — the exact
-// shape internal/dial's own SplitBearerSliceString parses.
+// (<token>#<cash_secret>, NIP-CASH's combined presentation) — the exact
+// shape internal/dial's own SplitCashSliceString parses.
 var giftSecretPattern = regexp.MustCompile(`#[0-9a-fA-F]{64}\b`)
 
 // RedactSecretInput scrubs every secret-shaped substring it recognizes out

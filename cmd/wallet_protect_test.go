@@ -16,59 +16,59 @@ func newTestProtectCmd(jsonMode, yes bool) *cobra.Command {
 	return cmd
 }
 
-// TestResolveUnprotectedBearerHolding_NoneEligible guards the "nothing to
+// TestResolveUnprotectedCashHolding_NoneEligible guards the "nothing to
 // protect" case — a fully-protected or pubkey-only wallet must get a
 // specific, actionable answer, not a bare "not found."
-func TestResolveUnprotectedBearerHolding_NoneEligible(t *testing.T) {
+func TestResolveUnprotectedCashHolding_NoneEligible(t *testing.T) {
 	amt := uint64(1000)
 	l := &ledger.Ledger{Entries: []ledger.Entry{
-		{ID: "already-protected", Status: ledger.StatusHeld, AmountMillis: &amt, BearerProtection: ledger.BearerProtected},
+		{ID: "already-protected", Status: ledger.StatusHeld, AmountMillis: &amt, CashProtection: ledger.CashProtected},
 		{ID: "pubkey-mode", Status: ledger.StatusHeld, AmountMillis: &amt},
 	}}
 	cmd := newTestProtectCmd(false, false)
-	_, err := resolveUnprotectedBearerHolding(cmd, l, nil)
+	_, err := resolveUnprotectedCashHolding(cmd, l, nil)
 	if err == nil {
-		t.Fatal("resolveUnprotectedBearerHolding() = nil error, want rejected (nothing eligible)")
+		t.Fatal("resolveUnprotectedCashHolding() = nil error, want rejected (nothing eligible)")
 	}
 	if output.ExitCode(err) != 4 {
 		t.Errorf("ExitCode = %d, want 4 (not_found)", output.ExitCode(err))
 	}
 }
 
-// TestResolveUnprotectedBearerHolding_AutoPicksTheOnlyOne mirrors
+// TestResolveUnprotectedCashHolding_AutoPicksTheOnlyOne mirrors
 // resolveHeldToken's own single-match auto-pick, scoped to eligible
-// (BearerShared) entries only — a protected sibling must never be offered.
-func TestResolveUnprotectedBearerHolding_AutoPicksTheOnlyOne(t *testing.T) {
+// (CashShared) entries only — a protected sibling must never be offered.
+func TestResolveUnprotectedCashHolding_AutoPicksTheOnlyOne(t *testing.T) {
 	amt := uint64(1000)
 	l := &ledger.Ledger{Entries: []ledger.Entry{
-		{ID: "shared-one", Status: ledger.StatusHeld, AmountMillis: &amt, BearerProtection: ledger.BearerShared},
-		{ID: "already-protected", Status: ledger.StatusHeld, AmountMillis: &amt, BearerProtection: ledger.BearerProtected},
+		{ID: "shared-one", Status: ledger.StatusHeld, AmountMillis: &amt, CashProtection: ledger.CashShared},
+		{ID: "already-protected", Status: ledger.StatusHeld, AmountMillis: &amt, CashProtection: ledger.CashProtected},
 	}}
 	cmd := newTestProtectCmd(false, false)
-	e, err := resolveUnprotectedBearerHolding(cmd, l, nil)
+	e, err := resolveUnprotectedCashHolding(cmd, l, nil)
 	if err != nil {
-		t.Fatalf("resolveUnprotectedBearerHolding() error = %v", err)
+		t.Fatalf("resolveUnprotectedCashHolding() error = %v", err)
 	}
 	if e.ID != "shared-one" {
 		t.Errorf("resolved ID = %q, want %q", e.ID, "shared-one")
 	}
 }
 
-// TestResolveUnprotectedBearerHolding_ExplicitTokenAlreadyProtected
+// TestResolveUnprotectedCashHolding_ExplicitTokenAlreadyProtected
 // confirms naming an already-protected token by --token gets a specific
 // conflict, not a silent re-protect attempt.
-func TestResolveUnprotectedBearerHolding_ExplicitTokenAlreadyProtected(t *testing.T) {
+func TestResolveUnprotectedCashHolding_ExplicitTokenAlreadyProtected(t *testing.T) {
 	amt := uint64(1000)
 	l := &ledger.Ledger{Entries: []ledger.Entry{
-		{ID: "already-protected", Status: ledger.StatusHeld, AmountMillis: &amt, BearerProtection: ledger.BearerProtected},
+		{ID: "already-protected", Status: ledger.StatusHeld, AmountMillis: &amt, CashProtection: ledger.CashProtected},
 	}}
 	cmd := newTestProtectCmd(false, false)
 	if err := cmd.Flags().Set("token", "already-protected"); err != nil {
 		t.Fatal(err)
 	}
-	_, err := resolveUnprotectedBearerHolding(cmd, l, nil)
+	_, err := resolveUnprotectedCashHolding(cmd, l, nil)
 	if err == nil {
-		t.Fatal("resolveUnprotectedBearerHolding(already protected) = nil error, want rejected")
+		t.Fatal("resolveUnprotectedCashHolding(already protected) = nil error, want rejected")
 	}
 	if output.ExitCode(err) != 5 {
 		t.Errorf("ExitCode = %d, want 5 (conflict)", output.ExitCode(err))
@@ -78,10 +78,10 @@ func TestResolveUnprotectedBearerHolding_ExplicitTokenAlreadyProtected(t *testin
 	}
 }
 
-// TestResolveUnprotectedBearerHolding_ExplicitTokenPubkeyMode confirms
-// naming a pubkey-mode entry (BearerProtection == "", n/a) is rejected
+// TestResolveUnprotectedCashHolding_ExplicitTokenPubkeyMode confirms
+// naming a pubkey-mode entry (CashProtection == "", n/a) is rejected
 // with a reason, not silently accepted.
-func TestResolveUnprotectedBearerHolding_ExplicitTokenPubkeyMode(t *testing.T) {
+func TestResolveUnprotectedCashHolding_ExplicitTokenPubkeyMode(t *testing.T) {
 	amt := uint64(1000)
 	l := &ledger.Ledger{Entries: []ledger.Entry{
 		{ID: "pubkey-mode", Status: ledger.StatusHeld, AmountMillis: &amt},
@@ -90,64 +90,64 @@ func TestResolveUnprotectedBearerHolding_ExplicitTokenPubkeyMode(t *testing.T) {
 	if err := cmd.Flags().Set("token", "pubkey-mode"); err != nil {
 		t.Fatal(err)
 	}
-	_, err := resolveUnprotectedBearerHolding(cmd, l, nil)
+	_, err := resolveUnprotectedCashHolding(cmd, l, nil)
 	if err == nil {
-		t.Fatal("resolveUnprotectedBearerHolding(pubkey-mode) = nil error, want rejected")
+		t.Fatal("resolveUnprotectedCashHolding(pubkey-mode) = nil error, want rejected")
 	}
-	if !strings.Contains(err.Error(), "bearer-mode") {
-		t.Errorf("error = %q, want it to say this isn't a bearer-mode holding", err)
+	if !strings.Contains(err.Error(), "cash-mode") {
+		t.Errorf("error = %q, want it to say this isn't a cash-mode holding", err)
 	}
 }
 
-// TestResolveUnprotectedBearerHolding_ExplicitTokenNotFound confirms a
+// TestResolveUnprotectedCashHolding_ExplicitTokenNotFound confirms a
 // nonexistent id is a plain not_found, same as every other --token lookup
 // in this codebase.
-func TestResolveUnprotectedBearerHolding_ExplicitTokenNotFound(t *testing.T) {
+func TestResolveUnprotectedCashHolding_ExplicitTokenNotFound(t *testing.T) {
 	l := &ledger.Ledger{}
 	cmd := newTestProtectCmd(false, false)
 	if err := cmd.Flags().Set("token", "nope"); err != nil {
 		t.Fatal(err)
 	}
-	_, err := resolveUnprotectedBearerHolding(cmd, l, nil)
+	_, err := resolveUnprotectedCashHolding(cmd, l, nil)
 	if err == nil {
-		t.Fatal("resolveUnprotectedBearerHolding(nonexistent) = nil error, want rejected")
+		t.Fatal("resolveUnprotectedCashHolding(nonexistent) = nil error, want rejected")
 	}
 	if output.ExitCode(err) != 4 {
 		t.Errorf("ExitCode = %d, want 4 (not_found)", output.ExitCode(err))
 	}
 }
 
-// TestResolveUnprotectedBearerHolding_MultipleEligibleJSONModeErrors
+// TestResolveUnprotectedCashHolding_MultipleEligibleJSONModeErrors
 // confirms the multi-match case defers to pickHeldToken (already
 // extensively tested in cash_redeem_test.go) rather than guessing —
 // --json has no terminal to prompt from.
-func TestResolveUnprotectedBearerHolding_MultipleEligibleJSONModeErrors(t *testing.T) {
+func TestResolveUnprotectedCashHolding_MultipleEligibleJSONModeErrors(t *testing.T) {
 	amt := uint64(1000)
 	l := &ledger.Ledger{Entries: []ledger.Entry{
-		{ID: "shared-a", Status: ledger.StatusHeld, AmountMillis: &amt, BearerProtection: ledger.BearerShared},
-		{ID: "shared-b", Status: ledger.StatusHeld, AmountMillis: &amt, BearerProtection: ledger.BearerShared},
+		{ID: "shared-a", Status: ledger.StatusHeld, AmountMillis: &amt, CashProtection: ledger.CashShared},
+		{ID: "shared-b", Status: ledger.StatusHeld, AmountMillis: &amt, CashProtection: ledger.CashShared},
 	}}
 	cmd := newTestProtectCmd(true, false)
-	_, err := resolveUnprotectedBearerHolding(cmd, l, nil)
+	_, err := resolveUnprotectedCashHolding(cmd, l, nil)
 	if err == nil {
-		t.Fatal("resolveUnprotectedBearerHolding(2 eligible, --json) = nil error, want rejected (ambiguous)")
+		t.Fatal("resolveUnprotectedCashHolding(2 eligible, --json) = nil error, want rejected (ambiguous)")
 	}
 	if output.ExitCode(err) != 2 {
 		t.Errorf("ExitCode = %d, want 2 (usage — ambiguous choice)", output.ExitCode(err))
 	}
 }
 
-// TestResolveUnprotectedBearerHolding_PositionalArg confirms the id can be
+// TestResolveUnprotectedCashHolding_PositionalArg confirms the id can be
 // given positionally, not just via --token.
-func TestResolveUnprotectedBearerHolding_PositionalArg(t *testing.T) {
+func TestResolveUnprotectedCashHolding_PositionalArg(t *testing.T) {
 	amt := uint64(1000)
 	l := &ledger.Ledger{Entries: []ledger.Entry{
-		{ID: "shared-one", Status: ledger.StatusHeld, AmountMillis: &amt, BearerProtection: ledger.BearerShared},
+		{ID: "shared-one", Status: ledger.StatusHeld, AmountMillis: &amt, CashProtection: ledger.CashShared},
 	}}
 	cmd := newTestProtectCmd(false, false)
-	e, err := resolveUnprotectedBearerHolding(cmd, l, []string{"shared-one"})
+	e, err := resolveUnprotectedCashHolding(cmd, l, []string{"shared-one"})
 	if err != nil {
-		t.Fatalf("resolveUnprotectedBearerHolding() error = %v", err)
+		t.Fatalf("resolveUnprotectedCashHolding() error = %v", err)
 	}
 	if e.ID != "shared-one" {
 		t.Errorf("resolved ID = %q, want %q", e.ID, "shared-one")

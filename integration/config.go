@@ -25,7 +25,7 @@ import (
 // is provisioned through it at test time (see ephemeral.go) rather than
 // hand-set-up beforehand.
 //
-// Token is a bearer JWT, not a long-lived static API key: mint one via
+// Token is a cash-mode JWT, not a long-lived static API key: mint one via
 // POST {base_url}/api/unlock (permission: "full", an explicit
 // token_expiry_days). Because it expires, operators need to refresh it here
 // periodically — an expired token makes every test in this suite fail

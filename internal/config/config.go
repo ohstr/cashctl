@@ -27,7 +27,7 @@ type Connection struct {
 	// secret= query value, or the equivalent embedded in a bech32 hub
 	// string's own TLV encoding — every connection kind this field can
 	// hold carries one) — json:"-" for the same reason
-	// ledger.Entry.Secret/BearerSecret are: `connect list`/`wallet show`
+	// ledger.Entry.Secret/CashSecret are: `connect list`/`wallet show`
 	// embed a whole []Connection directly into --json output, so a plain
 	// json tag here would leak it to anyone who ever runs the documented
 	// way to list registered wallets. Text mode already never prints it

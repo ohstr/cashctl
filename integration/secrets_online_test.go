@@ -42,18 +42,18 @@ func TestRedeem_IntoRawWalletURI_DoesNotEchoWalletSecret(t *testing.T) {
 	}
 }
 
-// A wallet that only ever held bearer cash never ran `init` and never needs
+// A wallet that only ever held cash never ran `init` and never needs
 // to for receive/transfer/redeem/history — but `wallet show`, the command
 // that lists held token ids, refuses with "run `cashctl init` first".
-func TestWalletShow_WorksForBearerOnlyWalletWithoutIdentity(t *testing.T) {
+func TestWalletShow_WorksForCashOnlyWalletWithoutIdentity(t *testing.T) {
 	admin := adminOrSkip(t)
 	hub := setUpCashHub(t, admin)
 	f := newFixture(t) // no init
-	f.mustJSON("receive", mintBearerGift(t, hub, 20_000), "--yes")
+	f.mustJSON("receive", mintCashGift(t, hub, 20_000), "--yes")
 
 	res := f.run("wallet", "show")
 	if res.ExitCode != 0 {
-		t.Fatalf("wallet show on a bearer-only wallet: exit %d (%s) — the held token is otherwise fully usable without an identity\nstderr: %s",
+		t.Fatalf("wallet show on a cash-mode-only wallet: exit %d (%s) — the held token is otherwise fully usable without an identity\nstderr: %s",
 			res.ExitCode, "wallet show requires `cashctl init`", res.Stderr)
 	}
 	if n := len(mustDecodeJSON(t, "wallet show", res.Stdout)["held_tokens"].([]any)); n != 1 {
@@ -61,10 +61,10 @@ func TestWalletShow_WorksForBearerOnlyWalletWithoutIdentity(t *testing.T) {
 	}
 }
 
-// `consolidate --to cash` generates a fresh bearer secret. It must
+// `consolidate --to cash` generates a fresh cash secret. It must
 // not be printed before the user has confirmed anything (transfer already
 // suppresses it; consolidate's copy of the same line does not).
-func TestConsolidate_ToBearerTarget_DoesNotPrintSecretBeforeConfirm(t *testing.T) {
+func TestConsolidate_ToCashTarget_DoesNotPrintSecretBeforeConfirm(t *testing.T) {
 	admin := adminOrSkip(t)
 	hub := setUpCashHub(t, admin)
 	f := newFixture(t)
@@ -77,7 +77,7 @@ func TestConsolidate_ToBearerTarget_DoesNotPrintSecretBeforeConfirm(t *testing.T
 
 	res := f.runInteractive("n\n", "consolidate", "--sources", id1+","+id2, "--to", "cash")
 	if hex64Re.MatchString(res.Stdout) || hex64Re.MatchString(res.Stderr) {
-		t.Errorf("consolidate --to cash printed the freshly generated bearer secret before the user confirmed (answered n):\n%s", res.Stdout)
+		t.Errorf("consolidate --to cash printed the freshly generated cash secret before the user confirmed (answered n):\n%s", res.Stdout)
 	}
 	if n := heldCount(t, f); n != 2 {
 		t.Errorf("declining must leave both tokens held, got %d", n)

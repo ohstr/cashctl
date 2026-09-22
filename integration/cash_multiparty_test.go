@@ -16,7 +16,7 @@ import (
 // transacts against a synthetic target — every send has a second live
 // human on the other end who must actually `receive` what landed before
 // it's theirs. Every other integration test in this suite sends to
-// fakeHex32(t) (nobody's listening) or verifies a bearer secret directly
+// fakeHex32(t) (nobody's listening) or verifies a cash secret directly
 // via the raw SDK; these tests instead drive two or three fully
 // independent cashctl fixtures transacting with each other, hop by hop,
 // exactly as a phone-to-phone cash hand-off works in practice.
@@ -26,7 +26,7 @@ import (
 // genuinely new wallet for the sent portion (new_wallet_token is
 // populated); a full (non-split) transfer may instead reassign the SAME
 // underlying wallet connection in place (new_wallet_token empty) — see
-// cash_security_test.go's TestCashTransfer_ToBearerTarget_SecretMustBeRecoverable,
+// cash_security_test.go's TestCashTransfer_ToCashTarget_SecretMustBeRecoverable,
 // which reconnects to the ORIGINAL token string after a full cash
 // transfer. sourceToken is the entry the transfer acted on, used as the
 // fallback for the in-place case either way.
@@ -45,8 +45,8 @@ func heldCount(t *testing.T, f *fixture) int {
 	return len(held)
 }
 
-// TestMultiParty_BearerRegiftChain_AtoBtoC follows one bearer note through
-// two real hand-offs: A earns pubkey-mode cash and turns it into a bearer
+// TestMultiParty_CashRegiftChain_AtoBtoC follows one cash note through
+// two real hand-offs: A earns pubkey-mode cash and turns it into a cash-mode
 // gift, B receives and auto-secures it then re-gifts a slice onward to C,
 // C receives and redeems it for real. Three independent cashctl
 // identities, each only ever seeing what the previous hop physically
@@ -55,9 +55,9 @@ func heldCount(t *testing.T, f *fixture) int {
 //
 // This test caught a real cross-repo bug during development: B's
 // `receive` step was refused with "no matching recipient," even though
-// list_recipients independently confirmed a real, unclaimed bearer
+// list_recipients independently confirmed a real, unclaimed cash-mode
 // allocation existed. Root-caused to nipcash/client.CheckClaim
-// (nipcash/client/check_claim.go) recomputing isBearer from the TOKEN'S
+// (nipcash/client/check_claim.go) recomputing isCash from the TOKEN'S
 // OWN embedded identity_required flag — exactly the field NIP-CASH
 // §Redemption Metadata calls "a best-effort hint... NOT a live
 // guarantee," explicitly warning it goes stale after exactly this
@@ -65,11 +65,11 @@ func heldCount(t *testing.T, f *fixture) int {
 // place, per cash_transfer.go's own TransferFromSources comment — the
 // token A hands to B still says identity_required:true from its original
 // pubkey-mode mint). Fixed by changing CheckClaim's own signature to take
-// isBearer as an explicit caller-supplied parameter instead of
+// isCash as an explicit caller-supplied parameter instead of
 // re-deriving it internally, and updating every cashctl call site
 // (cash_receive.go, cash_redeem.go, decode.go) to pass its own
 // already-corrected determination through.
-func TestMultiParty_BearerRegiftChain_AtoBtoC(t *testing.T) {
+func TestMultiParty_CashRegiftChain_AtoBtoC(t *testing.T) {
 	cfg, err := LoadConfig("")
 	if err != nil {
 		t.Skipf("skipping: could not load integration config (%v) — see integration/README.md", err)
@@ -81,7 +81,7 @@ func TestMultiParty_BearerRegiftChain_AtoBtoC(t *testing.T) {
 
 	hub := setUpCashHub(t, admin)
 
-	// --- A: earns pubkey-mode cash, then gifts it all as a bearer note ---
+	// --- A: earns pubkey-mode cash, then gifts it all as a cash note ---
 	a := newFixture(t)
 	aInit := a.mustJSON("wallet", "init")
 	aPub, err := npubToHex(aInit["npub"].(string))
@@ -306,10 +306,10 @@ func TestMultiParty_ForwardPortionKeepRemainder_AtoBtoC(t *testing.T) {
 
 // TestMultiParty_MixedIdentityModeCashSelection confirms cash selection's
 // same-minter grouping (internal/ledger.GroupableForConsolidation) holds up
-// live with a real recipient on the other end: B holds one bearer-mode
+// live with a real recipient on the other end: B holds one cash-mode
 // note AND two pubkey-mode same-minter tokens. Paying C an amount only the
 // pubkey-mode pair can reach must consolidate exactly those two — never
-// sweeping in the bearer note, even though (sized wrong) it could
+// sweeping in the cash note, even though (sized wrong) it could
 // otherwise look like an easy single-token cover.
 func TestMultiParty_MixedIdentityModeCashSelection(t *testing.T) {
 	cfg, err := LoadConfig("")
@@ -330,22 +330,22 @@ func TestMultiParty_MixedIdentityModeCashSelection(t *testing.T) {
 
 	hub := setUpCashHub(t, admin)
 
-	// A bearer note smaller than the target amount, so it can never be
+	// A cash note smaller than the target amount, so it can never be
 	// picked as a single-token best-fit cover (case 2) either — it must be
 	// excluded purely on identity-mode grounds, not because it's too small
 	// to matter.
-	const bearerAmount = uint64(15_000)
+	const cashAmount = uint64(15_000)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	cashClient := dialCash(t, ctx, hub.PairingUri)
 	mintResult, err := cashClient.MintCash(ctx, nipcash.MintCashParams{
-		Recipients: []nipcash.Allocation{nipcash.Send(nipcash.Anyone(), bearerAmount)},
+		Recipients: []nipcash.Allocation{nipcash.Send(nipcash.Anyone(), cashAmount)},
 	})
 	cancel()
 	if err != nil {
-		t.Fatalf("mint_cash (bearer): %v", err)
+		t.Fatalf("mint_cash (cash): %v", err)
 	}
-	if res := b.run("receive", mintResult.CashToken+"#"+mintResult.Recipients[0].BearerSecret); res.ExitCode != 0 {
-		t.Fatalf("B receive (bearer): exit %d\nstderr: %s", res.ExitCode, res.Stderr)
+	if res := b.run("receive", mintResult.CashToken+"#"+mintResult.Recipients[0].CashSecret); res.ExitCode != 0 {
+		t.Fatalf("B receive (cash): exit %d\nstderr: %s", res.ExitCode, res.Stderr)
 	}
 
 	const (
@@ -381,22 +381,22 @@ func TestMultiParty_MixedIdentityModeCashSelection(t *testing.T) {
 	transferResp := b.mustJSON("transfer", cPub, lokiArg(int64(target)), "--yes")
 	consolidatedFrom, _ := transferResp["consolidated_from"].([]any)
 	if len(consolidatedFrom) != 2 {
-		t.Fatalf("transfer: consolidated_from = %v, want exactly 2 (the two pubkey-mode tokens, not the bearer note)", transferResp["consolidated_from"])
+		t.Fatalf("transfer: consolidated_from = %v, want exactly 2 (the two pubkey-mode tokens, not the cash note)", transferResp["consolidated_from"])
 	}
 	if remaining := transferResp["remaining_amount_millis"]; remaining != nil {
 		t.Errorf("transfer: remaining_amount_millis = %v, want absent/nil (sum matched target exactly)", remaining)
 	}
 
-	// B's own side: only the untouched bearer note remains, at its
-	// original amount and still bearer-mode.
+	// B's own side: only the untouched cash note remains, at its
+	// original amount and still cash-mode.
 	showB := b.mustJSON("wallet", "show")
 	heldB, _ := showB["held_tokens"].([]any)
 	if len(heldB) != 1 {
-		t.Fatalf("B: expected 1 held token (the untouched bearer note), got %d: %v", len(heldB), heldB)
+		t.Fatalf("B: expected 1 held token (the untouched cash note), got %d: %v", len(heldB), heldB)
 	}
 	remainingEntry, _ := heldB[0].(map[string]any)
-	if amt, _ := remainingEntry["amount_millis"].(float64); uint64(amt) != bearerAmount {
-		t.Errorf("B's remaining token amount = %v, want %d (the bearer note, untouched)", remainingEntry["amount_millis"], bearerAmount)
+	if amt, _ := remainingEntry["amount_millis"].(float64); uint64(amt) != cashAmount {
+		t.Errorf("B's remaining token amount = %v, want %d (the cash note, untouched)", remainingEntry["amount_millis"], cashAmount)
 	}
 
 	recipientToken := recipientTokenFromTransfer(transferResp, token1)

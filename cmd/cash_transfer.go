@@ -81,14 +81,14 @@ func resolveTarget(cmd *cobra.Command, s string) (credential.ResolvedTarget, err
 }
 
 // targetClause renders how a transfer's destination reads inside a
-// sentence: "as cash" for a bearer target (no destination was ever given,
+// sentence: "as cash" for a cash-mode target (no destination was ever given,
 // so the result is redeemable by whoever ends up holding it), or "to
 // <toValue> as identity cash" / "to <toValue> as web identity cash" for a
 // resolved recipient — matching whichever Kind credential.ParseTarget/
 // ResolveConnectionTarget assigned. "Cash"/"identity cash"/"web identity
 // cash" deliberately avoid the word "token" (or any other developer-facing
 // jargon) in every user-facing message: the string this all builds up to
-// (recipientToken, or the combined bearer <token>#<secret>) is real,
+// (recipientToken, or the combined cash-mode <token>#<secret>) is real,
 // spendable money, not a code — see printAndSaveTransferResult's own
 // framing of it. Shared by the plain transfer path and
 // transferWithAutoConsolidate so both name the destination identically.
@@ -96,7 +96,7 @@ func targetClause(toValue string, kind credential.TargetKind) string {
 	switch kind {
 	case credential.TargetKindConnection:
 		return fmt.Sprintf("to %s as web identity cash", toValue)
-	case credential.TargetKindBearer:
+	case credential.TargetKindCash:
 		return "as cash"
 	default:
 		return fmt.Sprintf("to %s as identity cash", toValue)
@@ -104,7 +104,7 @@ func targetClause(toValue string, kind credential.TargetKind) string {
 }
 
 // transferConfirmMessage renders the plain (non-auto-consolidate)
-// transfer's own confirm prompt. Only the bearer case spells out what "as
+// transfer's own confirm prompt. Only the cash-mode case spells out what "as
 // cash" actually means (anyone who ends up holding it can redeem it): a
 // named destination is self-explanatory ("to alice@example.com"), but a
 // destination-less transfer is the one place a first-time user could
@@ -114,7 +114,7 @@ func targetClause(toValue string, kind credential.TargetKind) string {
 // "save this now" framing on the result side of the same transfer).
 func transferConfirmMessage(sendAmount uint64, toValue string, kind credential.TargetKind) string {
 	amt := output.FormatAmount(int64(sendAmount))
-	if kind == credential.TargetKindBearer {
+	if kind == credential.TargetKindCash {
 		return fmt.Sprintf("Transfer %s as cash — anyone holding it can redeem it. Continue?", amt)
 	}
 	return fmt.Sprintf("Transfer %s %s?", amt, targetClause(toValue, kind))
@@ -122,7 +122,7 @@ func transferConfirmMessage(sendAmount uint64, toValue string, kind credential.T
 
 // shouldPrintResolvedTarget decides whether a resolved target's Resolved
 // string is worth showing before confirming anything. Deliberately false
-// for a bearer target specifically: its Resolved carries the freshly
+// for a cash-mode target specifically: its Resolved carries the freshly
 // generated secret (needed intact for --json's target_resolved field —
 // see credential.go's own ParseTarget), but printing it here, before
 // anything is even confirmed, is pure noise — nothing is actionable with
@@ -130,14 +130,14 @@ func transferConfirmMessage(sendAmount uint64, toValue string, kind credential.T
 // resulting token, once the transfer actually completes
 // (printAndSaveTransferResult's cashToSend). Every other resolution (a
 // NIP-05 lookup, an nconnection's IA) genuinely benefits from review
-// before confirming, so only the bearer case is skipped. Pure so it's
+// before confirming, so only the cash-mode case is skipped. Pure so it's
 // unit-testable without a cobra.Command.
 func shouldPrintResolvedTarget(target credential.ResolvedTarget) bool {
 	if target.Resolved == "" {
 		return false
 	}
-	_, isBearer := target.Target.(*nipcash.BearerTarget)
-	return !isBearer
+	_, isCash := target.Target.(*nipcash.CashTarget)
+	return !isCash
 }
 
 // fetchExpiresAt best-effort fetches token's current Hub-side expiry
@@ -418,7 +418,7 @@ func transferWithAutoConsolidate(cmd *cobra.Command, l *ledger.Ledger, group []l
 	var partial *nipcashclient.PartialProgressError
 	if errors.As(ffsErr, &partial) && partial.Consolidated != nil {
 		// The interim consolidate landed for real, even though the
-		// final transfer then failed — unlike RekeyBearerSlice's own
+		// final transfer then failed — unlike RekeyCashSlice's own
 		// interim step (an in-place transfer, same wallet pubkey
 		// throughout), cash_consolidate always spins off a genuinely
 		// NEW wallet. That wallet's funds are still sitting there,
@@ -532,7 +532,7 @@ func markSourcesConsolidated(l *ledger.Ledger, sourceIDs []string, amountMillis 
 // ledger effects and renders cashctl's own output — shared by the plain
 // single-source path and transferWithAutoConsolidate, since both end in
 // exactly the same "one CashTransferResult, maybe a remainder" shape.
-// target is accepted (not just its Resolved string) so a bearer target's
+// target is accepted (not just its Resolved string) so a cash-mode target's
 // combined <token>#<secret> string — the actual thing the recipient
 // needs — can be assembled here.
 //
@@ -549,7 +549,7 @@ func markSourcesConsolidated(l *ledger.Ledger, sourceIDs []string, amountMillis 
 // Getting this wrong is a fund-loss bug, not a display nit: printing
 // nothing here for that case means the transfer's whole result — the
 // wallet's new owner has no way to ever spend it — cannot be recovered
-// from output alone, for BOTH bearer and pubkey/npub/connection targets.
+// from output alone, for BOTH cash-mode and pubkey/npub/connection targets.
 //
 // remainderMode carries the credential-mode fields (see credentialModeOf)
 // the remainder entry, if any, is saved with — cash_transfer leaves a
@@ -587,15 +587,15 @@ func printAndSaveTransferResult(cmd *cobra.Command, l *ledger.Ledger, transferRe
 	// recoverable once the process exits.
 	recipientToken := transferResult.RecipientToken(originalToken)
 
-	// For a bearer target there's no recipient identity — the recipient
+	// For a cash-mode target there's no recipient identity — the recipient
 	// is whoever holds the combined token#secret string, so that's what
 	// gets displayed/returned in its place. toValue itself (the literal
 	// "cash"/user input) still goes to AppendHistory above unchanged —
 	// only this display/--json substitution uses the assembled string.
-	_, isBearer := target.Target.(*nipcash.BearerTarget)
+	_, isCash := target.Target.(*nipcash.CashTarget)
 	var cashToSend string
-	if isBearer && recipientToken != "" {
-		bt := target.Target.(*nipcash.BearerTarget)
+	if isCash && recipientToken != "" {
+		bt := target.Target.(*nipcash.CashTarget)
 		cashToSend = fmt.Sprintf("%s#%s", recipientToken, bt.Secret())
 	}
 
@@ -640,9 +640,9 @@ func printAndSaveTransferResult(cmd *cobra.Command, l *ledger.Ledger, transferRe
 		}
 		// recipient_token: the exact string a pubkey/npub/connection-key
 		// recipient needs to `receive` this — distinct from cash_to_send
-		// (bearer-only, carries a secret) so existing bearer-vs-not
+		// (cash-mode-only, carries a secret) so existing cash-vs-not
 		// consumers of cash_to_send never see it change shape.
-		if !isBearer && recipientToken != "" {
+		if !isCash && recipientToken != "" {
 			out["recipient_token"] = recipientToken
 		}
 		output.PrintJSON(out)
@@ -659,10 +659,10 @@ func printAndSaveTransferResult(cmd *cobra.Command, l *ledger.Ledger, transferRe
 	// earlier version of this message) risks getting copied along and
 	// corrupting it.
 	switch {
-	case isBearer && cashToSend != "":
+	case isCash && cashToSend != "":
 		fmt.Printf("Transferred %s as cash. Save this now, it won't be shown again:\ncashctl receive %s\n",
 			output.FormatAmount(int64(sentAmount)), cashToSend)
-	case isBearer:
+	case isCash:
 		fmt.Printf("Transferred %s as cash.\n", output.FormatAmount(int64(sentAmount)))
 	default:
 		fmt.Printf("Transferred %s %s.\n", output.FormatAmount(int64(sentAmount)), targetClause(toValue, target.Kind))
@@ -675,19 +675,19 @@ func printAndSaveTransferResult(cmd *cobra.Command, l *ledger.Ledger, transferRe
 
 // credentialModeOf returns an Entry carrying only src's credential-mode
 // fields — exactly what resolveCredential reads to decide how to spend it
-// (bearer secret, identity requirement, connection-key reference), and
+// (cash secret, identity requirement, connection-key reference), and
 // nothing else. lokihub's cash_transfer leaves a split's remainder under
 // the source's SAME current identity (cash_transfer_controller.go carries
-// RemainderIdentityType/Value over unchanged), so a bearer source's
+// RemainderIdentityType/Value over unchanged), so a cash-mode source's
 // remainder is still spent by the very same secret. Without this, the
 // remainder was saved with IdentityRequired unknown and no secret, so
 // resolveCredential fell through to the local identity — which a
-// bearer-only wallet never has — and the next spend failed with "run
+// cash-mode-only wallet never has — and the next spend failed with "run
 // `cashctl init` first".
 func credentialModeOf(src ledger.Entry) ledger.Entry {
 	return ledger.Entry{
 		IdentityRequired:        src.IdentityRequired,
-		BearerSecret:            src.BearerSecret,
+		CashSecret:              src.CashSecret,
 		ConnectionKeyPlatform:   src.ConnectionKeyPlatform,
 		ConnectionKeyExternalID: src.ConnectionKeyExternalID,
 		AttestationEventID:      src.AttestationEventID,
@@ -939,7 +939,7 @@ func runCashTransfer(cmd *cobra.Command, args []string) error {
 
 	var result *nipcash.CashTransferResult
 	err = WithSpinner(jsonMode, "Transferring...", func() error {
-		r, cErr := spendBearerEntry(entry, cred, func(c nipcash.Credential) (*nipcash.CashTransferResult, error) {
+		r, cErr := spendCashEntry(entry, cred, func(c nipcash.Credential) (*nipcash.CashTransferResult, error) {
 			return client.CashTransfer(ctx, nipcash.CashTransferParams{
 				Credential: c, To: target.Target, CurrentAmount: amount, SplitAmount: splitAmount,
 			})

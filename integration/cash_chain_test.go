@@ -11,21 +11,21 @@ import (
 // The flows in this file are CHAINS: the output of one command is spent
 // again by the next. Single-step tests (a split happens; the remainder
 // exists) can't see a remainder that is saved but not actually spendable —
-// which is how a bearer-mode split remainder, saved without its bearer
+// which is how a cash-mode split remainder, saved without its cash
 // secret, shipped: the FIRST spend worked, the SECOND asked the user to run
 // `cashctl init`. Every chain here spends what the previous step left.
 
-// TestChain_BearerOnlyWallet_NoIdentity_SplitsRespentThenRedeemed is the
-// exact user report: a wallet that only ever held bearer cash (no `init`,
+// TestChain_CashOnlyWallet_NoIdentity_SplitsRespentThenRedeemed is the
+// exact user report: a wallet that only ever held cash (no `init`,
 // ever) transfers 1 loki several times in a row — each split's remainder
 // must itself be spendable with the same secret — then redeems what's left.
-func TestChain_BearerOnlyWallet_NoIdentity_SplitsRespentThenRedeemed(t *testing.T) {
+func TestChain_CashOnlyWallet_NoIdentity_SplitsRespentThenRedeemed(t *testing.T) {
 	admin := adminOrSkip(t)
 	hub := setUpCashHub(t, admin)
 	f := newFixture(t) // deliberately NO `wallet init`
 
 	const start = uint64(60_000) // 60 loki
-	gift := mintBearerGift(t, hub, start)
+	gift := mintCashGift(t, hub, start)
 
 	res := f.run("receive", gift, "--yes")
 	assertNoIdentityDemand(t, "receive", res)
@@ -72,15 +72,15 @@ func TestChain_BearerOnlyWallet_NoIdentity_SplitsRespentThenRedeemed(t *testing.
 	}
 }
 
-// TestChain_BearerRemainder_TransferredOnwardToSecondUser: a bearer split
+// TestChain_CashRemainder_TransferredOnwardToSecondUser: a cash-mode split
 // leaves a remainder; that remainder is then sent (split again) to a real
 // second cashctl user by pubkey, who receives and redeems it; the sender
 // redeems what's left of the remainder.
-func TestChain_BearerRemainder_TransferredOnwardToSecondUser(t *testing.T) {
+func TestChain_CashRemainder_TransferredOnwardToSecondUser(t *testing.T) {
 	admin := adminOrSkip(t)
 	hub := setUpCashHub(t, admin)
 
-	a := newFixture(t) // bearer-only, no identity
+	a := newFixture(t) // cash-mode-only, no identity
 	b := newFixture(t)
 	bHex, err := npubToHex(b.mustJSON("wallet", "init")["npub"].(string))
 	if err != nil {
@@ -88,7 +88,7 @@ func TestChain_BearerRemainder_TransferredOnwardToSecondUser(t *testing.T) {
 	}
 
 	const start = uint64(60_000)
-	a.mustJSON("receive", mintBearerGift(t, hub, start), "--yes")
+	a.mustJSON("receive", mintCashGift(t, hub, start), "--yes")
 
 	first := a.mustJSON("transfer", "1", "--yes") // creates the remainder
 	afterFirst := mloki(first, "remaining_amount_millis")
@@ -186,10 +186,10 @@ func TestChain_ConsolidateOutput_ThenSplitTransfer_ThenRedeem(t *testing.T) {
 	}
 }
 
-// TestChain_BearerToPubkeyToBearer_RoundTrip: cash changes mode as it moves —
-// pubkey -> bearer gift -> (B protects it) -> B sends it back to A's pubkey
+// TestChain_CashToPubkeyToCash_RoundTrip: cash changes mode as it moves —
+// pubkey -> cash gift -> (B protects it) -> B sends it back to A's pubkey
 // -> A redeems it — with the same wallet identity used throughout.
-func TestChain_BearerToPubkeyToBearer_RoundTrip(t *testing.T) {
+func TestChain_CashToPubkeyToCash_RoundTrip(t *testing.T) {
 	admin := adminOrSkip(t)
 	hub := setUpCashHub(t, admin)
 	a, b := newFixture(t), newFixture(t)
@@ -203,7 +203,7 @@ func TestChain_BearerToPubkeyToBearer_RoundTrip(t *testing.T) {
 	orig := mintPubkeyTokenFromHub(t, hub, aHex, amount)
 	a.mustJSON("receive", orig)
 
-	gifted := a.mustJSON("transfer", "cash", "--yes") // whole token, pubkey -> bearer
+	gifted := a.mustJSON("transfer", "cash", "--yes") // whole token, pubkey -> cash
 	secret := extractHexSecret(t, gifted["target_resolved"].(string))
 	gift := recipientTokenFromTransfer(gifted, orig) + "#" + secret
 
@@ -214,7 +214,7 @@ func TestChain_BearerToPubkeyToBearer_RoundTrip(t *testing.T) {
 	bEntry, _ := bRecv["entry"].(map[string]any)
 	bToken, _ := bEntry["token"].(string)
 
-	back := b.mustJSON("transfer", aHex, "--yes") // whole token, bearer -> A's pubkey
+	back := b.mustJSON("transfer", aHex, "--yes") // whole token, cash -> A's pubkey
 	aToken := recipientTokenFromTransfer(back, bToken)
 	got := a.mustJSON("receive", aToken)
 	if amt := mloki(got["entry"].(map[string]any), "amount_millis"); amt != amount {
@@ -257,16 +257,16 @@ func TestChain_TokenReturnsToOriginalHolder_CanBeReceivedAgain(t *testing.T) {
 	}
 }
 
-// TestReceive_BearerGiftAlreadyProtectedByAnotherHolder_IsNotSavedAsHeld: the
+// TestReceive_CashGiftAlreadyProtectedByAnotherHolder_IsNotSavedAsHeld: the
 // same gift string reaches two people (forwarded, or an old secret kept
 // around). The first holder's receive protects it (re-keys it), which kills
 // the original secret. The second receive can then never spend anything, so
 // it must not be saved as a healthy held token ("Verified", counted in the
 // ledger) — at minimum it must be flagged, ideally refused.
-func TestReceive_BearerGiftAlreadyProtectedByAnotherHolder_IsNotSavedAsHeld(t *testing.T) {
+func TestReceive_CashGiftAlreadyProtectedByAnotherHolder_IsNotSavedAsHeld(t *testing.T) {
 	admin := adminOrSkip(t)
 	hub := setUpCashHub(t, admin)
-	gift := mintBearerGift(t, hub, 30_000)
+	gift := mintCashGift(t, hub, 30_000)
 
 	first := newFixture(t)
 	first.mustJSON("wallet", "init")

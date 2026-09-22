@@ -12,14 +12,14 @@ import (
 	nipcashclient "github.com/ohstr/nmilat/nipcash/client"
 )
 
-// TestCashReceive_AutoSecuresBearerReceipt_NoOtherHoldings is scenario (a)
+// TestCashReceive_AutoSecuresCashReceipt_NoOtherHoldings is scenario (a)
 // from docs/private/auto-secure-bearer-receipt-plan.md's Verification
-// section: receiving a bearer gift with no other same-minter holdings
+// section: receiving a cash gift with no other same-minter holdings
 // re-keys it in place (Confirm auto-accepts under --json, same as every
 // other confirm in this codebase) — the original secret must be dead
 // afterward, and the ledger's own updated secret must still redeem for
 // real.
-func TestCashReceive_AutoSecuresBearerReceipt_NoOtherHoldings(t *testing.T) {
+func TestCashReceive_AutoSecuresCashReceipt_NoOtherHoldings(t *testing.T) {
 	cfg, err := LoadConfig("")
 	if err != nil {
 		t.Skipf("skipping: could not load integration config (%v) — see integration/README.md", err)
@@ -42,12 +42,12 @@ func TestCashReceive_AutoSecuresBearerReceipt_NoOtherHoldings(t *testing.T) {
 		Recipients: []nipcash.Allocation{nipcash.Send(nipcash.Anyone(), amountMillis)},
 	})
 	if err != nil {
-		t.Fatalf("mint_cash (bearer): %v", err)
+		t.Fatalf("mint_cash (cash): %v", err)
 	}
-	if len(mintResult.Recipients) != 1 || mintResult.Recipients[0].BearerSecret == "" {
-		t.Fatalf("mint_cash (bearer): expected exactly one recipient with a bearer_secret: %+v", mintResult.Recipients)
+	if len(mintResult.Recipients) != 1 || mintResult.Recipients[0].CashSecret == "" {
+		t.Fatalf("mint_cash (cash): expected exactly one recipient with a cash_secret: %+v", mintResult.Recipients)
 	}
-	originalSecret := mintResult.Recipients[0].BearerSecret
+	originalSecret := mintResult.Recipients[0].CashSecret
 	giftString := mintResult.CashToken + "#" + originalSecret
 
 	receiveResp := f.mustJSON("receive", giftString)
@@ -68,10 +68,10 @@ func TestCashReceive_AutoSecuresBearerReceipt_NoOtherHoldings(t *testing.T) {
 	defer origClient.Close()
 	if _, err := origClient.CashTransfer(ctx, nipcash.CashTransferParams{
 		Credential:    nipcash.BySecret(originalSecret),
-		To:            nipcash.NewBearerTarget(),
+		To:            nipcash.NewCashTarget(),
 		CurrentAmount: amountMillis,
 	}); err == nil {
-		t.Error("original bearer secret still spends after receive auto-secured it — it should have been re-keyed dead")
+		t.Error("original cash secret still spends after receive auto-secured it — it should have been re-keyed dead")
 	}
 
 	// The ledger's own updated secret (never re-shown to this test — it's
@@ -88,17 +88,17 @@ func TestCashReceive_AutoSecuresBearerReceipt_NoOtherHoldings(t *testing.T) {
 	}
 }
 
-// TestWalletProtect_ManuallyProtectsADeclinedBearerReceipt is the live
-// evidence for the fix to "a single unprotected bearer holding can never
+// TestWalletProtect_ManuallyProtectsADeclinedCashReceipt is the live
+// evidence for the fix to "a single unprotected cash-mode holding can never
 // be re-protected later": the documented recovery,
 // `consolidate --to cash`, needs 2+ sources and can't re-key one
 // holding alone — `wallet protect` (cmd/wallet_protect.go) reuses the
 // exact same protectRekeyOnly logic `receive`'s own automatic offer uses,
 // just triggered manually for a holding that missed it. Also proves
-// Entry.BearerProtection tracks the state correctly end to end: "shared"
+// Entry.CashProtection tracks the state correctly end to end: "shared"
 // right after a declined receive, "protected" after a successful manual
 // protect.
-func TestWalletProtect_ManuallyProtectsADeclinedBearerReceipt(t *testing.T) {
+func TestWalletProtect_ManuallyProtectsADeclinedCashReceipt(t *testing.T) {
 	cfg, err := LoadConfig("")
 	if err != nil {
 		t.Skipf("skipping: could not load integration config (%v) — see integration/README.md", err)
@@ -121,12 +121,12 @@ func TestWalletProtect_ManuallyProtectsADeclinedBearerReceipt(t *testing.T) {
 		Recipients: []nipcash.Allocation{nipcash.Send(nipcash.Anyone(), amountMillis)},
 	})
 	if err != nil {
-		t.Fatalf("mint_cash (bearer): %v", err)
+		t.Fatalf("mint_cash (cash): %v", err)
 	}
-	if len(mintResult.Recipients) != 1 || mintResult.Recipients[0].BearerSecret == "" {
-		t.Fatalf("mint_cash (bearer): expected exactly one recipient with a bearer_secret: %+v", mintResult.Recipients)
+	if len(mintResult.Recipients) != 1 || mintResult.Recipients[0].CashSecret == "" {
+		t.Fatalf("mint_cash (cash): expected exactly one recipient with a cash_secret: %+v", mintResult.Recipients)
 	}
-	originalSecret := mintResult.Recipients[0].BearerSecret
+	originalSecret := mintResult.Recipients[0].CashSecret
 	giftString := mintResult.CashToken + "#" + originalSecret
 
 	// Decline the automatic protect offer ("n", not a bare Enter — the
@@ -143,8 +143,8 @@ func TestWalletProtect_ManuallyProtectsADeclinedBearerReceipt(t *testing.T) {
 		t.Fatalf("wallet show: got %d held tokens, want 1: %v", len(held), held)
 	}
 	entry, _ := held[0].(map[string]any)
-	if got, _ := entry["bearer_protection"].(string); got != "shared" {
-		t.Fatalf(`wallet show: bearer_protection = %q, want "shared" (protect was declined)`, got)
+	if got, _ := entry["cash_protection"].(string); got != "shared" {
+		t.Fatalf(`wallet show: cash_protection = %q, want "shared" (protect was declined)`, got)
 	}
 	entryID, _ := entry["id"].(string)
 	if entryID == "" {
@@ -166,10 +166,10 @@ func TestWalletProtect_ManuallyProtectsADeclinedBearerReceipt(t *testing.T) {
 	defer origClient.Close()
 	if _, err := origClient.CashTransfer(ctx, nipcash.CashTransferParams{
 		Credential:    nipcash.BySecret(originalSecret),
-		To:            nipcash.NewBearerTarget(),
+		To:            nipcash.NewCashTarget(),
 		CurrentAmount: amountMillis,
 	}); err == nil {
-		t.Error("original bearer secret still spends after wallet protect — it should have been re-keyed dead")
+		t.Error("original cash secret still spends after wallet protect — it should have been re-keyed dead")
 	}
 
 	// wallet show must now report it as protected, same entry ID.
@@ -179,8 +179,8 @@ func TestWalletProtect_ManuallyProtectsADeclinedBearerReceipt(t *testing.T) {
 		t.Fatalf("wallet show (after protect): got %d held tokens, want 1: %v", len(afterHeld), afterHeld)
 	}
 	afterEntry, _ := afterHeld[0].(map[string]any)
-	if got, _ := afterEntry["bearer_protection"].(string); got != "protected" {
-		t.Errorf(`wallet show (after protect): bearer_protection = %q, want "protected"`, got)
+	if got, _ := afterEntry["cash_protection"].(string); got != "protected" {
+		t.Errorf(`wallet show (after protect): cash_protection = %q, want "protected"`, got)
 	}
 	if got, _ := afterEntry["id"].(string); got != entryID {
 		t.Errorf("wallet show (after protect): id changed from %q to %q — protectRekeyOnly re-keys in place, never a new entry", entryID, got)
@@ -199,7 +199,7 @@ func TestWalletProtect_ManuallyProtectsADeclinedBearerReceipt(t *testing.T) {
 }
 
 // TestWalletProtect_NothingToProtectIsNotFound confirms the empty case: a
-// wallet with no unprotected bearer holdings gets a clear, specific
+// wallet with no unprotected cash-mode holdings gets a clear, specific
 // answer, not a generic error.
 func TestWalletProtect_NothingToProtectIsNotFound(t *testing.T) {
 	f := newFixture(t)
@@ -214,13 +214,13 @@ func TestWalletProtect_NothingToProtectIsNotFound(t *testing.T) {
 	}
 }
 
-// TestCashReceive_AutoSecuresBearerReceipt_MergesWithExistingHolding is
-// scenario (b) from the same plan: receiving a bearer gift while already
+// TestCashReceive_AutoSecuresCashReceipt_MergesWithExistingHolding is
+// scenario (b) from the same plan: receiving a cash gift while already
 // holding another mint-signed token from the same minter merges them into
-// one fresh bearer note — both original sources must independently show
+// one fresh cash note — both original sources must independently show
 // fully claimed on the Hub (not just trusted from cashctl's own local
 // bookkeeping), and the merged amount must actually redeem.
-func TestCashReceive_AutoSecuresBearerReceipt_MergesWithExistingHolding(t *testing.T) {
+func TestCashReceive_AutoSecuresCashReceipt_MergesWithExistingHolding(t *testing.T) {
 	cfg, err := LoadConfig("")
 	if err != nil {
 		t.Skipf("skipping: could not load integration config (%v) — see integration/README.md", err)
@@ -245,7 +245,7 @@ func TestCashReceive_AutoSecuresBearerReceipt_MergesWithExistingHolding(t *testi
 
 	const (
 		existingAmount = uint64(30_000)
-		bearerAmount   = uint64(50_000)
+		cashAmount     = uint64(50_000)
 	)
 
 	// An existing pubkey-mode holding, mint-signed, from the same Hub —
@@ -259,26 +259,26 @@ func TestCashReceive_AutoSecuresBearerReceipt_MergesWithExistingHolding(t *testi
 		t.Fatalf("receive (existing pubkey-mode holding): exit %d\nstderr: %s", res.ExitCode, res.Stderr)
 	}
 
-	bearerResult, err := cashClient.MintCash(ctx, nipcash.MintCashParams{
-		Recipients:    []nipcash.Allocation{nipcash.Send(nipcash.Anyone(), bearerAmount)},
+	cashResult, err := cashClient.MintCash(ctx, nipcash.MintCashParams{
+		Recipients:    []nipcash.Allocation{nipcash.Send(nipcash.Anyone(), cashAmount)},
 		MintSignature: true,
 	})
 	if err != nil {
-		t.Fatalf("mint_cash (bearer, signed): %v", err)
+		t.Fatalf("mint_cash (cash, signed): %v", err)
 	}
-	if len(bearerResult.Recipients) != 1 || bearerResult.Recipients[0].BearerSecret == "" {
-		t.Fatalf("mint_cash (bearer, signed): expected exactly one recipient with a bearer_secret: %+v", bearerResult.Recipients)
+	if len(cashResult.Recipients) != 1 || cashResult.Recipients[0].CashSecret == "" {
+		t.Fatalf("mint_cash (cash, signed): expected exactly one recipient with a cash_secret: %+v", cashResult.Recipients)
 	}
-	decodeResp := f.mustJSON("decode", bearerResult.CashToken)
+	decodeResp := f.mustJSON("decode", cashResult.CashToken)
 	minter2, valid := decodeResp["minter_pubkey"].(string)
 	if !valid || minter2 == "" {
-		t.Skip("skipping: this Hub did not attach a mint signature to the bearer mint")
+		t.Skip("skipping: this Hub did not attach a mint signature to the cash-mode mint")
 	}
 	if minter1 != minter2 {
 		t.Skipf("skipping: the two tokens' recovered minter pubkeys differ (%s vs %s) — can't exercise same-minter grouping", minter1, minter2)
 	}
 
-	giftString := bearerResult.CashToken + "#" + bearerResult.Recipients[0].BearerSecret
+	giftString := cashResult.CashToken + "#" + cashResult.Recipients[0].CashSecret
 	receiveResp := f.mustJSON("receive", giftString)
 	secured, _ := receiveResp["secured"].(map[string]any)
 	if secured == nil {
@@ -294,13 +294,13 @@ func TestCashReceive_AutoSecuresBearerReceipt_MergesWithExistingHolding(t *testi
 
 	entry, _ := receiveResp["entry"].(map[string]any)
 	gotAmount, _ := entry["amount_millis"].(float64)
-	if uint64(gotAmount) != existingAmount+bearerAmount {
-		t.Errorf("final entry amount_millis = %v, want %d", entry["amount_millis"], existingAmount+bearerAmount)
+	if uint64(gotAmount) != existingAmount+cashAmount {
+		t.Errorf("final entry amount_millis = %v, want %d", entry["amount_millis"], existingAmount+cashAmount)
 	}
 
 	// Independently verify server-side: both original sources must no
 	// longer hold anything unclaimed.
-	for _, tok := range []string{existingToken, bearerResult.CashToken} {
+	for _, tok := range []string{existingToken, cashResult.CashToken} {
 		c, err := nipcashclient.Connect(ctx, tok)
 		if err != nil {
 			t.Fatalf("dial original token %q: %v", tok, err)
@@ -322,7 +322,7 @@ func TestCashReceive_AutoSecuresBearerReceipt_MergesWithExistingHolding(t *testi
 	}
 
 	hubClient := dialNWC(t, ctx, hub.PairingUri)
-	invoiceTx, err := hubClient.MakeInvoice(ctx, nip47.MakeInvoiceParams{Amount: int64(existingAmount + bearerAmount)})
+	invoiceTx, err := hubClient.MakeInvoice(ctx, nip47.MakeInvoiceParams{Amount: int64(existingAmount + cashAmount)})
 	if err != nil {
 		t.Fatalf("make_invoice: %v", err)
 	}
