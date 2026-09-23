@@ -33,7 +33,9 @@ fi
 
 # And confirm the agent's own run actually produced an identity, which is
 # what the round asked of it — the throwaway probe above cannot show that.
-AGENT_NPUB="$(jq -r '.. | strings | select(test("^npub1"))' "${RUN_DIR}/r0-bootstrap.self-report.json" 2>/dev/null | head -1)"
+# Match anywhere, not anchored: the agent usually quotes `init --json`'s
+# whole output inside one string field, so the npub sits mid-string.
+AGENT_NPUB="$(grep -oE 'npub1[a-z0-9]{20,}' "${RUN_DIR}/r0-bootstrap.self-report.json" 2>/dev/null | head -1)"
 if [ -n "${AGENT_NPUB}" ]; then
   add_check "agent_identity_created" true "agent reported ${AGENT_NPUB}"
 else
