@@ -47,7 +47,7 @@ code/JSON shape against `AGENTS.md`'s own table.
    integration suite uses (see `../README.md`). `r0-bootstrap` and
    `r3-error-contract` don't need it at all.
 3. `docker` + `docker compose`, and a Go toolchain on this host (used to
-   decode an npub and mint a bearer cash token — see `decode-npub/` and
+   decode an npub and mint a cash-mode token — see `decode-npub/` and
    `mint-fixture/`; neither ships with, or is imported by, cashctl itself).
 
 ```sh
@@ -60,7 +60,7 @@ bin/run.sh r0-bootstrap r3-error-contract   # just these
 - **r0-bootstrap** — install cashctl from scratch (following
   `PROMPT.md`/`README.md`), confirm `cashctl init --json`, pull in the
   matching skill.
-- **r1-cash-lifecycle** — receive a real, pre-minted bearer cash token,
+- **r1-cash-lifecycle** — receive a real, pre-minted cash-mode token,
   verify it, redeem it into a real invoice. Verified by checking the
   minted cash_wallet child's server-side `claimed` state directly, not by
   trusting `cashctl redeem`'s own reported success.

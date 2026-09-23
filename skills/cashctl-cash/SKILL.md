@@ -16,7 +16,7 @@ change. -->
 
 ```sh
 cashctl receive lokicash1... --json                            # prints the token's details, then verifies against the Cash Hub
-cashctl receive lokicash1...#deadbeef --json                   # bearer-mode: the combined "<token>#<bearer_secret>" presentation
+cashctl receive lokicash1...#deadbeef --json                   # cash-mode: the combined "<token>#<cash_secret>" presentation
 ```
 
 Always a network call: receive prints the token's details, then
@@ -29,26 +29,26 @@ added to your wallet. Pasting a Circle Hub (`circlehub1...`) or Cash Hub
 corrective error (`code: "invalid_input"`) naming the right command
 (`cashctl join ...`, or "cashctl can't mint").
 
-**A bearer-mode token (`identity_required: false`) is two values, not
+**A cash-mode token (`identity_required: false`) is two values, not
 one.** The token string only lets you dial the wallet — it is *never* a
 valid spending credential by itself, no matter how it looks. The real
-credential, `bearer_secret`, is a separate value the Hub operator hands
+credential, `cash_secret`, is a separate value the Hub operator hands
 out once, alongside the token, at mint time, and it MUST arrive embedded
-in the token itself: `<token>#<bearer_secret>` (NIP-CASH's combined
-bearer-slice presentation — `#` never appears in a token's own bech32
+in the token itself: `<token>#<cash_secret>` (NIP-CASH's combined
+cash-mode slice presentation — `#` never appears in a token's own bech32
 charset, so splitting it back apart is always unambiguous). There is no
-`--secret` flag: a bearer token pasted without the embedded secret has
+`--secret` flag: a cash-mode token pasted without the embedded secret has
 nothing `receive` can act on, so it degrades to a read-only report
 instead of erroring — `{"received": false, "reason":
 "no_embedded_secret"}`, exit 0, nothing saved. `cashctl decode` on the
-combined presentation reports `embedded_bearer_secret_present: true`
+combined presentation reports `embedded_cash_secret_present: true`
 (never the secret's value) if you want to check which form you have
 before receiving.
 
-**A saved bearer-mode receipt is then offered automatic protecting.**
-Anyone who saw the same bearer secret before it reached you — the
+**A saved cash-mode receipt is then offered automatic protecting.**
+Anyone who saw the same cash secret before it reached you — the
 sender, or anyone the sender showed it to — could still spend it too,
-for as long as it stays shared. Once `receive` saves a bearer-mode
+for as long as it stays shared. Once `receive` saves a cash-mode
 entry, it asks to protect it immediately (defaults to yes; always
 proceeds non-interactively under `--yes`/`--json` — there's no separate
 flag to opt out). Protecting re-keys the slice under a fresh secret only
@@ -57,7 +57,7 @@ the same issuer — merges it into that holding in the same step. Reported
 under `"secured"` in `--json` output: `{"status": "rekeyed"}` (re-keyed
 in place), `{"status": "consolidated", "consolidated_with": [...],
 "final_entry_id": "..."}` (merged into a new entry), `{"status":
-"declined"}`, or `{"status": "not_applicable"}` (not a bearer-mode
+"declined"}`, or `{"status": "not_applicable"}` (not a cash-mode
 receive). A wire failure here reports `{"status": "failed", "error":
 "..."}` but never fails `receive` itself — the cash is already genuinely
 yours; retry protecting later with `cashctl wallet protect [id]` (or
@@ -175,8 +175,8 @@ explicit-sources form always has; more than one returns
 `{"consolidated": [{"new_entry", "expires_at", "target_resolved"}, ...]}`
 instead — check which key is present rather than assuming one shape.
 `--to` defaults to your own identity; `--to cash` merges into a
-fresh, anonymous bearer note instead (same keyword `transfer` uses) —
-requires a Hub that accepts a bearer `cash_consolidate` target.
+fresh, anonymous cash note instead (same keyword `transfer` uses) —
+requires a Hub that accepts a cash-mode `cash_consolidate` target.
 
 ## `cashctl cash list-recipients`
 
