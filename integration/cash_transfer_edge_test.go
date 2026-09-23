@@ -114,9 +114,12 @@ func TestConsolidate_FailureDoesNotLeaveConsumedSourcesHeld(t *testing.T) {
 	}
 
 	res := f.run("consolidate", "--sources", srcs[0].id+","+srcs[1].id, "--to", "cash", "--yes")
-	if res.ExitCode == 0 {
-		t.Skip("consolidate to a cash-mode target succeeded on this hub; the partial-failure path can't be exercised")
-	}
+	// Whichever way the Hub answers, the ledger's view of each source has to
+	// match the Hub's. Skipping on success (what this test used to do) meant
+	// it asserted nothing at all on a healthy hub — the partial-failure path
+	// it was written for needs a Hub-side fault this suite cannot induce, so
+	// assert the invariant that holds either way instead of hoping for a
+	// decline.
 	for _, s := range srcs {
 		// decode --check asks the Hub whether this token still has a live
 		// recipient for us — the truth about whether it can be spent.
@@ -130,8 +133,19 @@ func TestConsolidate_FailureDoesNotLeaveConsumedSourcesHeld(t *testing.T) {
 			}
 		}
 		if heldLocally && !stillLive {
-			t.Errorf("after a failed consolidate (exit %d) source %s is still listed as held but the Hub says it is gone — the ledger counts money that has moved",
+			t.Errorf("after a consolidate (exit %d) source %s is still listed as held but the Hub says it is gone — the ledger counts money that has moved",
 				res.ExitCode, s.id)
+		}
+		// The mirror of the above, and the half a healthy hub actually
+		// reaches: a consolidate that reported success must have consumed
+		// every source it named, locally and on the Hub.
+		if res.ExitCode == 0 {
+			if stillLive {
+				t.Errorf("consolidate reported success but source %s is still live on the Hub — it was never merged", s.id)
+			}
+			if heldLocally {
+				t.Errorf("consolidate reported success but source %s is still held locally — it would be offered for a second spend", s.id)
+			}
 		}
 	}
 }
