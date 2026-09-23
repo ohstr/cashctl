@@ -2,8 +2,8 @@
 
 ## [0.5.0]
 
-- `--yes` no longer turns on `decode`'s and `receive`'s "verify online" check. That prompt is an opt-in to a network call you didn't ask for, not a confirmation, so skipping it now takes its default (no). `--check` still opts in.
-- `cashctl join <hub> 0` says 0 isn't a spend cap instead of claiming the amount is missing. There is no "0 means unlimited" convention here.
+- `--yes` no longer turns on `decode`'s and `receive`'s "verify online" check. That prompt is an opt-in to a network call you didn't ask for, not a confirmation, so skipping it now takes its default (no). `--check` still opts in. ([#20](https://github.com/ohstr/cashctl/pull/20))
+- `cashctl join <hub> 0` says 0 isn't a spend cap instead of claiming the amount is missing. There is no "0 means unlimited" convention here. ([#20](https://github.com/ohstr/cashctl/pull/20))
 
 ## [0.4.1]
 
