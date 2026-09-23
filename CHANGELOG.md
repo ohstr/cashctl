@@ -1,12 +1,13 @@
 # Changelog
 
-## [Unreleased]
+## [0.4.0]
 
-- **Breaking:** NIP-CASH's "bearer" mode is now "cash mode" on the wire, so this release needs a Hub that speaks the renamed protocol (lokihub 0.5.0-rc.6 or later). Older Hubs reject its cash-mode requests.
-- **Breaking:** two `--json` keys are renamed: `bearer_protection` becomes `cash_protection` (`wallet show`, `receive`, `transfer`, `consolidate`), and `decode`'s `embedded_bearer_secret_present` becomes `embedded_cash_secret_present`.
-- The ledger migrates itself the first time this version opens it: the `bearer_secret`, `pending_bearer_secret` and `bearer_protection` columns are renamed to `cash_secret`, `pending_cash_secret` and `cash_protection`. Stored values, including every spending secret, are carried across untouched, and held tokens stay spendable.
-- Downgrading afterwards is not supported: an older cashctl stops with "no such column: bearer_secret" rather than reading a half-renamed ledger. It could not reach a renamed Hub anyway.
-- Bumped `nmilat` to the cash-mode API (`NewCashTarget`, `RekeyCashSlice`, `CashSecret`, `IsCash`).
+- **Breaking:** NIP-CASH's "bearer" mode is now "cash mode" on the wire, so this release needs a Hub that speaks the renamed protocol (lokihub 0.5.0-rc.6 or later). Older Hubs reject its cash-mode requests. ([#8](https://github.com/ohstr/cashctl/pull/8))
+- **Breaking:** two `--json` keys are renamed: `bearer_protection` becomes `cash_protection` (`wallet show`, `receive`, `transfer`, `consolidate`), and `decode`'s `embedded_bearer_secret_present` becomes `embedded_cash_secret_present`. ([#8](https://github.com/ohstr/cashctl/pull/8))
+- **Breaking:** `--as` now takes `cash:<secret>` instead of `bearer:<secret>`, and `transfer`'s literal target keyword is `cash`, not `bearer`. ([#9](https://github.com/ohstr/cashctl/pull/9))
+- The ledger migrates itself the first time this version opens it: the `bearer_secret`, `pending_bearer_secret` and `bearer_protection` columns are renamed to `cash_secret`, `pending_cash_secret` and `cash_protection`. Stored values, including every spending secret, are carried across untouched, and held tokens stay spendable. ([#8](https://github.com/ohstr/cashctl/pull/8))
+- Downgrading afterwards is not supported: an older cashctl stops with "no such column: bearer_secret" rather than reading a half-renamed ledger. It could not reach a renamed Hub anyway. ([#8](https://github.com/ohstr/cashctl/pull/8))
+- Bumped `nmilat` to the cash-mode API (`NewCashTarget`, `RekeyCashSlice`, `CashSecret`, `IsCash`). ([#10](https://github.com/ohstr/cashctl/pull/10))
 - Bumped `ncli` to v0.6.0 and switched to its new `client/vault` package, dropping 22 indirect modules (tview, tcell, viper and the rest of ncli's CLI stack). ([#15](https://github.com/ohstr/cashctl/pull/15))
 - A command given `--token` for a holding already spent (redeemed, transferred or consolidated) says so at once instead of dialling a Hub that will never answer and timing out after 15s. ([#14](https://github.com/ohstr/cashctl/pull/14))
 - When a Hub stays silent about a holding, the error now says the bill has most likely been spent or expired rather than reporting a bare network failure. It is still reported as retryable, since an unreachable Hub looks the same from here. ([#14](https://github.com/ohstr/cashctl/pull/14))
