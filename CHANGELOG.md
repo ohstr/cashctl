@@ -2,9 +2,9 @@
 
 ## [0.4.1]
 
-- `consolidate` given an already-spent source (redeemed, transferred or consolidated) says so at once instead of dialling a Hub that never answers and timing out after 30s as a retryable `network` failure. `redeem --token` already did this.
-- A failed auto-protect on a received cash gift now points at `cashctl wallet protect`. It named `consolidate --to cash`, which cannot re-key a single holding.
-- `cashctl --help`'s `join` example now shows the required max amount, so copying it works.
+- `consolidate` given an already-spent source (redeemed, transferred or consolidated) says so at once instead of dialling a Hub that never answers and timing out after 30s as a retryable `network` failure. `redeem --token` already did this. ([#18](https://github.com/ohstr/cashctl/pull/18))
+- A failed auto-protect on a received cash gift now points at `cashctl wallet protect`. It named `consolidate --to cash`, which cannot re-key a single holding. ([#18](https://github.com/ohstr/cashctl/pull/18))
+- `cashctl --help`'s `join` example now shows the required max amount, so copying it works. ([#18](https://github.com/ohstr/cashctl/pull/18))
 
 ## [0.4.0]
 
