@@ -16,7 +16,7 @@ var RootCmd = &cobra.Command{
 	Use:   "cashctl",
 	Short: "A wallet CLI for Cash and Circle wallets",
 	Example: `  cashctl init
-  cashctl join <hub-connection>
+  cashctl join <hub-connection> <max-amount>
   cashctl receive <token>
   cashctl transfer 5 <pubkey>`,
 	SilenceUsage:  true,

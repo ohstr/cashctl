@@ -3,6 +3,7 @@ package cmd
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	relayclient "github.com/ohstr/nmilat/relay/client"
@@ -146,4 +147,24 @@ func TestIsIdentityEventReplayErr(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestRootExample_JoinCarriesMaxAmount guards the root command's own
+// Example against the shape runCircleJoin actually enforces: a cap is
+// mandatory (NIP-CW has no "0 means unlimited" convention), so a `join`
+// example without one is a copy-pasteable call that always exits 2.
+// Asserted structurally rather than against a fixed string, so rewording
+// the placeholders doesn't spuriously fail.
+func TestRootExample_JoinCarriesMaxAmount(t *testing.T) {
+	for _, line := range strings.Split(RootCmd.Example, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 || fields[0] != "cashctl" || fields[1] != "join" {
+			continue
+		}
+		if got := len(fields) - 2; got < 2 {
+			t.Errorf("root Example %q passes %d argument(s) to join, want 2 (hub connection and max amount)", line, got)
+		}
+		return
+	}
+	t.Skip("root Example no longer shows a join line — nothing to guard")
 }
