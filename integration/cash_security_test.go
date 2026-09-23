@@ -13,6 +13,25 @@ import (
 	nipcashclient "github.com/ohstr/nmilat/nipcash/client"
 )
 
+// assertTerminalFailure pins the error contract on a spend that must be
+// refused permanently. Checking only "exit != 0" lets a misclassification
+// through: a permanently-doomed spend reported as retryable (network, or a
+// retryable conflict) makes an agent back off and loop forever on it, which
+// is exactly the branching AGENTS.md's `retryable` field exists to drive.
+func assertTerminalFailure(t *testing.T, res result, what string, wantAnyCode ...string) {
+	t.Helper()
+	report := parseErrorReport(t, res)
+	if report.Retryable {
+		t.Errorf("%s: code=%q retryable=true — a permanently-refused spend must not tell an agent to retry", what, report.Code)
+	}
+	for _, code := range wantAnyCode {
+		if report.Code == code {
+			return
+		}
+	}
+	t.Errorf("%s: code=%q, want one of %v", what, report.Code, wantAnyCode)
+}
+
 // TestWalletShow_NeverLeaksSecrets confirms wallet show's --json output
 // never echoes back a held entry's actual spending/dialing secrets — the
 // token's own NWC pairing secret, or (for a cash-mode entry) the real
@@ -148,6 +167,7 @@ func TestCashTransfer_OverdraftAttempt(t *testing.T) {
 	if res.ExitCode == 0 {
 		t.Fatalf("transfer --amount (more than held): unexpectedly succeeded: %s", res.Stdout)
 	}
+	assertTerminalFailure(t, res, "overdraft transfer", "invalid_input")
 
 	// Whatever the failure shape, the token must be left exactly as it
 	// was — a rejected overdraft must never partially apply.
@@ -220,6 +240,7 @@ func TestCashRedeem_AlreadyRedeemedTokenRejectedOnRetry(t *testing.T) {
 	if res.ExitCode == 0 {
 		t.Fatalf("redeeming an already-redeemed token unexpectedly succeeded: %s", res.Stdout)
 	}
+	assertTerminalFailure(t, res, "redeem of an already-redeemed token", "not_found", "invalid_input", "conflict")
 
 	// The ledger must still show exactly one entry, still marked redeemed
 	// (not reverted, not duplicated) — a rejected re-redemption must be a
@@ -289,6 +310,7 @@ func TestCashConsolidate_ReusingAlreadyConsolidatedSourceRejected(t *testing.T) 
 	if res.ExitCode == 0 {
 		t.Fatalf("consolidating an already-consolidated source unexpectedly succeeded: %s", res.Stdout)
 	}
+	assertTerminalFailure(t, res, "consolidate reusing a spent source", "not_found", "invalid_input", "conflict")
 
 	// idC must still be untouched and held — a rejected consolidate must
 	// never partially claim its sources.

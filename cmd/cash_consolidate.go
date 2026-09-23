@@ -151,6 +151,17 @@ func consolidateItems(cmd *cobra.Command, l *ledger.Ledger, items []string, toFl
 		for _, item := range items {
 			item = strings.TrimSpace(item)
 			if e, ok := l.Find(item); ok {
+				// Find returns an entry whatever its status, so an explicit
+				// source could name a bill we already spent. Dialling one
+				// hangs and then reports a retryable network failure, telling
+				// an agent to retry something that can never succeed — the
+				// same trap cash_redeem.go's own --token path documents and
+				// guards. The auto-detect path picks from l.Held() and so
+				// cannot reach this.
+				if spent := spentStatusDescription(e.Status); spent != "" {
+					return output.NotFoundError(cmd, e.ID,
+						fmt.Errorf("token %q was already %s, so it no longer exists on the Hub", e.ID, spent))
+				}
 				src, err := sourceFromEntry(cmd, l, e)
 				if err != nil {
 					return err
