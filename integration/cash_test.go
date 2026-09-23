@@ -97,22 +97,24 @@ func setUpCashHubOpts(t *testing.T, admin *adminClient, opts cashHubOpts) adminC
 				continue
 			}
 			seen[claim.WalletAppID] = true
-			// An archived claim's bill is already gone server-side (the Hub
-			// deletes a bill once nothing is left on it and keeps its slices
-			// in an archive — see adminCashWalletClaim.Archived), so there is
-			// nothing left to reclaim and the delete would only 404/400. Most
-			// tests here spend their tokens to completion, so skipping these
-			// is what keeps the expected case quiet enough for a real failure
-			// below to stand out.
-			if claim.Archived {
+			// Anything but "unclaimed" has already ended — redeemed, split,
+			// expired, reclaimed or written-off (adminCashWalletClaim.Status)
+			// — and the Hub deletes a bill once nothing is left on it, so
+			// there is nothing to reclaim and the delete only 400s. Archived
+			// says the same thing a slice at a time, but lags: a redeemed or
+			// split claim is routinely still unarchived while its wallet is
+			// already gone. Filtering on both is what makes the remaining
+			// noise zero, so a real failure below actually stands out.
+			if claim.Archived || claim.Status != "unclaimed" {
 				continue
 			}
 			if err := admin.deleteCashWallet(resp.ID, claim.WalletAppID); err != nil {
-				// A live (non-archived) claim that will not reclaim is the one
-				// shape that means money was actually left on a shared hub —
-				// fail rather than log, which is indistinguishable from noise.
-				t.Errorf("cleanup: delete LIVE cash wallet child app_id=%d (status %q): %v — balance may be stranded on the hub",
-					claim.WalletAppID, claim.Status, err)
+				// An unclaimed claim still holds value, so a delete that will
+				// not reclaim it is the one shape meaning money was actually
+				// left behind on a shared hub — fail rather than log, which is
+				// indistinguishable from noise.
+				t.Errorf("cleanup: delete UNCLAIMED cash wallet child app_id=%d: %v — balance may be stranded on the hub",
+					claim.WalletAppID, err)
 			}
 		}
 	})
