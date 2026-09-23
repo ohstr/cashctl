@@ -18,13 +18,19 @@ import (
 
 // A local Identity Authority, for testing connection-key targets end to end.
 //
-// Nothing here talks to a relay or a real IA service. An nconnection target
-// resolves purely locally — ParseTarget turns nconnection1... plus --ia into
-// connection:<platform>:<external-id>:<ia-pubkey> with no lookup at all — and
-// the claiming half reads its attestation from a FILE
+// Nothing here talks to a relay. An nconnection target resolves purely
+// locally — ParseTarget turns nconnection1... plus --ia into
+// connection:<platform>:<external-id>:<ia-pubkey> with no lookup at all —
+// and the claiming half reads its attestation from a FILE
 // (credential.loadAttestation). So an IA is just a keypair that signs a
-// Kind 35522 event, which nmilat already builds for us via
-// nipIC.NewAttestation.
+// Kind 35522 event, which nmilat builds via nipIC.NewAttestation.
+//
+// The one thing that is NOT local: lokihub refuses a transfer whose
+// ia_pubkey is absent from its own trusted list ("ia_pubkey is not a
+// trusted Identity Authority"), so newTrustedIA registers the keypair
+// through the admin API and revokes it again in t.Cleanup — ephemeral, like
+// every other fixture here, rather than a long-lived IA an operator has to
+// hand-configure.
 //
 // Generated per test rather than checked into testdata on purpose: an
 // attestation binds a ConnectionKey to one specific user pubkey, and every
@@ -36,7 +42,9 @@ type localIA struct {
 	PubHex  string
 }
 
-func newLocalIA(t *testing.T) *localIA {
+// newUntrustedIA is an IA lokihub has never heard of — for asserting the
+// refusal path.
+func newUntrustedIA(t *testing.T) *localIA {
 	t.Helper()
 	priv := randomHex32(t)
 	pub, err := utils.GetPublicKey(priv)
@@ -44,6 +52,22 @@ func newLocalIA(t *testing.T) *localIA {
 		t.Fatalf("deriving IA pubkey: %v", err)
 	}
 	return &localIA{privHex: priv, PubHex: pub}
+}
+
+// newTrustedIA is newUntrustedIA plus registration in lokihub's trusted list,
+// revoked again on cleanup.
+func newTrustedIA(t *testing.T, admin *adminClient) *localIA {
+	t.Helper()
+	ia := newUntrustedIA(t)
+	if err := admin.registerIdentityAuthority(ia.PubHex, ephemeralFixtureNamePrefix+" trusted IA"); err != nil {
+		t.Fatalf("register ephemeral trusted IA: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := admin.deleteIdentityAuthority(ia.PubHex); err != nil {
+			t.Logf("cleanup: revoke ephemeral trusted IA %s: %v", ia.PubHex, err)
+		}
+	})
+	return ia
 }
 
 // Attest writes a signed attestation binding (platform, externalID) to
@@ -104,7 +128,7 @@ func randomHex32(t *testing.T) string {
 // Registering a trusted IA is not exposed by the admin API this suite uses
 // (see adminCreateAppRequest — no IA fields), so a delivery that actually
 // lands still needs hub-side configuration. When that exists, this fixture
-// already supplies everything else: newLocalIA(t).Attest(...) produces the
+// already supplies everything else: newTrustedIA(t, admin).Attest(...) produces the
 // attestation file the recipient claims with.
 func TestConnectionTarget_TransferReachesTheHubAndIsRefusedForAnUntrustedIA(t *testing.T) {
 	admin := adminOrSkip(t)
@@ -115,7 +139,7 @@ func TestConnectionTarget_TransferReachesTheHubAndIsRefusedForAnUntrustedIA(t *t
 		t.Fatal(err)
 	}
 
-	ia := newLocalIA(t)
+	ia := newUntrustedIA(t)
 	const platform, externalID = nipIC.WebIdentity("discord"), "482910"
 	nconn, err := nipIC.EncodeNConnection(nipIC.NewConnectionKey(platform, externalID), []string{"wss://relay.invalid"}, platform)
 	if err != nil {
@@ -164,7 +188,7 @@ func TestLocalIA_AttestationIsAcceptedAsACredential(t *testing.T) {
 	if err != nil {
 		t.Fatalf("deriving user pubkey: %v", err)
 	}
-	ia := newLocalIA(t)
+	ia := newUntrustedIA(t)
 	file := ia.Attest(t, "discord", "482910", userPub, 90)
 
 	// No held tokens, so this stops at not_found — AFTER the credential has
@@ -176,5 +200,82 @@ func TestLocalIA_AttestationIsAcceptedAsACredential(t *testing.T) {
 	}
 	if !jsonErrorContains(t, res.Stderr, "not_found", "no held cash tokens") {
 		t.Errorf("expected to get past credential parsing to 'no held tokens', got: %s", res.Stderr)
+	}
+}
+
+// TestConnectionTarget_TrustedIA_TransferSucceedsButCannotBeClaimed drives a
+// connection-key transfer as far as cashctl can currently take it, and pins
+// where it stops.
+//
+// With the IA registered as trusted, the send half works completely: the
+// Hub accepts the transfer and hands back a recipient token. That is new —
+// without registration the same call is refused outright (see the sibling
+// test above).
+//
+// The receive half cannot be completed at all today, and that is a cashctl
+// gap rather than a protocol one: `receive` cross-checks a token by calling
+// CheckClaim with the LOCAL identity's pubkey (cmd/cash_receive.go), and has
+// no --as flag, so there is no way to say "I am this connection key, here is
+// my attestation". A connection-key token's claim is keyed to the
+// ConnectionKey (SHA256("<platform>:<external-id>")), never to the
+// recipient's Nostr pubkey, so the check can only ever miss. And
+// `redeem --as connection-key:...` — the one place that credential form IS
+// accepted — resolves --token against the local ledger, which receive is
+// what populates.
+//
+// So cashctl can SEND to a Web Identity it cannot RECEIVE as. This test
+// asserts both halves so the day receive learns --as, it turns into the
+// delivery test rather than silently passing.
+func TestConnectionTarget_TrustedIA_TransferSucceedsButCannotBeClaimed(t *testing.T) {
+	admin := adminOrSkip(t)
+	hub := setUpCashHub(t, admin)
+	sender := newFixture(t)
+	senderPub, err := npubToHex(sender.mustJSON("wallet", "init")["npub"].(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	recipientPriv := randomHex32(t)
+	recipientPub, err := utils.GetPublicKey(recipientPriv)
+	if err != nil {
+		t.Fatalf("deriving recipient pubkey: %v", err)
+	}
+	ia := newTrustedIA(t, admin)
+	const platform, externalID = nipIC.WebIdentity("discord"), "77310045"
+	ia.Attest(t, platform, externalID, recipientPub, 90)
+
+	nconn, err := nipIC.EncodeNConnection(nipIC.NewConnectionKey(platform, externalID), []string{"wss://relay.invalid"}, platform)
+	if err != nil {
+		t.Fatalf("encode nconnection: %v", err)
+	}
+
+	sender.mustJSON("receive", mintPubkeyTokenFromHub(t, hub, senderPub, 40_000))
+
+	// The send half: works end to end once the IA is trusted.
+	out := sender.mustJSON("transfer", "10", nconn, "--ia", ia.PubHex, "--yes")
+
+	// AGENTS.md: target_resolved is always present under --json, and shows
+	// back whatever had to be resolved before it was used. For an
+	// nconnection that is the platform plus the IA actually trusted — the
+	// sender-side trust decision, which is the thing worth echoing.
+	resolved, _ := out["target_resolved"].(string)
+	if !strings.Contains(resolved, string(platform)) || !strings.Contains(resolved, ia.PubHex) {
+		t.Errorf("target_resolved = %q, want it to name both the platform %q and the IA it trusted", resolved, platform)
+	}
+
+	recipientToken, _ := out["recipient_token"].(string)
+	if recipientToken == "" {
+		t.Fatalf("transfer to a connection target handed back no recipient token: %v", out)
+	}
+
+	// The receive half: blocked, and specifically on recipient matching.
+	recipient := newFixture(t)
+	recipient.mustJSON("wallet", "init")
+	res := recipient.run("receive", recipientToken)
+	if res.ExitCode == 0 {
+		t.Fatalf("receive accepted a connection-key token — cashctl can now take delivery, so this test should become the full redeem-with---as delivery test described above:\n%s", res.Stdout)
+	}
+	if !strings.Contains(res.Stderr, "no matching recipient") {
+		t.Errorf("expected receive to fail on recipient matching (CheckClaim uses the local pubkey), got: %s", res.Stderr)
 	}
 }

@@ -136,6 +136,22 @@ func (c *adminClient) deleteApp(id uint) error {
 	return c.doBody(http.MethodDelete, fmt.Sprintf("/api/apps/%d", id), nil, nil)
 }
 
+// registerIdentityAuthority adds pubkey to lokihub's trusted Identity
+// Authority list — without it, a cash_transfer naming that IA is refused
+// with "ia_pubkey is not a trusted Identity Authority". Paired with
+// deleteIdentityAuthority so a test's IA is ephemeral like every other
+// fixture here, rather than a long-lived one an operator hand-configures.
+func (c *adminClient) registerIdentityAuthority(pubkeyHex, name string) error {
+	return c.doBody(http.MethodPost, "/api/identity-authorities",
+		map[string]any{"pubkey": pubkeyHex, "name": name}, nil)
+}
+
+// deleteIdentityAuthority revokes trust in pubkey — registerIdentityAuthority's
+// cleanup half.
+func (c *adminClient) deleteIdentityAuthority(pubkeyHex string) error {
+	return c.doBody(http.MethodDelete, "/api/identity-authorities/"+pubkeyHex, nil, nil)
+}
+
 type adminCashWalletClaim struct {
 	ID          uint `json:"id"`
 	WalletAppID uint `json:"wallet_app_id"`
