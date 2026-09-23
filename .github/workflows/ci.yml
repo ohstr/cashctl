@@ -37,6 +37,13 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      # The integration suite sits behind //go:build integration, so nothing
+      # above compiles it. Vetting under the tag type-checks those files
+      # without running them — no hub is contacted — so a break there is
+      # caught here instead of by whoever next runs the live suite by hand.
+      - name: Vet (integration tag)
+        run: go vet -tags integration ./...
+
       - name: Tidy
         run: |
           go mod tidy
