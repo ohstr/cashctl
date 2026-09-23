@@ -598,7 +598,7 @@ func TestRace_ConcurrentReceiveSameToken(t *testing.T) {
 // local bookkeeping has nothing shared to race on here: appdir.override is
 // a process-lifetime global set once from a flag (harmless across real OS
 // processes, each with its own address space), identity generation
-// (internal/identity.GenerateAndSaveLocal -> ncli.GenerateIdentity) draws
+// (internal/identity.GenerateAndSaveLocal -> vault.GenerateIdentity) draws
 // from crypto/rand with no shared file/global state, and each fixture gets
 // its own cashctl.db under its own --config-dir — confirmed by code
 // reading (internal/appdir, internal/identity, internal/store) before

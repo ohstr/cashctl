@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	ncli "github.com/ohstr/ncli/client"
+	"github.com/ohstr/ncli/client/vault"
 )
 
 // seedNcliVault puts a real ncli vault holding one entry under f's private
@@ -15,15 +15,15 @@ import (
 func seedNcliVault(t *testing.T, f *fixture, label string) string {
 	t.Helper()
 	t.Setenv("XDG_CONFIG_HOME", f.xdgHome)
-	_, vaultPriv, err := ncli.CreateVaultIdentity("vault-password-for-test")
+	_, vaultPriv, err := vault.CreateIdentity("vault-password-for-test")
 	if err != nil {
 		t.Fatalf("creating a test ncli vault: %v", err)
 	}
-	id, err := ncli.GenerateIdentity()
+	id, err := vault.GenerateIdentity()
 	if err != nil {
 		t.Fatalf("generating a test identity: %v", err)
 	}
-	entry, err := ncli.AddVaultEntry(vaultPriv, label, id.PrivKeyHex)
+	entry, err := vault.AddEntry(vaultPriv, label, id.PrivKeyHex)
 	if err != nil {
 		t.Fatalf("adding a test vault entry: %v", err)
 	}
