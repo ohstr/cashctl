@@ -73,9 +73,17 @@ func newTrustedIA(t *testing.T, admin *adminClient) *localIA {
 // Attest writes a signed attestation binding (platform, externalID) to
 // userPubkey and returns the file path, in the form
 // `--as connection-key:<privkey>,<platform>,<external-id>,<file>` expects.
-// expireInDays of 0 means no expiry.
+//
+// expireInDays must be positive. nipIC.NewAttestation treats 0 as "no
+// expiry", but nipcash's proof builder rejects an attestation whose
+// ExpiresAt is nil outright (ErrAttestationExpired, nipcash/proof.go), so a
+// never-expiring attestation can never actually spend — a trap worth
+// failing on here rather than debugging from a confusing runtime error.
 func (ia *localIA) Attest(t *testing.T, platform nipIC.WebIdentity, externalID, userPubkey string, expireInDays int) string {
 	t.Helper()
+	if expireInDays <= 0 {
+		t.Fatalf("Attest: expireInDays must be positive (got %d) — a never-expiring attestation is rejected at spend time", expireInDays)
+	}
 	ev, err := nipIC.NewAttestation(nipIC.AttestationParams{
 		PrivateKey:    ia.privHex,
 		ConnectionKey: nipIC.NewConnectionKey(platform, externalID),
