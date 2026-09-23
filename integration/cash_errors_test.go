@@ -397,6 +397,19 @@ func TestCashTransfer_NConnectionWithIA_ResolvesPastTarget(t *testing.T) {
 	}
 }
 
+// KNOWN GAP: no test completes a DELIVERY to an nconnection target. The two
+// tests above stop the moment resolution succeeds, so a bug resolving a
+// connection key to the WRONG pubkey would send money to the wrong recipient
+// with nothing here to catch it — unlike every other target shape, which
+// cash_chain_test.go/cash_multiparty_test.go verify hub-side end to end.
+//
+// Closing it needs infrastructure this suite does not have: a real Identity
+// Authority keypair publishing an attestation that maps the connection key
+// (platform + external id) to a recipient pubkey, on a relay both sides
+// read, plus a second local identity to receive as. The lab admin API
+// provisions cash and circle hubs but nothing that acts as an IA, so this
+// cannot be minted on demand the way the other fixtures are.
+
 // TestCashTransfer_MalformedAmountBlamesTheAmountNotTheTarget is the live
 // evidence for the disambiguateTransferArgs fix: a malformed amount
 // alongside a genuinely valid target used to blame the target — "<hex
