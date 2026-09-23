@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -33,6 +34,23 @@ func classifyCashTokenNWCErr(cmd *cobra.Command, err error) error {
 	var walletErr *relayclient.WalletError
 	if errors.As(err, &walletErr) {
 		return output.NWCErrorForCashToken(cmd, walletErr)
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		// A Hub deletes a bill once nothing is left on it, and answers
+		// nothing at all about one it no longer has -- that silence is
+		// deliberate, so a spent bill cannot be told apart from a pubkey the
+		// Hub never served. The bare "network error" this used to produce
+		// pointed the user at their connection when the likeliest cause is
+		// that the bill is gone.
+		//
+		// Still classified as a network failure, not not_found: no answer is
+		// genuinely ambiguous. An unreachable Hub looks identical from here,
+		// and reporting "spent" on a Hub that is merely down would tell
+		// someone their money is gone when it is not.
+		return output.NetworkError(cmd, fmt.Errorf(
+			"the Hub did not answer for this bill: it has most likely been spent or has expired, "+
+				"since a Hub stops answering about a bill once nothing is left on it. "+
+				"If you believe it is still good, the Hub may simply be unreachable -- try again: %w", err))
 	}
 	return output.NetworkError(cmd, err)
 }
