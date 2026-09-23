@@ -9,7 +9,6 @@ import (
 
 	"github.com/ohstr/nmilat/nip47"
 	"github.com/ohstr/nmilat/nipcash"
-	nipcashclient "github.com/ohstr/nmilat/nipcash/client"
 )
 
 // This file proves cashctl's real-world shape: a "lambda" client never
@@ -278,29 +277,10 @@ func TestMultiParty_ForwardPortionKeepRemainder_AtoBtoC(t *testing.T) {
 		t.Errorf("C redeem: no preimage in response: %v", redeemResp)
 	}
 
-	// Independently verify server-side: both of B's original tokens are
-	// now fully claimed, not just reported as such by cashctl.
-	verifyCtx, verifyCancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer verifyCancel()
+	// Independently verify server-side: both of B's original tokens were
+	// spent away, not just reported as such by cashctl.
 	for _, tok := range []string{token1, token2} {
-		client, err := nipcashclient.Connect(verifyCtx, tok)
-		if err != nil {
-			t.Fatalf("dial original token %q: %v", tok, err)
-		}
-		recipients, err := client.ListRecipients(verifyCtx)
-		client.Close()
-		if err != nil {
-			t.Fatalf("list_recipients on original token %q: %v", tok, err)
-		}
-		var unclaimed uint64
-		for _, r := range recipients.Recipients {
-			if !r.Claimed {
-				unclaimed += r.AmountMillis
-			}
-		}
-		if unclaimed != 0 {
-			t.Errorf("original token %q still has %d unclaimed after consolidate+transfer", tok, unclaimed)
-		}
+		requireBillSpentAway(t, tok, "forwarded source")
 	}
 }
 
