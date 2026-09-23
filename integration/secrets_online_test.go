@@ -3,6 +3,7 @@
 package integration
 
 import (
+	"encoding/json"
 	"regexp"
 	"strings"
 	"testing"
@@ -164,5 +165,56 @@ func TestJoin_DoesNotPrintNewWalletSecret(t *testing.T) {
 	resp, _ := out["response"].(map[string]any)
 	if resp == nil || resp["wallet_pubkey"] == "" {
 		t.Errorf("join --json response is missing the expected safe fields: %v", out)
+	}
+}
+
+// TestCashTransfer_AsCashCredential_OverridesStoredSecretAndSpends closes a
+// real gap: --as was only ever exercised with MALFORMED values (see
+// secrets_and_contract_test.go, which proves the rejection path doesn't leak
+// the secret). Nothing proved a WELL-FORMED credential is actually the one
+// dispatched on the wire — so a bug threading the wrong credential through
+// to cash_transfer would let a legitimate agent-to-agent spend fail, or
+// spend under the wrong authority, undetected.
+//
+// The stored secret is deliberately corrupted first: if --as were ignored
+// and the ledger's own value used, the spend would fail. Succeeding proves
+// the override reached the Hub.
+func TestCashTransfer_AsCashCredential_OverridesStoredSecretAndSpends(t *testing.T) {
+	admin := adminOrSkip(t)
+	hub := setUpCashHub(t, admin)
+	f := newFixture(t)
+	f.mustJSON("wallet", "init")
+
+	entry := f.mustJSON("receive", mintCashGift(t, hub, 50_000))["entry"].(map[string]any)
+	id := entryID(t, entry)
+
+	// The live secret after receive's automatic protect — the only authority
+	// that can still spend this holding.
+	realSecret := currentCashSecret(t, f, id)
+	if realSecret == "" {
+		t.Skip("no cash secret stored after receive — nothing to override")
+	}
+	corruptCashSecret(t, f, id, "not-the-real-secret", "")
+
+	res := f.run("transfer", "10", "cash", "--token", id, "--as", "cash:"+realSecret, "--yes")
+	if res.ExitCode != 0 {
+		t.Fatalf("transfer --as cash:<real secret>: exit %d — the override was not used\nstderr: %s", res.ExitCode, res.Stderr)
+	}
+
+	// And the money actually moved: the result must hand back a spendable
+	// cash note, not merely report success.
+	var out map[string]any
+	if err := json.Unmarshal([]byte(res.Stdout), &out); err != nil {
+		t.Fatalf("transfer stdout is not JSON: %v\n%s", err, res.Stdout)
+	}
+	// cash_to_send is the cash-mode handoff string (cash_transfer.go's own
+	// doc comment: distinct from recipient_token, which is the pubkey-mode
+	// form and carries no secret).
+	gift, _ := out["cash_to_send"].(string)
+	if gift == "" {
+		t.Fatalf("transfer to cash returned no spendable note: %s", res.Stdout)
+	}
+	if !strings.Contains(gift, "#") {
+		t.Errorf("cash note %q is missing its #<cash_secret> half — the recipient could not spend it", gift)
 	}
 }
