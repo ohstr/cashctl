@@ -392,7 +392,7 @@ func printProtectFailure(jsonMode bool, err error) {
 	if jsonMode {
 		return
 	}
-	fmt.Printf("Received, but protecting failed (%v) — still shared. Retry: `cashctl consolidate --to cash`.\n", err)
+	fmt.Printf("Received, but protecting failed (%v) — still shared. Retry: `cashctl wallet protect`.\n", err)
 }
 
 // printProtectAmbiguousFailure is printProtectFailure's counterpart for a
@@ -424,5 +424,5 @@ func printProtectPartialFailure(jsonMode bool, err error) {
 	if jsonMode {
 		return
 	}
-	fmt.Printf("Received — old secret is dead, merge failed partway (%v). Finish: `cashctl consolidate --to cash`.\n", err)
+	fmt.Printf("Received — old secret is dead and this is yours alone now; only the merge failed (%v). Nothing at risk; merge later with `cashctl consolidate`.\n", err)
 }
