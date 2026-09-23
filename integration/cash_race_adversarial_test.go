@@ -224,23 +224,29 @@ func TestRace_ConcurrentRedeemSameToken(t *testing.T) {
 	}
 
 	// Ground truth, not cashctl's own self-report.
-	verifyClient, err := nipcashclient.Connect(ctx, token)
+	//
+	// Read from the Hub's archive rather than from the bill itself. The
+	// winning redeem emptied this single-recipient bill, so the Hub deleted
+	// it -- there is no longer a recipient list to ask for. The archive is
+	// where a spent slice's outcome now lives, and it answers the question
+	// this test actually asks: was the slice paid out exactly once?
+	requireBillSpentAway(t, token, "the redeemed bill")
+
+	claims, err := admin.listCashWalletClaims(hub.ID)
 	if err != nil {
-		t.Fatalf("dial original token connection: %v", err)
+		t.Fatalf("list cash wallet claims: %v", err)
 	}
-	defer verifyClient.Close()
-	recipients, err := verifyClient.ListRecipients(ctx)
-	if err != nil {
-		t.Fatalf("list_recipients: %v", err)
-	}
-	claimed := 0
-	for _, r := range recipients.Recipients {
-		if r.Claimed {
-			claimed++
+	redeemed := 0
+	for _, c := range claims {
+		if c.Archived && c.Status == "redeemed" {
+			redeemed++
 		}
 	}
-	if claimed != 1 {
-		t.Errorf("server-side: %d recipients claimed, want exactly 1: %+v", claimed, recipients.Recipients)
+	// This hub is ephemeral and minted exactly one bill, so every archived
+	// slice under it belongs to that bill.
+	if redeemed != 1 {
+		t.Errorf("server-side: %d slices archived as redeemed, want exactly 1 (a second would be a double payout): %+v",
+			redeemed, claims)
 	}
 }
 

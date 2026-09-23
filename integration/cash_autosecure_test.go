@@ -298,27 +298,10 @@ func TestCashReceive_AutoSecuresCashReceipt_MergesWithExistingHolding(t *testing
 		t.Errorf("final entry amount_millis = %v, want %d", entry["amount_millis"], existingAmount+cashAmount)
 	}
 
-	// Independently verify server-side: both original sources must no
-	// longer hold anything unclaimed.
+	// Independently verify server-side: both original sources were merged
+	// away, so neither bill exists any more.
 	for _, tok := range []string{existingToken, cashResult.CashToken} {
-		c, err := nipcashclient.Connect(ctx, tok)
-		if err != nil {
-			t.Fatalf("dial original token %q: %v", tok, err)
-		}
-		recipients, err := c.ListRecipients(ctx)
-		c.Close()
-		if err != nil {
-			t.Fatalf("list_recipients on original token %q: %v", tok, err)
-		}
-		var total uint64
-		for _, r := range recipients.Recipients {
-			if !r.Claimed {
-				total += r.AmountMillis
-			}
-		}
-		if total != 0 {
-			t.Errorf("original token %q still has %d unclaimed after merge", tok, total)
-		}
+		requireBillSpentAway(t, tok, "merged source")
 	}
 
 	hubClient := dialNWC(t, ctx, hub.PairingUri)

@@ -139,6 +139,13 @@ func (c *adminClient) deleteApp(id uint) error {
 type adminCashWalletClaim struct {
 	ID          uint `json:"id"`
 	WalletAppID uint `json:"wallet_app_id"`
+	// Archived marks a slice whose bill no longer exists. The Hub deletes a
+	// bill once nothing is left on it and keeps its slices in an archive, so
+	// this listing returns both and a caller asserting on live state must
+	// filter. Status is how the slice ended: unclaimed, redeemed, split,
+	// expired, reclaimed or written-off.
+	Archived bool   `json:"archived"`
+	Status   string `json:"status"`
 }
 
 // listCashWalletClaims returns every recipient-slice claim row under

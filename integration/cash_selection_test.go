@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/ohstr/nmilat/nipcash"
-	nipcashclient "github.com/ohstr/nmilat/nipcash/client"
 )
 
 // mintSignedPubkeyTokenFromHub mints a pubkey-mode token from hub with
@@ -265,48 +264,9 @@ func TestCashTransfer_CashSelection_AutoConsolidate(t *testing.T) {
 		t.Errorf("transfer (auto-consolidate): remaining_amount_millis = %v, want %d", resp["remaining_amount_millis"], amount1+amount2-targetAmount)
 	}
 
-	// Independently verify server-side: the two original tokens' wallets
-	// must no longer hold anything (consolidated away).
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
+	// Independently verify server-side: both original bills were
+	// consolidated away, so neither exists any more.
 	for _, tok := range []string{token1, token2} {
-		c, err := nipcashclient.Connect(ctx, tok)
-		if err != nil {
-			t.Fatalf("dial original token %q: %v", tok, err)
-		}
-		recipients, err := c.ListRecipients(ctx)
-		c.Close()
-		if err != nil {
-			t.Fatalf("list_recipients on original token %q: %v", tok, err)
-		}
-		var total uint64
-		for _, r := range recipients.Recipients {
-			if !r.Claimed {
-				total += r.AmountMillis
-			}
-		}
-		if total != 0 {
-			t.Errorf("original token %q still has %d unclaimed after consolidation", tok, total)
-		}
-	}
-
-	historyResp := f.mustJSON("wallet", "history")
-	history, _ := historyResp["history"].([]any)
-	sawConsolidate, sawTransfer, consolidateBeforeTransfer := false, false, false
-	for _, h := range history {
-		entry, _ := h.(map[string]any)
-		action, _ := entry["action"].(string)
-		switch action {
-		case "consolidate":
-			sawConsolidate = true
-		case "transfer":
-			sawTransfer = true
-			if sawConsolidate {
-				consolidateBeforeTransfer = true
-			}
-		}
-	}
-	if !sawConsolidate || !sawTransfer || !consolidateBeforeTransfer {
-		t.Errorf("wallet history doesn't show consolidate-then-transfer as expected: %v", history)
+		requireBillSpentAway(t, tok, "consolidated source")
 	}
 }

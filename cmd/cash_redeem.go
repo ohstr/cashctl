@@ -255,6 +255,19 @@ func resolveHeldToken(cmd *cobra.Command, l *ledger.Ledger) (*ledger.Entry, erro
 		if !ok {
 			return nil, output.NotFoundError(cmd, id, fmt.Errorf("no held token %q", id))
 		}
+		// Find returns an entry whatever its status, so --token could reach a
+		// bill we already spent. Dialling one is not just wasteful, it hangs:
+		// a Hub deletes a bill once nothing is left on it and then stays
+		// silent about it, so the call waits out its whole timeout and
+		// reports a network failure. Our own ledger is the better source
+		// here -- it recorded the spend, and the Hub is deliberately
+		// refusing to confirm it.
+		//
+		// The no-flag path below picks from l.Held() and so cannot hit this.
+		if spent := spentStatusDescription(e.Status); spent != "" {
+			return nil, output.NotFoundError(cmd, id,
+				fmt.Errorf("token %q was already %s, so it no longer exists on the Hub", id, spent))
+		}
 		return e, nil
 	}
 	held := l.Held()
@@ -279,6 +292,21 @@ func resolveHeldToken(cmd *cobra.Command, l *ledger.Ledger) (*ledger.Entry, erro
 		return nil, output.NotFoundError(cmd, id, fmt.Errorf("no held token %q", id))
 	}
 	return e, nil
+}
+
+// spentStatusDescription puts a terminal ledger status into the words an
+// error message wants, or returns "" for a token that is still held.
+func spentStatusDescription(status string) string {
+	switch status {
+	case ledger.StatusRedeemed:
+		return "redeemed"
+	case ledger.StatusTransferred:
+		return "transferred away"
+	case ledger.StatusConsolidated:
+		return "consolidated into another token"
+	default:
+		return ""
+	}
 }
 
 // pickHeldToken disambiguates which held token to act on when more than

@@ -401,3 +401,52 @@ func TestTruncateInvoiceForDisplay(t *testing.T) {
 		t.Errorf("truncateInvoiceForDisplay(short) = %q, want it returned whole (%q)", got, short)
 	}
 }
+
+// TestResolveHeldToken_SpentTokenIsRefusedWithoutDialling covers the case
+// --token can reach but the auto-pick path cannot: a bill this ledger already
+// recorded as spent.
+//
+// It matters because of what the Hub does now. A Hub deletes a bill once
+// nothing is left on it and then answers nothing at all about it, so dialling
+// one does not fail fast -- it waits out the whole timeout and then reports a
+// network problem. Our own ledger already knows the answer the Hub is
+// refusing to give.
+func TestResolveHeldToken_SpentTokenIsRefusedWithoutDialling(t *testing.T) {
+	for _, status := range []string{
+		ledger.StatusRedeemed,
+		ledger.StatusTransferred,
+		ledger.StatusConsolidated,
+	} {
+		t.Run(status, func(t *testing.T) {
+			l := heldLedger(2)
+			l.Entries[1].Status = status
+
+			cmd := testCmdWithFlags(false, false)
+			cmd.Flags().String("token", l.Entries[1].ID, "")
+
+			entry, err := resolveHeldToken(cmd, l)
+			if err == nil {
+				t.Fatalf("resolveHeldToken() on a %s token returned entry %v, want an error", status, entry)
+			}
+			if !strings.Contains(err.Error(), "no longer exists on the Hub") {
+				t.Fatalf("error = %q, want it to say the bill is gone", err)
+			}
+		})
+	}
+}
+
+// TestResolveHeldToken_StillHeldTokenIsAccepted is the other half: the gate
+// above must not reject a bill that is still spendable.
+func TestResolveHeldToken_StillHeldTokenIsAccepted(t *testing.T) {
+	l := heldLedger(2)
+	cmd := testCmdWithFlags(false, false)
+	cmd.Flags().String("token", l.Entries[1].ID, "")
+
+	entry, err := resolveHeldToken(cmd, l)
+	if err != nil {
+		t.Fatalf("resolveHeldToken() on a held token error = %v", err)
+	}
+	if entry.ID != l.Entries[1].ID {
+		t.Fatalf("got %s, want %s", entry.ID, l.Entries[1].ID)
+	}
+}
