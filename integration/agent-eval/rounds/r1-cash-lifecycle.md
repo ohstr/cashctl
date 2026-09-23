@@ -28,7 +28,9 @@ You've been handed two fixtures, mounted read-only:
    history` — the token should no longer show up as a held token, and the
    history should record the redeem.
 
-Write your self-report to `/report/r1-cash-lifecycle.self-report.json`.
+Write your self-report to `/report/r1-cash-lifecycle.self-report.json`. Follow `/rounds/_report-schema.json` exactly — in particular the
+top-level `outcome` ("pass" | "partial" | "fail") and `summary` keys, which
+the harness reads to compare your own account against its independent check.
 Include the exact `redeem` output (it should contain a Lightning payment
 preimage on success) and whether `wallet balance --breakdown` matched what
 you expected after redeeming.

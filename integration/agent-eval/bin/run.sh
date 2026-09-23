@@ -25,7 +25,12 @@ ROUNDS=("${@:-${ALL_ROUNDS[@]}}")
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"
 RUN_DIR="report/${RUN_ID}"
 mkdir -p "${RUN_DIR}" report fixtures
-chmod 777 report fixtures
+# The agent container runs as uid 10001 (agent/Dockerfile) and writes its
+# self-reports here. Grant exactly that, rather than the 777 this used to
+# take: these directories hold a real cash token, a circle-hub connection
+# string and full agent transcripts.
+chown 10001:10001 report fixtures 2>/dev/null || chmod 777 report fixtures
+chmod 770 report fixtures 2>/dev/null || true
 
 echo "==> run ${RUN_ID}: ${ROUNDS[*]}"
 
@@ -41,20 +46,46 @@ if [ ! -f "${HOST_CREDS}" ]; then
   exit 1
 fi
 rm -rf .creds-seed
-mkdir -p .creds-seed
-cp "${HOST_CREDS}" .creds-seed/credentials.json
-[ -f "${HOST_CLAUDE_JSON}" ] && cp "${HOST_CLAUDE_JSON}" .creds-seed/claude.json || true
+# Create and copy under a tight umask: these are the host's real Claude
+# Code credentials, and cp-then-chmod leaves them ambient-umask readable
+# in between.
+(umask 077 && mkdir -p .creds-seed)
+install -m 600 "${HOST_CREDS}" .creds-seed/credentials.json
+[ -f "${HOST_CLAUDE_JSON}" ] && install -m 600 "${HOST_CLAUDE_JSON}" .creds-seed/claude.json || true
 # uid 10001 == evaluser inside agent/Dockerfile.
 chown -R 10001:10001 .creds-seed
 chmod 700 .creds-seed
 chmod 600 .creds-seed/*.json
 
-FIXTURE_HUB_APP_IDS=()
+# Entries are "<kind>:<app-id>" — kind is one of hub (cash_hub), circle
+# (circle_hub) or wallet (a plain NWC app). They are NOT interchangeable at
+# teardown: mint-fixture's cleanup lists /cash-wallets first and returns
+# early if that errors, so running it against a circle_hub or a plain
+# wallet skips the final app delete and leaks the fixture on a shared hub.
+FIXTURE_APPS=()
 cleanup() {
   echo "==> tearing down"
-  for id in "${FIXTURE_HUB_APP_IDS[@]:-}"; do
-    [ -n "${id}" ] || continue
-    GOWORK=off go run ./mint-fixture cleanup "${ADMIN_BASE_URL}" "${ADMIN_TOKEN}" "${id}" 2>/dev/null || true
+  for entry in "${FIXTURE_APPS[@]:-}"; do
+    [ -n "${entry}" ] || continue
+    local kind="${entry%%:*}" id="${entry##*:}"
+    case "${kind}" in
+      hub)
+        GOWORK=off go run ./mint-fixture cleanup "${ADMIN_BASE_URL}" "${ADMIN_TOKEN}" "${id}" 2>/dev/null || true
+        ;;
+      circle)
+        # Drain circle children first — an app with children attached is
+        # refused — then delete the hub itself either way.
+        admin_api GET "/api/apps/${id}/circle/children?limit=0" 2>/dev/null \
+          | jq -r '.children[]?.appId' 2>/dev/null \
+          | while read -r child; do
+              [ -n "${child}" ] && admin_api DELETE "/api/apps/${id}/circle/children/${child}" >/dev/null 2>&1 || true
+            done
+        admin_api DELETE "/api/apps/${id}" >/dev/null 2>&1 || true
+        ;;
+      *)
+        admin_api DELETE "/api/apps/${id}" >/dev/null 2>&1 || true
+        ;;
+    esac
   done
   docker compose down -v >/dev/null 2>&1 || true
   rm -rf .creds-seed fixtures/*
@@ -81,6 +112,11 @@ run_round() {
   local prompt
   prompt="$(cat rounds/_preamble.md; echo; cat "rounds/${round}.md")"
   echo "==> [${round}] running agent"
+  # Clear any leftover from an earlier run: report/ is not wiped by
+  # cleanup(), and the round writes to this same fixed path. Without this a
+  # crashed agent silently inherits the previous run's self-report and every
+  # verifier's self_report_written check passes for a step that never ran.
+  rm -f "report/${round}.self-report.json"
   docker compose exec -T agent claude -p "${prompt}" \
     --output-format stream-json --verbose \
     --permission-mode bypassPermissions \
@@ -91,22 +127,22 @@ run_round() {
   return ${status}
 }
 
-# prepare_r1 mints a real bearer cash token and a plain payer wallet
+# prepare_r1 mints a real cash-mode token and a plain payer wallet
 # before the round starts — see rounds/r1-cash-lifecycle.md.
 prepare_r1() {
-  echo "==> [r1-cash-lifecycle] minting a bearer cash token"
+  echo "==> [r1-cash-lifecycle] minting a cash-mode token"
   local mint_out hub_id
   mint_out="$(GOWORK=off go run ./mint-fixture mint "${ADMIN_BASE_URL}" "${ADMIN_TOKEN}" 250000)"
   echo "${mint_out}" | jq -r '.cash_token' > fixtures/r1-cash-token.txt
   hub_id="$(echo "${mint_out}" | jq -r '.hub_app_id')"
   echo "${hub_id}" > fixtures/r1-hub-app-id.txt
-  FIXTURE_HUB_APP_IDS+=("${hub_id}")
+  FIXTURE_APPS+=("hub:${hub_id}")
 
   echo "==> [r1-cash-lifecycle] provisioning a plain payer wallet"
   local wallet
   wallet="$(admin_api POST /api/apps '{"name":"cashctl agent-eval r1-cash-lifecycle payout","scopes":["make_invoice","get_balance"]}')"
   echo "${wallet}" | jq -r '.pairingUri' > fixtures/r1-wallet-uri.txt
-  FIXTURE_HUB_APP_IDS+=("$(echo "${wallet}" | jq -r '.id')")
+  FIXTURE_APPS+=("wallet:$(echo "${wallet}" | jq -r '.id')")
 }
 
 # prepare_r2 provisions an ephemeral allowlist circle_hub ahead of time
@@ -119,8 +155,12 @@ prepare_r2() {
   R2_HUB_APP_ID="$(echo "${hub}" | jq -r '.id')"
   R2_HUB_TOKEN="$(echo "${hub}" | jq -r '.circleHubToken')"
   echo "${R2_HUB_APP_ID}" > fixtures/r2-hub-app-id.txt
-  FIXTURE_HUB_APP_IDS+=("${R2_HUB_APP_ID}")
-  admin_api POST /api/transfers "{\"toAppId\":${R2_HUB_APP_ID},\"amountLoki\":100}" >/dev/null
+  FIXTURE_APPS+=("circle:${R2_HUB_APP_ID}")
+  # Fund to the per-wallet cap this hub advertises (1000000 mloki ==
+  # 1000 loki). Funding below it made every join at or near the stated cap
+  # fail with "circle commitment would exceed available balance", leaving
+  # the round's real ceiling undiscoverable except by trial and error.
+  admin_api POST /api/transfers "{\"toAppId\":${R2_HUB_APP_ID},\"amountLoki\":1000}" >/dev/null
 }
 
 # run_r2 runs the round in the background, polls report/r2-npub.txt for
@@ -157,8 +197,14 @@ for round in "${ROUNDS[@]}"; do
       run_round "${round}" || echo "WARNING: [${round}] claude invocation exited non-zero" >&2
       ;;
     r2-circle-join)
-      load_admin_config && prepare_r2 || echo "WARNING: [${round}] admin_api not configured — skipping fixture provisioning; round will fail" >&2
-      run_r2
+      # run_r2 dereferences R2_HUB_APP_ID/R2_HUB_TOKEN, which only prepare_r2
+      # sets. Running it unprepared aborts the whole script under `set -u`,
+      # losing judging and the report for every other round too.
+      if load_admin_config && prepare_r2; then
+        run_r2
+      else
+        echo "WARNING: [${round}] admin_api not configured — skipping this round" >&2
+      fi
       ;;
     *)
       run_round "${round}" || echo "WARNING: [${round}] claude invocation exited non-zero" >&2
