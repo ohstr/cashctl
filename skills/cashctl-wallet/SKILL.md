@@ -97,7 +97,8 @@ for `wallet invoice`/`wallet pay` — identical flags and output, just
 without the `wallet` prefix.
 
 Any wallet decline surfaces as `code: "auth"` (restricted/unauthorized/
-expired), `code: "conflict"` (rate-limited, retry), or `code: "internal"`
+expired), `code: "conflict"` (rate-limited, retry), `code: "invalid_input"`
+(BAD_REQUEST), `code: "not_found"` (NOT_FOUND), or `code: "internal"`
 (insufficient balance, payment failed, or anything else) — check the
 `nwc_code` field in `--json` output for the exact NIP-47 reason.
 
@@ -108,8 +109,8 @@ cashctl decode lokicash1... --json      # {"type":"cash_token","hrp","wallet_pub
 cashctl decode lokicash1...#deadbeef --json  # cash-mode combined presentation — adds "embedded_cash_secret_present":true
 cashctl decode circlehub1... --json     # {"type":"circlehub","hrp","wallet_pubkey","relays","label"}
 cashctl decode nostr+walletconnect://... --json  # {"type":"nwc_uri","wallet_pubkey","relays"}
-cashctl decode lokicash1... --check --json    # adds "check":{"ok","amount_millis"?,"error"?} — a network call
-cashctl decode circlehub1... --check --json   # adds "check":{"ok","error"?} — is joining even possible here
+cashctl decode lokicash1... --check --json    # adds "check":{"ok","amount_millis"?,"expires_at"?,"error"?} — a network call
+cashctl decode circlehub1... --check --json   # adds "check":{"ok","note"?,"error"?} — is joining even possible here
 ```
 
 The one general-purpose local decoder: paste in whichever of the three
