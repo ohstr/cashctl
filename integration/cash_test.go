@@ -97,8 +97,22 @@ func setUpCashHubOpts(t *testing.T, admin *adminClient, opts cashHubOpts) adminC
 				continue
 			}
 			seen[claim.WalletAppID] = true
+			// An archived claim's bill is already gone server-side (the Hub
+			// deletes a bill once nothing is left on it and keeps its slices
+			// in an archive — see adminCashWalletClaim.Archived), so there is
+			// nothing left to reclaim and the delete would only 404/400. Most
+			// tests here spend their tokens to completion, so skipping these
+			// is what keeps the expected case quiet enough for a real failure
+			// below to stand out.
+			if claim.Archived {
+				continue
+			}
 			if err := admin.deleteCashWallet(resp.ID, claim.WalletAppID); err != nil {
-				t.Logf("cleanup: delete ephemeral cash wallet child app_id=%d: %v", claim.WalletAppID, err)
+				// A live (non-archived) claim that will not reclaim is the one
+				// shape that means money was actually left on a shared hub —
+				// fail rather than log, which is indistinguishable from noise.
+				t.Errorf("cleanup: delete LIVE cash wallet child app_id=%d (status %q): %v — balance may be stranded on the hub",
+					claim.WalletAppID, claim.Status, err)
 			}
 		}
 	})
