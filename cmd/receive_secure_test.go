@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -56,5 +58,51 @@ func TestProtectCashReceipt_Declined(t *testing.T) {
 	}
 	if finalEntry != entry {
 		t.Fatal("finalEntry must be the same entry unchanged when declined")
+	}
+}
+
+// TestPrintProtectFailure_PointsAtWalletProtect pins the remediation these
+// two text-mode hints name. Both used to say `consolidate --to cash`, which
+// cannot reach the holding either way: with no sources it auto-groups, and
+// GroupableForConsolidation skips cash-mode entries entirely; with one it
+// refuses ("needs at least 2 sources, got 1"). `wallet protect` exists for
+// exactly this state. The string was last changed by a mechanical
+// bearer->cash rename sweep, so a plain regression test is what keeps the
+// next sweep from reintroducing advice that can't work.
+func TestPrintProtectFailure_PointsAtWalletProtect(t *testing.T) {
+	out := withCapturedStdout(func() { printProtectFailure(false, errors.New("hub declined")) })
+
+	if !strings.Contains(out, "cashctl wallet protect") {
+		t.Errorf("printProtectFailure must name `cashctl wallet protect`, got: %q", out)
+	}
+	if strings.Contains(out, "--to cash") {
+		t.Errorf("printProtectFailure must not send the user to consolidate --to cash, got: %q", out)
+	}
+}
+
+// TestPrintProtectPartialFailure_DoesNotSendToCashConsolidate covers the
+// partial case, whose state is different: the interim step already
+// reassigned the holding to the local pubkey (CashSecret cleared,
+// IdentityRequired set), so nothing is still shared and only the merge
+// failed. Naming a cash-mode target here was doubly wrong.
+func TestPrintProtectPartialFailure_DoesNotSendToCashConsolidate(t *testing.T) {
+	out := withCapturedStdout(func() { printProtectPartialFailure(false, errors.New("merge failed")) })
+
+	if strings.Contains(out, "--to cash") {
+		t.Errorf("printProtectPartialFailure must not name a cash-mode consolidate target, got: %q", out)
+	}
+}
+
+// TestPrintProtectHints_SilentInJSONMode keeps these on the right side of
+// AGENTS.md's output contract: they are text-mode narration, so --json
+// callers must see nothing on stdout from them.
+func TestPrintProtectHints_SilentInJSONMode(t *testing.T) {
+	for name, fn := range map[string]func(){
+		"printProtectFailure":        func() { printProtectFailure(true, errors.New("hub declined")) },
+		"printProtectPartialFailure": func() { printProtectPartialFailure(true, errors.New("merge failed")) },
+	} {
+		if out := withCapturedStdout(fn); out != "" {
+			t.Errorf("%s in jsonMode printed %q, want nothing", name, out)
+		}
 	}
 }

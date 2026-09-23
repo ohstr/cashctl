@@ -14,11 +14,12 @@ import (
 // a standalone action, for the one case `receive`'s own automatic offer
 // can't reach: a cash-mode holding that was received unprotected (the offer
 // was declined, or the attempt failed) and is still shared — spendable by
-// anyone else who was shown the same secret. The documented recovery,
-// `consolidate --to cash`, needs 2+ sources and can't re-key a
-// single holding alone ("needs at least 2 sources, got 1"); this can,
-// since it's the exact same single-source re-key `receive` already runs,
-// just triggered manually instead of automatically.
+// anyone else who was shown the same secret. `consolidate --to cash` can't
+// stand in for this: it needs 2+ sources, so it can't re-key a single
+// holding alone ("needs at least 2 sources, got 1"), and with no sources
+// given it auto-groups, which skips cash-mode entries entirely
+// (ledger.GroupableForConsolidation). This can, since it's the exact same
+// single-source re-key `receive` already runs, just triggered manually.
 func newWalletProtectCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "protect [id]",

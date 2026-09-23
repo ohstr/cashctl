@@ -14,8 +14,10 @@ its exit code and its exact stderr JSON:
 3. `cashctl join --json` — a required flag (`--hub`) missing
 4. `cashctl transfer --json` — a required flag (`--to`) missing
 5. `cashctl decode not-a-valid-token --json` — a value that fails to parse
-6. `cashctl redeem --json` — a legitimate "nothing to act on" case (assuming
-   you hold no cash tokens in this fresh environment)
+6. `cashctl redeem --json` — a legitimate "nothing to act on" case. Do not
+   assume the wallet is empty: check with `cashctl wallet show --json` first,
+   and if you do hold a cash token, say so in `issues` and report what
+   `redeem --json` actually returned instead of forcing the expected answer
 7. `cashctl wallet balance --from does-not-exist --json` — a named
    thing that doesn't exist
 
@@ -25,7 +27,9 @@ For each one, check: does the exit code match AGENTS.md's table for the
 stdout)? Does `retryable` match the table? Flag any mismatch as an issue
 in your self-report — don't just record the raw output uncritically.
 
-Write your self-report to `/report/r3-error-contract.self-report.json`,
+Write your self-report to `/report/r3-error-contract.self-report.json`
+(schema: `/rounds/_report-schema.json` — include its top-level `outcome`
+and `summary` keys),
 with one entry in `steps` per command above (put the exit code in
 `exit_code` and the raw stderr JSON in `result`), and list every contract
 mismatch you found in `issues` (empty array if none).

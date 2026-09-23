@@ -97,8 +97,24 @@ func setUpCashHubOpts(t *testing.T, admin *adminClient, opts cashHubOpts) adminC
 				continue
 			}
 			seen[claim.WalletAppID] = true
+			// Anything but "unclaimed" has already ended — redeemed, split,
+			// expired, reclaimed or written-off (adminCashWalletClaim.Status)
+			// — and the Hub deletes a bill once nothing is left on it, so
+			// there is nothing to reclaim and the delete only 400s. Archived
+			// says the same thing a slice at a time, but lags: a redeemed or
+			// split claim is routinely still unarchived while its wallet is
+			// already gone. Filtering on both is what makes the remaining
+			// noise zero, so a real failure below actually stands out.
+			if claim.Archived || claim.Status != "unclaimed" {
+				continue
+			}
 			if err := admin.deleteCashWallet(resp.ID, claim.WalletAppID); err != nil {
-				t.Logf("cleanup: delete ephemeral cash wallet child app_id=%d: %v", claim.WalletAppID, err)
+				// An unclaimed claim still holds value, so a delete that will
+				// not reclaim it is the one shape meaning money was actually
+				// left behind on a shared hub — fail rather than log, which is
+				// indistinguishable from noise.
+				t.Errorf("cleanup: delete UNCLAIMED cash wallet child app_id=%d: %v — balance may be stranded on the hub",
+					claim.WalletAppID, err)
 			}
 		}
 	})

@@ -397,6 +397,19 @@ func TestCashTransfer_NConnectionWithIA_ResolvesPastTarget(t *testing.T) {
 	}
 }
 
+// KNOWN GAP: no test completes a DELIVERY to an nconnection target. The two
+// tests above stop the moment resolution succeeds, so a bug resolving a
+// connection key to the WRONG pubkey would send money to the wrong recipient
+// with nothing here to catch it — unlike every other target shape, which
+// cash_chain_test.go/cash_multiparty_test.go verify hub-side end to end.
+//
+// Closing it needs infrastructure this suite does not have: a real Identity
+// Authority keypair publishing an attestation that maps the connection key
+// (platform + external id) to a recipient pubkey, on a relay both sides
+// read, plus a second local identity to receive as. The lab admin API
+// provisions cash and circle hubs but nothing that acts as an IA, so this
+// cannot be minted on demand the way the other fixtures are.
+
 // TestCashTransfer_MalformedAmountBlamesTheAmountNotTheTarget is the live
 // evidence for the disambiguateTransferArgs fix: a malformed amount
 // alongside a genuinely valid target used to blame the target — "<hex
@@ -473,4 +486,44 @@ func jsonErrorContainsAny(t *testing.T, stderr, wantCode string, anySubstr ...st
 		}
 	}
 	return false
+}
+
+// TestCashTransfer_NIP05Target_IsParsedAsATargetNotAnAmount covers the CLI
+// wiring around NIP-05 that the unit tests cannot reach. internal/credential
+// tests resolveNIP05 against an httptest server by overriding nip05Endpoint,
+// but that var hardcodes https://<domain>/... and is only swappable
+// in-process — a compiled binary can't be pointed at a test server, so a
+// real end-to-end NIP-05 lookup is not black-box testable here.
+//
+// What IS testable, and what actually regresses, is disambiguateTransferArgs:
+// a name@domain argument must be recognised as the TARGET in either position,
+// with the bare number taken as the amount. A misparse would show up as a
+// usage error (exit 2) or as the identifier being read as an amount, not as
+// the resolution failure below.
+func TestCashTransfer_NIP05Target_IsParsedAsATargetNotAnAmount(t *testing.T) {
+	f := newFixture(t)
+	f.mustJSON("wallet", "init")
+	const id = "alice@nip05-nowhere.invalid"
+
+	for _, args := range [][]string{
+		{"transfer", "5", id, "--yes"},
+		{"transfer", id, "5", "--yes"},
+		{"transfer", "--to", id, "--amount", "5", "--yes"},
+	} {
+		res := f.run(args...)
+		if res.ExitCode == 2 {
+			t.Errorf("cashctl %v: exit 2 (usage) — the NIP-05 identifier was not accepted as a target\nstderr: %s", args, res.Stderr)
+			continue
+		}
+		// It got as far as resolving, which is the whole point: parsing
+		// succeeded and the identifier was looked up as an identity.
+		if !jsonErrorContains(t, res.Stderr, "invalid_input", "NIP-05") {
+			t.Errorf("cashctl %v: want an invalid_input naming the NIP-05 lookup, got: %s", args, res.Stderr)
+		}
+		// The identifier is public, not secret, so it must stay legible in
+		// the error rather than being redacted like a key would be.
+		if !strings.Contains(res.Stderr, id) {
+			t.Errorf("cashctl %v: error should name %q so the user can see the typo: %s", args, id, res.Stderr)
+		}
+	}
 }

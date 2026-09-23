@@ -190,7 +190,22 @@ func mint(baseURL, token string, amountMillis uint64) error {
 		return fmt.Errorf("mint_cash: %w", err)
 	}
 
-	out, _ := json.Marshal(map[string]any{"cash_token": result.CashToken, "hub_app_id": created.ID})
+	// A cash-mode slice's secret is returned here and nowhere else, ever
+	// (NIP-CASH §Cash-Mode Slices), so dropping it makes the token
+	// permanently unspendable and r1 unpassable by construction. Hand over
+	// the spec's combined "<token>#<cash_secret>" presentation, which is
+	// what `cashctl receive` needs to save a cash gift at all.
+	cashToken := result.CashToken
+	for _, r := range result.Recipients {
+		if r.CashSecret != "" {
+			cashToken = result.CashToken + "#" + r.CashSecret
+			break
+		}
+	}
+	if cashToken == result.CashToken {
+		return fmt.Errorf("mint_cash returned no cash_secret for a cash-mode recipient: the fixture would be unspendable")
+	}
+	out, _ := json.Marshal(map[string]any{"cash_token": cashToken, "hub_app_id": created.ID})
 	fmt.Println(string(out))
 	return nil
 }

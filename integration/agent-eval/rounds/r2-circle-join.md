@@ -17,9 +17,12 @@ identity first — so this round has two parts, in order:
    connection string that has just been authorized for the npub you wrote
    in step 1.
 3. Join it: `cashctl join --hub "$(cat /fixtures/r2-hub.txt)" --max-amount
-   100000 --yes`.
+   500 --yes`. (The hub caps a wallet at 1000 loki and is funded to match,
+   so this is comfortably inside both.)
 4. Confirm the resulting wallet is live: `cashctl wallet get-info` and
    `cashctl wallet show`.
 
-Write your self-report to `/report/r2-circle-join.self-report.json`.
+Write your self-report to `/report/r2-circle-join.self-report.json`. Follow `/rounds/_report-schema.json` exactly — in particular the
+top-level `outcome` ("pass" | "partial" | "fail") and `summary` keys, which
+the harness reads to compare your own account against its independent check.
 Include how long you had to wait in step 2, and the exact `join` output.

@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.4.1]
+
+- `consolidate` given an already-spent source (redeemed, transferred or consolidated) says so at once instead of dialling a Hub that never answers and timing out after 30s as a retryable `network` failure. `redeem --token` already did this. ([#18](https://github.com/ohstr/cashctl/pull/18))
+- A failed auto-protect on a received cash gift now points at `cashctl wallet protect`. It named `consolidate --to cash`, which cannot re-key a single holding. ([#18](https://github.com/ohstr/cashctl/pull/18))
+- `cashctl --help`'s `join` example now shows the required max amount, so copying it works. ([#18](https://github.com/ohstr/cashctl/pull/18))
+
 ## [0.4.0]
 
 - **Breaking:** NIP-CASH's "bearer" mode is now "cash mode" on the wire, so this release needs a Hub that speaks the renamed protocol (lokihub 0.5.0-rc.6 or later). Older Hubs reject its cash-mode requests. ([#8](https://github.com/ohstr/cashctl/pull/8))

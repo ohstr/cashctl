@@ -20,11 +20,26 @@ else
   add_check "cashctl_installed_and_runnable" false "cashctl version --json did not return valid JSON with a version field"
 fi
 
-INIT_JSON="$(agent_exec 'cashctl init --json' 2>/dev/null)"
+# The agent has already run `init` in this container, so re-running it here
+# returns {"already_configured": true} with no npub — which used to fail this
+# check unless the agent had FAILED to set up an identity. Probe under a
+# throwaway config dir instead, so this exercises a genuine first run.
+INIT_JSON="$(agent_exec 'cashctl init --json --config-dir "$(mktemp -d)"' 2>/dev/null)"
 if jq -e '.npub | test("^npub1")' >/dev/null 2>&1 <<<"${INIT_JSON}"; then
   add_check "init_json_sane_shape" true "cashctl init --json returns a well-formed npub"
 else
   add_check "init_json_sane_shape" false "cashctl init --json output missing/malformed npub: ${INIT_JSON}"
+fi
+
+# And confirm the agent's own run actually produced an identity, which is
+# what the round asked of it — the throwaway probe above cannot show that.
+# Match anywhere, not anchored: the agent usually quotes `init --json`'s
+# whole output inside one string field, so the npub sits mid-string.
+AGENT_NPUB="$(grep -oE 'npub1[a-z0-9]{20,}' "${RUN_DIR}/r0-bootstrap.self-report.json" 2>/dev/null | head -1)"
+if [ -n "${AGENT_NPUB}" ]; then
+  add_check "agent_identity_created" true "agent reported ${AGENT_NPUB}"
+else
+  add_check "agent_identity_created" false "agent's self-report contains no npub1... identity"
 fi
 
 write_verify "${ROUND}" "${RUN_DIR}"

@@ -11,6 +11,8 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/ohstr/nmilat/nip19"
+
 	"bytes"
 )
 
@@ -368,6 +370,46 @@ func TestContract_TypoSubcommand_IsUsageError(t *testing.T) {
 		}
 		if res.Stdout != "" {
 			t.Errorf("cashctl %v: stdout must stay empty on a usage error, got %q", args, res.Stdout)
+		}
+	}
+}
+
+// TestNsec_PastedIntoBinary_NeverEchoed is the black-box half of
+// cmd/decode_test.go's TestDecode_NostrEntityMisPaste_FriendlyError and
+// internal/output's TestRedactSecretInput: both prove the redaction at the
+// unit level, but nothing drove the COMPILED binary with a private key and
+// checked what actually reaches the terminal. Every other secret shape in
+// this file is pinned that way; an nsec — the worst one to leak — was not.
+func TestNsec_PastedIntoBinary_NeverEchoed(t *testing.T) {
+	nsec, err := nip19.EncodePrivateKey(strings.Repeat("bb", 32))
+	if err != nil {
+		t.Fatalf("nip19.EncodePrivateKey: %v", err)
+	}
+	f := newFixture(t)
+	f.mustJSON("wallet", "init")
+
+	for _, args := range [][]string{
+		{"receive", nsec},
+		{"decode", nsec},
+		{"receive", nsec, "--json"},
+		{"decode", nsec, "--json"},
+	} {
+		res := f.rawRun(args...)
+		if res.ExitCode == 0 {
+			t.Errorf("cashctl %v exited 0 — a pasted private key must be refused", args[:1])
+		}
+		for stream, text := range map[string]string{"stdout": res.Stdout, "stderr": res.Stderr} {
+			if strings.Contains(text, nsec) {
+				t.Errorf("cashctl %v echoed the raw nsec on %s: %s", args, stream, text)
+			}
+			// The bare key bytes must not surface either — redaction that
+			// only strips the bech32 form would still leak the material.
+			if strings.Contains(text, strings.Repeat("bb", 32)) {
+				t.Errorf("cashctl %v echoed the raw private key bytes on %s: %s", args, stream, text)
+			}
+		}
+		if !strings.Contains(res.Stderr, "PRIVATE KEY") {
+			t.Errorf("cashctl %v should warn that this is a private key, got stderr: %s", args, res.Stderr)
 		}
 	}
 }
