@@ -33,19 +33,19 @@ func adminOrSkip(t *testing.T) *adminClient {
 // "<token>#<cash_secret>" gift string, the form `cashctl receive` takes.
 func mintCashGift(t *testing.T, hub adminCreateAppResponse, amountMillis uint64) string {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	cashClient := dialCash(t, ctx, hub.PairingUri)
-	result, err := cashClient.MintCash(ctx, nipcash.MintCashParams{
-		Recipients: []nipcash.Allocation{nipcash.Send(nipcash.Anyone(), amountMillis)},
+	return retryEphemeralNWC(t, "mint_cash (cash)", func(ctx context.Context) (string, error) {
+		cashClient := dialCash(t, ctx, hub.PairingUri)
+		result, err := cashClient.MintCash(ctx, nipcash.MintCashParams{
+			Recipients: []nipcash.Allocation{nipcash.Send(nipcash.Anyone(), amountMillis)},
+		})
+		if err != nil {
+			return "", err
+		}
+		if len(result.Recipients) != 1 || result.Recipients[0].CashSecret == "" {
+			t.Fatalf("mint_cash (cash): expected exactly one recipient with a cash_secret: %+v", result.Recipients)
+		}
+		return result.CashToken + "#" + result.Recipients[0].CashSecret, nil
 	})
-	if err != nil {
-		t.Fatalf("mint_cash (cash): %v", err)
-	}
-	if len(result.Recipients) != 1 || result.Recipients[0].CashSecret == "" {
-		t.Fatalf("mint_cash (cash): expected exactly one recipient with a cash_secret: %+v", result.Recipients)
-	}
-	return result.CashToken + "#" + result.Recipients[0].CashSecret
 }
 
 // makeHubInvoice has hub's own NWC connection make an invoice for exactly

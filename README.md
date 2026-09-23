@@ -20,7 +20,7 @@ and [Circle wallets](https://github.com/flokiorg/lokihub/blob/main/docs/nips/NIP
 - [`cashctl init`](#cashctl-init) — Set up your identity and, optionally, a wallet
 - [`cashctl wallet show/history/use`](#cashctl-wallet-show) — Show your identity, registered wallets, and local action history
 - [`cashctl wallet balance`](#cashctl-wallet-balance) — Sums every wallet's balance plus unredeemed held tokens into one figure
-- [`cashctl wallet protect`](#cashctl-wallet-protect) — Re-key a still-shared bearer holding so the original secret can no longer spend it
+- [`cashctl wallet protect`](#cashctl-wallet-protect) — Re-key a still-shared cash-mode holding so the original secret can no longer spend it
 - [`cashctl wallet <op>`](#cashctl-wallet-op) — Run ordinary NWC operations against whichever wallet is current
 - [`cashctl connect add/list/use/rm`](#cashctl-connect-addlistuserm) — Register an NWC connection: a plain Lightning wallet you already have
 - [`cashctl version`](#cashctl-version) — Print the cashctl version
@@ -132,7 +132,7 @@ and just skips it.
 
 ```sh
 cashctl receive lokicash1...
-cashctl receive lokicash1...#deadbeef   # bearer-mode: the combined "<token>#<bearer_secret>" presentation
+cashctl receive lokicash1...#deadbeef   # cash-mode: the combined "<token>#<cash_secret>" presentation
 ```
 
 Decodes the token, prints its details, then cross-checks it against the
@@ -142,12 +142,12 @@ Hub can't be reached to confirm at all, is refused outright.
 If you paste a Circle Hub or Cash Hub connection here instead of a token,
 `cashctl` gives you a specific error pointing you to the right command.
 
-**A bearer-mode token is two values, not one.** `lokicash1...` alone only
+**A cash-mode token is two values, not one.** `lokicash1...` alone only
 decodes it — redeeming or transferring it needs the secret embedded,
-`<token>#<bearer_secret>`. There's no `--secret` flag: a bearer token
+`<token>#<cash_secret>`. There's no `--secret` flag: a cash-mode token
 pasted without it just gets inspected and checked, never saved.
 
-**A saved bearer-mode receipt gets protected automatically** — re-keyed
+**A saved cash-mode receipt gets protected automatically** — re-keyed
 under a fresh secret (defaults to yes; always proceeds under
 `--yes`/`--json`) and merged with any other cash you hold from the same
 issuer. A failure here doesn't fail the receive — retry later with
@@ -205,7 +205,7 @@ entry. Use the verbose `<token>:<amount-loki>:<credential>` form
 themselves are visible via `cashctl wallet show --json`; plain-text
 `wallet show` never prints them (see `cashctl consolidate --help`).
 `--to` defaults to your own identity; `--to cash` merges into a
-fresh, anonymous bearer note instead (needs Hub support). An
+fresh, anonymous cash note instead (needs Hub support). An
 `nconnection1...` `--to` target needs `--ia <identity>` (hex or NIP-05) to
 resolve its Identity Authority, same as `transfer`.
 
@@ -305,7 +305,7 @@ balance`.
 
 ## `cashctl wallet protect`
 
-Re-key a bearer holding that's still shared, so the original secret can no
+Re-key a cash-mode holding that's still shared, so the original secret can no
 longer spend it. `receive` does this automatically; use this if that was
 declined or failed.
 
@@ -369,7 +369,7 @@ npx skills add ohstr/cashctl --all -y
 
 State lives under `$XDG_CONFIG_HOME/cashctl` (or `~/.config/cashctl` on
 Linux/macOS) in a single SQLite database, `cashctl.db` (0600 — it can hold
-a plaintext identity key and bearer-mode spending secrets). Override the
+a plaintext identity key and cash-mode spending secrets). Override the
 location with `--config-dir`. Set `NO_COLOR` to disable ANSI color on
 stderr.
 

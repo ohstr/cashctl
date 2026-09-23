@@ -45,7 +45,7 @@ or with a real user's own cashctl/ncli state:
   it (which always cross-checks against the Hub now), and `cashctl
   redeem`s it into a real invoice from the same hub. The full mint →
   receive → redeem round trip, proven live.
-- `TestCashInspect_DecodeAndListRecipients` — mints a bearer token, then
+- `TestCashInspect_DecodeAndListRecipients` — mints a cash-mode token, then
   exercises `cashctl decode` (local-only) and `cashctl cash
   list-recipients` (network) against it.
 - `TestCircleJoin_CreateWalletAndGetInfo` — provisions an allowlist-policy
@@ -81,13 +81,13 @@ or with a real user's own cashctl/ncli state:
   consolidated wallet before the final transfer call.
 - `TestWalletShow_NeverLeaksSecrets` / `TestDecode_NeverLeaksTokenSecret` —
   a held entry's real spending/dialing secrets (the token's own NWC
-  pairing secret, and a bearer-mode entry's `bearer_secret`) must never
+  pairing secret, and a cash-mode entry's `cash_secret`) must never
   appear in `wallet show`/`decode` output, checked against real, known
   values rather than assumed safe. Caught a real leak during development:
   `ledger.Entry` embeds directly into several commands' `--json` output
   (`wallet show`'s `held_tokens`, `receive`'s `entry`, `transfer`'s
   `remainder_entry`, `consolidate`'s `new_entry`), and its `Secret`/
-  `BearerSecret` fields had ordinary JSON tags — every one of those
+  `CashSecret` fields had ordinary JSON tags — every one of those
   responses was echoing the real credential back in plaintext. Fixed by
   tagging both `json:"-"` on the struct itself, so no future command that
   happens to return a `ledger.Entry` can reintroduce the same leak.
@@ -105,25 +105,25 @@ or with a real user's own cashctl/ncli state:
   field is bookkeeping, not a security boundary — and that a rejected
   retry never corrupts the ledger (no duplicate history entry, no
   resurrected held token).
-- `TestCashTransfer_ToBearerTarget_SecretMustBeRecoverable` — transfers to
-  `cash` and confirms the freshly-generated bearer secret is
+- `TestCashTransfer_ToCashTarget_SecretMustBeRecoverable` — transfers to
+  `cash` and confirms the freshly-generated cash secret is
   actually recoverable from the response, by extracting it and redeeming
   with it for real. Caught a second real bug during development: the wire
   request only ever carries a one-way commitment of that secret
-  (NIP-CASH §Bearer Slices), and `ParseTarget` generated the real secret
+  (NIP-CASH §Cash-Mode Slices), and `ParseTarget` generated the real secret
   and then simply discarded it once the function returned — every
   `transfer cash` (and `consolidate --to cash`, sharing
-  the same code path) was moving funds into a bearer note nobody, not
+  the same code path) was moving funds into a cash note nobody, not
   even the sender, could ever recover. Fixed by surfacing it through the
   same `Resolved`/`target_resolved` mechanism every other resolved
   identity already uses.
-- `TestCashReceive_BearerWithoutEmbeddedSecretDegradesToReadOnly` — a
-  bearer-mode token pasted with no embedded secret (there is no `--secret`
+- `TestCashReceive_CashWithoutEmbeddedSecretDegradesToReadOnly` — a
+  cash-mode token pasted with no embedded secret (there is no `--secret`
   flag) is never a usage error: it degrades to a read-only report and
   saves nothing, the same contract `decode --check` has.
-- `TestCashReceive_AutoSecuresBearerReceipt_NoOtherHoldings` /
+- `TestCashReceive_AutoSecuresCashReceipt_NoOtherHoldings` /
   `_MergesWithExistingHolding` — receive's own automatic post-receive
-  securing step (re-key a freshly-received bearer slice so the secret you
+  securing step (re-key a freshly-received cash-mode slice so the secret you
   were handed can no longer spend it; merge it with an existing
   same-minter holding if there is one), verified end to end against a
   real Hub: the original secret is confirmed dead by attempting to spend
@@ -132,7 +132,7 @@ or with a real user's own cashctl/ncli state:
   cashctl's own local bookkeeping. The merge case currently fails against
   this project's own lab Hub (`BAD_REQUEST: new_identity.identity_type
   must be pubkey for cash_consolidate`) — that Hub's `cash_consolidate`
-  doesn't yet accept a bearer target, a server-side deployment gap, not a
+  doesn't yet accept a cash-mode target, a server-side deployment gap, not a
   cashctl/nmilat bug; left failing on purpose rather than skipped, since
   it's a real, currently-unmet prerequisite for that one path.
 - `TestCashReceive_RapidSequentialReceivesPreserveOrder` — several real

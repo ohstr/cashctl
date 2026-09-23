@@ -25,6 +25,7 @@ package integration
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -55,17 +56,18 @@ func waitPastCashExpiry() { time.Sleep(9 * time.Second) }
 // SAME hub with deliberately different expiries within one test.
 func mintPubkeyTokenExpiry(t *testing.T, hub adminCreateAppResponse, pubkeyHex string, amountMillis uint64, expirySecs int) string {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	cashClient := dialCash(t, ctx, hub.PairingUri)
-	result, err := cashClient.MintCash(ctx, nipcash.MintCashParams{
-		Recipients: []nipcash.Allocation{nipcash.Send(nipcash.Pubkey(pubkeyHex), amountMillis)},
-		Expiry:     time.Duration(expirySecs) * time.Second,
+	what := fmt.Sprintf("mint_cash (expiry=%ds)", expirySecs)
+	return retryEphemeralNWC(t, what, func(ctx context.Context) (string, error) {
+		cashClient := dialCash(t, ctx, hub.PairingUri)
+		result, err := cashClient.MintCash(ctx, nipcash.MintCashParams{
+			Recipients: []nipcash.Allocation{nipcash.Send(nipcash.Pubkey(pubkeyHex), amountMillis)},
+			Expiry:     time.Duration(expirySecs) * time.Second,
+		})
+		if err != nil {
+			return "", err
+		}
+		return result.CashToken, nil
 	})
-	if err != nil {
-		t.Fatalf("mint_cash (expiry=%ds): %v", expirySecs, err)
-	}
-	return result.CashToken
 }
 
 // mintSignedPubkeyTokenExpiry is mintPubkeyTokenExpiry's mint-provenance
