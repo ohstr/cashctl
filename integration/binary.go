@@ -47,7 +47,7 @@ func cashctlBinary(t *testing.T) string {
 }
 
 // fixture is one isolated cashctl "user": its own --config-dir (cashctl's own
-// local state) and its own empty XDG_CONFIG_HOME (so ncli.VaultExists()
+// local state) and its own empty XDG_CONFIG_HOME (so vault.Exists()
 // reliably reports false, regardless of what's on the host running this
 // suite — every fixture always gets cashctl's own freshly generated local
 // identity, never an incidentally-present ncli vault).

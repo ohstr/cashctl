@@ -5,7 +5,7 @@ import (
 	"os"
 	"testing"
 
-	ncli "github.com/ohstr/ncli/client"
+	"github.com/ohstr/ncli/client/vault"
 
 	"github.com/ohstr/cashctl/internal/appdir"
 	"github.com/ohstr/cashctl/internal/store"
@@ -107,15 +107,15 @@ func TestNcliVaultRef_RoundTripAndResolve(t *testing.T) {
 	// Set up a real ncli vault with one saved entry, exactly as `ncli id
 	// --save` would leave behind.
 	const password = "hunter2"
-	_, vaultPriv, err := ncli.CreateVaultIdentity(password)
+	_, vaultPriv, err := vault.CreateIdentity(password)
 	if err != nil {
 		t.Fatalf("CreateVaultIdentity() error = %v", err)
 	}
-	id, err := ncli.GenerateIdentity()
+	id, err := vault.GenerateIdentity()
 	if err != nil {
 		t.Fatalf("GenerateIdentity() error = %v", err)
 	}
-	entry, err := ncli.AddVaultEntry(vaultPriv, "main", id.PrivKeyHex)
+	entry, err := vault.AddEntry(vaultPriv, "main", id.PrivKeyHex)
 	if err != nil {
 		t.Fatalf("AddVaultEntry() error = %v", err)
 	}
@@ -170,15 +170,15 @@ func TestNcliVaultRef_EntryRemovedFromVault(t *testing.T) {
 func TestNcliVaultRef_WrongPassword(t *testing.T) {
 	withTempDirs(t)
 
-	_, vaultPriv, err := ncli.CreateVaultIdentity("correct-password")
+	_, vaultPriv, err := vault.CreateIdentity("correct-password")
 	if err != nil {
 		t.Fatalf("CreateVaultIdentity() error = %v", err)
 	}
-	id, err := ncli.GenerateIdentity()
+	id, err := vault.GenerateIdentity()
 	if err != nil {
 		t.Fatalf("GenerateIdentity() error = %v", err)
 	}
-	entry, err := ncli.AddVaultEntry(vaultPriv, "main", id.PrivKeyHex)
+	entry, err := vault.AddEntry(vaultPriv, "main", id.PrivKeyHex)
 	if err != nil {
 		t.Fatalf("AddVaultEntry() error = %v", err)
 	}

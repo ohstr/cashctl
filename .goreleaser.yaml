@@ -38,7 +38,7 @@ checksum:
 # tag) and a "-latest" entry (skip_push: auto, so only a stable release
 # ever moves the latest-* tags). A single entry can't do both: skip_push
 # applies to every image_template in that entry, so latest can't be
-# pushed if the version tag doesn't push too. See RELEASE_CANDIDATES.md.
+# pushed if the version tag doesn't push too.
 dockers:
   - id: cashctl-amd64-versioned
     ids: [cashctl]
@@ -102,7 +102,7 @@ docker_manifests:
 # (skip on prerelease) for the stable `cashctl` formula, and the inverse
 # for `cashctl-rc` (skip unless it's a prerelease) so `brew install/upgrade
 # cashctl` never resolves to an RC, but `brew install ohstr/tap/cashctl-rc`
-# can still try one. See RELEASE_CANDIDATES.md.
+# can still try one.
 brews:
   - name: cashctl
     repository:

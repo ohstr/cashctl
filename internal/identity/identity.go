@@ -11,7 +11,7 @@ import (
 	"errors"
 	"fmt"
 
-	ncli "github.com/ohstr/ncli/client"
+	"github.com/ohstr/ncli/client/vault"
 
 	"github.com/ohstr/cashctl/internal/store"
 )
@@ -91,13 +91,13 @@ func SaveNcliVaultRef(npub, label string) error {
 }
 
 // GenerateAndSaveLocal generates a brand-new keypair via ncli's own
-// client.GenerateIdentity (the same generator ncli's own `ncli id` uses —
+// client/vault.GenerateIdentity (the same generator ncli's own `ncli id` uses —
 // just persisted under cashctl's own identity table instead of ncli's
 // vault) and stores it directly. Returns the new identity's npub, or
 // ErrAlreadyConfigured if another process claimed the identity first (the
 // key just generated is then discarded, never used or shown).
 func GenerateAndSaveLocal() (npub string, err error) {
-	id, err := ncli.GenerateIdentity()
+	id, err := vault.GenerateIdentity()
 	if err != nil {
 		return "", fmt.Errorf("failed to generate identity: %w", err)
 	}
@@ -160,7 +160,7 @@ func Resolve(promptPassword PasswordPrompt) (string, error) {
 	case SourceLocal:
 		return s.PrivHex, nil
 	case SourceNcliVault:
-		entry, found, err := ncli.FindVaultEntry(s.Npub)
+		entry, found, err := vault.FindEntry(s.Npub)
 		if err != nil {
 			return "", fmt.Errorf("failed to look up ncli vault entry: %w", err)
 		}
@@ -171,11 +171,11 @@ func Resolve(promptPassword PasswordPrompt) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		vaultPrivKeyHex, err := ncli.UnlockVaultIdentity(password)
+		vaultPrivKeyHex, err := vault.Unlock(password)
 		if err != nil {
 			return "", fmt.Errorf("failed to unlock ncli vault: %w", err)
 		}
-		return ncli.DecryptVaultEntry(vaultPrivKeyHex, *entry)
+		return vault.DecryptEntry(vaultPrivKeyHex, *entry)
 	default:
 		return "", fmt.Errorf("stored identity has an unknown source %q", s.Source)
 	}

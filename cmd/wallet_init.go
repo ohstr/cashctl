@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 
-	ncli "github.com/ohstr/ncli/client"
+	"github.com/ohstr/ncli/client/vault"
 	"github.com/spf13/cobra"
 
 	"github.com/ohstr/cashctl/internal/config"
@@ -81,9 +81,9 @@ func setUpIdentity(cmd *cobra.Command, jsonMode bool) (npub, source string, err 
 	if jsonMode {
 		return generateLocalIdentity()
 	}
-	exists, err := ncli.VaultExists()
+	exists, err := vault.Exists()
 	if err == nil && exists {
-		entries, err := ncli.LoadVaultEntries()
+		entries, err := vault.LoadEntries()
 		if err == nil && len(entries) > 0 {
 			entry := entries[0]
 			if len(entries) > 1 {
