@@ -558,16 +558,16 @@ func mintPubkeyToken(t *testing.T, admin *adminClient, pubkeyHex string, amountM
 // per NIP-CASH §Consolidating Tokens step 2).
 func mintPubkeyTokenFromHub(t *testing.T, hub adminCreateAppResponse, pubkeyHex string, amountMillis uint64) string {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	cashClient := dialCash(t, ctx, hub.PairingUri)
-	result, err := cashClient.MintCash(ctx, nipcash.MintCashParams{
-		Recipients: []nipcash.Allocation{nipcash.Send(nipcash.Pubkey(pubkeyHex), amountMillis)},
+	return retryEphemeralNWC(t, "mint_cash", func(ctx context.Context) (string, error) {
+		cashClient := dialCash(t, ctx, hub.PairingUri)
+		result, err := cashClient.MintCash(ctx, nipcash.MintCashParams{
+			Recipients: []nipcash.Allocation{nipcash.Send(nipcash.Pubkey(pubkeyHex), amountMillis)},
+		})
+		if err != nil {
+			return "", err
+		}
+		return result.CashToken, nil
 	})
-	if err != nil {
-		t.Fatalf("mint_cash: %v", err)
-	}
-	return result.CashToken
 }
 
 // TestCashTransfer_Full receives a real pubkey-mode token, transfers it in
