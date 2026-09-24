@@ -403,12 +403,14 @@ func TestCashTransfer_NConnectionWithIA_ResolvesPastTarget(t *testing.T) {
 // with nothing here to catch it — unlike every other target shape, which
 // cash_chain_test.go/cash_multiparty_test.go verify hub-side end to end.
 //
-// Closing it needs infrastructure this suite does not have: a real Identity
-// Authority keypair publishing an attestation that maps the connection key
-// (platform + external id) to a recipient pubkey, on a relay both sides
-// read, plus a second local identity to receive as. The lab admin API
-// provisions cash and circle hubs but nothing that acts as an IA, so this
-// cannot be minted on demand the way the other fixtures are.
+// local_ia_test.go now closes most of the distance: an IA is just a keypair
+// signing a Kind 35522 event (no relay involved — an nconnection target
+// resolves purely locally, and the claiming side reads its attestation from
+// a file), and newLocalIA(t) mints one on demand. What remains is hub-side:
+// lokihub refuses a transfer whose ia_pubkey is not on its own trusted list,
+// and the admin API exposes no way to register one (see
+// adminCreateAppRequest). Given a trusted IA, the fixture already supplies
+// everything else needed for a delivery that actually lands.
 
 // TestCashTransfer_MalformedAmountBlamesTheAmountNotTheTarget is the live
 // evidence for the disambiguateTransferArgs fix: a malformed amount
