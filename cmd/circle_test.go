@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spf13/cobra"
+
 	relayclient "github.com/ohstr/nmilat/relay/client"
 
 	"github.com/ohstr/nmilat/nipcw"
@@ -167,4 +169,53 @@ func TestRootExample_JoinCarriesMaxAmount(t *testing.T) {
 		return
 	}
 	t.Skip("root Example no longer shows a join line — nothing to guard")
+}
+
+// newTestJoinCmd carries the flags runCircleJoin reads directly off cmd —
+// the same set newCircleJoinCmd registers, plus the root's globals.
+func newTestJoinCmd() *cobra.Command {
+	c := &cobra.Command{}
+	c.Flags().Bool("json", false, "")
+	c.Flags().Bool("yes", false, "")
+	c.Flags().String("hub", "", "")
+	c.Flags().String("max-amount", "", "")
+	c.Flags().Duration("expiry", 0, "")
+	c.Flags().String("budget-renewal", "", "")
+	c.Flags().String("as", "", "")
+	return c
+}
+
+// TestRunCircleJoin_ZeroCapIsNotTreatedAsMissing pins that an explicitly
+// supplied 0 and an omitted amount are different mistakes. They used to
+// share one message, so a user who had just typed `0` was told they were
+// missing the argument they had typed. Someone passing 0 has almost
+// certainly assumed a "0 means unlimited" convention NIP-CW does not have,
+// which is what the message must say.
+func TestRunCircleJoin_ZeroCapIsNotTreatedAsMissing(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		args    []string
+		flags   map[string]string
+		wantSub string
+	}{
+		{"positional zero", []string{"circlehub1qqq", "0"}, nil, "0 isn't a spend cap"},
+		{"flag zero", []string{"circlehub1qqq"}, map[string]string{"max-amount": "0"}, "0 isn't a spend cap"},
+		{"omitted", []string{"circlehub1qqq"}, nil, "a max amount is required"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newTestJoinCmd()
+			for k, v := range tc.flags {
+				if err := c.Flags().Set(k, v); err != nil {
+					t.Fatal(err)
+				}
+			}
+			err := runCircleJoin(c, tc.args)
+			if err == nil {
+				t.Fatal("runCircleJoin() = nil error, want a refusal")
+			}
+			if !strings.Contains(err.Error(), tc.wantSub) {
+				t.Errorf("error = %q, want it to contain %q", err.Error(), tc.wantSub)
+			}
+		})
+	}
 }

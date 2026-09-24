@@ -323,3 +323,43 @@ func TestFormatMinterStatus_ValidSignatureReportsMinter(t *testing.T) {
 		t.Errorf("amountLine = %q, want no (unverified) qualifier for a genuinely valid signature", amountLine)
 	}
 }
+
+// TestShouldRunCheck_YesFlagIsFlagOnlyNeverPrompts is the sibling of the
+// --json tests above, and pins the fix for a real leak: --yes used to fall
+// through to Confirm, which answers yes to everything, so `decode <token>
+// --yes` silently made a Hub call. AGENTS.md promises decode is local unless
+// --check asks otherwise, and the default-No prompt was a deliberate 0.3.0
+// decision — a convenience flag must not undo either.
+//
+// No stdin is queued: reaching Confirm's prompt path at all would read EOF
+// and return the default, so these also prove the prompt was never shown.
+func TestShouldRunCheck_YesFlagIsFlagOnlyNeverPrompts(t *testing.T) {
+	c := newTestDecodeCmd()
+	if err := c.Flags().Set("yes", "true"); err != nil {
+		t.Fatal(err)
+	}
+	if got := shouldRunCheck(c, false, false, "check?"); got {
+		t.Error("shouldRunCheck(--yes, no --check) = true, want false — --yes must not turn on a network call the caller never asked for")
+	}
+	// --yes with an explicit --check still honours --check: the caller did
+	// ask for the call in that case.
+	if err := c.Flags().Set("check", "true"); err != nil {
+		t.Fatal(err)
+	}
+	if got := shouldRunCheck(c, false, true, "check?"); !got {
+		t.Error("shouldRunCheck(--yes --check) = false, want true — an explicit --check is a request, not a prompt")
+	}
+}
+
+// TestShouldCheckCashToken_YesFlagDoesNotGoOnline covers the same fix through
+// the cash-token wrapper, which is the path `decode <cash-token> --yes`
+// actually takes (cmd/decode.go:153).
+func TestShouldCheckCashToken_YesFlagDoesNotGoOnline(t *testing.T) {
+	c := newTestDecodeCmd()
+	if err := c.Flags().Set("yes", "true"); err != nil {
+		t.Fatal(err)
+	}
+	if got := shouldCheckCashToken(c, false, false, true); got {
+		t.Error("shouldCheckCashToken(--yes) = true, want false — a cash-mode decode must stay local without --check")
+	}
+}

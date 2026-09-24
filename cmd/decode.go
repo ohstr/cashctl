@@ -289,7 +289,16 @@ func printMintSignatureStatus(tok nipcash.Token) {
 // what I'm doing" contract, same as every other confirmation), only the
 // unattended-defaults case changed.
 func shouldRunCheck(cmd *cobra.Command, jsonMode, checkFlag bool, prompt string) bool {
-	if jsonMode || cmd.Flags().Changed("check") {
+	// --yes is handled here rather than left to Confirm, which answers yes
+	// to everything (cmd/prompt.go). This prompt is not a confirmation of
+	// something already asked for — it is an opt-in to a network call the
+	// caller did not request, deliberately defaulting to No. Letting --yes
+	// flip it meant `decode <token> --yes` silently went online, against
+	// AGENTS.md's "locally, no network call; --check opts into a read-only
+	// Hub check". Skipping a default-No prompt takes the default; only
+	// --check turns the call on.
+	yesFlag, _ := cmd.Flags().GetBool("yes")
+	if jsonMode || yesFlag || cmd.Flags().Changed("check") {
 		return checkFlag
 	}
 	return Confirm(cmd, false, prompt)
