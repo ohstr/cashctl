@@ -7,6 +7,7 @@ import (
 
 func amountPtr(v uint64) *uint64 { return &v }
 func minterPtr(s string) *string { return &s }
+func boolPtr(b bool) *bool       { return &b }
 
 const (
 	minterA = "aaaa111122223333444455556666777788889999aaaabbbbccccddddeeee00"
@@ -310,5 +311,94 @@ func TestSumAmounts(t *testing.T) {
 	}
 	if got := SumAmounts(entries); got != 3500 {
 		t.Errorf("SumAmounts() = %d, want 3500", got)
+	}
+}
+
+// The tests below pin the selection behaviour an amount-first `redeem` will
+// depend on (docs/private/redeem-ux-review.md, F3). `redeem <amount>` is
+// defined to mean NET — the amount that arrives — so the caller selects for
+// `net + fee`. SelectForAmount itself needs no fee concept for that: the fee
+// is a rate on the redeemed slice, so the caller inverts it and selects for
+// the gross. These prove the engine already serves that call shape, so the
+// redeem work is wiring rather than new selection logic.
+
+// TestSelectForAmount_NetPlusFeeAcrossBills is the review's worked example:
+// 100 + 400 + 50 held from one minter, 500 wanted net, 1% worst-case fee, so
+// the caller selects for 506. No single bill covers it; all three must merge.
+// The point is that the fee is paid out of the OTHER bills — the 50 here —
+// not out of the bill being cashed.
+func TestSelectForAmount_NetPlusFeeAcrossBills(t *testing.T) {
+	held := []Entry{
+		{ID: "tok-100", AmountMillis: amountPtr(100), MinterPubkey: minterPtr(minterA), IdentityRequired: boolPtr(true)},
+		{ID: "tok-400", AmountMillis: amountPtr(400), MinterPubkey: minterPtr(minterA), IdentityRequired: boolPtr(true)},
+		{ID: "tok-50", AmountMillis: amountPtr(50), MinterPubkey: minterPtr(minterA), IdentityRequired: boolPtr(true)},
+	}
+	plan, err := SelectForAmount(held, 506) // 500 net + 6 worst-case fee
+	if err != nil {
+		t.Fatalf("SelectForAmount(506) error = %v — 550 is held, so 506 must be reachable", err)
+	}
+	if len(plan.ConsolidateFirst) != 3 {
+		t.Fatalf("ConsolidateFirst has %d entries, want all 3 (no smaller subset reaches 506)", len(plan.ConsolidateFirst))
+	}
+	if got := SumAmounts(plan.ConsolidateFirst); got != 550 {
+		t.Errorf("selected sum = %d, want 550", got)
+	}
+	// 550 > 506, so the merged bill is split and 44 comes back as change.
+	if !plan.Split {
+		t.Error("plan.Split = false, want true — 550 covers 506 with change left over")
+	}
+}
+
+// TestSelectForAmount_FeeIsWhatTipsItOverTheEdge is the case that makes net
+// vs gross observable rather than academic: exactly 500 is held, so a GROSS
+// redeem of 500 succeeds while a NET one cannot — the fee has nothing left
+// to come out of. A wallet must refuse here, the same way a Lightning wallet
+// refuses when the balance covers the amount but not the routing fee.
+func TestSelectForAmount_FeeIsWhatTipsItOverTheEdge(t *testing.T) {
+	held := []Entry{{ID: "tok-500", AmountMillis: amountPtr(500)}}
+
+	if _, err := SelectForAmount(held, 500); err != nil {
+		t.Fatalf("gross 500 against 500 held should succeed, got %v", err)
+	}
+	_, err := SelectForAmount(held, 506)
+	if !errors.Is(err, ErrInsufficientFunds) {
+		t.Fatalf("net 500 (= 506 gross) against 500 held: error = %v, want ErrInsufficientFunds", err)
+	}
+}
+
+// TestSelectForAmount_FeeShortfallAcrossMintersIsFragmented guards the
+// interaction with the settled "never split one logical send across minters"
+// rule (docs/private/ux-review.md:263-269): holding enough in total but not
+// under any one minter must stay a FundsFragmented refusal once the fee is
+// added, not silently become a cross-minter redeem.
+func TestSelectForAmount_FeeShortfallAcrossMintersIsFragmented(t *testing.T) {
+	held := []Entry{
+		{ID: "tok-a", AmountMillis: amountPtr(300), MinterPubkey: minterPtr(minterA), IdentityRequired: boolPtr(true)},
+		{ID: "tok-b", AmountMillis: amountPtr(300), MinterPubkey: minterPtr(minterB), IdentityRequired: boolPtr(true)},
+	}
+	_, err := SelectForAmount(held, 506)
+	if !errors.Is(err, ErrFundsFragmented) {
+		t.Fatalf("600 held but split across two minters: error = %v, want ErrFundsFragmented", err)
+	}
+}
+
+// TestSelectForAmount_ZeroFeeTargetIsUnchanged pins the common deployment:
+// NIP-CASH frames same-node redeems as routinely free, and a zero fee makes
+// net == gross, so selection for an amount-first redeem is then identical to
+// selection for a transfer of the same size.
+func TestSelectForAmount_ZeroFeeTargetIsUnchanged(t *testing.T) {
+	held := []Entry{
+		{ID: "tok-1", AmountMillis: amountPtr(400)},
+		{ID: "tok-2", AmountMillis: amountPtr(900)},
+	}
+	plan, err := SelectForAmount(held, 500) // zero fee: net == gross
+	if err != nil {
+		t.Fatalf("SelectForAmount(500) error = %v", err)
+	}
+	if plan.Entry == nil || plan.Entry.ID != "tok-2" {
+		t.Fatalf("plan.Entry = %+v, want tok-2 (smallest single bill covering 500)", plan.Entry)
+	}
+	if !plan.Split {
+		t.Error("plan.Split = false, want true — 900 covers 500 with change")
 	}
 }

@@ -153,6 +153,14 @@ func runCircleJoin(cmd *cobra.Command, args []string) error {
 	// missing cap fails fast, locally, instead of round-tripping to the
 	// Hub for the same rejection.
 	if maxAmount == 0 {
+		// Absent and zero are different mistakes and used to share one
+		// message, which told a user who had just typed `0` that they were
+		// missing an argument. Someone passing 0 has almost certainly
+		// assumed the "0 means unlimited" convention this method does not
+		// have, so say that instead.
+		if positionalMaxAmount != "" || maxAmountFlag != "" {
+			return output.InvalidInputError(cmd, "0", fmt.Errorf("0 isn't a spend cap — there's no \"0 means unlimited\" convention here, so pass the most this wallet may spend"))
+		}
 		return output.InvocationError(cmd, fmt.Errorf("a max amount is required — pass it directly (cashctl join <hub-connection> <amount>) or via --max-amount"))
 	}
 
