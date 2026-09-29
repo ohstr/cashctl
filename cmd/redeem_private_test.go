@@ -6,9 +6,12 @@ import (
 	"testing"
 
 	"github.com/ohstr/nmilat/nipcash"
+	nipcashclient "github.com/ohstr/nmilat/nipcash/client"
+	"github.com/ohstr/nmilat/nipcash/transport"
 	"github.com/spf13/cobra"
 
 	"github.com/ohstr/cashctl/internal/ledger"
+	"github.com/ohstr/cashctl/internal/output"
 )
 
 // tokenWithRelays builds a real, decodable cash token naming relays, so
@@ -211,5 +214,115 @@ func TestParseTransportMode(t *testing.T) {
 		if got != tc.want {
 			t.Errorf("parseTransportMode(%q) = %q, want %q", tc.in, got, tc.want)
 		}
+	}
+}
+
+// --- applyRedeemResults: the three states a batched bill can come back in. This is
+// the mapping that decides whether the caller is told money moved, money did not
+// move, or nobody knows — and two of the three are easy to get subtly wrong in a
+// way no compiler catches.
+
+func batchOutcome(id string, state nipcashclient.OutcomeState, result *nipcash.CashRedeemResult, resErr *transport.ResultError) nipcashclient.RedeemOutcome {
+	return nipcashclient.RedeemOutcome{
+		ItemOutcome: nipcashclient.ItemOutcome{ID: id, State: state, Error: resErr},
+		Result:      result,
+	}
+}
+
+func TestApplyRedeemResults_PaidBillIsRecordedAndReported(t *testing.T) {
+	plans := []redeemPlan{planFor("tok-a", "hub-1", "t")}
+	plans[0].Index = 0
+	outcomes := []redeemOutcome{{EntryID: "tok-a"}}
+	l := &ledger.Ledger{Entries: []ledger.Entry{{ID: "tok-a", Status: ledger.StatusHeld}}}
+
+	applyRedeemResults(&cobra.Command{}, l, plans, []nipcashclient.RedeemOutcome{
+		batchOutcome("tok-a", nipcashclient.OutcomeResult, &nipcash.CashRedeemResult{Preimage: "beef01"}, nil),
+	}, outcomes, "savings")
+
+	if outcomes[0].Result == nil || outcomes[0].Result.Preimage != "beef01" {
+		t.Fatalf("outcome = %+v, want the payment's preimage", outcomes[0])
+	}
+	if l.Entries[0].Status != ledger.StatusRedeemed {
+		t.Errorf("ledger status = %q, want redeemed — a paid bill left as held gets offered again", l.Entries[0].Status)
+	}
+}
+
+// TestApplyRedeemResults_HubRefusalKeepsItsClassification pins that a batched
+// refusal reads exactly like a single-bill one. transport.ResultError mirrors
+// NIP-47's error shape precisely so it can, and a caller must not have to branch
+// on which transport carried an error to understand it.
+func TestApplyRedeemResults_HubRefusalKeepsItsClassification(t *testing.T) {
+	plans := []redeemPlan{planFor("tok-a", "hub-1", "t")}
+	outcomes := []redeemOutcome{{EntryID: "tok-a"}}
+	l := &ledger.Ledger{Entries: []ledger.Entry{{ID: "tok-a", Status: ledger.StatusHeld}}}
+
+	applyRedeemResults(&cobra.Command{}, l, plans, []nipcashclient.RedeemOutcome{
+		batchOutcome("tok-a", nipcashclient.OutcomeError, nil, &transport.ResultError{Code: "EXPIRED", Message: "this bill's deadline has passed"}),
+	}, outcomes, "savings")
+
+	if outcomes[0].Err == nil {
+		t.Fatal("a refused bill produced no error")
+	}
+	ce := output.AsCLIError(outcomes[0].Err)
+	if ce.NWCCode != "EXPIRED" {
+		t.Errorf("nwc_code = %q, want EXPIRED preserved verbatim for an agent that branches on it", ce.NWCCode)
+	}
+	if ce.RawMessage == "" {
+		t.Error("the hub's own message was discarded; --json consumers read it")
+	}
+	// A refused bill did NOT pay out, so the ledger must still show it as held.
+	if l.Entries[0].Status != ledger.StatusHeld {
+		t.Errorf("ledger status = %q, want held — a refusal must not mark a bill spent", l.Entries[0].Status)
+	}
+}
+
+// TestApplyRedeemResults_OmissionIsNeitherSuccessNorSilence is the important one.
+// An omission is information-free by design — the same answer for a bill the hub
+// does not hold, a proof that did not verify, and a method it will not serve — so
+// it is indistinguishable from a redemption whose reply was lost. It must never
+// read as success, must never be silently dropped, and must point at the check to
+// run rather than invite a blind retry that could double-spend.
+func TestApplyRedeemResults_OmissionIsNeitherSuccessNorSilence(t *testing.T) {
+	plans := []redeemPlan{planFor("tok-a", "hub-1", "t")}
+	outcomes := []redeemOutcome{{EntryID: "tok-a"}}
+	l := &ledger.Ledger{Entries: []ledger.Entry{{ID: "tok-a", Status: ledger.StatusHeld}}}
+
+	applyRedeemResults(&cobra.Command{}, l, plans, []nipcashclient.RedeemOutcome{
+		batchOutcome("tok-a", nipcashclient.OutcomeNotServed, nil, nil),
+	}, outcomes, "savings")
+
+	if outcomes[0].Result != nil {
+		t.Fatal("an omitted bill was reported as paid — the hub said nothing at all")
+	}
+	if outcomes[0].Err == nil {
+		t.Fatal("an omitted bill was reported as nothing happening; it may or may not have been redeemed")
+	}
+	if !strings.Contains(outcomes[0].Err.Error(), "list-recipients") {
+		t.Errorf("the error does not name the check to run before retrying: %v", outcomes[0].Err)
+	}
+	// The ledger must NOT be marked spent: we genuinely do not know.
+	if l.Entries[0].Status != ledger.StatusHeld {
+		t.Errorf("ledger status = %q, want held — an omission is not evidence of a spend", l.Entries[0].Status)
+	}
+}
+
+// TestApplyRedeemResults_UnknownIDIsIgnored: a reply naming a bill we never sent
+// must not be written anywhere. DecodeResponse already rejects unrequested ids, so
+// this is belt-and-braces — but writing into a slot by a hub-supplied name is
+// exactly the shape of bug worth making impossible.
+func TestApplyRedeemResults_UnknownIDIsIgnored(t *testing.T) {
+	plans := []redeemPlan{planFor("tok-a", "hub-1", "t")}
+	outcomes := []redeemOutcome{{EntryID: "tok-a"}}
+	l := &ledger.Ledger{Entries: []ledger.Entry{{ID: "tok-a", Status: ledger.StatusHeld}}}
+
+	applyRedeemResults(&cobra.Command{}, l, plans, []nipcashclient.RedeemOutcome{
+		batchOutcome("tok-never-sent", nipcashclient.OutcomeResult, &nipcash.CashRedeemResult{Preimage: "x"}, nil),
+	}, outcomes, "savings")
+
+	if outcomes[0].Result != nil || outcomes[0].Err != nil {
+		t.Errorf("a result for an unsent bill landed on tok-a: %+v", outcomes[0])
+	}
+	if l.Entries[0].Status != ledger.StatusHeld {
+		t.Errorf("ledger status = %q, want untouched", l.Entries[0].Status)
 	}
 }

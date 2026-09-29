@@ -387,6 +387,48 @@ func redeemGroupPrivately(
 		return false, sendErr
 	}
 
+	applyRedeemResults(cmd, l, g.Plans, results, outcomes, destName)
+	return true, nil
+}
+
+// plansEntry finds a group's plan by ledger id.
+func plansEntry(plans []redeemPlan, id string) *ledger.Entry {
+	for _, p := range plans {
+		if p.Entry.ID == id {
+			return p.Entry
+		}
+	}
+	return nil
+}
+
+// recordRedeemed is the local bookkeeping for one bill that really paid out,
+// shared by both transports so they cannot drift.
+func recordRedeemed(l *ledger.Ledger, entry *ledger.Entry, destName string) {
+	if entry == nil {
+		return
+	}
+	_ = l.SetStatus(entry.ID, ledger.StatusRedeemed)
+	if entry.AmountMillis != nil {
+		l.AppendHistory("redeem", fmt.Sprintf("redeemed %s into %s", output.FormatAmount(int64(*entry.AmountMillis)), destName))
+	} else {
+		l.AppendHistory("redeem", fmt.Sprintf("redeemed into %s", destName))
+	}
+}
+
+// applyRedeemResults maps a batch's per-item outcomes onto this run's own outcome
+// slots.
+//
+// Extracted from the send so the mapping is testable without a relay, because it
+// is where the three states are decided and two of them are easy to get subtly
+// wrong in a way no compiler catches.
+func applyRedeemResults(
+	cmd *cobra.Command,
+	l *ledger.Ledger,
+	plans []redeemPlan,
+	results []nipcashclient.RedeemOutcome,
+	outcomes []redeemOutcome,
+	destName string,
+) {
 	byID := make(map[string]int, len(outcomes))
 	for i, o := range outcomes {
 		byID[o.EntryID] = i
@@ -399,7 +441,7 @@ func redeemGroupPrivately(
 		switch {
 		case r.Succeeded() && r.Result != nil:
 			outcomes[idx].Result = r.Result
-			recordRedeemed(l, plansEntry(g.Plans, r.ID), destName)
+			recordRedeemed(l, plansEntry(plans, r.ID), destName)
 		case r.State == nipcashclient.OutcomeError && r.Error != nil:
 			// A per-item error deliberately mirrors NIP-47's own error shape
 			// ("so per-item failures read the same as a single-request failure
@@ -426,30 +468,5 @@ func redeemGroupPrivately(
 			outcomes[idx].Err = output.ConflictError(cmd, r.ID, fmt.Errorf(
 				"the hub returned no answer for this token — it may or may not have been redeemed; check with `cashctl cash list-recipients --token %s` before retrying", r.ID))
 		}
-	}
-	return true, nil
-}
-
-// plansEntry finds a group's plan by ledger id.
-func plansEntry(plans []redeemPlan, id string) *ledger.Entry {
-	for _, p := range plans {
-		if p.Entry.ID == id {
-			return p.Entry
-		}
-	}
-	return nil
-}
-
-// recordRedeemed is the local bookkeeping for one bill that really paid out,
-// shared by both transports so they cannot drift.
-func recordRedeemed(l *ledger.Ledger, entry *ledger.Entry, destName string) {
-	if entry == nil {
-		return
-	}
-	_ = l.SetStatus(entry.ID, ledger.StatusRedeemed)
-	if entry.AmountMillis != nil {
-		l.AppendHistory("redeem", fmt.Sprintf("redeemed %s into %s", output.FormatAmount(int64(*entry.AmountMillis)), destName))
-	} else {
-		l.AppendHistory("redeem", fmt.Sprintf("redeemed into %s", destName))
 	}
 }
