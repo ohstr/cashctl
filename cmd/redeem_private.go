@@ -255,7 +255,16 @@ func quoteGroupPrivately(
 			errs[e.ID] = output.RuntimeError(cmd, err)
 			continue
 		}
-		items = append(items, nipcashclient.BatchStatus{ID: e.ID, Target: tok.WalletPubkey, Credential: creds[e.ID]})
+		items = append(items, nipcashclient.BatchStatus{
+			ID: e.ID, Target: tok.WalletPubkey, Credential: creds[e.ID],
+			// Explicit, though it is also the private transport's default. A
+			// redeem needs exactly one row — the caller's own, for its fee quote
+			// — and saying so keeps the reply ~300 bytes instead of ~28,500 for a
+			// 100-recipient bill. Batched, that difference is per bill, and an
+			// unscoped batch is the common way to make a reply outgrow its
+			// envelope and need chunking.
+			Scope: nipcash.ScopeMine,
+		})
 	}
 	if len(items) == 0 {
 		return quotes, errs
