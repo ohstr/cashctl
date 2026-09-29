@@ -142,14 +142,27 @@ func batchableHub(e *ledger.Entry) *string {
 	if e == nil || e.MinterPubkey == nil || *e.MinterPubkey == "" {
 		return nil
 	}
-	cashMode := e.IdentityRequired != nil && !*e.IdentityRequired
-	if cashMode {
-		if e.CashSecret == "" {
-			return nil
-		}
-		if e.PendingCashSecret != "" && e.PendingCashSecret != e.CashSecret {
-			return nil
-		}
+	// An unreconciled pending secret disqualifies a bill WHATEVER
+	// IdentityRequired says, and that independence is the whole point.
+	//
+	// A bill left behind by an interrupted auto-secure is cash-mode ON THE HUB —
+	// confirmed by reading its roster: identity_type="cash" — while cashctl's own
+	// entry does not say so, so resolveCredential picks the local pubkey and signs
+	// a proof. The hub then correctly refuses it: a proof-bearing item must match a
+	// non-cash claim, and a cash-mode bill has none. On the standard transport
+	// spendCashEntry rescues exactly this by retrying with the pending secret after
+	// the decline; on this path the refusal is an omission, which carries no signal
+	// to retry on.
+	//
+	// So the pending secret, not IdentityRequired, is the reliable marker that
+	// cashctl does not yet know this bill's real credential. Gating on cash mode
+	// first is what let this bill through.
+	if e.PendingCashSecret != "" && e.PendingCashSecret != e.CashSecret {
+		return nil
+	}
+	// Cash-mode with nothing to send cannot even build an item.
+	if e.IdentityRequired != nil && !*e.IdentityRequired && e.CashSecret == "" {
+		return nil
 	}
 	return e.MinterPubkey
 }

@@ -362,6 +362,17 @@ func TestBatchableHub_ExcludesUnresolvedCashSecrets(t *testing.T) {
 	if got := batchableHub(&ledger.Entry{ID: "tok", MinterPubkey: &minter, IdentityRequired: &yes}); got == nil {
 		t.Error("a pubkey-mode bill must still batch")
 	}
+	// The case that actually escaped: an interrupted auto-secure leaves a bill that
+	// is cash-mode ON THE HUB while cashctl's own entry does not say so. Gating on
+	// IdentityRequired first let it through, cashctl signed a pubkey proof, and the
+	// hub correctly refused it — as an omission, which carries no signal to retry on.
+	// The pending secret is the reliable marker, whatever IdentityRequired says.
+	if got := batchableHub(&ledger.Entry{
+		ID: "tok", MinterPubkey: &minter, IdentityRequired: &yes,
+		CashSecret: "live", PendingCashSecret: "other",
+	}); got != nil {
+		t.Errorf("a bill with an unreconciled pending secret must not batch even when it looks pubkey-mode; got %v", *got)
+	}
 	// No minter: nothing to verify an announcement against.
 	if got := batchableHub(&ledger.Entry{ID: "tok"}); got != nil {
 		t.Errorf("a bill with no recovered minter must not batch; got %v", *got)
