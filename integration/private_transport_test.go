@@ -1,0 +1,226 @@
+//go:build integration
+
+package integration
+
+import (
+	"context"
+	"encoding/json"
+	"net/url"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/ohstr/nmilat/nip01"
+	"github.com/ohstr/nmilat/nipcash"
+	nipcashclient "github.com/ohstr/nmilat/nipcash/client"
+	"github.com/ohstr/nmilat/nipcash/transport"
+	relayclient "github.com/ohstr/nmilat/relay/client"
+	"github.com/ohstr/nmilat/wire"
+)
+
+// hubIdentityFromToken recovers the hub's own identity from a bill's mint
+// signature, which is exactly what a client has to do: an announcement is only
+// meaningful if its signature is checked against an identity known in advance,
+// and the mint signature is the only thing a bill carries that supplies one.
+func hubIdentityFromToken(t *testing.T, token string) (hubXOnly string, relays []string) {
+	t.Helper()
+	tok, err := nipcash.Decode(strings.SplitN(token, "#", 2)[0])
+	if err != nil {
+		t.Fatalf("decode token: %v", err)
+	}
+	if !tok.HasProvenance() {
+		t.Fatal("this bill carries no mint signature, so a client has no hub identity to verify an announcement against — the private transport is unusable for it")
+	}
+	minter, ok := nipcash.VerifyProvenance(tok)
+	if !ok {
+		t.Fatal("this bill's mint signature does not verify")
+	}
+	return minter, tok.RelayURLs
+}
+
+// countPrivateRequests opens a live subscription that counts kind-23190 requests
+// addressed to inbox, and returns a stop function giving the final count.
+//
+// Live rather than a replay: kind 23190 is ephemeral and a relay is not required
+// to store it — this transport specifically does not want it to — so the only way
+// to observe one is to be listening when it goes past.
+func countPrivateRequests(t *testing.T, relayURL, inbox string) (stop func() int64) {
+	t.Helper()
+	u, err := url.Parse(relayURL)
+	if err != nil {
+		t.Fatalf("parse relay url %q: %v", relayURL, err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	conn, err := relayclient.Connect(ctx, u)
+	if err != nil {
+		cancel()
+		t.Fatalf("connect to relay %s: %v", relayURL, err)
+	}
+	// SubscribeWithID + Read, not Connection.Subscribe: Subscribe closes its
+	// channel at EOSE by design, and EOSE only marks the end of STORED events. A
+	// kind-23190 request is ephemeral and arrives live, so a Subscribe-based
+	// observer counts zero however many requests actually go past — which is
+	// exactly the bug this transport's own reply path had.
+	subID := "e2e-private-request-counter"
+	if !conn.SubscribeWithID(subID, nip01.NewSubscriptionFilterGroup(&nip01.SubscriptionFilter{
+		Kinds: []int{transport.KindPrivateRequest},
+		Tags:  map[string][]string{"p": {inbox}},
+	})) {
+		cancel()
+		conn.Close()
+		t.Fatal("could not open the observing subscription")
+	}
+
+	var seen atomic.Int64
+	done := make(chan struct{})
+	stopCh := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case msg, ok := <-conn.Read():
+				if !ok {
+					return
+				}
+				if m, ok := msg.(*wire.EventSubscriptionResponse); ok && m.SubscriptionID == subID && m.Event != nil {
+					seen.Add(1)
+				}
+			case <-stopCh:
+				return
+			}
+		}
+	}()
+	return func() int64 {
+		// A moment for anything still in flight, so the count cannot be low
+		// merely because we stopped listening too early.
+		time.Sleep(2 * time.Second)
+		// Stop via our own channel rather than relying on Close() ending the
+		// Read range — it does not, and ranging over it here deadlocked the test.
+		close(stopCh)
+		<-done
+		conn.Close()
+		cancel()
+		return seen.Load()
+	}
+}
+
+// TestPrivateTransport_RedeemsManyBillsInOneRelayEvent is the end-to-end proof the
+// whole private-transport effort exists for: several bills spent in ONE relay
+// event instead of one event per bill.
+//
+// Everything here is real — a real hub, real bills with real mint signatures, the
+// real compiled cashctl binary, a real relay — and the assertion that matters is
+// the event count, observed on the relay itself rather than inferred from
+// cashctl's own output. Two bills redeemed over one request is the entire claim;
+// counting them anywhere else would be trusting the thing under test.
+//
+// --transport private is deliberate: it refuses to fall back, so a broken
+// transport cannot pass by silently redeeming over the standard path instead.
+func TestPrivateTransport_RedeemsManyBillsInOneRelayEvent(t *testing.T) {
+	const billCount = 3
+
+	admin := adminOrSkip(t)
+	hub := setUpCashHub(t, admin)
+	f := newFixture(t)
+
+	pub, err := npubToHex(f.mustJSON("wallet", "init")["npub"].(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Both bills from the SAME hub: an envelope's items must all bind to one hub,
+	// so bills from different hubs could never share a request.
+	// Mint-signed deliberately, and it is not a test detail: a client anchors an
+	// announcement's signature to an identity it already trusts, and a bill's mint
+	// signature is the only thing that supplies one. A bill minted without it —
+	// which is mint_cash's own default — can only ever use the standard transport.
+	first, minter, signed := mintSignedPubkeyTokenFromHub(t, f, hub, pub, 40_000)
+	if !signed {
+		t.Skip("this hub did not attach a mint signature (it is best-effort server-side), so no client could use its private transport")
+	}
+	second, _, signed2 := mintSignedPubkeyTokenFromHub(t, f, hub, pub, 30_000)
+	third, _, signed3 := mintSignedPubkeyTokenFromHub(t, f, hub, pub, 20_000)
+	if !signed2 || !signed3 {
+		t.Skip("a bill came back unsigned")
+	}
+	f.mustJSON("receive", first)
+	f.mustJSON("receive", second)
+	f.mustJSON("receive", third)
+
+	// The payouts need somewhere to go. The hub itself holds make_invoice, so it
+	// doubles as the destination wallet — one invoice per bill is drawn from it.
+	f.mustJSON("connect", "add", "dest", hub.PairingUri)
+
+	hubXOnly, relays := hubIdentityFromToken(t, first)
+	if hubXOnly != minter {
+		t.Fatalf("recovered hub identity %s disagrees with decode's minter_pubkey %s", hubXOnly, minter)
+	}
+	if len(relays) == 0 {
+		t.Fatal("bill carries no relay hints, so nothing can find the hub")
+	}
+
+	// Resolve the announcement the way cashctl does, and fail loudly if the hub is
+	// not advertising the transport — otherwise the count assertion below would
+	// pass for the wrong reason.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	client := &nipcashclient.Client{}
+	session, err := client.NewBatchSession(ctx, hubXOnly, relays)
+	if err != nil {
+		t.Fatalf("this hub publishes no usable private-transport announcement (%v) — enable PRIVATE_TRANSPORT_ENABLED on it before running this test", err)
+	}
+	inbox := session.Inbox()
+	if inbox == "" {
+		t.Fatal("the announcement names no inbox")
+	}
+	t.Logf("hub identity %s, inbox %s, relays %v", hubXOnly, inbox, session.Relays())
+
+	stop := countPrivateRequests(t, relays[0], inbox)
+
+	res := f.run("redeem", "--all", "--into", "dest", "--transport", "private", "--json", "--yes")
+	requests := stop()
+
+	if res.ExitCode != 0 {
+		t.Fatalf("redeem --transport private: exit %d\nstdout: %s\nstderr: %s", res.ExitCode, res.Stdout, res.Stderr)
+	}
+
+	// Both bills paid out, read from the per-bill report.
+	var resp map[string]any
+	if err := json.Unmarshal([]byte(res.Stdout), &resp); err != nil {
+		t.Fatalf("redeem --json did not print one JSON object: %v\nstdout: %s", err, res.Stdout)
+	}
+	rows, _ := resp["redeemed"].([]any)
+	if len(rows) != billCount {
+		t.Fatalf("redeemed %d bills, want %d\nstdout: %s", len(rows), billCount, res.Stdout)
+	}
+	for i, r := range rows {
+		row, _ := r.(map[string]any)
+		if row["status"] != "ok" {
+			t.Errorf("bill %d: status=%v error=%v code=%v", i, row["status"], row["error"], row["code"])
+		}
+		if row["preimage"] == nil || row["preimage"] == "" {
+			t.Errorf("bill %d: no preimage, so nothing proves it was actually paid", i)
+		}
+	}
+
+	// The claim, and it is about SCALING rather than a magic number.
+	//
+	// A redeem is two phases, so it publishes two request envelopes: one
+	// cash_status batch for the fee quotes, then one cash_redeem batch for the
+	// spends. Both carry every bill. What matters is that the count is two
+	// regardless of how many bills are in the run — on the standard transport it
+	// would be two events PER BILL, which for three bills is six, each one tagged
+	// with its own bill's wallet pubkey and published seconds apart.
+	const wantRequests = 2
+	if requests != wantRequests {
+		t.Errorf("observed %d kind-23190 requests on the relay for %d bills, want exactly %d (one cash_status batch + one cash_redeem batch) — the count must not scale with bill count, or nothing is being batched",
+			requests, billCount, wantRequests)
+	}
+
+	// And the ledger agrees that nothing is left held.
+	held, _ := f.mustJSON("wallet", "show")["held_tokens"].([]any)
+	if len(held) != 0 {
+		t.Errorf("%d bill(s) still held after redeeming everything: %v", len(held), held)
+	}
+}
