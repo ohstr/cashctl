@@ -14,6 +14,8 @@ func TestValidateConnectionValue(t *testing.T) {
 	walletPubkey, secret := strings.Repeat("aa", 32), strings.Repeat("bb", 32)
 	cashToken, err := nipcash.Encode(nipcash.Token{
 		HRP: "lokicash", WalletPubkey: walletPubkey, Secret: secret, IdentityRequired: ptrTo(false),
+		// Required by nipcash.Encode: a bill with no relay hint is unreachable.
+		RelayURLs: []string{"wss://relay.example"},
 	})
 	if err != nil {
 		t.Fatalf("nipcash.Encode: %v", err)

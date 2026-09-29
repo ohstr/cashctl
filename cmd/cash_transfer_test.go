@@ -303,13 +303,19 @@ func TestFetchExpiresAt_MalformedTokenReturnsNil(t *testing.T) {
 	}
 }
 
-// TestFetchExpiresAt_NoRelayURLsReturnsNil confirms the same contract one
-// layer deeper: a structurally valid, decodable token that just has no
-// RelayURLs at all — nipcashclient.Connect's own NewNWCClient rejects that
-// immediately ("pairing info has no relay urls") before opening any real
-// network connection, so this exercises fetchExpiresAt's Connect-failure
-// branch without a live Hub or a timeout.
-func TestFetchExpiresAt_NoRelayURLsReturnsNil(t *testing.T) {
+// TestFetchExpiresAt_UnreachableRelayReturnsNil confirms the same contract one
+// layer deeper: a structurally valid, decodable token whose only relay hint
+// cannot be parsed as a URL. NewNWCClient skips unparseable hints and then has
+// nothing left to dial, so it fails before opening any real network connection
+// — which exercises fetchExpiresAt's Connect-failure branch without a live Hub
+// or a timeout.
+//
+// This used to encode a token with NO relay hints at all, which is a state that
+// no longer exists: nipcash.Encode now REQUIRES at least one usable hint,
+// because a bill's wallet pubkey is published nowhere and a hintless bill is
+// unreachable by anyone (NIP-CASH §The Cash Token). A malformed hint is the
+// nearest thing that still reaches Connect and still cannot touch the network.
+func TestFetchExpiresAt_UnreachableRelayReturnsNil(t *testing.T) {
 	walletPubkey := strings.Repeat("aa", 32)
 	secret := strings.Repeat("bb", 32)
 	encoded, err := nipcash.Encode(nipcash.Token{
@@ -317,13 +323,14 @@ func TestFetchExpiresAt_NoRelayURLsReturnsNil(t *testing.T) {
 		WalletPubkey:     walletPubkey,
 		Secret:           secret,
 		IdentityRequired: ptrTo(false),
+		RelayURLs:        []string{"://not-a-url"},
 	})
 	if err != nil {
 		t.Fatalf("nipcash.Encode: %v", err)
 	}
 	c := newTestTransferCmd()
 	if got := fetchExpiresAt(c, encoded); got != nil {
-		t.Errorf("fetchExpiresAt(no relay urls) = %v, want nil", *got)
+		t.Errorf("fetchExpiresAt(unreachable relay) = %v, want nil", *got)
 	}
 }
 

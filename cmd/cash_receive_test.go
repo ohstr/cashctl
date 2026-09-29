@@ -34,6 +34,9 @@ func TestRunCashReceive_NoEmbeddedSecret_JSONMode(t *testing.T) {
 		WalletPubkey:     walletPubkey,
 		Secret:           secret,
 		IdentityRequired: ptrTo(false),
+		// Required by nipcash.Encode. It does not make this test dial anything:
+		// shouldRunCheck short-circuits under --json before any connection.
+		RelayURLs: []string{"wss://relay.example"},
 	})
 	if err != nil {
 		t.Fatalf("nipcash.Encode: %v", err)

@@ -296,7 +296,7 @@ func newWalletGetInfoCmd() *cobra.Command {
 			if cw := info.CircleWallet; cw != nil {
 				fmt.Printf("circle policy:    %s\n", output.Sanitize(cw.CirclePolicy))
 				fmt.Printf("circle fee:       %d ppm\n", cw.FeesPpm)
-				fmt.Printf("circle available: %s\n", output.FormatAmount(cw.AvailableMloki))
+				fmt.Printf("circle available: %s\n", output.FormatAmount(cw.AvailableMillis))
 			}
 			return nil
 		},

@@ -24,6 +24,9 @@ func validCircleHub(t *testing.T) string {
 	s, err := nipcw.EncodeCircleHubConnection(nipcw.CircleHubConnection{
 		WalletPubkey: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		Secret:       "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		// Required by the encoder: a hub connection naming no relay cannot be
+		// reached by anyone, so it is no longer encodable at all.
+		RelayURLs: []string{"wss://relay.example"},
 	})
 	if err != nil {
 		t.Fatalf("EncodeCircleHubConnection: %v", err)

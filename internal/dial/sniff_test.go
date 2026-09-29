@@ -21,6 +21,9 @@ func TestSniff_CashToken(t *testing.T) {
 		HRP:          "lokicash",
 		WalletPubkey: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		Secret:       "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		// A relay hint is REQUIRED by every encoder now, so even a fixture that
+		// does not care where the wallet lives must name one.
+		RelayURLs: []string{"wss://relay.example"},
 	})
 	if err != nil {
 		t.Fatalf("test setup: Encode() error = %v", err)
@@ -34,6 +37,9 @@ func TestSniff_CircleHub(t *testing.T) {
 	s, err := nipcw.EncodeCircleHubConnection(nipcw.CircleHubConnection{
 		WalletPubkey: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		Secret:       "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		// A relay hint is REQUIRED by every encoder now, so even a fixture that
+		// does not care where the wallet lives must name one.
+		RelayURLs: []string{"wss://relay.example"},
 	})
 	if err != nil {
 		t.Fatalf("test setup: EncodeCircleHubConnection() error = %v", err)
@@ -47,6 +53,9 @@ func TestSniff_CashHub(t *testing.T) {
 	s, err := nipcash.EncodeCashHubConnection(nipcash.CashHubConnection{
 		WalletPubkey: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		Secret:       "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		// A relay hint is REQUIRED by every encoder now, so even a fixture that
+		// does not care where the wallet lives must name one.
+		RelayURLs: []string{"wss://relay.example"},
 	})
 	if err != nil {
 		t.Fatalf("test setup: EncodeCashHubConnection() error = %v", err)
@@ -126,6 +135,9 @@ func TestNostrEntityHRP_EmptyForNonNostrEntity(t *testing.T) {
 		HRP:          "lokicash",
 		WalletPubkey: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		Secret:       "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		// A relay hint is REQUIRED by every encoder now, so even a fixture that
+		// does not care where the wallet lives must name one.
+		RelayURLs: []string{"wss://relay.example"},
 	})
 	if err != nil {
 		t.Fatalf("test setup: Encode() error = %v", err)

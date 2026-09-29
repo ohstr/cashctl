@@ -33,3 +33,13 @@ require (
 	modernc.org/memory v1.12.1 // indirect
 	sigs.k8s.io/yaml v1.4.0 // indirect
 )
+
+// TEMPORARY — do not release with this in place.
+//
+// Points at the local nmilat checkout so cashctl can be built against the SDK changes it
+// needs and which are committed there but untagged: the batch API for the private
+// transport, the available_mloki -> available_millis rename, and the codec requiring at
+// least one non-empty relay in every credential.
+//
+// Remove this and pin a real version once nmilat is released.
+replace github.com/ohstr/nmilat => /u/flzpace/xgit/orgs/ohstr/nmilat
