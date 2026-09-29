@@ -2,15 +2,21 @@ package cmd
 
 import (
 	"bufio"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/ohstr/nmilat/nipcash"
 	"github.com/spf13/cobra"
 
 	"github.com/ohstr/cashctl/internal/ledger"
+	"github.com/ohstr/cashctl/internal/output"
 )
 
 // withCapturedStdout redirects os.Stdout to a pipe for the duration of fn,
@@ -448,5 +454,319 @@ func TestResolveHeldToken_StillHeldTokenIsAccepted(t *testing.T) {
 	}
 	if entry.ID != l.Entries[1].ID {
 		t.Fatalf("got %s, want %s", entry.ID, l.Entries[1].ID)
+	}
+}
+
+// --- resolveHeldTokensForRedeem: multi-bill selection. Redeeming more than one
+// token in a single command was previously impossible — pickHeldToken hard-errored
+// under --json/--yes with "specify which with --token" and the whole flow was
+// single-entry — so all of this is new capability rather than changed behaviour.
+
+// redeemCmdWithTokens builds redeem's real flag set: --token is a StringSlice
+// here, unlike transfer/inspect/protect, which keep a single-value --token and
+// still share resolveHeldToken.
+func redeemCmdWithTokens(jsonMode, yes bool, tokens []string, all bool) *cobra.Command {
+	cmd := testCmdWithFlags(jsonMode, yes)
+	cmd.Flags().StringSlice("token", tokens, "")
+	cmd.Flags().Bool("all", all, "")
+	return cmd
+}
+
+func heldIDs(entries []*ledger.Entry) []string {
+	out := make([]string, len(entries))
+	for i, e := range entries {
+		out[i] = e.ID
+	}
+	return out
+}
+
+func TestResolveHeldTokensForRedeem_SeveralExplicitTokens(t *testing.T) {
+	l := heldLedger(4)
+	cmd := redeemCmdWithTokens(true, true, []string{"tok-0", "tok-2"}, false)
+
+	got, err := resolveHeldTokensForRedeem(cmd, l)
+	if err != nil {
+		t.Fatalf("resolveHeldTokensForRedeem() error = %v", err)
+	}
+	if want := []string{"tok-0", "tok-2"}; !reflect.DeepEqual(heldIDs(got), want) {
+		t.Errorf("selected %v, want %v", heldIDs(got), want)
+	}
+}
+
+// TestResolveHeldTokensForRedeem_ReturnsLivePointers is the same copy-vs-pointer
+// contract resolveHeldToken has its own long doc comment about: l.Held() returns
+// copies, so a pointer into that slice looks live and silently does not write
+// through. resolveRedeemQuote writes the discovered amount straight onto the
+// entry it is handed, so getting this wrong loses it permanently.
+func TestResolveHeldTokensForRedeem_ReturnsLivePointers(t *testing.T) {
+	l := heldLedger(3)
+	cmd := redeemCmdWithTokens(true, true, []string{"tok-0", "tok-1"}, false)
+
+	got, err := resolveHeldTokensForRedeem(cmd, l)
+	if err != nil {
+		t.Fatalf("resolveHeldTokensForRedeem() error = %v", err)
+	}
+	for _, e := range got {
+		amt := uint64(424242)
+		e.AmountMillis = &amt
+	}
+	for i := 0; i < 2; i++ {
+		if l.Entries[i].AmountMillis == nil || *l.Entries[i].AmountMillis != 424242 {
+			t.Errorf("l.Entries[%d].AmountMillis = %v, want the write to land on the live entry", i, l.Entries[i].AmountMillis)
+		}
+	}
+}
+
+func TestResolveHeldTokensForRedeem_AllSelectsEveryHeldToken(t *testing.T) {
+	l := heldLedger(3)
+	cmd := redeemCmdWithTokens(true, true, nil, true)
+
+	got, err := resolveHeldTokensForRedeem(cmd, l)
+	if err != nil {
+		t.Fatalf("resolveHeldTokensForRedeem(--all) error = %v", err)
+	}
+	if len(got) != 3 {
+		t.Errorf("--all selected %d tokens, want all 3", len(got))
+	}
+}
+
+// TestResolveHeldTokensForRedeem_DuplicateTokenRefused matters because the second
+// attempt would not fail cleanly: a Hub deletes a spent slice and then stays
+// silent about it, so redeeming the same bill twice in one run would wait out the
+// whole timeout and report a network failure for what is really a caller mistake.
+func TestResolveHeldTokensForRedeem_DuplicateTokenRefused(t *testing.T) {
+	l := heldLedger(2)
+	cmd := redeemCmdWithTokens(true, true, []string{"tok-0", "tok-0"}, false)
+
+	if _, err := resolveHeldTokensForRedeem(cmd, l); err == nil {
+		t.Fatal("expected an error when the same token is named twice")
+	}
+}
+
+func TestResolveHeldTokensForRedeem_TokenAndAllTogetherRefused(t *testing.T) {
+	l := heldLedger(2)
+	cmd := redeemCmdWithTokens(true, true, []string{"tok-0"}, true)
+
+	if _, err := resolveHeldTokensForRedeem(cmd, l); err == nil {
+		t.Fatal("expected an error when both --token and --all are given")
+	}
+}
+
+// TestResolveHeldTokensForRedeem_SpentTokenRefused keeps the rule the
+// single-token path already enforced, now applied to every id in the list.
+func TestResolveHeldTokensForRedeem_SpentTokenRefused(t *testing.T) {
+	l := heldLedger(2)
+	l.Entries[1].Status = ledger.StatusRedeemed
+	cmd := redeemCmdWithTokens(true, true, []string{"tok-0", "tok-1"}, false)
+
+	if _, err := resolveHeldTokensForRedeem(cmd, l); err == nil {
+		t.Fatal("expected an error for a token the ledger already records as redeemed")
+	}
+}
+
+func TestResolveHeldTokensForRedeem_SingleHeldStillAutoPicks(t *testing.T) {
+	l := heldLedger(1)
+	cmd := redeemCmdWithTokens(false, false, nil, false)
+
+	got, err := resolveHeldTokensForRedeem(cmd, l)
+	if err != nil {
+		t.Fatalf("resolveHeldTokensForRedeem() error = %v", err)
+	}
+	if len(got) != 1 || got[0].ID != "tok-0" {
+		t.Errorf("selected %v, want just tok-0 — the single-held auto-pick must be unchanged", heldIDs(got))
+	}
+}
+
+// TestResolveHeldTokensForRedeem_JSONModeStillRefusesToGuess pins a deliberate
+// asymmetry with consolidate, which DOES process every group under --json.
+// Redeeming pays out irreversibly, so a script that did not say which bills it
+// meant must not have that decided for it — and the error has to name --all,
+// which is how a script says it means all of them.
+func TestResolveHeldTokensForRedeem_JSONModeStillRefusesToGuess(t *testing.T) {
+	l := heldLedger(3)
+	cmd := redeemCmdWithTokens(true, false, nil, false)
+
+	_, err := resolveHeldTokensForRedeem(cmd, l)
+	if err == nil {
+		t.Fatal("expected a usage error under --json with several held tokens")
+	}
+	if !strings.Contains(err.Error(), "--all") {
+		t.Errorf("error does not mention --all, so a script cannot discover how to proceed: %v", err)
+	}
+}
+
+// --- printRedeemOutcomes / firstRedeemError: reporting a run in which some
+// payouts succeeded and others did not.
+
+func okOutcome(id string, amount uint64, fee uint64, preimage string) redeemOutcome {
+	return redeemOutcome{
+		EntryID:      id,
+		AmountMillis: &amount,
+		Result:       &nipcash.CashRedeemResult{FeesPaid: fee, Preimage: preimage},
+	}
+}
+
+// TestPrintRedeemOutcomes_SingleSuccessKeepsTheLegacyJSONShape guards the --json
+// contract: the one-bill case is what every existing consumer parses, so it must
+// keep emitting a top-level redeemed_token/preimage object rather than an array.
+func TestPrintRedeemOutcomes_SingleSuccessKeepsTheLegacyJSONShape(t *testing.T) {
+	outcomes := []redeemOutcome{okOutcome("tok-0", 1000, 7, "deadbeef")}
+	out := withCapturedStdout(func() { printRedeemOutcomes(true, outcomes, "savings", "") })
+
+	var got map[string]any
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("output is not one JSON object: %v\n%s", err, out)
+	}
+	if got["redeemed_token"] != "tok-0" {
+		t.Errorf("lost the top-level redeemed_token — this breaks every --json consumer:\n%s", out)
+	}
+	if got["preimage"] != "deadbeef" {
+		t.Errorf("lost the top-level preimage:\n%s", out)
+	}
+	if _, ok := got["redeemed"]; ok {
+		t.Errorf("single success used the array shape, changing the established contract:\n%s", out)
+	}
+}
+
+// TestPrintRedeemOutcomes_PartialRunReportsEveryBill is the core of why this work
+// exists. Each payout is separate and irreversible, so a run where bill 1 paid
+// and bill 2 failed must report BOTH — the preimage of the one that paid is the
+// only proof that it did.
+func TestPrintRedeemOutcomes_PartialRunReportsEveryBill(t *testing.T) {
+	outcomes := []redeemOutcome{
+		okOutcome("tok-0", 1000, 0, "beef01"),
+		{EntryID: "tok-1", Err: output.NetworkError(&cobra.Command{}, errors.New("relay went away"))},
+	}
+	out := withCapturedStdout(func() { printRedeemOutcomes(true, outcomes, "savings", "") })
+
+	var got map[string]any
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("output is not one JSON object: %v\n%s", err, out)
+	}
+	rows, _ := got["redeemed"].([]any)
+	if len(rows) != 2 {
+		t.Fatalf("reported %d bills, want 2 — a failure must not hide the one that paid:\n%s", len(rows), out)
+	}
+	first, _ := rows[0].(map[string]any)
+	second, _ := rows[1].(map[string]any)
+	if first["status"] != "ok" || first["preimage"] != "beef01" {
+		t.Errorf("bill 1 lost its proof of payment: %v", first)
+	}
+	if second["status"] != "failed" || second["code"] != "network" {
+		t.Errorf("bill 2 not reported as a classified failure: %v", second)
+	}
+}
+
+// TestPrintRedeemOutcomes_NotAttemptedIsNotAFailure covers the third state. A
+// bill in a run the person declined had no wire call made for it, so reporting it
+// as failed would invite a retry of something that never happened.
+func TestPrintRedeemOutcomes_NotAttemptedIsNotAFailure(t *testing.T) {
+	outcomes := []redeemOutcome{okOutcome("tok-0", 1000, 0, "beef01"), {EntryID: "tok-1"}}
+	out := withCapturedStdout(func() { printRedeemOutcomes(true, outcomes, "savings", "") })
+
+	if !strings.Contains(out, `"status": "not_attempted"`) {
+		t.Errorf("a bill that was never attempted is not reported as such:\n%s", out)
+	}
+	if err := firstRedeemError(outcomes); err != nil {
+		t.Errorf("firstRedeemError = %v, want nil — nothing failed, so the exit code must stay 0", err)
+	}
+}
+
+func TestPrintRedeemOutcomes_InvoiceDestinationUsesItsOwnField(t *testing.T) {
+	outcomes := []redeemOutcome{okOutcome("tok-0", 1000, 0, "beef01"), {EntryID: "tok-1"}}
+	out := withCapturedStdout(func() { printRedeemOutcomes(true, outcomes, "invoice lnbc1…", "lnbc1fullinvoice") })
+
+	if !strings.Contains(out, `"to_invoice": "lnbc1fullinvoice"`) {
+		t.Errorf("an invoice destination must report the whole invoice under to_invoice, not a truncated to_wallet:\n%s", out)
+	}
+	if strings.Contains(out, `"to_wallet"`) {
+		t.Errorf("to_wallet must not be set for an invoice destination:\n%s", out)
+	}
+}
+
+func TestFirstRedeemError_PreservesClassification(t *testing.T) {
+	classified := output.NetworkError(&cobra.Command{}, errors.New("relay unreachable"))
+	outcomes := []redeemOutcome{okOutcome("tok-0", 1000, 0, "beef01"), {EntryID: "tok-1", Err: classified}}
+
+	got := firstRedeemError(outcomes)
+	if got == nil {
+		t.Fatal("firstRedeemError = nil, want the failing bill's error")
+	}
+	if output.ExitCode(got) != output.ExitCode(classified) {
+		t.Errorf("exit code = %d, want %d — classification was lost", output.ExitCode(got), output.ExitCode(classified))
+	}
+}
+
+// TestRedeemRecoveryHint_NamesEveryPreimage covers the worst case in this file:
+// the payouts happened and recording them locally did not. A preimage is the only
+// proof a specific payment occurred, so every one has to be in the message.
+func TestRedeemRecoveryHint_NamesEveryPreimage(t *testing.T) {
+	outcomes := []redeemOutcome{
+		okOutcome("tok-0", 1000, 0, "beef01"),
+		{EntryID: "tok-1", Err: errors.New("nope")},
+		okOutcome("tok-2", 3000, 0, "beef02"),
+	}
+	got := redeemRecoveryHint(outcomes)
+	for _, want := range []string{"tok-0=beef01", "tok-2=beef02"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("recovery hint is missing %q — that payment becomes unreconcilable: %s", want, got)
+		}
+	}
+	if strings.Contains(got, "tok-1") {
+		t.Errorf("recovery hint names a bill that never paid out: %s", got)
+	}
+}
+
+func TestRedeemConfirmMessage_SingleBillUnchangedMultiShowsTheTotal(t *testing.T) {
+	one := []redeemPlan{{Quote: redeemQuote{AmountMillis: 1000}}}
+	if got := redeemConfirmMessage(one, "savings"); !strings.Contains(got, "into savings?") || strings.Contains(got, "tokens") {
+		t.Errorf("single-bill prompt changed shape: %q", got)
+	}
+	two := []redeemPlan{{Quote: redeemQuote{AmountMillis: 1000}}, {Quote: redeemQuote{AmountMillis: 2000}}}
+	got := redeemConfirmMessage(two, "savings")
+	if !strings.Contains(got, "2 tokens") {
+		t.Errorf("multi-bill prompt does not say how many: %q", got)
+	}
+	// The total is the number a person actually has to check before agreeing.
+	if !strings.Contains(got, output.FormatAmount(3000)) {
+		t.Errorf("multi-bill prompt does not show the total: %q", got)
+	}
+}
+
+// TestRedeemTimeout_ScalesWithBillCount guards against the failure mode a fixed
+// budget would reintroduce: aborting a large batch part-way through, which for a
+// money path is the worst available outcome, since some bills would have paid out
+// and the rest would be unknown.
+func TestRedeemTimeout_ScalesWithBillCount(t *testing.T) {
+	if one, four := redeemTimeout(1), redeemTimeout(4); four <= one {
+		t.Errorf("redeemTimeout(4) = %v, want more than redeemTimeout(1) = %v", four, one)
+	}
+	if got := redeemTimeout(0); got <= 0 {
+		t.Errorf("redeemTimeout(0) = %v, want a positive budget", got)
+	}
+	// Bounded, so a caller passing an absurd count cannot hang indefinitely.
+	if got := redeemTimeout(10000); got > 5*time.Minute {
+		t.Errorf("redeemTimeout(10000) = %v, want it capped", got)
+	}
+}
+
+// TestWorthReportingRedeemRun_SingleFailureStaysQuietOnStdout pins the one place
+// this work must NOT change behaviour. A single bill that failed has always been
+// described by its error on stderr alone, with nothing on stdout; a script that
+// checked for empty stdout on failure must keep working. The per-bill report only
+// earns its place once the error cannot describe the run by itself.
+func TestWorthReportingRedeemRun_SingleFailureStaysQuietOnStdout(t *testing.T) {
+	justFailed := []redeemOutcome{{EntryID: "tok-0", Err: errors.New("nope")}}
+	if worthReportingRedeemRun(justFailed) {
+		t.Error("a lone failed bill should print no result document — its error already says everything")
+	}
+	// As soon as anything paid out, silence would hide a real payment.
+	if !worthReportingRedeemRun([]redeemOutcome{okOutcome("tok-0", 1000, 0, "beef01")}) {
+		t.Error("a bill that paid out must be reported")
+	}
+	// Several bills: which one failed is information the single error cannot carry.
+	twoBills := []redeemOutcome{{EntryID: "tok-0", Err: errors.New("nope")}, {EntryID: "tok-1", Err: errors.New("nope")}}
+	if !worthReportingRedeemRun(twoBills) {
+		t.Error("with several bills the per-bill report is the only way to see which failed")
 	}
 }

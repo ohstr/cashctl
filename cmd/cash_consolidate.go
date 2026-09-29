@@ -218,7 +218,14 @@ func runCashConsolidate(cmd *cobra.Command, args []string) error {
 	}
 
 	outcomes := consolidateGroups(cmd, l, chosen, toFlag, jsonMode, yesFlag)
-	printConsolidateOutcomes(jsonMode, outcomes)
+	// A single group that failed is fully described by its own error on stderr,
+	// which is exactly what this command has always printed for it — so no
+	// result document is emitted there, keeping the single-group failure path
+	// unchanged. With more than one group, or any group that actually merged,
+	// the error alone cannot describe the run.
+	if len(outcomes) > 1 || (len(outcomes) == 1 && outcomes[0].Err == nil) {
+		printConsolidateOutcomes(jsonMode, outcomes)
+	}
 
 	// Reported first, then failed. The full picture is already on stdout in both
 	// modes, so the returned error only has to drive the exit code.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/ohstr/nmilat/nip47"
@@ -22,15 +23,30 @@ import (
 func newCashRedeemCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "redeem [wallet]",
-		Short: "Redeem a held cash token into a Lightning wallet",
-		Long:  `Redeems a held cash token into a Lightning wallet, or straight into any invoice via --invoice.`,
+		Short: "Redeem held cash token(s) into a Lightning wallet",
+		Long: `Redeems one or more held cash tokens into a Lightning wallet, or a single
+token straight into any invoice via --invoice.
+
+Several tokens can be redeemed in one command: name them with a repeatable
+(or comma-separated) --token, or pass --all for every held token. Each
+token is paid out into its own invoice, because a slice pays out exactly
+once and an invoice is payable once. Every selected token is attempted and
+reported even if another fails — each payout is separate and irreversible,
+so a failure part-way through must not hide which ones already paid.`,
 		Example: `  cashctl redeem
   cashctl redeem savings --token tok-abc123
+  cashctl redeem --token tok-abc123,tok-def456
+  cashctl redeem --all
   cashctl redeem --invoice lnbc1...`,
 		Args: output.MaximumNArgs(1),
 		RunE: runCashRedeem,
 	}
-	cmd.Flags().String("token", "", "which held token to redeem (auto-picked if you only hold one)")
+	// StringSlice, not String: redeeming several bills in one command is the
+	// point of the batch work, and repeating/comma-separating --token is how a
+	// script names them. A single `--token <id>` parses identically to before,
+	// so nothing that already worked changes.
+	cmd.Flags().StringSlice("token", nil, "which held token(s) to redeem — repeatable, or comma-separated (auto-picked if you only hold one)")
+	cmd.Flags().Bool("all", false, "redeem every held token")
 	cmd.Flags().String("into", "", "which wallet to redeem into (defaults to your default wallet)")
 	cmd.Flags().String("invoice", "", "redeem straight into this external invoice")
 	cmd.Flags().String("as", "", "override credential (pubkey:<priv> | connection-key:... | cash:<secret>)")
@@ -74,69 +90,67 @@ func runCashRedeem(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return output.RuntimeError(cmd, err)
 	}
-	entry, err := resolveHeldToken(cmd, l)
+	entries, err := resolveHeldTokensForRedeem(cmd, l)
 	if err != nil {
 		return err
 	}
-	cred, err := resolveCredential(cmd, entry)
-	if err != nil {
-		return err
+	// One invoice can only be paid once, and a slice pays out exactly once, so
+	// N bills need N invoices. Refused rather than silently redeeming only the
+	// first: a caller asking for several bills into one invoice has a wrong
+	// model of what redeeming does, and quietly doing part of it would leave
+	// them believing the rest had been paid too.
+	if explicitInvoice != "" && len(entries) > 1 {
+		return output.InvocationError(cmd, fmt.Errorf("--invoice redeems into one invoice, but %d tokens were selected — an invoice is payable once, so each token needs its own; drop --invoice to have them paid into a wallet, or redeem them one at a time", len(entries)))
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), redeemTimeout(len(entries)))
 	defer cancel()
 
-	var sourceClient *nipcashclient.Client
-	err = WithSpinner(jsonMode, "Connecting...", func() error {
-		c, cErr := nipcashclient.Connect(ctx, entry.Token)
-		if cErr != nil {
-			return cErr
+	// Prepared per bill — credential, connection, live quote — and a bill that
+	// cannot be prepared becomes its own failed outcome rather than aborting the
+	// run. No money has moved for any of them at this point.
+	//
+	// Deliberately before the destination is resolved, preserving the order a
+	// single-bill redeem has always had: resolveCredential's own usage error for
+	// a cash-mode token with no stored secret comes first, and
+	// TestRedeem_NoWalletConfigured's reasoning depends on exactly that
+	// precedence.
+	plans, outcomes := prepareRedeems(ctx, cmd, l, entries, explicitInvoice, jsonMode)
+	defer func() {
+		for _, p := range plans {
+			p.Client.Close()
 		}
-		sourceClient = c
-		return nil
-	})
-	if err != nil {
-		return output.NetworkError(cmd, err)
+	}()
+	if len(plans) == 0 {
+		// Nothing left to pay into, so the destination is never resolved or
+		// dialled — there would be nothing to ask it for.
+		if worthReportingRedeemRun(outcomes) {
+			printRedeemOutcomes(jsonMode, outcomes, "", explicitInvoice)
+		}
+		return firstRedeemError(outcomes)
 	}
-	defer sourceClient.Close()
 
-	var invoice string
-	var destName string
-	var message string
+	// The destination is resolved and dialled ONCE: every invoice comes from it,
+	// and with several bills there is no "the bill" whose quote could size a
+	// single shared invoice anyway.
+	//
+	// --invoice deliberately skips all of it — see
+	// TestRedeem_InvoiceFlagBypassesNoWalletCheck, which exists to prove the
+	// no-wallet-configured check really is bypassed rather than merely
+	// preempted by some other error.
+	destName := ""
 	if explicitInvoice != "" {
-		invoice = explicitInvoice
-		// "the invoice above" used to name a line this command never
-		// actually printed — nothing shows the invoice anywhere before
-		// this prompt/result, in either mode. A bolt11 invoice carries no
-		// secret (it's meant to be shared/paid by anyone), so — unlike
-		// safeDestinationLabel's own wallet-connection case — there's
-		// nothing sensitive about naming a piece of it directly.
+		// "the invoice above" used to name a line this command never actually
+		// printed — nothing shows the invoice anywhere before this
+		// prompt/result, in either mode. A bolt11 invoice carries no secret
+		// (it's meant to be shared/paid by anyone), so — unlike
+		// safeDestinationLabel's own wallet-connection case — there's nothing
+		// sensitive about naming a piece of it directly.
 		destName = fmt.Sprintf("invoice %s…", truncateInvoiceForDisplay(explicitInvoice))
-		message = fmt.Sprintf("Redeem into %s?", destName)
-		if entry.AmountMillis != nil {
-			message = fmt.Sprintf("Redeem %s into %s?", output.FormatAmount(int64(*entry.AmountMillis)), destName)
-		}
 	} else {
-		// Always a live CheckClaim, in every mode including --json/--yes:
-		// the fee quote isn't confirmation-prompt decoration anymore, it
-		// decides the destination invoice's amount below (see
-		// redeemInvoiceAmount) — "skip it, nothing prints the preview" is
-		// no longer a valid reason to bypass this.
-		var quote redeemQuote
-		err = WithSpinner(jsonMode, "Checking fee quote...", func() error {
-			q, qErr := resolveRedeemQuote(cmd, l, entry, sourceClient)
-			if qErr != nil {
-				return qErr
-			}
-			quote = q
-			return nil
-		})
-		if err != nil {
-			return err
-		}
-		destWalletName, destValue, err := resolveDestWallet(cmd, intoValue)
-		if err != nil {
-			return err
+		destWalletName, destValue, dErr := resolveDestWallet(cmd, intoValue)
+		if dErr != nil {
+			return dErr
 		}
 		var destClient *relayclient.NWCClient
 		err = WithSpinner(jsonMode, "Preparing invoice...", func() error {
@@ -145,11 +159,6 @@ func runCashRedeem(cmd *cobra.Command, args []string) error {
 				return cErr
 			}
 			destClient = c
-			tx, cErr := c.MakeInvoice(ctx, nip47.MakeInvoiceParams{Amount: int64(redeemInvoiceAmount(quote))})
-			if cErr != nil {
-				return cErr
-			}
-			invoice = tx.Invoice
 			return nil
 		})
 		if err != nil {
@@ -157,79 +166,605 @@ func runCashRedeem(cmd *cobra.Command, args []string) error {
 		}
 		defer destClient.Close()
 		destName = destWalletName
-		message = fmt.Sprintf("Redeem %s into %s?", output.FormatAmount(int64(quote.AmountMillis)), destName)
-		// Linef, not fmt.Println: these are human-only narration — under
-		// --json they used to land on stdout ahead of the result object, so
-		// a script's json.Unmarshal of stdout failed on the first line.
-		if fee := previewSuffix(quote); fee != "" {
+
+		plans = makeRedeemInvoices(ctx, cmd, destClient, plans, outcomes, jsonMode)
+		if len(plans) == 0 {
+			if worthReportingRedeemRun(outcomes) {
+				printRedeemOutcomes(jsonMode, outcomes, destName, explicitInvoice)
+			}
+			return firstRedeemError(outcomes)
+		}
+	}
+
+	// Narration for the single-bill case, unchanged: the fee caveat and the
+	// expiry warning that the confirmation prompt has always been preceded by.
+	// Not printed for a multi-bill run, where one line per bill about a fee that
+	// may or may not apply would bury the total the person actually has to
+	// check — the per-bill detail is in the result instead.
+	if len(plans) == 1 && explicitInvoice == "" {
+		// Linef, not fmt.Println: these are human-only narration — under --json
+		// they used to land on stdout ahead of the result object, so a script's
+		// json.Unmarshal of stdout failed on the first line.
+		if fee := previewSuffix(plans[0].Quote); fee != "" {
 			output.Notef(jsonMode, "%s", fee)
 		}
-		if w := expiryWarningSuffix(quote.ExpiresAt, "redeem"); w != "" {
+		if w := expiryWarningSuffix(plans[0].Quote.ExpiresAt, "redeem"); w != "" {
 			output.Notef(jsonMode, "%s", w)
 		}
 	}
+
 	// defaultYes=false: moves real money — never accept on a bare Enter.
 	// --yes/--json skip this entirely, unaffected.
-	if !Confirm(cmd, false, message) {
+	if !Confirm(cmd, false, redeemConfirmMessage(plans, destName)) {
 		fmt.Println("Cancelled.")
 		return nil
 	}
 
-	var result *nipcash.CashRedeemResult
-	err = WithSpinner(jsonMode, "Redeeming...", func() error {
-		r, cErr := spendCashEntry(entry, cred, func(c nipcash.Credential) (*nipcash.CashRedeemResult, error) {
-			return sourceClient.CashRedeem(ctx, nipcash.CashRedeemParams{Invoice: invoice, Credential: c})
-		})
-		if cErr != nil {
-			return cErr
-		}
-		result = r
-		return nil
-	})
-	if err != nil {
-		return classifyCashTokenNWCErr(cmd, err)
+	executeRedeems(ctx, cmd, l, plans, outcomes, destName, jsonMode)
+
+	// Unlike consolidate/transfer, there's no new token to lose here — the cash
+	// was paid out for real (each result's Preimage proves it) and no longer
+	// exists to recover. What a failed Save leaves wrong is purely local
+	// bookkeeping: these entries stay "held" and get offered again by a later
+	// pick/redeem, so that mismatch has to be reported, not hidden behind an
+	// exit-0 "Redeemed" that implies the ledger agrees.
+	if err := l.Save(); err != nil {
+		// Reported BEFORE returning the save failure, so the preimages of
+		// payments that really happened are on stdout where they can be
+		// recovered from.
+		printRedeemOutcomes(jsonMode, outcomes, destName, explicitInvoice)
+		return reportUnsavedResult(cmd, err, "Redeem", redeemRecoveryHint(outcomes))
 	}
 
-	_ = l.SetStatus(entry.ID, ledger.StatusRedeemed)
-	if entry.AmountMillis != nil {
-		l.AppendHistory("redeem", fmt.Sprintf("redeemed %s into %s", output.FormatAmount(int64(*entry.AmountMillis)), destName))
-	} else {
-		l.AppendHistory("redeem", fmt.Sprintf("redeemed into %s", destName))
+	printRedeemOutcomes(jsonMode, outcomes, destName, explicitInvoice)
+	return firstRedeemError(outcomes)
+}
+
+// redeemTimeout scales the overall budget with how many bills are being
+// redeemed, since each one is its own sequence of round trips (quote, invoice,
+// redeem) against a possibly different Hub. A fixed 30s was right for one bill
+// and would abort a large batch partway through — which for a money path is the
+// worst outcome available, since some bills would have paid out and the rest
+// would be unknown.
+func redeemTimeout(bills int) time.Duration {
+	if bills < 1 {
+		bills = 1
 	}
-	// Unlike consolidate/transfer, there's no new token to lose here — the
-	// cash was paid out for real (result.Preimage proves it) and no longer
-	// exists to recover. What a failed Save leaves wrong is purely local
-	// bookkeeping: this entry stays "held" and gets offered again by a
-	// later pick/redeem, so that mismatch has to be reported, not hidden
-	// behind an exit-0 "Redeemed" that implies the ledger agrees.
-	if err := l.Save(); err != nil {
-		return reportUnsavedResult(cmd, err, "Redeem",
-			fmt.Sprintf("The payment went through (preimage: %s) — this entry will incorrectly keep showing as held until you remove or reconcile it.", result.Preimage))
+	const perBill = 30 * time.Second
+	if d := time.Duration(bills) * perBill; d < 5*time.Minute {
+		return d
+	}
+	return 5 * time.Minute
+}
+
+// redeemPlan is one bill prepared for redemption: its own source connection, its
+// own live quote, and its own invoice.
+//
+// Per-bill rather than shared because all three genuinely are: bills can sit on
+// different Hubs, each Hub quotes its own fee, and an invoice is payable once.
+type redeemPlan struct {
+	Index   int
+	Entry   *ledger.Entry
+	Cred    nipcash.Credential
+	Client  *nipcashclient.Client
+	Quote   redeemQuote
+	Invoice string
+}
+
+// redeemOutcome is what happened to one selected bill. Three states, matching
+// consolidateOutcome and the SDK's own ItemOutcome for the same reason: paid
+// (Result set), not attempted or refused before the wire (Err set), or — for a
+// run the person declined — neither.
+type redeemOutcome struct {
+	EntryID      string
+	AmountMillis *uint64
+	Result       *nipcash.CashRedeemResult
+	Err          error
+}
+
+// prepareRedeems dials, quotes and builds an invoice for each selected bill.
+//
+// Returns the bills that are ready plus an outcome slot for every selected bill,
+// so a bill that failed preparation is reported rather than silently dropped. No
+// money has moved at this point for any of them.
+func prepareRedeems(
+	ctx context.Context,
+	cmd *cobra.Command,
+	l *ledger.Ledger,
+	entries []*ledger.Entry,
+	explicitInvoice string,
+	jsonMode bool,
+) ([]redeemPlan, []redeemOutcome) {
+	outcomes := make([]redeemOutcome, len(entries))
+	plans := make([]redeemPlan, 0, len(entries))
+
+	for i, entry := range entries {
+		outcomes[i] = redeemOutcome{EntryID: entry.ID, AmountMillis: entry.AmountMillis}
+
+		cred, err := resolveCredential(cmd, entry)
+		if err != nil {
+			outcomes[i].Err = err
+			continue
+		}
+
+		var sourceClient *nipcashclient.Client
+		err = WithSpinner(jsonMode, redeemStep(len(entries), i, "Connecting..."), func() error {
+			c, cErr := nipcashclient.Connect(ctx, entry.Token)
+			if cErr != nil {
+				return cErr
+			}
+			sourceClient = c
+			return nil
+		})
+		if err != nil {
+			outcomes[i].Err = output.NetworkError(cmd, err)
+			continue
+		}
+
+		plan := redeemPlan{Index: i, Entry: entry, Cred: cred, Client: sourceClient}
+
+		if explicitInvoice != "" {
+			// Guarded above: --invoice only ever reaches here with one bill.
+			plan.Invoice = explicitInvoice
+			if entry.AmountMillis != nil {
+				plan.Quote = redeemQuote{AmountMillis: *entry.AmountMillis}
+			}
+			plans = append(plans, plan)
+			continue
+		}
+
+		// Always a live CheckClaim, in every mode including --json/--yes: the
+		// fee quote isn't confirmation-prompt decoration anymore, it decides
+		// the destination invoice's amount below (see redeemInvoiceAmount) —
+		// "skip it, nothing prints the preview" is no longer a valid reason to
+		// bypass this.
+		err = WithSpinner(jsonMode, redeemStep(len(entries), i, "Checking fee quote..."), func() error {
+			q, qErr := resolveRedeemQuote(cmd, l, entry, plan.Client)
+			if qErr != nil {
+				return qErr
+			}
+			plan.Quote = q
+			return nil
+		})
+		if err != nil {
+			plan.Client.Close()
+			outcomes[i].Err = err
+			continue
+		}
+		outcomes[i].AmountMillis = entry.AmountMillis
+		plans = append(plans, plan)
+	}
+	return plans, outcomes
+}
+
+// makeRedeemInvoices asks the destination wallet for one invoice per prepared
+// bill, each sized to that bill's own quote.
+//
+// Separated from prepareRedeems so the destination is contacted once per bill
+// only for bills that actually got a quote — and so a destination that starts
+// refusing partway through marks exactly the remaining bills, not the ones
+// already invoiced.
+func makeRedeemInvoices(
+	ctx context.Context,
+	cmd *cobra.Command,
+	destClient *relayclient.NWCClient,
+	plans []redeemPlan,
+	outcomes []redeemOutcome,
+	jsonMode bool,
+) []redeemPlan {
+	ready := make([]redeemPlan, 0, len(plans))
+	for i, p := range plans {
+		if p.Invoice != "" {
+			ready = append(ready, p)
+			continue
+		}
+		var invoice string
+		err := WithSpinner(jsonMode, redeemStep(len(plans), i, "Preparing invoice..."), func() error {
+			tx, cErr := destClient.MakeInvoice(ctx, nip47.MakeInvoiceParams{Amount: int64(redeemInvoiceAmount(p.Quote))})
+			if cErr != nil {
+				return cErr
+			}
+			invoice = tx.Invoice
+			return nil
+		})
+		if err != nil {
+			p.Client.Close()
+			outcomes[p.Index].Err = classifyNWCErr(cmd, err)
+			continue
+		}
+		p.Invoice = invoice
+		ready = append(ready, p)
+	}
+	return ready
+}
+
+// executeRedeems places each prepared bill's cash_redeem call and records what
+// happened, writing outcomes in place.
+//
+// Never stops early. Each call is a separate, irreversible payout, so abandoning
+// the rest on one failure would leave a caller unable to tell which bills paid
+// out — and unlike consolidate there is nothing to re-merge: the cash is simply
+// gone or not.
+func executeRedeems(
+	ctx context.Context,
+	cmd *cobra.Command,
+	l *ledger.Ledger,
+	plans []redeemPlan,
+	outcomes []redeemOutcome,
+	destName string,
+	jsonMode bool,
+) {
+	for i, p := range plans {
+		var result *nipcash.CashRedeemResult
+		err := WithSpinner(jsonMode, redeemStep(len(plans), i, "Redeeming..."), func() error {
+			r, cErr := spendCashEntry(p.Entry, p.Cred, func(c nipcash.Credential) (*nipcash.CashRedeemResult, error) {
+				return p.Client.CashRedeem(ctx, nipcash.CashRedeemParams{Invoice: p.Invoice, Credential: c})
+			})
+			if cErr != nil {
+				return cErr
+			}
+			result = r
+			return nil
+		})
+		if err != nil {
+			outcomes[p.Index].Err = classifyCashTokenNWCErr(cmd, err)
+			continue
+		}
+
+		outcomes[p.Index].Result = result
+		_ = l.SetStatus(p.Entry.ID, ledger.StatusRedeemed)
+		if p.Entry.AmountMillis != nil {
+			l.AppendHistory("redeem", fmt.Sprintf("redeemed %s into %s", output.FormatAmount(int64(*p.Entry.AmountMillis)), destName))
+		} else {
+			l.AppendHistory("redeem", fmt.Sprintf("redeemed into %s", destName))
+		}
+	}
+}
+
+// redeemStep labels a spinner with which bill of how many it is working on, so a
+// multi-bill run does not sit on an unchanging "Redeeming..." with no sense of
+// progress. Single-bill runs keep the original bare label.
+func redeemStep(total, index int, label string) string {
+	if total <= 1 {
+		return label
+	}
+	return fmt.Sprintf("[%d/%d] %s", index+1, total, label)
+}
+
+// redeemConfirmMessage is the one prompt covering the whole run.
+//
+// One prompt rather than one per bill: a person who asked to redeem forty bills
+// has already made the decision, and asking forty times trains them to answer
+// without reading. The total is what they need to check.
+func redeemConfirmMessage(plans []redeemPlan, destName string) string {
+	if len(plans) == 1 {
+		q := plans[0].Quote
+		if q.AmountMillis > 0 {
+			return fmt.Sprintf("Redeem %s into %s?", output.FormatAmount(int64(q.AmountMillis)), destName)
+		}
+		return fmt.Sprintf("Redeem into %s?", destName)
+	}
+	var total uint64
+	for _, p := range plans {
+		total += p.Quote.AmountMillis
+	}
+	if total > 0 {
+		return fmt.Sprintf("Redeem %d tokens (%s) into %s?", len(plans), output.FormatAmount(int64(total)), destName)
+	}
+	return fmt.Sprintf("Redeem %d tokens into %s?", len(plans), destName)
+}
+
+// printRedeemOutcomes renders a whole run, paid and failed together.
+//
+// The single-successful-bill --json shape is deliberately unchanged, because
+// that is what every existing consumer parses. The per-bill array is used only
+// when more than one bill was selected or one of them did not succeed — states
+// in which this command previously could not run at all, so nothing can depend
+// on the old shape there.
+func printRedeemOutcomes(jsonMode bool, outcomes []redeemOutcome, destName, explicitInvoice string) {
+	destKey, destVal := "to_wallet", destName
+	if explicitInvoice != "" {
+		// Distinct field, not a repurposed "to_wallet": destName here names an
+		// invoice, not a registered wallet — and unlike destName's own
+		// truncated display form, the raw invoice isn't secret, so a --json
+		// consumer gets the whole thing, not 12 chars of it.
+		destKey, destVal = "to_invoice", explicitInvoice
+	}
+
+	paid := 0
+	for _, o := range outcomes {
+		if o.Result != nil {
+			paid++
+		}
 	}
 
 	if jsonMode {
-		payload := map[string]any{
-			"redeemed_token": entry.ID,
-			"fee_mloki":      result.FeesPaid, "preimage": result.Preimage,
+		if len(outcomes) == 1 && paid == 1 {
+			o := outcomes[0]
+			output.PrintJSON(map[string]any{
+				"redeemed_token": o.EntryID,
+				"fee_mloki":      o.Result.FeesPaid, "preimage": o.Result.Preimage,
+				destKey: destVal,
+			})
+			return
 		}
-		// Distinct field, not a repurposed "to_wallet": destName here
-		// names an invoice, not a registered wallet — and unlike
-		// destName's own truncated display form, the raw invoice isn't
-		// secret, so a --json consumer gets the whole thing, not 12 chars
-		// of it.
-		if explicitInvoice != "" {
-			payload["to_invoice"] = explicitInvoice
-		} else {
-			payload["to_wallet"] = destName
+		rows := make([]map[string]any, len(outcomes))
+		for i, o := range outcomes {
+			row := map[string]any{"token": o.EntryID}
+			if o.AmountMillis != nil {
+				row["amount_millis"] = *o.AmountMillis
+			}
+			switch {
+			case o.Result != nil:
+				row["status"] = "ok"
+				row["fee_mloki"] = o.Result.FeesPaid
+				row["preimage"] = o.Result.Preimage
+			case o.Err != nil:
+				ce := output.AsCLIError(o.Err)
+				row["status"] = "failed"
+				row["error"] = ce.Err.Error()
+				if ce.RawMessage != "" {
+					row["error"] = ce.RawMessage
+				}
+				row["code"] = string(ce.Code)
+				if ce.NWCCode != "" {
+					row["nwc_code"] = ce.NWCCode
+				}
+			default:
+				// Neither paid nor failed: the run was declined before this
+				// bill was ever attempted. Never reported as a failure — no
+				// wire call was made, so there is nothing to retry or
+				// reconcile.
+				row["status"] = "not_attempted"
+			}
+			rows[i] = row
 		}
-		output.PrintJSON(payload)
-		return nil
+		output.PrintJSON(map[string]any{"redeemed": rows, destKey: destVal})
+		return
 	}
-	fmt.Printf("Redeemed → %s.\n", destName)
-	if result.FeesPaid > 0 {
-		fmt.Printf("Fee: %s.\n", output.FormatAmount(int64(result.FeesPaid)))
+
+	for _, o := range outcomes {
+		switch {
+		case o.Result != nil:
+			amount := ""
+			if o.AmountMillis != nil {
+				amount = " " + output.FormatAmount(int64(*o.AmountMillis))
+			}
+			fmt.Printf("Redeemed%s → %s.\n", amount, destName)
+			if o.Result.FeesPaid > 0 {
+				fmt.Printf("Fee: %s.\n", output.FormatAmount(int64(o.Result.FeesPaid)))
+			}
+		case o.Err != nil:
+			// Named by token id: with several bills in play, "it failed"
+			// without saying which one is not actionable.
+			fmt.Printf("Failed to redeem %s: %v\n", output.Sanitize(o.EntryID), output.AsCLIError(o.Err).Err)
+		}
+	}
+	if len(outcomes) > 1 {
+		fmt.Printf("%d of %d tokens redeemed.\n", paid, len(outcomes))
+	}
+}
+
+// worthReportingRedeemRun reports whether the run has something to say beyond
+// the returned error.
+//
+// A single bill that failed is fully described by its own error on stderr, and
+// that is exactly what this command has always printed for it — so no result
+// document is emitted, keeping single-bill behaviour byte-for-byte unchanged. As
+// soon as there is more than one bill, or any bill actually paid out, the error
+// alone cannot describe the run and the per-bill report becomes the point.
+func worthReportingRedeemRun(outcomes []redeemOutcome) bool {
+	if len(outcomes) > 1 {
+		return true
+	}
+	for _, o := range outcomes {
+		if o.Result != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// firstRedeemError returns the first failed bill's own error, or nil.
+//
+// The original error, neither wrapped nor joined, so its classification,
+// retryable flag and any wallet-side NWC code survive exactly as they would have
+// for a single bill — AsCLIError unwraps to the inner *CLIError and prints that,
+// so a wrapper's text would never reach the user anyway. The complete per-bill
+// picture is on stdout instead.
+func firstRedeemError(outcomes []redeemOutcome) error {
+	for _, o := range outcomes {
+		if o.Err != nil {
+			return o.Err
+		}
 	}
 	return nil
+}
+
+// redeemRecoveryHint lists the preimages of payments that really happened, for
+// the case where the payouts succeeded but recording them locally did not.
+//
+// Every preimage is included rather than just a count: a preimage is the proof
+// that a specific payment occurred, and it is the only thing that lets a person
+// reconcile a ledger that now disagrees with reality.
+func redeemRecoveryHint(outcomes []redeemOutcome) string {
+	var preimages []string
+	for _, o := range outcomes {
+		if o.Result != nil {
+			preimages = append(preimages, fmt.Sprintf("%s=%s", o.EntryID, o.Result.Preimage))
+		}
+	}
+	if len(preimages) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("These payments went through (token=preimage): %s — those entries will incorrectly keep showing as held until you remove or reconcile them.",
+		strings.Join(preimages, ", "))
+}
+
+// resolveHeldTokensForRedeem picks which held tokens to redeem: --token by ID
+// (repeatable, or comma-separated), --all for every held token, or the
+// single-entry auto-pick/interactive-pick that redeem has always done.
+//
+// Separate from resolveHeldToken rather than a replacement for it, because
+// transfer, inspect and wallet protect all act on exactly one token and share
+// that function — widening it would force a multi-token shape on three commands
+// that have no use for one.
+//
+// Each returned pointer is re-resolved through l.Find, for the reason
+// resolveHeldToken's own doc comment sets out at length: l.Held() returns
+// copies, so a pointer into it looks live and silently does not write through.
+func resolveHeldTokensForRedeem(cmd *cobra.Command, l *ledger.Ledger) ([]*ledger.Entry, error) {
+	ids, _ := cmd.Flags().GetStringSlice("token")
+	all, _ := cmd.Flags().GetBool("all")
+
+	if len(ids) > 0 && all {
+		return nil, output.InvocationError(cmd, fmt.Errorf("got both --token and --all — pass one or the other"))
+	}
+
+	if len(ids) > 0 {
+		out := make([]*ledger.Entry, 0, len(ids))
+		seen := make(map[string]struct{}, len(ids))
+		for _, raw := range ids {
+			id := strings.TrimSpace(raw)
+			if id == "" {
+				continue
+			}
+			// A bill named twice must not be redeemed twice. The second attempt
+			// would fail anyway — the Hub deletes a spent slice — but it would
+			// fail as a network timeout against a Hub that has gone
+			// deliberately silent, reported as though something were wrong.
+			if _, dup := seen[id]; dup {
+				return nil, output.InvocationError(cmd, fmt.Errorf("token %q given more than once", output.Sanitize(id)))
+			}
+			seen[id] = struct{}{}
+			e, err := heldTokenByID(cmd, l, id)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, e)
+		}
+		if len(out) == 0 {
+			return nil, output.InvocationError(cmd, fmt.Errorf("--token was given no ids"))
+		}
+		return out, nil
+	}
+
+	held := l.Held()
+	if len(held) == 0 {
+		return nil, output.NotFoundError(cmd, "", fmt.Errorf("you have no held cash tokens — receive one first with `cashctl receive <token>`"))
+	}
+	if all {
+		out := make([]*ledger.Entry, 0, len(held))
+		for _, h := range held {
+			e, ok := l.Find(h.ID)
+			if !ok {
+				continue
+			}
+			out = append(out, e)
+		}
+		return out, nil
+	}
+	if len(held) == 1 {
+		e, ok := l.Find(held[0].ID)
+		if !ok {
+			return nil, output.NotFoundError(cmd, held[0].ID, fmt.Errorf("no held token %q", held[0].ID))
+		}
+		return []*ledger.Entry{e}, nil
+	}
+	return pickHeldTokens(cmd, l, held)
+}
+
+// pickHeldTokens asks which of several held tokens to redeem, allowing more than
+// one.
+//
+// Under --json/--yes this stays a usage error rather than quietly redeeming
+// everything. That is a deliberate asymmetry with consolidate, which does
+// process every group non-interactively: consolidating is reversible in the
+// sense that the value stays yours, whereas redeeming pays out irreversibly, so
+// a script that did not say which bills it meant must not have that decided for
+// it. --all is how a script says it means all of them.
+func pickHeldTokens(cmd *cobra.Command, l *ledger.Ledger, held []ledger.Entry) ([]*ledger.Entry, error) {
+	jsonMode, _ := cmd.Flags().GetBool("json")
+	yesFlag, _ := cmd.Flags().GetBool("yes")
+	tooManyErr := func() error {
+		// This branch is only reached under --json/--yes — no terminal to
+		// interactively pick from — so the hint points at --json too: wallet
+		// show's plain-text listing deliberately never prints entry.ID
+		// (docs/private/wallet-abstraction-plan.md), only --json does.
+		return output.UsageError(cmd, fmt.Errorf("you hold %d cash tokens — specify which with --token <id> (repeatable, or comma-separated), or --all to redeem every one (see `cashctl wallet show --json`)", len(held)))
+	}
+	if jsonMode || yesFlag {
+		return nil, tooManyErr()
+	}
+
+	output.Notef(false, "You hold %d cash tokens:", len(held))
+	for i, e := range held {
+		amount := "unknown amount"
+		if e.AmountMillis != nil {
+			amount = output.FormatAmount(int64(*e.AmountMillis))
+		}
+		output.Notef(false, "  %d) %s   received %s", i+1, amount, formatReceivedDate(e.ReceivedAt))
+	}
+	choice, err := PromptLine(fmt.Sprintf("Which one(s)? [1-%d, comma-separated, or 'all'] ", len(held)))
+	if err != nil {
+		return nil, output.RuntimeError(cmd, err)
+	}
+	choice = strings.TrimSpace(choice)
+
+	var picked []ledger.Entry
+	switch {
+	case strings.EqualFold(choice, "all"):
+		picked = held
+	case choice == "":
+		// A bare Enter is NOT "all" here, unlike pickMinterGroups', because
+		// this one pays out irreversibly: the cheap default must be the one
+		// that spends nothing.
+		return nil, tooManyErr()
+	default:
+		for _, part := range strings.Split(choice, ",") {
+			idx := parseChoice(strings.TrimSpace(part), len(held))
+			if idx < 0 {
+				return nil, output.UsageError(cmd, fmt.Errorf("invalid selection %q", part))
+			}
+			picked = append(picked, held[idx])
+		}
+	}
+
+	out := make([]*ledger.Entry, 0, len(picked))
+	seen := make(map[string]struct{}, len(picked))
+	for _, p := range picked {
+		if _, dup := seen[p.ID]; dup {
+			continue
+		}
+		seen[p.ID] = struct{}{}
+		e, ok := l.Find(p.ID)
+		if !ok {
+			return nil, output.NotFoundError(cmd, p.ID, fmt.Errorf("no held token %q", p.ID))
+		}
+		out = append(out, e)
+	}
+	return out, nil
+}
+
+// heldTokenByID resolves one --token id to a live ledger entry, refusing a bill
+// that our own ledger already records as spent.
+//
+// Factored out of resolveHeldToken so the multi-token path applies exactly the
+// same rule to every id. The spent check is not merely tidy: a Hub deletes a
+// bill once nothing is left on it and then stays silent about it, so dialling a
+// spent bill waits out the whole timeout and reports a network failure. Our own
+// ledger recorded the spend and is the better source — the Hub is deliberately
+// refusing to confirm it.
+func heldTokenByID(cmd *cobra.Command, l *ledger.Ledger, id string) (*ledger.Entry, error) {
+	e, ok := l.Find(id)
+	if !ok {
+		return nil, output.NotFoundError(cmd, id, fmt.Errorf("no held token %q", id))
+	}
+	if spent := spentStatusDescription(e.Status); spent != "" {
+		return nil, output.NotFoundError(cmd, id,
+			fmt.Errorf("token %q was already %s, so it no longer exists on the Hub", id, spent))
+	}
+	return e, nil
 }
 
 // resolveHeldToken picks which held token to act on: --token by ID, or

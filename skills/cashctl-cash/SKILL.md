@@ -71,14 +71,58 @@ override for a held token.
 ```sh
 cashctl redeem --json                              # auto-picks your one held token + default wallet
 cashctl redeem work --token tok-a1b2 --json         # positional wallet name — or --into work
+cashctl redeem --token tok-a1b2,tok-c3d4 --json     # several at once — repeatable, or comma-separated
+cashctl redeem --all --json                        # every held token
 cashctl redeem --invoice lnbc1... --json           # bypasses both — any invoice, no cashctl wallet needed
 ```
 
-If you hold more than one token and `--token`/`--json`/`--yes` isn't given,
-`redeem` (and `transfer`/`consolidate` below) prompts interactively with a
-numbered list instead of failing outright — under `--json`/`--yes`/a
-non-interactive script, `--token <id>` is still required (`cashctl wallet
-show` lists held-token IDs), since there's no terminal to prompt from. A
+**Several tokens in one call.** `--token` is repeatable (and accepts a
+comma-separated list); `--all` selects every held token. `--token` and
+`--all` together is a usage error, and naming the same token twice is too
+(the second attempt could only fail, and would fail as a misleading
+network timeout, because a Hub deletes a spent slice and then stays silent
+about it).
+
+Each token is paid out into **its own invoice**: a slice pays out exactly
+once and an invoice is payable once, so N tokens need N invoices, all
+drawn from the one destination wallet. `--invoice` therefore accepts only
+one token — combining it with several is a usage error rather than a
+partial redemption.
+
+Every selected token is attempted, and one failing never stops the others:
+each payout is separate and irreversible, so aborting part-way through
+would leave the caller unable to tell which tokens already paid. Under
+`--json` a multi-token run returns `{"redeemed": [...], "to_wallet"}` (or
+`to_invoice`), one entry per token with `token`, `amount_millis`, and a
+`status` of:
+
+| `status` | meaning |
+|---|---|
+| `ok` | paid out; entry also carries `fee_mloki` and `preimage` |
+| `failed` | entry also carries `error`, `code`, and `nwc_code` when the wallet returned one |
+| `not_attempted` | the run was declined before this token was reached — no wire call was made, so there is nothing to retry or reconcile |
+
+A single-token run keeps the original top-level
+`{"redeemed_token", "fee_mloki", "preimage", "to_wallet"|"to_invoice"}`
+shape, and a single token that *failed* still prints nothing on stdout —
+its error on stderr says everything. As with `consolidate`, **a partially
+successful run prints its full result on stdout AND exits nonzero**, so a
+nonzero exit does not mean nothing was paid: read stdout before retrying
+anything. A `preimage` is the only proof a given payout happened, so if
+recording the run locally fails afterwards, every preimage is named in the
+error message for reconciliation.
+
+If you hold more than one token and none of
+`--token`/`--all`/`--json`/`--yes` is given, `redeem` (and
+`transfer`/`consolidate` below) prompts interactively with a numbered list
+instead of failing outright — accepting a comma-separated selection or
+`all`, though a bare Enter is **not** "all" here, since redeeming pays out
+irreversibly and the cheap default must be the one that spends nothing.
+Under `--json`/`--yes`/a non-interactive script, `--token <id>` or `--all`
+is still required (`cashctl wallet show` lists held-token IDs), since
+there's no terminal to prompt from — note this is deliberately stricter
+than `consolidate`, which does process every group non-interactively,
+because consolidating keeps the value yours and redeeming does not. A
 **connection-key-bound** token needs an explicit `--as
 connection-key:<privkey>,<platform>,<external-id>,<attestation-file>` —
 cashctl does not auto-refresh a connection-key credential from a relay
@@ -88,7 +132,11 @@ automatic), so the error names exactly what to pass.
 In an interactive (non-`--json`/`--yes`) session, the confirmation prompt
 shows the expected fee (only if non-zero) and warns if the token's own
 redemption deadline is close or already passed, and — like `transfer`/
-`consolidate` — defaults to **no** on a bare Enter. None of this affects
+`consolidate` — defaults to **no** on a bare Enter. Those two previews are
+shown for a single-token redeem only: with several tokens, one fee line
+per token would bury the total the prompt exists to have you check, so the
+prompt names the token count and the total instead and the per-token fee
+lands in the result. None of this affects
 `--json`/`--yes` calls: the prompt (and the live lookup behind the fee/
 expiry preview) is skipped entirely in that mode, same as always.
 
