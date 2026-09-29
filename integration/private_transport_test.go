@@ -275,24 +275,21 @@ func TestPrivateTransport_DerivedBillIsServed(t *testing.T) {
 	}
 }
 
-// TestPrivateTransport_MergedCashModeReceipt documents a LEDGER bug that the
-// private transport exposes, and pins the behaviour that is correct today.
+// TestPrivateTransport_CashModeBillIsServed covers a cash-mode bill over the private
+// transport — the shape that was impossible to serve until the proof-null round-trip
+// bug was fixed.
 //
-// Auto-securing a cash-mode receipt and merging it produces a bill the hub records
-// as cash-mode — read straight off its roster below: identity_type="cash". cashctl's
-// own entry does not say so, so resolveCredential picks the local pubkey and signs a
-// proof. The hub then refuses it correctly, because a proof-bearing item must match a
-// non-cash claim and a cash-mode bill has none.
+// A cash-mode bill is proofless by design: it has no keypair, so the secret in params
+// is the whole authorization (NIP-CASH §Bearer Items). `Proof json.RawMessage` without
+// omitempty marshalled that nil proof to `"proof":null`, which decodes to a four-byte
+// value — so the hub's length check read every bearer item as carrying an
+// unverifiable proof, and omitted it. An omission is information-free, so no client
+// could learn why its cash-mode bill vanished.
 //
-// The mismatch is cashctl's: its record of what that bill IS disagrees with the hub.
-// The standard transport tolerates it, which is why it went unnoticed; the private
-// transport's per-item authorization does not, and answers with an omission that
-// carries no diagnosis. That is why --transport defaults to standard.
-//
-// What is asserted here is the true current contract: the default redeems this bill.
-// The --transport auto case is skipped, not deleted, so the gap stays visible next to
-// the evidence for it.
-func TestPrivateTransport_MergedCashModeReceipt(t *testing.T) {
+// Built by auto-securing a cash-mode receipt and merging it, because that is how a
+// real cash-mode holding arises, and the hub's own roster is read below to confirm the
+// shape really is cash-mode rather than assumed.
+func TestPrivateTransport_CashModeBillIsServed(t *testing.T) {
 	admin := adminOrSkip(t)
 	hub := setUpCashHub(t, admin)
 	f := newFixture(t)
@@ -351,15 +348,20 @@ func TestPrivateTransport_MergedCashModeReceipt(t *testing.T) {
 
 	f.mustJSON("connect", "add", "dest", hub.PairingUri)
 
-	// The contract that holds today: the default transport redeems this bill.
-	if res := f.run("redeem", "--token", mergedID, "--into", "dest", "--json", "--yes"); res.ExitCode != 0 {
-		t.Fatalf("the default transport must redeem a merged cash-mode receipt: exit %d\nstderr: %s", res.ExitCode, res.Stderr)
+	if !hubSaysCashMode {
+		t.Skip("this hub did not produce a cash-mode merged bill, so the shape under test is absent")
 	}
 
-	if hubSaysCashMode {
-		t.Skip("KNOWN GAP: the hub records this merged bill as cash-mode while cashctl's entry does not, " +
-			"so --transport auto signs a pubkey proof the hub correctly refuses (omission). " +
-			"Tracked in lokihub data/docs/issues/private-transport-omits-derived-bills-2026-09-29.md — " +
-			"the fix belongs in cashctl's auto-secure/merge bookkeeping, not in the transport.")
+	// The shape that could not be served at all until the proof-null round-trip bug
+	// was fixed: a cash-mode bill is proofless BY DESIGN, and a nil proof serialized
+	// as `"proof":null` decoded to four bytes on the hub, so every bearer item looked
+	// like it carried an unverifiable proof and was omitted.
+	res := f.run("redeem", "--token", mergedID, "--into", "dest", "--transport", "private", "--json", "--yes")
+	if res.ExitCode != 0 {
+		t.Fatalf("a merged cash-mode receipt must redeem over the private transport: exit %d\nstdout: %s\nstderr: %s",
+			res.ExitCode, res.Stdout, res.Stderr)
+	}
+	if !strings.Contains(res.Stdout, "preimage") {
+		t.Errorf("no preimage, so nothing proves it was paid: %s", res.Stdout)
 	}
 }
