@@ -168,12 +168,32 @@ With neither positional IDs nor `--sources` given: only same-minter
 tokens can actually be merged, so cashctl groups held tokens by minter
 and consolidates each group with 2+ tokens (a lone token from a minter
 needs no merge, and is skipped) — under `--json`, every qualifying group
-is processed with no prompt. Response shape depends on how many groups
-were actually processed: exactly one (the common case) returns the same
-`{"new_entry", "expires_at", "target_resolved"}` object as the
-explicit-sources form always has; more than one returns
-`{"consolidated": [{"new_entry", "expires_at", "target_resolved"}, ...]}`
-instead — check which key is present rather than assuming one shape.
+is processed with no prompt.
+
+Every chosen group is attempted, and one group failing never stops the
+others: each group is its own separately committed `cash_consolidate`
+call, so aborting on the first failure would leave earlier groups already
+merged on the Hub and never report the tokens they produced.
+
+Response shape depends on how many groups were processed and whether all
+of them succeeded. Exactly one, succeeded (the common case) returns the
+same `{"new_entry", "expires_at", "target_resolved"}` object as the
+explicit-sources form always has. Otherwise you get
+`{"consolidated": [...]}`, one entry per group, each with `minter`,
+`sources` (the ledger IDs it tried), and a `status` of:
+
+| `status` | meaning |
+|---|---|
+| `ok` | merged; entry also carries `new_entry`, `expires_at`, `target_resolved` |
+| `declined` | a person said no at the prompt — a choice, not a fault, and never an exit-code failure |
+| `failed` | entry also carries `error`, `code`, and `nwc_code` when the wallet returned one — same vocabulary as a top-level error |
+
+Check which key is present rather than assuming one shape. **A partially
+successful run prints its full result on stdout AND exits nonzero**, with
+the first failing group's own `code` driving the exit status — so a
+nonzero exit here does not mean nothing happened, and stdout must be read
+before deciding what to retry. `declined` groups alone never make the
+exit nonzero.
 `--to` defaults to your own identity; `--to cash` merges into a
 fresh, anonymous cash note instead (same keyword `transfer` uses) —
 requires a Hub that accepts a cash-mode `cash_consolidate` target.

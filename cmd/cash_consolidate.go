@@ -27,8 +27,10 @@ tokens can actually be merged) and consolidates each such group — one
 call per minter, not a single "everything" attempt that would fail across
 minters. Interactive sessions are asked which group(s) to proceed with
 when more than one qualifies; --json/--yes processes every qualifying
-group. Pass IDs/--sources for exact control instead (see "cashctl wallet
-show --json" for the IDs — plain-text "wallet show" never prints them).`,
+group. Every chosen group is attempted and reported even if another fails,
+since each group is a separate committed merge. Pass IDs/--sources for
+exact control instead (see "cashctl wallet show --json" for the IDs —
+plain-text "wallet show" never prints them).`,
 		Example: `  cashctl consolidate
   cashctl consolidate tok-a tok-b
   cashctl consolidate --sources tok-a,tok-b --to cash`,
@@ -50,6 +52,117 @@ type consolidateResult struct {
 	NewEntry       *ledger.Entry
 	ExpiresAt      *int64
 	TargetResolved string
+}
+
+// consolidateOutcome is what happened to ONE minter group, and it has three
+// states rather than two — mirroring the SDK's own ItemOutcome, for the same
+// reason. A group either merged (Result set), was declined by the person at the
+// prompt (both nil), or failed (Err set). Collapsing declined into failed would
+// report a deliberate choice as a fault; collapsing failed into "nothing
+// happened" would hide that the Hub may have moved money.
+//
+// This exists because each group is a separate committed call: the states are
+// genuinely per-group, so a single error return cannot describe the run.
+type consolidateOutcome struct {
+	// Minter is the group's shared minter pubkey — the thing that MADE it a
+	// group, and the only stable way to name it in output, since the ledger IDs
+	// of a failed group are not otherwise interesting to a caller.
+	Minter string
+	// IDs are the source ledger entries this group tried to merge.
+	IDs []string
+	// Result is set only when the merge completed.
+	Result *consolidateResult
+	// Err is set only when it failed. A group with neither is a decline.
+	Err error
+}
+
+// declined reports the third state: attempted, and the person said no.
+func (o consolidateOutcome) declined() bool { return o.Result == nil && o.Err == nil }
+
+// printConsolidateOutcomes renders a whole multi-group run, successes and
+// failures together.
+//
+// The single-successful-group case deliberately keeps printConsolidateResults'
+// original top-level {"new_entry", "expires_at", "target_resolved"} JSON shape,
+// because that is what every existing --json consumer parses (integration/ reads
+// consolidateResp["new_entry"] directly). The richer per-group array is used only
+// when there is more than one outcome or one of them did not succeed — states in
+// which this command previously returned an error and printed no result at all,
+// so no consumer can be depending on the old shape there.
+func printConsolidateOutcomes(jsonMode bool, outcomes []consolidateOutcome) {
+	succeeded := make([]*consolidateResult, 0, len(outcomes))
+	for _, o := range outcomes {
+		if o.Result != nil {
+			succeeded = append(succeeded, o.Result)
+		}
+	}
+	allOK := len(succeeded) == len(outcomes)
+
+	if jsonMode {
+		if len(outcomes) == 1 && allOK {
+			printConsolidateResults(true, succeeded)
+			return
+		}
+		out := make([]map[string]any, len(outcomes))
+		for i, o := range outcomes {
+			row := map[string]any{"minter": o.Minter, "sources": o.IDs}
+			switch {
+			case o.Result != nil:
+				row["status"] = "ok"
+				row["new_entry"] = o.Result.NewEntry
+				row["expires_at"] = o.Result.ExpiresAt
+				row["target_resolved"] = o.Result.TargetResolved
+			case o.declined():
+				row["status"] = "declined"
+			default:
+				// Classified the same way a fatal error would have been, so a
+				// script branches on one vocabulary whether a failure was the
+				// only group or one of several.
+				ce := output.AsCLIError(o.Err)
+				row["status"] = "failed"
+				row["error"] = ce.Err.Error()
+				if ce.RawMessage != "" {
+					row["error"] = ce.RawMessage
+				}
+				row["code"] = string(ce.Code)
+				if ce.NWCCode != "" {
+					row["nwc_code"] = ce.NWCCode
+				}
+			}
+			out[i] = row
+		}
+		output.PrintJSON(map[string]any{"consolidated": out})
+		return
+	}
+
+	for _, o := range outcomes {
+		switch {
+		case o.Result != nil:
+			fmt.Printf("Consolidated into one %s note, saved to your wallet.\n", output.FormatAmount(int64(*o.Result.NewEntry.AmountMillis)))
+		case o.declined():
+			// consolidateItems already printed "Cancelled." for this group.
+		default:
+			// Named by minter and source count: with several groups in play,
+			// "it failed" without saying which one is not actionable.
+			fmt.Printf("Failed to consolidate %d tokens from minter %s: %v\n",
+				len(o.IDs), output.Sanitize(shortMinter(o.Minter)), output.AsCLIError(o.Err).Err)
+		}
+	}
+	// Only when the run was genuinely mixed. A single failure speaks for itself
+	// through the returned error's own "Error:" line, and repeating a count of
+	// one would be noise.
+	if len(outcomes) > 1 && !allOK {
+		fmt.Printf("%d of %d groups consolidated.\n", len(succeeded), len(outcomes))
+	}
+}
+
+// shortMinter trims a 64-hex minter pubkey to something readable in a line of
+// output, the way the rest of the CLI abbreviates keys.
+func shortMinter(minter string) string {
+	if len(minter) <= 12 {
+		return minter
+	}
+	return minter[:12] + "…"
 }
 
 func runCashConsolidate(cmd *cobra.Command, args []string) error {
@@ -104,24 +217,65 @@ func runCashConsolidate(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	var results []*consolidateResult
+	outcomes := consolidateGroups(cmd, l, chosen, toFlag, jsonMode, yesFlag)
+	printConsolidateOutcomes(jsonMode, outcomes)
+
+	// Reported first, then failed. The full picture is already on stdout in both
+	// modes, so the returned error only has to drive the exit code.
+	return firstOutcomeError(outcomes)
+}
+
+// consolidateGroups attempts every chosen minter group and returns one outcome
+// per group, in order, whatever happened.
+//
+// A failure in one group never stops the others or hides their outcome. This
+// used to `return err` on the first failure, which was wrong in the one way that
+// costs a user real information: each group is its own separately committed
+// cash_consolidate call, so failing on group 2 of 3 left group 1 ALREADY MERGED
+// on the Hub, group 3 never attempted, and only group 2's error printed. The
+// caller could not tell which of those three states each group was in, and the
+// new token group 1 had just produced went unreported — a token that exists,
+// holds real value, and was never named in the output.
+//
+// A decline is likewise this group's own call to make (both fields nil,
+// reachable only outside --json/--yes — see Confirm) and does not cancel the
+// rest.
+func consolidateGroups(cmd *cobra.Command, l *ledger.Ledger, chosen [][]ledger.Entry, toFlag string, jsonMode, yesFlag bool) []consolidateOutcome {
+	outcomes := make([]consolidateOutcome, 0, len(chosen))
 	for _, group := range chosen {
 		ids := make([]string, len(group))
 		for i, e := range group {
 			ids[i] = e.ID
 		}
-		result, err := consolidateItems(cmd, l, ids, toFlag, jsonMode, yesFlag)
-		if err != nil {
-			return err
+		o := consolidateOutcome{IDs: ids}
+		if len(group) > 0 && group[0].MinterPubkey != nil {
+			o.Minter = *group[0].MinterPubkey
 		}
-		if result != nil {
-			results = append(results, result)
-		}
-		// A decline (result == nil, only reachable outside --json/--yes —
-		// see Confirm's own doc comment) is this group's own call to make;
-		// it doesn't cancel the remaining chosen groups.
+		o.Result, o.Err = consolidateItemsFn(cmd, l, ids, toFlag, jsonMode, yesFlag)
+		outcomes = append(outcomes, o)
 	}
-	printConsolidateResults(jsonMode, results)
+	return outcomes
+}
+
+// consolidateItemsFn is a package-var seam so the group loop's own policy —
+// attempt everything, report everything — is testable without a ledger file or a
+// network call, the same pattern attemptCashConsolidateFn already uses below.
+var consolidateItemsFn = consolidateItems
+
+// firstOutcomeError returns the first failure's own error, or nil.
+//
+// Deliberately the original error, neither wrapped nor joined, so its
+// classification, retryable flag and any wallet-side NWC code survive exactly as
+// they would have for a single group. Wrapping it to say "partial" would be
+// discarded anyway: AsCLIError unwraps to the inner *CLIError and prints that, so
+// a wrapper's text never reaches the user. The per-group detail that a wrapper
+// would have carried is on stdout instead, where it can be complete.
+func firstOutcomeError(outcomes []consolidateOutcome) error {
+	for _, o := range outcomes {
+		if o.Err != nil {
+			return o.Err
+		}
+	}
 	return nil
 }
 

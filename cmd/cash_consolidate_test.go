@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"encoding/json"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -517,5 +519,160 @@ func TestSharedMinterOfIDs(t *testing.T) {
 	}
 	if got := sharedMinterOfIDs(l, []string{e1.ID, "no-such-id"}); got != nil {
 		t.Errorf("sharedMinterOfIDs() with an unknown id = %v, want nil", *got)
+	}
+}
+
+// --- consolidateGroups / printConsolidateOutcomes: the multi-group run's own
+// policy — attempt every group, report every group. The regression guard here is
+// for a bug with real consequences: the loop used to `return err` on the first
+// failing group, so a failure on group 2 of 3 left group 1 already merged on the
+// Hub, group 3 never attempted, and nothing printed but group 2's error. The
+// newly minted token from group 1 was never named anywhere.
+
+func withFakeConsolidateItems(t *testing.T, fn func(cmd *cobra.Command, l *ledger.Ledger, items []string, toFlag string, jsonMode, yesFlag bool) (*consolidateResult, error)) {
+	t.Helper()
+	orig := consolidateItemsFn
+	consolidateItemsFn = fn
+	t.Cleanup(func() { consolidateItemsFn = orig })
+}
+
+func consolidateOK(amountMillis uint64) *consolidateResult {
+	return &consolidateResult{
+		NewEntry:       &ledger.Entry{ID: "new-entry", Token: "merged-token", AmountMillis: ptrTo(amountMillis)},
+		TargetResolved: "self",
+	}
+}
+
+// twoGroups is the minimal shape that exercises the bug: two groups, each with
+// two same-minter sources.
+func twoGroups() [][]ledger.Entry {
+	return [][]ledger.Entry{
+		{groupableEntry("tok-a1", "minter-a", 1000), groupableEntry("tok-a2", "minter-a", 2000)},
+		{groupableEntry("tok-b1", "minter-b", 3000), groupableEntry("tok-b2", "minter-b", 4000)},
+	}
+}
+
+func TestConsolidateGroups_FailureInOneGroupDoesNotStopTheNext(t *testing.T) {
+	var attempted []string
+	withFakeConsolidateItems(t, func(_ *cobra.Command, _ *ledger.Ledger, items []string, _ string, _, _ bool) (*consolidateResult, error) {
+		attempted = append(attempted, items[0])
+		if items[0] == "tok-a1" {
+			return nil, errors.New("hub said no")
+		}
+		return consolidateOK(7000), nil
+	})
+
+	outcomes := consolidateGroups(&cobra.Command{}, &ledger.Ledger{}, twoGroups(), "", true, true)
+
+	if len(attempted) != 2 {
+		t.Fatalf("attempted %d groups (%v), want both — a failing group must not cancel the rest", len(attempted), attempted)
+	}
+	if len(outcomes) != 2 {
+		t.Fatalf("len(outcomes) = %d, want 2 (one per group, whatever happened)", len(outcomes))
+	}
+	if outcomes[0].Err == nil {
+		t.Errorf("outcomes[0].Err = nil, want the first group's failure")
+	}
+	if outcomes[1].Result == nil {
+		t.Errorf("outcomes[1].Result = nil, want the second group to have gone ahead anyway")
+	}
+	// The minter is what names a group in output; without it a failure is not
+	// actionable when several groups are in play.
+	if outcomes[0].Minter != "minter-a" || outcomes[1].Minter != "minter-b" {
+		t.Errorf("minters = (%q, %q), want (minter-a, minter-b)", outcomes[0].Minter, outcomes[1].Minter)
+	}
+}
+
+// TestConsolidateGroups_SucceededGroupIsStillReportedAfterALaterFailure is the
+// money-losing case stated directly: group 1 merges, group 2 fails, and group 1's
+// new token must still reach the output. Before the fix it was silently dropped.
+func TestConsolidateGroups_SucceededGroupIsStillReportedAfterALaterFailure(t *testing.T) {
+	withFakeConsolidateItems(t, func(_ *cobra.Command, _ *ledger.Ledger, items []string, _ string, _, _ bool) (*consolidateResult, error) {
+		if items[0] == "tok-b1" {
+			return nil, errors.New("relay went away")
+		}
+		return consolidateOK(3000), nil
+	})
+
+	outcomes := consolidateGroups(&cobra.Command{}, &ledger.Ledger{}, twoGroups(), "", true, true)
+	out := withCapturedStdout(func() { printConsolidateOutcomes(true, outcomes) })
+
+	if !strings.Contains(out, "merged-token") {
+		t.Errorf("output does not name the token group 1 actually minted:\n%s", out)
+	}
+	if !strings.Contains(out, `"status": "failed"`) {
+		t.Errorf("output does not report group 2 as failed:\n%s", out)
+	}
+	if !strings.Contains(out, `"status": "ok"`) {
+		t.Errorf("output does not report group 1 as ok:\n%s", out)
+	}
+}
+
+// TestConsolidateGroups_DeclineIsNeitherSuccessNorFailure pins the third state.
+// A person saying no at the prompt is a choice, not a fault: it must not be
+// reported as failed (which would imply something went wrong and invite a retry)
+// and must not be reported as ok (which would imply a merge happened).
+func TestConsolidateGroups_DeclineIsNeitherSuccessNorFailure(t *testing.T) {
+	withFakeConsolidateItems(t, func(_ *cobra.Command, _ *ledger.Ledger, items []string, _ string, _, _ bool) (*consolidateResult, error) {
+		if items[0] == "tok-a1" {
+			return nil, nil // declined
+		}
+		return consolidateOK(7000), nil
+	})
+
+	outcomes := consolidateGroups(&cobra.Command{}, &ledger.Ledger{}, twoGroups(), "", false, false)
+	if !outcomes[0].declined() {
+		t.Errorf("outcomes[0].declined() = false, want true for a nil/nil group")
+	}
+	if err := firstOutcomeError(outcomes); err != nil {
+		t.Errorf("firstOutcomeError = %v, want nil — a decline is not a failure and must not set an exit code", err)
+	}
+	out := withCapturedStdout(func() { printConsolidateOutcomes(true, outcomes) })
+	if !strings.Contains(out, `"status": "declined"`) {
+		t.Errorf("declined group not reported as such:\n%s", out)
+	}
+}
+
+// TestPrintConsolidateOutcomes_SingleSuccessKeepsTheLegacyJSONShape guards the
+// --json contract. Every existing consumer parses a top-level "new_entry"
+// (integration/ reads consolidateResp["new_entry"] directly), so the common
+// one-group case must keep emitting exactly that object. The richer per-group
+// array is only for runs with several groups or a non-success — states where this
+// command previously printed no result at all, so nothing can depend on them.
+func TestPrintConsolidateOutcomes_SingleSuccessKeepsTheLegacyJSONShape(t *testing.T) {
+	outcomes := []consolidateOutcome{{Minter: "minter-a", IDs: []string{"tok-a1", "tok-a2"}, Result: consolidateOK(3000)}}
+	out := withCapturedStdout(func() { printConsolidateOutcomes(true, outcomes) })
+
+	var got map[string]any
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("output is not one JSON object: %v\n%s", err, out)
+	}
+	if _, ok := got["new_entry"]; !ok {
+		t.Errorf("single success lost its top-level new_entry — this breaks every --json consumer:\n%s", out)
+	}
+	if _, ok := got["consolidated"]; ok {
+		t.Errorf("single success used the array shape, changing the established contract:\n%s", out)
+	}
+}
+
+// TestFirstOutcomeError_PreservesClassification confirms the returned error is
+// the group's OWN error, not a wrapper. The exit code and the --json "code"
+// field both come from it, so re-wrapping would flatten a network failure (exit
+// 6, retryable) into a generic internal one (exit 1, not retryable).
+func TestFirstOutcomeError_PreservesClassification(t *testing.T) {
+	classified := output.NetworkError(&cobra.Command{}, errors.New("relay unreachable"))
+	outcomes := []consolidateOutcome{
+		{Minter: "minter-a", Result: consolidateOK(1000)},
+		{Minter: "minter-b", Err: classified},
+	}
+	got := firstOutcomeError(outcomes)
+	if got == nil {
+		t.Fatal("firstOutcomeError = nil, want the failing group's error")
+	}
+	if output.ExitCode(got) != output.ExitCode(classified) {
+		t.Errorf("exit code = %d, want %d — classification was lost", output.ExitCode(got), output.ExitCode(classified))
+	}
+	if output.AsCLIError(got).Code != "network" {
+		t.Errorf("code = %q, want network", output.AsCLIError(got).Code)
 	}
 }

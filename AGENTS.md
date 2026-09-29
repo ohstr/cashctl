@@ -28,7 +28,7 @@ commands run unattended). `NO_COLOR` disables ANSI color on stderr.
 | `cashctl receive <token>` | Decode a cash token, print its details, then cross-check it against the Cash Hub before adding it to your wallet — refuses anything that doesn't check out. A cash-mode token's `cash_secret` must be embedded, `<token>#<cash_secret>` (NIP-CASH's combined cash-mode slice presentation) — pasted bare, it degrades to a read-only report instead of erroring. A saved cash-mode receipt is then offered automatic protecting: re-keyed under a fresh secret (and merged with any other same-issuer holding), reported under `"secured"` |
 | `cashctl redeem [wallet] [--token <id>] [--invoice <bolt11>] [--as <credential>]` | Redeem a held token into a wallet (positional, or `--into`) or a raw invoice |
 | `cashctl transfer [amount] [target] [--as <credential>]` | Send a held token — amount and target are positional (either order), or `--to`/`--amount`. An amount with no target defaults to a cash note (a `<token>#<secret>` string to hand anyone); neither one is a usage error. With an amount and no `--token`, cash selection picks which held token(s) reach it exactly (auto-consolidating a same-minter subset first if no single token covers it) instead of just picking one token to act on |
-| `cashctl consolidate [id...] [--to <target>]` | Merge several held tokens into one — positional IDs, or `--sources`, for exact control (IDs discoverable via `wallet show --json`; plain-text `wallet show` never prints them). With neither, auto-groups held tokens by minter (only same-minter tokens can merge) and consolidates each group with 2+ tokens — one group proceeds directly, several prompt interactively (or all process under `--json`/`--yes`) |
+| `cashctl consolidate [id...] [--to <target>]` | Merge several held tokens into one — positional IDs, or `--sources`, for exact control (IDs discoverable via `wallet show --json`; plain-text `wallet show` never prints them). With neither, auto-groups held tokens by minter (only same-minter tokens can merge) and consolidates each group with 2+ tokens — one group proceeds directly, several prompt interactively (or all process under `--json`/`--yes`). Every chosen group is attempted: one failing never cancels or hides the others (see **Partial success**) |
 | `cashctl cash list-recipients [--token <id>]` | Your allocation + co-recipients of a held token (network) |
 | `cashctl cash receive` / `redeem` / `transfer` / `consolidate` | Same as the top-level forms above — the canonical, fully-namespaced versions |
 | `cashctl version` | Print the cashctl version |
@@ -102,6 +102,16 @@ is deliberately coarse, so this is there for an agent that needs
 finer-grained branching. A usage mistake in `--json` mode skips the
 human-readable help dump (which would otherwise land on stdout) in favor
 of the structured error alone.
+
+**Partial success**: a command that performs several independently
+committed operations — today only `consolidate`, when it auto-groups held
+tokens by minter — reports every operation's outcome on stdout AND exits
+nonzero if any of them failed, with the first failure's own `code` driving
+the exit status. A nonzero exit from such a command therefore does not mean
+nothing happened: stdout is still a complete result document and must be
+read before deciding what to retry. The alternative would be worse than
+untidy — aborting on the first failure leaves the already-committed
+operations unreported, including any new token they produced.
 
 ## Before attempting a task, read the matching skill
 
