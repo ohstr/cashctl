@@ -141,7 +141,6 @@ func protectCashReceipt(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entr
 			Amount:       *entry.AmountMillis,
 			Credential:   nipcash.BySecret(entry.CashSecret),
 		},
-		MintSignature:     entry.MinterPubkey != nil,
 		InterimIdentity:   nipcash.Pubkey(myPubHex),
 		InterimCredential: cred,
 		ConsolidateWith:   consolidateWith,
@@ -300,7 +299,6 @@ func protectRekeyOnly(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entry,
 			Credential:    nipcash.BySecret(entry.CashSecret),
 			To:            bt,
 			CurrentAmount: *entry.AmountMillis,
-			MintSignature: entry.MinterPubkey != nil,
 		})
 		if cErr != nil {
 			return cErr

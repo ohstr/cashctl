@@ -310,7 +310,6 @@ func TestPrivateTransport_CashModeBillIsServed(t *testing.T) {
 	cashClient := dialCash(t, ctx, hub.PairingUri)
 	cashResult, err := cashClient.MintCash(ctx, nipcash.MintCashParams{
 		Recipients:    []nipcash.Allocation{nipcash.Send(nipcash.Anyone(), 50_000)},
-		MintSignature: true,
 	})
 	if err != nil {
 		t.Fatalf("mint_cash (cash, signed): %v", err)

@@ -450,7 +450,39 @@ func transferWithAutoConsolidate(cmd *cobra.Command, l *ledger.Ledger, group []l
 		return classifyCashTokenNWCErr(cmd, ffsErr)
 	}
 
+	if isCrossHubSourcesDecline(ffsErr) {
+		// The sources turned out to live under different Cash Hubs. cashctl cannot
+		// know that locally: a bill's recovered minter identifies the NODE that
+		// signed it, and one node can run many Cash Hubs, so same-minter is a
+		// necessary but not sufficient signal for same-hub. Only the hub can settle
+		// it, which is why this arrives as a decline rather than a local refusal.
+		//
+		// Reported as fragmentation because that is what it IS from the holder's
+		// side — the funds exist but cannot be assembled into one payment — and it
+		// is the answer they can act on. Leaving the raw decline through would name
+		// an internal grouping rule and suggest their input was malformed.
+		return output.UsageError(cmd, fmt.Errorf("%w: you hold %s total, but these tokens come from different Cash Hubs and only same-hub tokens can be merged into the %s you're sending",
+			ledger.ErrFundsFragmented,
+			output.FormatAmount(int64(ledger.SumAmounts(l.Held()))),
+			output.FormatAmount(int64(sendAmount))))
+	}
 	return classifyCashTokenNWCErr(cmd, ffsErr)
+}
+
+// isCrossHubSourcesDecline reports whether err is a Hub refusing a consolidate
+// because its sources belong to different Cash Hubs.
+//
+// Matched on the Hub's own message, which is not ideal and is done deliberately:
+// NIP-CASH gives this no distinct error code (it arrives as BAD_REQUEST, shared with
+// every other malformed request), and the alternative is showing a holder an internal
+// rule about grouping when what they need to know is that their funds are split. If
+// the Hub ever gains a specific code, this should key off that instead.
+func isCrossHubSourcesDecline(err error) bool {
+	var walletErr *relayclient.WalletError
+	if !errors.As(err, &walletErr) {
+		return false
+	}
+	return strings.Contains(strings.ToLower(walletErr.Message), "same cash hub")
 }
 
 // attemptTransferFromSourcesWithRetry places the interim-consolidate-then-

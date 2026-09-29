@@ -131,7 +131,6 @@ func cmdToken(a *admin, st *state, args []string) {
 	forPub := fs.String("for", "", "recipient pubkey (hex or npub) for a pubkey-mode token")
 	cashMode := fs.Bool("cash", false, "mint a cash-mode token instead")
 	amount := fs.Uint64("amount", 50_000, "amount in mloki")
-	signed := fs.Bool("signed", false, "request a mint signature (best effort server-side)")
 	expires := fs.Int("expires-in", 0, "per-mint expiry seconds (0 = hub ceiling)")
 	feePpm := fs.Int("fee-ppm", 0, "redeem fee ppm (applies when the hub label is first created)")
 	minXfer := fs.Int64("min-transfer", 0, "min transfer floor mloki (applies when the hub label is first created)")
@@ -184,7 +183,6 @@ func cmdToken(a *admin, st *state, args []string) {
 	res, err := client.MintCash(ctx, nipcash.MintCashParams{
 		Recipients:    []nipcash.Allocation{nipcash.Send(target, *amount)},
 		Expiry:        time.Duration(*expires) * time.Second,
-		MintSignature: *signed,
 	})
 	must(err)
 	ag.MintedMloki += *amount

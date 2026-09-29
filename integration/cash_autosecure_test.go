@@ -261,7 +261,6 @@ func TestCashReceive_AutoSecuresCashReceipt_MergesWithExistingHolding(t *testing
 
 	cashResult, err := cashClient.MintCash(ctx, nipcash.MintCashParams{
 		Recipients:    []nipcash.Allocation{nipcash.Send(nipcash.Anyone(), cashAmount)},
-		MintSignature: true,
 	})
 	if err != nil {
 		t.Fatalf("mint_cash (cash, signed): %v", err)

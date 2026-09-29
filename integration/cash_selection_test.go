@@ -24,7 +24,6 @@ func mintSignedPubkeyTokenFromHub(t *testing.T, f *fixture, hub adminCreateAppRe
 	cashClient := dialCash(t, ctx, hub.PairingUri)
 	result, err := cashClient.MintCash(ctx, nipcash.MintCashParams{
 		Recipients:    []nipcash.Allocation{nipcash.Send(nipcash.Pubkey(pubkeyHex), amountMillis)},
-		MintSignature: true,
 	})
 	if err != nil {
 		t.Fatalf("mint_cash (MintSignature: true): %v", err)
