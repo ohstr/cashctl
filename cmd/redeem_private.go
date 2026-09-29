@@ -35,30 +35,40 @@ import (
 type transportMode string
 
 const (
-	// transportAuto uses the private transport for every hub that announces
-	// one and falls back per bill for the rest. The default: a hub offering
-	// the transport is the only evidence that it can serve it, and asking is
-	// one cheap replaceable-event read.
+	// transportAuto uses the private transport for every hub that announces one
+	// and falls back per bill for the rest.
+	//
+	// NOT the default, deliberately. A bill derived by cashctl itself — a
+	// consolidate's merged output, a split's remainder — INHERITS its sources'
+	// minter (see ledger.Entry.MinterPubkey) rather than carrying a mint
+	// signature of its own. Such a bill therefore looks batchable, and against a
+	// live hub its items come back omitted: the envelope is unwrapped and the
+	// item is then not served, for a reason not yet identified.
+	//
+	// Omission is information-free by design, so the caller cannot tell that from
+	// a hub declining, and a redeem that reports "it may or may not have been
+	// redeemed" is a bad outcome to hand someone by default. Until that case is
+	// understood, routing real money over this path is opt-in.
 	transportAuto transportMode = "auto"
 	// transportPrivate refuses to fall back, so a test or an operator can be
 	// certain which path was exercised. Without this, a silent fallback would
 	// make a broken transport look like a working one.
 	transportPrivate transportMode = "private"
-	// transportStandard skips the private transport entirely — the escape
-	// hatch for a money path, so a new wire format can always be taken out of
-	// the loop without downgrading the SDK.
+	// transportStandard skips the private transport entirely: one request event
+	// per bill, exactly as before this work. The DEFAULT, so nothing about an
+	// existing redeem changes until a caller asks for the new path.
 	transportStandard transportMode = "standard"
 )
 
 func parseTransportMode(cmd *cobra.Command) (transportMode, error) {
 	raw, _ := cmd.Flags().GetString("transport")
 	switch transportMode(raw) {
-	case "", transportAuto:
+	case "", transportStandard:
+		return transportStandard, nil
+	case transportAuto:
 		return transportAuto, nil
 	case transportPrivate:
 		return transportPrivate, nil
-	case transportStandard:
-		return transportStandard, nil
 	default:
 		return "", output.InvalidInputError(cmd, raw, fmt.Errorf("--transport must be auto, private or standard"))
 	}

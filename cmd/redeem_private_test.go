@@ -191,7 +191,7 @@ func TestParseTransportMode(t *testing.T) {
 		want transportMode
 		bad  bool
 	}{
-		{in: "", want: transportAuto},
+		{in: "", want: transportStandard},
 		{in: "auto", want: transportAuto},
 		{in: "private", want: transportPrivate},
 		{in: "standard", want: transportStandard},

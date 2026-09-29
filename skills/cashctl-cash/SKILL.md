@@ -112,10 +112,19 @@ anything. A `preimage` is the only proof a given payout happened, so if
 recording the run locally fails afterwards, every preimage is named in the
 error message for reconciliation.
 
-**Wire path (`--transport`).** `auto` (the default) batches the redeem
-calls for every hub that announces a batch inbox and falls back to one
-event per token for the rest; `private` refuses to fall back, so a test can
-be certain which path ran; `standard` skips batching entirely. Batching
+**Wire path (`--transport`).** `standard` (the **default**) sends one event
+per token, exactly as before batching existed. `auto` batches for every hub
+that announces a batch inbox and falls back per token for the rest;
+`private` refuses to fall back, so a test can be certain which path ran.
+
+The default is deliberately conservative: a bill cashctl derived itself —
+a consolidate's merged output, a split's remainder — inherits its sources'
+minter rather than carrying its own mint signature, and against a live hub
+such a bill's items come back **omitted** for a reason not yet identified.
+Omission is information-free, so that reaches you as "may or may not have
+been redeemed", which is not a default worth having on a money path. Opt in
+with `--transport auto` once you know your bills carry their own mint
+signatures. Batching
 matters for privacy, not just round trips: on the standard transport each
 request is tagged with its own token's wallet pubkey, so redeeming forty
 tokens publishes forty events seconds apart and ties them together for
