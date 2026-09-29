@@ -112,6 +112,25 @@ anything. A `preimage` is the only proof a given payout happened, so if
 recording the run locally fails afterwards, every preimage is named in the
 error message for reconciliation.
 
+**Wire path (`--transport`).** `auto` (the default) batches the redeem
+calls for every hub that announces a batch inbox and falls back to one
+event per token for the rest; `private` refuses to fall back, so a test can
+be certain which path ran; `standard` skips batching entirely. Batching
+matters for privacy, not just round trips: on the standard transport each
+request is tagged with its own token's wallet pubkey, so redeeming forty
+tokens publishes forty events seconds apart and ties them together for
+anyone watching the relay. Note the current limit — only the redeem calls
+are batched; the fee quote before them is still one standard request per
+token, so a watcher can still correlate the roster reads.
+
+A batched token whose hub returns **no answer** is reported as `failed`
+with code `conflict`, and that case needs care: an omission is deliberately
+information-free (it is the same answer for a token the hub does not hold,
+a proof that did not verify, and a method it will not serve — telling them
+apart would make batching an oracle for which tokens a hub holds), so it is
+indistinguishable from a redemption whose reply was lost. Never retry it
+blind; check with `cashctl cash list-recipients --token <id>` first.
+
 If you hold more than one token and none of
 `--token`/`--all`/`--json`/`--yes` is given, `redeem` (and
 `transfer`/`consolidate` below) prompts interactively with a numbered list

@@ -47,6 +47,7 @@ so a failure part-way through must not hide which ones already paid.`,
 	// so nothing that already worked changes.
 	cmd.Flags().StringSlice("token", nil, "which held token(s) to redeem — repeatable, or comma-separated (auto-picked if you only hold one)")
 	cmd.Flags().Bool("all", false, "redeem every held token")
+	cmd.Flags().String("transport", "auto", "wire path: auto (batch where the hub offers it), private (batch only), standard (one event per token)")
 	cmd.Flags().String("into", "", "which wallet to redeem into (defaults to your default wallet)")
 	cmd.Flags().String("invoice", "", "redeem straight into this external invoice")
 	cmd.Flags().String("as", "", "override credential (pubkey:<priv> | connection-key:... | cash:<secret>)")
@@ -84,6 +85,11 @@ func runCashRedeem(cmd *cobra.Command, args []string) error {
 			return output.InvocationError(cmd, fmt.Errorf("got both a destination (%q) and -c/--connection (%q) with different values — pass only one", output.Sanitize(intoValue), output.Sanitize(conn)))
 		}
 		intoValue = conn
+	}
+
+	mode, err := parseTransportMode(cmd)
+	if err != nil {
+		return err
 	}
 
 	l, err := ledger.Load()
@@ -200,7 +206,7 @@ func runCashRedeem(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	executeRedeems(ctx, cmd, l, plans, outcomes, destName, jsonMode)
+	executeRedeems(ctx, cmd, l, plans, outcomes, destName, jsonMode, mode)
 
 	// Unlike consolidate/transfer, there's no new token to lose here — the cash
 	// was paid out for real (each result's Preimage proves it) and no longer
@@ -381,11 +387,72 @@ func makeRedeemInvoices(
 // executeRedeems places each prepared bill's cash_redeem call and records what
 // happened, writing outcomes in place.
 //
+// Chooses the wire path per hub: bills whose hub announces a batch inbox travel
+// together in one relay event (redeemGroupPrivately), the rest go one at a time.
+// The split is per hub because an envelope's items must all bind to the same hub,
+// and bills from different hubs simply cannot share one.
+//
+// Falling back is safe because every reason a group cannot be batched is
+// discovered before anything is published — a missing announcement at session
+// setup, an unbatchable credential or an oversized item during packing. Once a
+// request is on the wire there is no fallback, since re-sending a cash_redeem
+// could double-spend.
+func executeRedeems(
+	ctx context.Context,
+	cmd *cobra.Command,
+	l *ledger.Ledger,
+	plans []redeemPlan,
+	outcomes []redeemOutcome,
+	destName string,
+	jsonMode bool,
+	mode transportMode,
+) {
+	if mode == transportStandard {
+		executeRedeemsOneByOne(ctx, cmd, l, plans, outcomes, destName, jsonMode)
+		return
+	}
+
+	groups, ungrouped := groupPlansByHub(plans)
+	for _, g := range groups {
+		served, setupErr := redeemGroupPrivately(ctx, cmd, l, g, outcomes, destName, jsonMode)
+		if served {
+			continue
+		}
+		// Nothing was published for this group — every refusal above happens
+		// before the first envelope goes out — so falling back cannot
+		// double-spend.
+		if mode == transportPrivate {
+			// Asked for the private transport specifically, so a silent
+			// fallback would make a broken transport look like a working one.
+			for _, p := range g.Plans {
+				outcomes[p.Index].Err = output.NetworkError(cmd, fmt.Errorf(
+					"--transport private was requested but this hub's batch inbox could not be used: %v", setupErr))
+			}
+			continue
+		}
+		output.Notef(jsonMode, "This hub has no batch inbox — redeeming one token at a time.")
+		executeRedeemsOneByOne(ctx, cmd, l, g.Plans, outcomes, destName, jsonMode)
+	}
+
+	if len(ungrouped) > 0 {
+		if mode == transportPrivate {
+			for _, p := range ungrouped {
+				outcomes[p.Index].Err = output.InvocationError(cmd, fmt.Errorf(
+					"--transport private was requested but this token has no verifiable mint signature, so there is no hub identity to check an announcement against"))
+			}
+		} else {
+			executeRedeemsOneByOne(ctx, cmd, l, ungrouped, outcomes, destName, jsonMode)
+		}
+	}
+}
+
+// executeRedeemsOneByOne is the standard transport: one request event per bill.
+//
 // Never stops early. Each call is a separate, irreversible payout, so abandoning
 // the rest on one failure would leave a caller unable to tell which bills paid
 // out — and unlike consolidate there is nothing to re-merge: the cash is simply
 // gone or not.
-func executeRedeems(
+func executeRedeemsOneByOne(
 	ctx context.Context,
 	cmd *cobra.Command,
 	l *ledger.Ledger,
@@ -412,12 +479,7 @@ func executeRedeems(
 		}
 
 		outcomes[p.Index].Result = result
-		_ = l.SetStatus(p.Entry.ID, ledger.StatusRedeemed)
-		if p.Entry.AmountMillis != nil {
-			l.AppendHistory("redeem", fmt.Sprintf("redeemed %s into %s", output.FormatAmount(int64(*p.Entry.AmountMillis)), destName))
-		} else {
-			l.AppendHistory("redeem", fmt.Sprintf("redeemed into %s", destName))
-		}
+		recordRedeemed(l, p.Entry, destName)
 	}
 }
 
