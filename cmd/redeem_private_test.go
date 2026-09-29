@@ -326,3 +326,44 @@ func TestApplyRedeemResults_UnknownIDIsIgnored(t *testing.T) {
 		t.Errorf("ledger status = %q, want untouched", l.Entries[0].Status)
 	}
 }
+
+// TestBatchableHub_ExcludesUnresolvedCashSecrets pins the rule that a bill whose
+// spending credential can only be settled by a live per-bill decline must not be
+// batched: an omission carries no such signal, so the fallback that resolves it
+// cannot run (see spendCashEntry).
+func TestBatchableHub_ExcludesUnresolvedCashSecrets(t *testing.T) {
+	minter := "hub-1"
+	cashMode := func(secret, pending string) *ledger.Entry {
+		no := false
+		return &ledger.Entry{
+			ID: "tok", MinterPubkey: &minter, IdentityRequired: &no,
+			CashSecret: secret, PendingCashSecret: pending,
+		}
+	}
+
+	if got := batchableHub(cashMode("", "")); got != nil {
+		t.Errorf("a cash-mode bill with no secret must not batch — it cannot even build an item; got %v", *got)
+	}
+	if got := batchableHub(cashMode("", "pending-one")); got != nil {
+		t.Errorf("a cash-mode bill whose only secret is unconfirmed must not batch; got %v", *got)
+	}
+	if got := batchableHub(cashMode("live", "other")); got != nil {
+		t.Errorf("an ambiguous pair of candidate secrets must not batch — only a decline can say which is live; got %v", *got)
+	}
+	// Settled cash-mode: batchable.
+	if got := batchableHub(cashMode("live", "")); got == nil || *got != minter {
+		t.Errorf("a cash-mode bill with a settled secret must batch, got %v", got)
+	}
+	if got := batchableHub(cashMode("live", "live")); got == nil {
+		t.Error("a pending value equal to the live one is not ambiguous and must batch")
+	}
+	// Pubkey-mode is unaffected by any of this.
+	yes := true
+	if got := batchableHub(&ledger.Entry{ID: "tok", MinterPubkey: &minter, IdentityRequired: &yes}); got == nil {
+		t.Error("a pubkey-mode bill must still batch")
+	}
+	// No minter: nothing to verify an announcement against.
+	if got := batchableHub(&ledger.Entry{ID: "tok"}); got != nil {
+		t.Errorf("a bill with no recovered minter must not batch; got %v", *got)
+	}
+}

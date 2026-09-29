@@ -117,9 +117,46 @@ func groupByHub[T any](items []T, hubOf func(T) *string) (order []string, byHub 
 	return order, byHub, ungrouped
 }
 
+// batchableHub reports which hub a bill may be batched against, or nil when it
+// must take the standard transport.
+//
+// Having a recovered minter is necessary but NOT sufficient. A cash-mode bill whose
+// spending secret is unresolved cannot be batched, and the reason is specific to how
+// this transport answers: cashctl learns which of two candidate secrets an
+// interrupted rekey left live ONLY by placing a call and reading a wrong-secret
+// decline (see spendCashEntry, and NIP-CASH has no read-only way to ask). A batched
+// item that fails authorization is OMITTED, and an omission is information-free by
+// design — so the very signal the fallback depends on does not exist on this path.
+//
+// Two such bills, both produced by ordinary use:
+//
+//   - an empty CashSecret, which cannot even build an item: the SDK refuses it
+//     locally, which is correct but happens at pack time, before any call the
+//     fallback could have learned from;
+//   - a PendingCashSecret that differs from CashSecret, the genuinely ambiguous
+//     state an interrupted auto-secure leaves behind.
+//
+// Both route to the standard transport, where the fallback works. This is why
+// redeeming a merged cash-mode receipt failed against the live hub.
+func batchableHub(e *ledger.Entry) *string {
+	if e == nil || e.MinterPubkey == nil || *e.MinterPubkey == "" {
+		return nil
+	}
+	cashMode := e.IdentityRequired != nil && !*e.IdentityRequired
+	if cashMode {
+		if e.CashSecret == "" {
+			return nil
+		}
+		if e.PendingCashSecret != "" && e.PendingCashSecret != e.CashSecret {
+			return nil
+		}
+	}
+	return e.MinterPubkey
+}
+
 // groupEntriesByHub is groupByHub over selected bills, before preparation.
 func groupEntriesByHub(entries []*ledger.Entry) ([]entryHubGroup, []*ledger.Entry) {
-	order, byHub, ungrouped := groupByHub(entries, func(e *ledger.Entry) *string { return e.MinterPubkey })
+	order, byHub, ungrouped := groupByHub(entries, batchableHub)
 	groups := make([]entryHubGroup, 0, len(order))
 	for _, hub := range order {
 		groups = append(groups, entryHubGroup{HubXOnly: hub, Entries: byHub[hub]})
@@ -139,7 +176,7 @@ func groupEntriesByHub(entries []*ledger.Entry) ([]entryHubGroup, []*ledger.Entr
 // has no hub identity to check an announcement against and so cannot use the
 // transport at all.
 func groupPlansByHub(plans []redeemPlan) ([]hubGroup, []redeemPlan) {
-	order, byHub, ungrouped := groupByHub(plans, func(p redeemPlan) *string { return p.Entry.MinterPubkey })
+	order, byHub, ungrouped := groupByHub(plans, func(p redeemPlan) *string { return batchableHub(p.Entry) })
 	groups := make([]hubGroup, 0, len(order))
 	for _, hub := range order {
 		groups = append(groups, hubGroup{HubXOnly: hub, Plans: byHub[hub]})

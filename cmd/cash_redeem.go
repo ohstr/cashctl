@@ -421,7 +421,13 @@ func prepareRedeems(
 func entriesForHub(entries []*ledger.Entry, hub string, creds map[string]nipcash.Credential) []*ledger.Entry {
 	var out []*ledger.Entry
 	for _, e := range entries {
-		if e.MinterPubkey == nil || *e.MinterPubkey != hub {
+		// batchableHub, not MinterPubkey: a bill can name the right hub and still
+		// be unbatchable — a cash-mode bill with an unresolved secret is decided by
+		// a live decline, which this transport answers with silence instead.
+		// Matching on the minter alone put exactly such a bill back into the quote
+		// batch after the send path had correctly excluded it.
+		hubOf := batchableHub(e)
+		if hubOf == nil || *hubOf != hub {
 			continue
 		}
 		if _, ok := creds[e.ID]; !ok {

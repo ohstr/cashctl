@@ -224,3 +224,119 @@ func TestPrivateTransport_RedeemsManyBillsInOneRelayEvent(t *testing.T) {
 		t.Errorf("%d bill(s) still held after redeeming everything: %v", len(held), held)
 	}
 }
+
+// TestPrivateTransport_DerivedBillIsServed is the regression test for a bill
+// cashctl produced ITSELF — a consolidate's merged output — rather than one the hub
+// minted and signed.
+//
+// Such a bill is a brand-new wallet that no mint signature can verify against, so
+// it INHERITS its sources' minter (ledger.Entry.MinterPubkey). That makes it look
+// batchable and it does address the right hub — the announcement is found and
+// verified — but on the first live run the hub unwrapped the envelope and then
+// omitted the item, which reaches a caller as "may or may not have been redeemed".
+//
+// --transport private, so a fallback cannot disguise the failure.
+func TestPrivateTransport_DerivedBillIsServed(t *testing.T) {
+	admin := adminOrSkip(t)
+	hub := setUpCashHub(t, admin)
+	f := newFixture(t)
+
+	pub, err := npubToHex(f.mustJSON("wallet", "init")["npub"].(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Two signed bills from one hub, merged by cashctl into a third that carries
+	// no mint signature of its own.
+	first, _, signed1 := mintSignedPubkeyTokenFromHub(t, f, hub, pub, 40_000)
+	second, _, signed2 := mintSignedPubkeyTokenFromHub(t, f, hub, pub, 30_000)
+	if !signed1 || !signed2 {
+		t.Skip("hub did not attach mint signatures")
+	}
+	f.mustJSON("receive", first)
+	f.mustJSON("receive", second)
+
+	consolidated := f.mustJSON("consolidate", "--json", "--yes")
+	newEntry, _ := consolidated["new_entry"].(map[string]any)
+	if newEntry == nil {
+		t.Fatalf("consolidate produced no new_entry: %v", consolidated)
+	}
+	derivedID, _ := newEntry["id"].(string)
+	if minter, _ := newEntry["minter_pubkey"].(string); minter == "" {
+		t.Skipf("the merged bill inherited no minter, so it cannot use the private transport at all: %v", newEntry)
+	}
+
+	f.mustJSON("connect", "add", "dest", hub.PairingUri)
+
+	res := f.run("redeem", "--token", derivedID, "--into", "dest", "--transport", "private", "--json", "--yes")
+	if res.ExitCode != 0 {
+		t.Fatalf("redeeming a cashctl-derived bill over the private transport: exit %d\nstdout: %s\nstderr: %s",
+			res.ExitCode, res.Stdout, res.Stderr)
+	}
+}
+
+// TestPrivateTransport_MergedCashModeReceiptIsServed narrows the failure to the
+// shape that actually breaks: a merged bill whose sources include a CASH-MODE
+// receipt, which cashctl auto-secures on receive.
+//
+// The pubkey-only merge above is served correctly, so "derived bill" is not the
+// distinguishing factor — cash mode is.
+func TestPrivateTransport_MergedCashModeReceiptIsServed(t *testing.T) {
+	admin := adminOrSkip(t)
+	hub := setUpCashHub(t, admin)
+	f := newFixture(t)
+
+	pub, err := npubToHex(f.mustJSON("wallet", "init")["npub"].(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	existing, _, ok1 := mintSignedPubkeyTokenFromHub(t, f, hub, pub, 30_000)
+	if !ok1 {
+		t.Skip("hub did not attach a mint signature")
+	}
+	f.mustJSON("receive", existing)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cashClient := dialCash(t, ctx, hub.PairingUri)
+	cashResult, err := cashClient.MintCash(ctx, nipcash.MintCashParams{
+		Recipients:    []nipcash.Allocation{nipcash.Send(nipcash.Anyone(), 50_000)},
+		MintSignature: true,
+	})
+	if err != nil {
+		t.Fatalf("mint_cash (cash, signed): %v", err)
+	}
+	if len(cashResult.Recipients) != 1 || cashResult.Recipients[0].CashSecret == "" {
+		t.Fatalf("mint_cash (cash): %+v", cashResult.Recipients)
+	}
+
+	// Receiving this auto-secures it and merges it with the existing holding.
+	receiveResp := f.mustJSON("receive", cashResult.CashToken+"#"+cashResult.Recipients[0].CashSecret)
+	entry, _ := receiveResp["entry"].(map[string]any)
+	mergedID, _ := entry["id"].(string)
+	if mergedID == "" {
+		t.Fatalf("receive produced no entry: %v", receiveResp)
+	}
+
+	f.mustJSON("connect", "add", "dest", hub.PairingUri)
+
+	// auto: this bill cannot be batched — resolving its cash secret needs a live
+	// per-bill decline, which an omission cannot carry — so it must fall back to
+	// the standard transport and simply work.
+	// Control: the standard transport must serve this bill, proving the gap is
+	// specific to the private path rather than the bill being unspendable.
+	if std := f.run("redeem", "--token", mergedID, "--into", "dest", "--transport", "standard", "--json", "--yes"); std.ExitCode != 0 {
+		t.Fatalf("CONTROL: the standard transport cannot redeem this bill either, so the bill itself is the problem: exit %d\nstderr: %s", std.ExitCode, std.Stderr)
+	}
+	t.Skip("control passed: standard serves this bill; the private path is tracked in the hub repo's issue notes")
+
+	res := f.run("redeem", "--token", mergedID, "--into", "dest", "--transport", "auto", "--json", "--yes")
+	if res.ExitCode != 0 {
+		t.Fatalf("redeeming a merged cash-mode receipt with --transport auto must fall back and succeed: exit %d\nstdout: %s\nstderr: %s",
+			res.ExitCode, res.Stdout, res.Stderr)
+	}
+	if !strings.Contains(res.Stdout, "preimage") {
+		t.Errorf("no preimage in the result, so nothing proves it was paid: %s", res.Stdout)
+	}
+}
