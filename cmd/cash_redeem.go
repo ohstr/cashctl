@@ -100,13 +100,8 @@ func runCashRedeem(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	// One invoice can only be paid once, and a slice pays out exactly once, so
-	// N bills need N invoices. Refused rather than silently redeeming only the
-	// first: a caller asking for several bills into one invoice has a wrong
-	// model of what redeeming does, and quietly doing part of it would leave
-	// them believing the rest had been paid too.
-	if explicitInvoice != "" && len(entries) > 1 {
-		return output.InvocationError(cmd, fmt.Errorf("--invoice redeems into one invoice, but %d tokens were selected — an invoice is payable once, so each token needs its own; drop --invoice to have them paid into a wallet, or redeem them one at a time", len(entries)))
+	if err := refuseInvoiceForManyBills(cmd, explicitInvoice, len(entries)); err != nil {
+		return err
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), redeemTimeout(len(entries)))
@@ -224,6 +219,26 @@ func runCashRedeem(cmd *cobra.Command, args []string) error {
 
 	printRedeemOutcomes(jsonMode, outcomes, destName, explicitInvoice)
 	return firstRedeemError(outcomes)
+}
+
+// refuseInvoiceForManyBills rejects --invoice when several bills were selected.
+//
+// One invoice can only be paid once and a slice pays out exactly once, so N bills
+// need N invoices. Refused rather than silently redeeming only the first: a caller
+// asking for several bills into one invoice has a wrong model of what redeeming
+// does, and quietly doing part of it would leave them believing the rest had been
+// paid too.
+//
+// Necessarily checked after selection, since the bills have to be resolved before
+// they can be counted — which is why it is a separate function: the path through
+// runCashRedeem that reaches it needs a populated ledger, so the rule itself is
+// tested here instead.
+func refuseInvoiceForManyBills(cmd *cobra.Command, explicitInvoice string, bills int) error {
+	if explicitInvoice == "" || bills <= 1 {
+		return nil
+	}
+	return output.InvocationError(cmd, fmt.Errorf(
+		"--invoice redeems into one invoice, but %d tokens were selected — an invoice is payable once, so each token needs its own; drop --invoice to have them paid into a wallet, or redeem them one at a time", bills))
 }
 
 // redeemTimeout scales the overall budget with how many bills are being

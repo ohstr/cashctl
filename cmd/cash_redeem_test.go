@@ -770,3 +770,22 @@ func TestWorthReportingRedeemRun_SingleFailureStaysQuietOnStdout(t *testing.T) {
 		t.Error("with several bills the per-bill report is the only way to see which failed")
 	}
 }
+
+// TestRefuseInvoiceForManyBills covers the rule that keeps --invoice honest. A
+// slice pays out exactly once and an invoice is payable once, so several bills
+// into one invoice cannot mean what a caller thinks it means — and quietly
+// redeeming only the first would leave them believing the rest had been paid.
+func TestRefuseInvoiceForManyBills(t *testing.T) {
+	cmd := &cobra.Command{}
+	if err := refuseInvoiceForManyBills(cmd, "lnbc1abc", 2); err == nil {
+		t.Error("--invoice with 2 bills was accepted, want a usage error")
+	}
+	if err := refuseInvoiceForManyBills(cmd, "lnbc1abc", 1); err != nil {
+		t.Errorf("--invoice with 1 bill = %v, want accepted", err)
+	}
+	// No --invoice: every bill gets its own invoice from the destination wallet,
+	// so any count is fine.
+	if err := refuseInvoiceForManyBills(cmd, "", 40); err != nil {
+		t.Errorf("40 bills with no --invoice = %v, want accepted", err)
+	}
+}
