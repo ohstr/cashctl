@@ -116,10 +116,20 @@ func runCashRedeem(cmd *cobra.Command, args []string) error {
 	// a cash-mode token with no stored secret comes first, and
 	// TestRedeem_NoWalletConfigured's reasoning depends on exactly that
 	// precedence.
-	plans, outcomes := prepareRedeems(ctx, cmd, l, entries, explicitInvoice, jsonMode)
+	// Asked once, up front, and reused for BOTH the quote and the spend. Opening
+	// it only for the spend would leave the quotes on the standard transport,
+	// each tagged with its own bill — republishing the very linkable set that
+	// batching the spend exists to hide.
+	sessions, sessionErrs := openRedeemSessions(ctx, entries, mode, jsonMode)
+
+	plans, outcomes := prepareRedeems(ctx, cmd, l, entries, explicitInvoice, jsonMode, sessions)
 	defer func() {
 		for _, p := range plans {
-			p.Client.Close()
+			// Nil for a bill quoted in a batch: nothing about it was ever
+			// opened outside the shared envelope.
+			if p.Client != nil {
+				p.Client.Close()
+			}
 		}
 	}()
 	if len(plans) == 0 {
@@ -201,7 +211,7 @@ func runCashRedeem(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	executeRedeems(ctx, cmd, l, plans, outcomes, destName, jsonMode, mode)
+	executeRedeems(ctx, cmd, l, plans, outcomes, destName, jsonMode, mode, sessions, sessionErrs)
 
 	// Unlike consolidate/transfer, there's no new token to lose here — the cash
 	// was paid out for real (each result's Preimage proves it) and no longer
@@ -295,37 +305,61 @@ func prepareRedeems(
 	entries []*ledger.Entry,
 	explicitInvoice string,
 	jsonMode bool,
+	sessions redeemSessions,
 ) ([]redeemPlan, []redeemOutcome) {
 	outcomes := make([]redeemOutcome, len(entries))
 	plans := make([]redeemPlan, 0, len(entries))
 
+	// Credentials first, for every bill, because the batched quote below needs
+	// them all before it can send anything. A credential failure is the caller's
+	// own and is recorded per bill rather than aborting the run.
+	creds := make(map[string]nipcash.Credential, len(entries))
 	for i, entry := range entries {
 		outcomes[i] = redeemOutcome{EntryID: entry.ID, AmountMillis: entry.AmountMillis}
-
 		cred, err := resolveCredential(cmd, entry)
 		if err != nil {
 			outcomes[i].Err = err
 			continue
 		}
+		creds[entry.ID] = cred
+	}
 
-		var sourceClient *nipcashclient.Client
-		err = WithSpinner(jsonMode, redeemStep(len(entries), i, "Connecting..."), func() error {
-			c, cErr := nipcashclient.Connect(ctx, entry.Token)
-			if cErr != nil {
-				return cErr
+	// One cash_status request per HUB rather than per bill, wherever the hub
+	// offers a batch inbox. This is not only fewer round trips: a standard
+	// cash_status is tagged with its own bill's wallet pubkey, so quoting forty
+	// bills one at a time republishes precisely the linkable set that batching
+	// the spend exists to hide.
+	quotes := map[string]redeemQuote{}
+	quoteErrs := map[string]error{}
+	if explicitInvoice == "" {
+		for hub, session := range sessions {
+			group := entriesForHub(entries, hub, creds)
+			if len(group) == 0 {
+				continue
 			}
-			sourceClient = c
-			return nil
-		})
-		if err != nil {
-			outcomes[i].Err = output.NetworkError(cmd, err)
-			continue
+			gotQuotes, gotErrs := quoteGroupPrivately(ctx, cmd, l, session, group, creds, jsonMode)
+			for id, q := range gotQuotes {
+				quotes[id] = q
+			}
+			for id, e := range gotErrs {
+				quoteErrs[id] = e
+			}
 		}
+	}
 
-		plan := redeemPlan{Index: i, Entry: entry, Cred: cred, Client: sourceClient}
+	for i, entry := range entries {
+		if outcomes[i].Err != nil {
+			continue // credential failure, already recorded
+		}
+		cred := creds[entry.ID]
+		plan := redeemPlan{Index: i, Entry: entry, Cred: cred}
 
 		if explicitInvoice != "" {
-			// Guarded above: --invoice only ever reaches here with one bill.
+			// Guarded above: --invoice only ever reaches here with one bill, so
+			// it is always the standard path and always needs a connection.
+			if !connectPlan(ctx, cmd, &plan, outcomes, i, len(entries), jsonMode) {
+				continue
+			}
 			plan.Invoice = explicitInvoice
 			if entry.AmountMillis != nil {
 				plan.Quote = redeemQuote{AmountMillis: *entry.AmountMillis}
@@ -334,12 +368,32 @@ func prepareRedeems(
 			continue
 		}
 
+		// Quoted in the batch: no per-bill connection is opened at all, which
+		// is the whole point — nothing about this bill appears on the relay
+		// outside the shared envelope.
+		if q, ok := quotes[entry.ID]; ok {
+			plan.Quote = q
+			outcomes[i].AmountMillis = entry.AmountMillis
+			plans = append(plans, plan)
+			continue
+		}
+		if err, ok := quoteErrs[entry.ID]; ok {
+			outcomes[i].Err = err
+			continue
+		}
+
+		// Standard path: this bill's hub offers no batch inbox, or it has no
+		// recoverable minter to address one with.
+		if !connectPlan(ctx, cmd, &plan, outcomes, i, len(entries), jsonMode) {
+			continue
+		}
+
 		// Always a live CheckClaim, in every mode including --json/--yes: the
 		// fee quote isn't confirmation-prompt decoration anymore, it decides
 		// the destination invoice's amount below (see redeemInvoiceAmount) —
 		// "skip it, nothing prints the preview" is no longer a valid reason to
 		// bypass this.
-		err = WithSpinner(jsonMode, redeemStep(len(entries), i, "Checking fee quote..."), func() error {
+		err := WithSpinner(jsonMode, redeemStep(len(entries), i, "Checking fee quote..."), func() error {
 			q, qErr := resolveRedeemQuote(cmd, l, entry, plan.Client)
 			if qErr != nil {
 				return qErr
@@ -356,6 +410,49 @@ func prepareRedeems(
 		plans = append(plans, plan)
 	}
 	return plans, outcomes
+}
+
+// entriesForHub is the subset of entries belonging to one hub that still have a
+// usable credential.
+//
+// Credential-less bills are excluded rather than sent and omitted: an omission
+// is information-free, so a bill dropped for a reason we already know locally
+// would come back indistinguishable from one the hub refused to serve.
+func entriesForHub(entries []*ledger.Entry, hub string, creds map[string]nipcash.Credential) []*ledger.Entry {
+	var out []*ledger.Entry
+	for _, e := range entries {
+		if e.MinterPubkey == nil || *e.MinterPubkey != hub {
+			continue
+		}
+		if _, ok := creds[e.ID]; !ok {
+			continue
+		}
+		out = append(out, e)
+	}
+	return out
+}
+
+// connectPlan opens the standard-transport connection a plan needs, recording a
+// failure as that bill's own outcome. Reports whether the plan is usable.
+func connectPlan(ctx context.Context, cmd *cobra.Command, plan *redeemPlan, outcomes []redeemOutcome, i, total int, jsonMode bool) bool {
+	if plan.Client != nil {
+		return true
+	}
+	var client *nipcashclient.Client
+	err := WithSpinner(jsonMode, redeemStep(total, i, "Connecting..."), func() error {
+		c, cErr := nipcashclient.Connect(ctx, plan.Entry.Token)
+		if cErr != nil {
+			return cErr
+		}
+		client = c
+		return nil
+	})
+	if err != nil {
+		outcomes[i].Err = output.NetworkError(cmd, err)
+		return false
+	}
+	plan.Client = client
+	return true
 }
 
 // makeRedeemInvoices asks the destination wallet for one invoice per prepared
@@ -421,6 +518,8 @@ func executeRedeems(
 	destName string,
 	jsonMode bool,
 	mode transportMode,
+	sessions redeemSessions,
+	sessionErrs map[string]error,
 ) {
 	if mode == transportStandard {
 		executeRedeemsOneByOne(ctx, cmd, l, plans, outcomes, destName, jsonMode)
@@ -429,7 +528,12 @@ func executeRedeems(
 
 	groups, ungrouped := groupPlansByHub(plans)
 	for _, g := range groups {
-		served, setupErr := redeemGroupPrivately(ctx, cmd, l, g, outcomes, destName, jsonMode)
+		session := sessions[g.HubXOnly]
+		var served bool
+		setupErr := sessionErrs[g.HubXOnly]
+		if session != nil {
+			served, setupErr = redeemGroupPrivately(ctx, cmd, l, session, g, outcomes, destName, jsonMode)
+		}
 		if served {
 			continue
 		}
@@ -476,7 +580,20 @@ func executeRedeemsOneByOne(
 	destName string,
 	jsonMode bool,
 ) {
-	for i, p := range plans {
+	for i := range plans {
+		p := plans[i]
+		// A bill quoted in a batch has no connection of its own — nothing about
+		// it was opened outside the shared envelope. Reaching here means its
+		// group could not be batched after all, so it needs one now. Safe at
+		// this point precisely because a batch that got as far as publishing
+		// never falls back.
+		if p.Client == nil {
+			if !connectPlan(ctx, cmd, &p, outcomes, p.Index, len(plans), jsonMode) {
+				continue
+			}
+			defer p.Client.Close()
+		}
+
 		var result *nipcash.CashRedeemResult
 		err := WithSpinner(jsonMode, redeemStep(len(plans), i, "Redeeming..."), func() error {
 			r, cErr := spendCashEntry(p.Entry, p.Cred, func(c nipcash.Credential) (*nipcash.CashRedeemResult, error) {

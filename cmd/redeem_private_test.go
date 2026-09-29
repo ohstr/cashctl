@@ -99,28 +99,86 @@ func TestGroupPlansByHub_NoMinterCannotBeBatched(t *testing.T) {
 	}
 }
 
-// TestPlanRelays_UnionsEveryBillsHints matters because a bill's hints were fixed
+// TestEntryRelays_UnionsEveryBillsHints matters because a bill's hints were fixed
 // when it was minted: an older bill may name a relay the hub has since left, and
 // a newer one may name where it went. Using only the first bill's hints would
 // strand a group whose newer bills know exactly where to look.
-func TestPlanRelays_UnionsEveryBillsHints(t *testing.T) {
-	plans := []redeemPlan{
-		planFor("tok-a", "hub-1", tokenWithRelays(t, "wss://old.example")),
-		planFor("tok-b", "hub-1", tokenWithRelays(t, "wss://new.example", "wss://old.example")),
+func TestEntryRelays_UnionsEveryBillsHints(t *testing.T) {
+	entries := []*ledger.Entry{
+		planFor("tok-a", "hub-1", tokenWithRelays(t, "wss://old.example")).Entry,
+		planFor("tok-b", "hub-1", tokenWithRelays(t, "wss://new.example", "wss://old.example")).Entry,
 	}
-	got := planRelays(plans)
+	got := entryRelays(entries)
 	if want := []string{"wss://old.example", "wss://new.example"}; !reflect.DeepEqual(got, want) {
-		t.Errorf("planRelays() = %v, want %v (union, in order, deduplicated)", got, want)
+		t.Errorf("entryRelays() = %v, want %v (union, in order, deduplicated)", got, want)
 	}
 }
 
-func TestPlanRelays_UndecodableTokenIsSkippedNotFatal(t *testing.T) {
-	plans := []redeemPlan{
-		planFor("tok-bad", "hub-1", "not-a-token"),
-		planFor("tok-good", "hub-1", tokenWithRelays(t, "wss://live.example")),
+func TestEntryRelays_UndecodableTokenIsSkippedNotFatal(t *testing.T) {
+	entries := []*ledger.Entry{
+		planFor("tok-bad", "hub-1", "not-a-token").Entry,
+		planFor("tok-good", "hub-1", tokenWithRelays(t, "wss://live.example")).Entry,
 	}
-	if got := planRelays(plans); !reflect.DeepEqual(got, []string{"wss://live.example"}) {
-		t.Errorf("planRelays() = %v, want the reachable hint only", got)
+	if got := entryRelays(entries); !reflect.DeepEqual(got, []string{"wss://live.example"}) {
+		t.Errorf("entryRelays() = %v, want the reachable hint only", got)
+	}
+}
+
+// TestGroupEntriesByHub_MatchesGroupPlansByHub pins that the two splits agree.
+// They must: one chooses the wire path before quoting and the other decides what
+// to send, so a disagreement would quote a bill on one transport and spend it on
+// another — or build an envelope whose items bind to different hubs, which the
+// hub answers with silence.
+func TestGroupEntriesByHub_MatchesGroupPlansByHub(t *testing.T) {
+	plans := []redeemPlan{
+		planFor("tok-a", "hub-1", "t"),
+		planFor("tok-b", "hub-2", "t"),
+		planFor("tok-c", "hub-1", "t"),
+		planFor("tok-unsigned", "", "t"),
+	}
+	entries := make([]*ledger.Entry, len(plans))
+	for i, p := range plans {
+		entries[i] = p.Entry
+	}
+
+	planGroups, planUngrouped := groupPlansByHub(plans)
+	entryGroups, entryUngrouped := groupEntriesByHub(entries)
+
+	if len(planGroups) != len(entryGroups) {
+		t.Fatalf("group counts differ: %d plan groups vs %d entry groups", len(planGroups), len(entryGroups))
+	}
+	for i := range planGroups {
+		if planGroups[i].HubXOnly != entryGroups[i].HubXOnly {
+			t.Errorf("group %d: plans say hub %q, entries say %q", i, planGroups[i].HubXOnly, entryGroups[i].HubXOnly)
+		}
+		if len(planGroups[i].Plans) != len(entryGroups[i].Entries) {
+			t.Errorf("group %d (%s): %d plans vs %d entries", i, planGroups[i].HubXOnly, len(planGroups[i].Plans), len(entryGroups[i].Entries))
+		}
+	}
+	if len(planUngrouped) != len(entryUngrouped) {
+		t.Errorf("ungrouped differs: %d vs %d", len(planUngrouped), len(entryUngrouped))
+	}
+}
+
+// TestEntriesForHub_SkipsCredentiallessBills covers a subtle one: a bill we
+// cannot build a credential for must be dropped BEFORE the envelope, not sent and
+// omitted. An omission is information-free, so a bill dropped for a reason we
+// already knew locally would come back indistinguishable from one the hub refused.
+func TestEntriesForHub_SkipsCredentiallessBills(t *testing.T) {
+	entries := []*ledger.Entry{
+		planFor("tok-a", "hub-1", "t").Entry,
+		planFor("tok-b", "hub-1", "t").Entry,
+		planFor("tok-other", "hub-2", "t").Entry,
+	}
+	creds := map[string]nipcash.Credential{"tok-a": nipcash.BySecret("s")}
+
+	got := entriesForHub(entries, "hub-1", creds)
+	if len(got) != 1 || got[0].ID != "tok-a" {
+		ids := []string{}
+		for _, e := range got {
+			ids = append(ids, e.ID)
+		}
+		t.Errorf("entriesForHub = %v, want just tok-a (tok-b has no credential, tok-other another hub)", ids)
 	}
 }
 

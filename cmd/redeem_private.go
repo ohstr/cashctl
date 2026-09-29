@@ -77,6 +77,46 @@ type hubGroup struct {
 	Plans    []redeemPlan
 }
 
+// entryHubGroup is hubGroup before the bills have been prepared — the same
+// split, made early enough to decide the wire path before any quoting happens.
+type entryHubGroup struct {
+	HubXOnly string
+	Entries  []*ledger.Entry
+}
+
+// groupByHub splits items into per-hub groups, in first-appearance order, plus
+// the ones with no usable hub identity.
+//
+// Generic because the split has to happen twice over the same rule: once over
+// entries, to choose a wire path before quoting, and once over prepared plans,
+// to send. Two copies of this rule would be two chances for the quote and the
+// spend to disagree about which hub a bill belongs to.
+func groupByHub[T any](items []T, hubOf func(T) *string) (order []string, byHub map[string][]T, ungrouped []T) {
+	byHub = make(map[string][]T, len(items))
+	for _, it := range items {
+		hub := hubOf(it)
+		if hub == nil || *hub == "" {
+			ungrouped = append(ungrouped, it)
+			continue
+		}
+		if _, seen := byHub[*hub]; !seen {
+			order = append(order, *hub)
+		}
+		byHub[*hub] = append(byHub[*hub], it)
+	}
+	return order, byHub, ungrouped
+}
+
+// groupEntriesByHub is groupByHub over selected bills, before preparation.
+func groupEntriesByHub(entries []*ledger.Entry) ([]entryHubGroup, []*ledger.Entry) {
+	order, byHub, ungrouped := groupByHub(entries, func(e *ledger.Entry) *string { return e.MinterPubkey })
+	groups := make([]entryHubGroup, 0, len(order))
+	for _, hub := range order {
+		groups = append(groups, entryHubGroup{HubXOnly: hub, Entries: byHub[hub]})
+	}
+	return groups, ungrouped
+}
+
 // groupPlansByHub splits prepared bills into per-hub groups plus the ones that
 // cannot be batched at all.
 //
@@ -89,22 +129,7 @@ type hubGroup struct {
 // has no hub identity to check an announcement against and so cannot use the
 // transport at all.
 func groupPlansByHub(plans []redeemPlan) ([]hubGroup, []redeemPlan) {
-	order := make([]string, 0, len(plans))
-	byHub := make(map[string][]redeemPlan, len(plans))
-	var ungrouped []redeemPlan
-
-	for _, p := range plans {
-		if p.Entry.MinterPubkey == nil || *p.Entry.MinterPubkey == "" {
-			ungrouped = append(ungrouped, p)
-			continue
-		}
-		hub := *p.Entry.MinterPubkey
-		if _, seen := byHub[hub]; !seen {
-			order = append(order, hub)
-		}
-		byHub[hub] = append(byHub[hub], p)
-	}
-
+	order, byHub, ungrouped := groupByHub(plans, func(p redeemPlan) *string { return p.Entry.MinterPubkey })
 	groups := make([]hubGroup, 0, len(order))
 	for _, hub := range order {
 		groups = append(groups, hubGroup{HubXOnly: hub, Plans: byHub[hub]})
@@ -112,18 +137,18 @@ func groupPlansByHub(plans []redeemPlan) ([]hubGroup, []redeemPlan) {
 	return groups, ungrouped
 }
 
-// planRelays collects the relay hints of a group's bills, in order and without
+// entryRelays collects the relay hints of a group's bills, in order and without
 // duplicates.
 //
 // Every bill's hints are offered, not just the first's: the hints were fixed
 // when each bill was minted, so an older bill may name a relay the hub has since
 // left and a newer one may name where it went. The announcement's own relay list
 // takes over once it is found (BatchSession.Refresh).
-func planRelays(plans []redeemPlan) []string {
+func entryRelays(entries []*ledger.Entry) []string {
 	var relays []string
 	seen := map[string]struct{}{}
-	for _, p := range plans {
-		tok, err := nipcash.Decode(p.Entry.Token)
+	for _, e := range entries {
+		tok, err := nipcash.Decode(e.Token)
 		if err != nil {
 			continue
 		}
@@ -141,54 +166,185 @@ func planRelays(plans []redeemPlan) []string {
 	return relays
 }
 
+// redeemSessions is one opened batch session per hub identity.
+//
+// Opened once per run and reused for BOTH the fee quote and the spend. That
+// reuse is the point rather than an optimisation: a session opened only for the
+// spend would leave the quotes on the standard transport, where each is tagged
+// with its own bill's wallet pubkey — which republishes exactly the linkable set
+// that batching the spend was meant to hide.
+type redeemSessions map[string]*nipcashclient.BatchSession
+
+// openRedeemSessions asks each hub whether it offers a batch inbox.
+//
+// Returns the sessions it could open plus, per hub, why it could not. A hub that
+// publishes no announcement is the expected answer for one that simply does not
+// offer the transport — it is OPTIONAL in both directions — so that is a reason
+// to fall back, not a fault.
+func openRedeemSessions(
+	ctx context.Context,
+	entries []*ledger.Entry,
+	mode transportMode,
+	jsonMode bool,
+) (redeemSessions, map[string]error) {
+	sessions := redeemSessions{}
+	failures := map[string]error{}
+	if mode == transportStandard {
+		return sessions, failures
+	}
+
+	groups, _ := groupEntriesByHub(entries)
+	for _, g := range groups {
+		relays := entryRelays(g.Entries)
+		if len(relays) == 0 {
+			failures[g.HubXOnly] = errors.New("no relay hints on this hub's bills")
+			continue
+		}
+		var session *nipcashclient.BatchSession
+		err := WithSpinner(jsonMode, "Looking up the hub's batch inbox...", func() error {
+			// The client is needed only to construct the session; the session
+			// does its own relay I/O from the announcement afterwards, so this
+			// connection is not held open for the batch.
+			client, cErr := nipcashclient.Connect(ctx, g.Entries[0].Token)
+			if cErr != nil {
+				return cErr
+			}
+			defer client.Close()
+			s, sErr := client.NewBatchSession(ctx, g.HubXOnly, relays)
+			if sErr != nil {
+				return sErr
+			}
+			session = s
+			return nil
+		})
+		if err != nil {
+			failures[g.HubXOnly] = err
+			continue
+		}
+		sessions[g.HubXOnly] = session
+	}
+	return sessions, failures
+}
+
+// quoteGroupPrivately reads a whole hub group's fee quotes in ONE relay event.
+//
+// cash_status is read-only, so unlike the spend there is nothing here that could
+// double-anything — but it is exactly as revealing on the standard transport,
+// which is why it belongs on the same envelope as the spend it precedes.
+//
+// Mirrors CheckClaim's own semantics deliberately, using the same exported
+// MatchClaimAuto, so a quote means the same thing whichever transport fetched
+// it: the caller's own unclaimed row, matched by pubkey or by the bill being
+// cash-mode, and the same ledger bookkeeping written from it.
+func quoteGroupPrivately(
+	ctx context.Context,
+	cmd *cobra.Command,
+	l *ledger.Ledger,
+	session *nipcashclient.BatchSession,
+	entries []*ledger.Entry,
+	creds map[string]nipcash.Credential,
+	jsonMode bool,
+) (map[string]redeemQuote, map[string]error) {
+	quotes := map[string]redeemQuote{}
+	errs := map[string]error{}
+
+	items := make([]nipcashclient.BatchStatus, 0, len(entries))
+	for _, e := range entries {
+		tok, err := nipcash.Decode(e.Token)
+		if err != nil {
+			errs[e.ID] = output.RuntimeError(cmd, err)
+			continue
+		}
+		items = append(items, nipcashclient.BatchStatus{ID: e.ID, Target: tok.WalletPubkey, Credential: creds[e.ID]})
+	}
+	if len(items) == 0 {
+		return quotes, errs
+	}
+
+	var results []nipcashclient.StatusOutcome
+	var sendErr error
+	_ = WithSpinner(jsonMode, fmt.Sprintf("Checking %d fee quotes in one request...", len(items)), func() error {
+		results, sendErr = session.StatusMany(ctx, items)
+		return nil
+	})
+	if len(results) == 0 {
+		if sendErr == nil {
+			sendErr = errors.New("hub returned no answer")
+		}
+		for _, it := range items {
+			errs[it.ID] = output.NetworkError(cmd, sendErr)
+		}
+		return quotes, errs
+	}
+
+	myPubHex, _ := localPubKeyHex(cmd)
+	byID := map[string]*ledger.Entry{}
+	for _, e := range entries {
+		byID[e.ID] = e
+	}
+	for _, r := range results {
+		entry := byID[r.ID]
+		if entry == nil {
+			continue
+		}
+		switch {
+		case r.Succeeded() && r.Result != nil:
+			recipient, ok := nipcash.MatchClaimAuto(r.Result.Recipients, myPubHex)
+			if !ok {
+				// Same answer, and the same wording, CheckClaim's own
+				// ErrClaimNotFound produces on the standard transport.
+				errs[r.ID] = output.NotFoundError(cmd, r.ID,
+					fmt.Errorf("couldn't determine this token's amount — check `cashctl wallet show`, or that it's still valid"))
+				continue
+			}
+			quotes[r.ID] = recordQuote(l, entry, recipient)
+		case r.State == nipcashclient.OutcomeError && r.Error != nil:
+			errs[r.ID] = output.NWCErrorForCashToken(cmd, &relayclient.WalletError{
+				Method: "cash_status", Code: r.Error.Code, Message: r.Error.Message,
+			})
+		default:
+			// Omitted. Harmless here in a way it is NOT for a spend: nothing was
+			// executed, so this is simply "no quote", and the bill is reported
+			// as unquotable rather than redeemed into an unknown state.
+			errs[r.ID] = output.NotFoundError(cmd, r.ID,
+				fmt.Errorf("the hub returned no answer for this token — check `cashctl wallet show`, or that it's still valid"))
+		}
+	}
+	return quotes, errs
+}
+
+// recordQuote turns a matched roster row into a quote and writes the same ledger
+// bookkeeping resolveRedeemQuote does, so the two transports cannot drift.
+func recordQuote(l *ledger.Ledger, entry *ledger.Entry, recipient nipcash.RecipientStatus) redeemQuote {
+	entry.AmountMillis = &recipient.AmountMillis
+	entry.ExpiresAt = recipient.ExpiresAt
+	_ = l.SetVerified(entry.ID, true)
+	return redeemQuote{
+		AmountMillis:        recipient.AmountMillis,
+		RedeemFeeMillis:     recipient.RedeemFeeMillis,
+		NetRedeemableMillis: recipient.NetRedeemableMillis,
+		ExpiresAt:           recipient.ExpiresAt,
+	}
+}
+
 // redeemGroupPrivately spends a whole hub group in one relay event.
 //
 // Returns false when the group could not be served this way at all and the
 // caller should fall back — which is safe only because every such refusal
-// happens BEFORE anything is published: a missing announcement fails at session
-// setup, and an unbatchable credential or an oversized item fails in packing,
-// which runs to completion before the first envelope goes out. Once a request is
-// on the wire this returns true and reports outcomes, never a fallback, since
-// re-sending could double-spend.
+// happens BEFORE anything is published: an unbatchable credential or an
+// oversized item fails in packing, which runs to completion before the first
+// envelope goes out. Once a request is on the wire this returns true and reports
+// outcomes, never a fallback, since re-sending could double-spend.
 func redeemGroupPrivately(
 	ctx context.Context,
 	cmd *cobra.Command,
 	l *ledger.Ledger,
+	session *nipcashclient.BatchSession,
 	g hubGroup,
 	outcomes []redeemOutcome,
 	destName string,
 	jsonMode bool,
 ) (served bool, setupErr error) {
-	relays := planRelays(g.Plans)
-	if len(relays) == 0 {
-		return false, fmt.Errorf("no relay hints on this hub's bills")
-	}
-
-	// The client is needed only to construct the session; the session does its
-	// own relay I/O from the announcement afterwards, so this connection is not
-	// held open for the batch.
-	client, err := nipcashclient.Connect(ctx, g.Plans[0].Entry.Token)
-	if err != nil {
-		return false, err
-	}
-	defer client.Close()
-
-	var session *nipcashclient.BatchSession
-	err = WithSpinner(jsonMode, "Looking up the hub's batch inbox...", func() error {
-		s, sErr := client.NewBatchSession(ctx, g.HubXOnly, relays)
-		if sErr != nil {
-			return sErr
-		}
-		session = s
-		return nil
-	})
-	if err != nil {
-		// ErrNoAnnouncement is the expected answer for a hub that simply does
-		// not offer the transport — it is OPTIONAL in both directions — so it
-		// is a fallback, not a fault.
-		return false, err
-	}
-
 	items := make([]nipcashclient.BatchRedeem, 0, len(g.Plans))
 	for _, p := range g.Plans {
 		tok, dErr := nipcash.Decode(p.Entry.Token)

@@ -119,9 +119,9 @@ be certain which path ran; `standard` skips batching entirely. Batching
 matters for privacy, not just round trips: on the standard transport each
 request is tagged with its own token's wallet pubkey, so redeeming forty
 tokens publishes forty events seconds apart and ties them together for
-anyone watching the relay. Note the current limit — only the redeem calls
-are batched; the fee quote before them is still one standard request per
-token, so a watcher can still correlate the roster reads.
+anyone watching the relay. Both halves of a redeem travel this way — the
+fee quote (`cash_status`) and the spend (`cash_redeem`) share one session
+per hub, so neither republishes the set the other is hiding.
 
 A batched token whose hub returns **no answer** is reported as `failed`
 with code `conflict`, and that case needs care: an omission is deliberately
