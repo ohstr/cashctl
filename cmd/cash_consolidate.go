@@ -64,10 +64,14 @@ type consolidateResult struct {
 // This exists because each group is a separate committed call: the states are
 // genuinely per-group, so a single error return cannot describe the run.
 type consolidateOutcome struct {
-	// Minter is the group's shared minter pubkey — the thing that MADE it a
+	// Hub is the group's shared Cash Hub fingerprint — the thing that MADE it a
 	// group, and the only stable way to name it in output, since the ledger IDs
 	// of a failed group are not otherwise interesting to a caller.
-	Minter string
+	//
+	// Was the shared MINTER pubkey, which became actively misleading once grouping
+	// moved to the Hub: one node runs several Hubs, so two different groups would
+	// have reported the same minter and a reader could not tell them apart.
+	Hub string
 	// IDs are the source ledger entries this group tried to merge.
 	IDs []string
 	// Result is set only when the merge completed.
@@ -105,7 +109,7 @@ func printConsolidateOutcomes(jsonMode bool, outcomes []consolidateOutcome) {
 		}
 		out := make([]map[string]any, len(outcomes))
 		for i, o := range outcomes {
-			row := map[string]any{"minter": o.Minter, "sources": o.IDs}
+			row := map[string]any{"hub": o.Hub, "sources": o.IDs}
 			switch {
 			case o.Result != nil:
 				row["status"] = "ok"
@@ -142,10 +146,10 @@ func printConsolidateOutcomes(jsonMode bool, outcomes []consolidateOutcome) {
 		case o.declined():
 			// consolidateItems already printed "Cancelled." for this group.
 		default:
-			// Named by minter and source count: with several groups in play,
+			// Named by Hub and source count: with several groups in play,
 			// "it failed" without saying which one is not actionable.
-			fmt.Printf("Failed to consolidate %d tokens from minter %s: %v\n",
-				len(o.IDs), output.Sanitize(shortMinter(o.Minter)), output.AsCLIError(o.Err).Err)
+			fmt.Printf("Failed to consolidate %d tokens from Cash Hub %s: %v\n",
+				len(o.IDs), output.Sanitize(shortHub(o.Hub)), output.AsCLIError(o.Err).Err)
 		}
 	}
 	// Only when the run was genuinely mixed. A single failure speaks for itself
@@ -156,13 +160,14 @@ func printConsolidateOutcomes(jsonMode bool, outcomes []consolidateOutcome) {
 	}
 }
 
-// shortMinter trims a 64-hex minter pubkey to something readable in a line of
-// output, the way the rest of the CLI abbreviates keys.
-func shortMinter(minter string) string {
-	if len(minter) <= 12 {
-		return minter
+// shortHub trims a Hub fingerprint to something readable in a line of output, the
+// way the rest of the CLI abbreviates keys. A fingerprint is already short, so this
+// usually returns it unchanged.
+func shortHub(hub string) string {
+	if len(hub) <= 12 {
+		return hub
 	}
-	return minter[:12] + "…"
+	return hub[:12] + "…"
 }
 
 func runCashConsolidate(cmd *cobra.Command, args []string) error {
@@ -199,10 +204,10 @@ func runCashConsolidate(cmd *cobra.Command, args []string) error {
 	// No explicit sources: naively merging every held token together isn't
 	// possible — NIP-CASH sources are minter-scoped (cash_consolidate only
 	// accepts same-minter sources) — so auto-detect which minter's tokens
-	// can actually be merged instead (see mergeableMinterGroups) and
+	// can actually be merged instead (see mergeableHubGroups) and
 	// process each such group, rather than erroring out and making the
 	// common "tidy up my dust" case require first hunting down IDs.
-	groups := mergeableMinterGroups(l.Held())
+	groups := mergeableHubGroups(l.Held())
 	if len(groups) == 0 {
 		if jsonMode {
 			output.PrintJSON(map[string]any{"consolidated": []any{}})
@@ -212,7 +217,7 @@ func runCashConsolidate(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	chosen, err := pickMinterGroups(cmd, groups)
+	chosen, err := pickHubGroups(cmd, groups)
 	if err != nil {
 		return err
 	}
@@ -255,13 +260,64 @@ func consolidateGroups(cmd *cobra.Command, l *ledger.Ledger, chosen [][]ledger.E
 			ids[i] = e.ID
 		}
 		o := consolidateOutcome{IDs: ids}
-		if len(group) > 0 && group[0].MinterPubkey != nil {
-			o.Minter = *group[0].MinterPubkey
+		if len(group) > 0 {
+			o.Hub = ledger.HubGroupKey(group[0])
 		}
 		o.Result, o.Err = consolidateItemsFn(cmd, l, ids, toFlag, jsonMode, yesFlag)
+		if o.Err != nil && isCrossHubDeclineClassified(o.Err) {
+			o.Err = crossHubGroupError(cmd, ids)
+		}
 		outcomes = append(outcomes, o)
 	}
 	return outcomes
+}
+
+// isCrossHubDeclineClassified recognises the Hub's "same Cash Hub" refusal AFTER
+// it has been classified.
+//
+// isCrossHubSourcesDecline cannot be used here, and the difference is easy to miss:
+// it matches a raw *relayclient.WalletError, which works at a call site that sees
+// the error straight off the wire (cash_transfer's does). consolidateItemsFn has
+// already run it through output.NWCErrorForCashToken by the time it returns, and
+// that builds a fresh CLIError around a plainError — the WalletError is not in the
+// chain any more, so errors.As can never find it and the match silently never
+// fires. The raw text survives only on CLIError.RawMessage, so that is what this
+// reads.
+func isCrossHubDeclineClassified(err error) bool {
+	if isCrossHubSourcesDecline(err) {
+		return true
+	}
+	ce := output.AsCLIError(err)
+	if ce == nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(ce.RawMessage), "same cash hub") ||
+		strings.Contains(strings.ToLower(ce.Err.Error()), "same cash hub")
+}
+
+// crossHubGroupError replaces the Hub's own "all sources must belong to the same
+// Cash Hub" with something a person can act on.
+//
+// Now a DEFENCE rather than the common path. The auto-grouped path used to group by
+// MINTER — the Lightning node that signed the mint, not the Hub that issued the bill
+// — and since one node routinely runs several Hubs, bills from different Hubs landed
+// in one group and the Hub refused it. Grouping by the token's own hub-group
+// fingerprint (ledger.GroupByHub) removed that whole class, so reaching this now
+// means a group was built wrongly.
+//
+// Kept because the refusal must stay legible if it ever happens again: a bill whose
+// fingerprint is absent or wrong, a future grouping change, a Hub that re-parented a
+// bill. The raw refusal reads as a protocol error the user caused, when the selection
+// was made for them.
+//
+// Classified invalid_input, matching the Hub: the selection genuinely cannot be
+// merged as given, and nothing moved.
+func crossHubGroupError(cmd *cobra.Command, ids []string) error {
+	return output.InvalidInputError(cmd, strings.Join(ids, ","), fmt.Errorf(
+		"these bills (%s) were minted by the same Lightning node but not by the same Cash Hub, "+
+			"and a consolidation can only merge bills of one Hub. Nothing was changed. "+
+			"Consolidate one Hub's bills at a time with --sources, e.g. --sources %s",
+		strings.Join(ids, ","), strings.Join(ids[:1], ",")))
 }
 
 // consolidateItemsFn is a package-var seam so the group loop's own policy —
@@ -496,8 +552,8 @@ func printConsolidateResults(jsonMode bool, results []*consolidateResult) {
 // acts on when the caller gave explicit positional args or --sources
 // (comma-separated) — runCashConsolidate only calls this once it's
 // already checked at least one of the two is set; with neither given, it
-// takes the auto-detected-minter-groups path instead (mergeableMinterGroups/
-// pickMinterGroups), never this function's own "every held token" fallback
+// takes the auto-detected-Hub-groups path instead (mergeableHubGroups/
+// pickHubGroups), never this function's own "every held token" fallback
 // below (kept for this function's own standalone testability/contract,
 // not reachable through the real command anymore). Pure and cobra-free so
 // it's unit-testable directly, without a ledger file or a network call —
@@ -520,19 +576,25 @@ func resolveConsolidateSources(args []string, sourcesFlag string, held []ledger.
 	return items, nil
 }
 
-// mergeableMinterGroups returns held's consolidation-eligible entries
-// (ledger.GroupableForConsolidation — pubkey-mode, known minter, known
-// amount), grouped by minter (ledger.GroupByMinter), restricted to
-// minters with 2+ held tokens: a singleton has nothing to merge into.
-// Used by runCashConsolidate's no-args/no---sources default instead of
+// mergeableHubGroups returns held's consolidation-eligible entries
+// (ledger.GroupableForConsolidation — pubkey-mode, known issuing Hub, known
+// amount), grouped by that Hub's own fingerprint (ledger.GroupByHub),
+// restricted to Hubs with 2+ held tokens: a singleton has nothing to merge
+// into. Used by runCashConsolidate's no-args/no---sources default instead of
 // naively trying to merge every held token together, which isn't possible
-// across minters (cash_consolidate only accepts same-minter sources).
-func mergeableMinterGroups(held []ledger.Entry) map[string][]ledger.Entry {
-	groups := ledger.GroupByMinter(ledger.GroupableForConsolidation(held))
+// across Hubs (cash_consolidate only accepts sources of one Cash Hub).
+//
+// Grouped by HUB, not by minter, and the difference is not cosmetic. A mint
+// signature names the minting NODE, and one node routinely runs several Hubs,
+// so the old same-minter grouping merged bills from sibling Hubs and the Hub
+// refused the whole selection — an ordinary `consolidate` failing with a
+// protocol error the holder had not caused.
+func mergeableHubGroups(held []ledger.Entry) map[string][]ledger.Entry {
+	groups := ledger.GroupByHub(ledger.GroupableForConsolidation(held))
 	out := make(map[string][]ledger.Entry, len(groups))
-	for minter, entries := range groups {
+	for hub, entries := range groups {
 		if len(entries) >= 2 {
-			out[minter] = entries
+			out[hub] = entries
 		}
 	}
 	return out
@@ -578,10 +640,10 @@ func sharedMinterOfIDs(l *ledger.Ledger, ids []string) *string {
 	return sharedMinter(entries)
 }
 
-// sortedMinterKeys returns groups' minter keys in a stable order, so
-// pickMinterGroups' numbered list (and its own tests) don't depend on Go's
+// sortedHubKeys returns groups' minter keys in a stable order, so
+// pickHubGroups' numbered list (and its own tests) don't depend on Go's
 // randomized map iteration order.
-func sortedMinterKeys(groups map[string][]ledger.Entry) []string {
+func sortedHubKeys(groups map[string][]ledger.Entry) []string {
 	keys := make([]string, 0, len(groups))
 	for k := range groups {
 		keys = append(keys, k)
@@ -590,7 +652,7 @@ func sortedMinterKeys(groups map[string][]ledger.Entry) []string {
 	return keys
 }
 
-// pickMinterGroups decides which of groups' minter clusters
+// pickHubGroups decides which of groups' minter clusters
 // runCashConsolidate should actually process. Under --json/--yes there's
 // no terminal to ask from (and no point asking a question a script can't
 // answer) — every qualifying group is processed, matching this command's
@@ -600,8 +662,8 @@ func sortedMinterKeys(groups map[string][]ledger.Entry) []string {
 // pickHeldToken's own style in cash_redeem.go), a bare Enter or "all"
 // picks every group, or a comma-separated subset of numbers picks just
 // those.
-func pickMinterGroups(cmd *cobra.Command, groups map[string][]ledger.Entry) ([][]ledger.Entry, error) {
-	keys := sortedMinterKeys(groups)
+func pickHubGroups(cmd *cobra.Command, groups map[string][]ledger.Entry) ([][]ledger.Entry, error) {
+	keys := sortedHubKeys(groups)
 	all := func() [][]ledger.Entry {
 		picked := make([][]ledger.Entry, len(keys))
 		for i, k := range keys {
@@ -616,7 +678,7 @@ func pickMinterGroups(cmd *cobra.Command, groups map[string][]ledger.Entry) ([][
 		return all(), nil
 	}
 
-	output.Notef(false, "Found %d separate minters you can consolidate:", len(keys))
+	output.Notef(false, "Found %d separate Cash Hubs you can consolidate:", len(keys))
 	for i, k := range keys {
 		entries := groups[k]
 		output.Notef(false, "  %d) %d tokens (%s)", i+1, len(entries), output.FormatAmount(int64(ledger.SumAmounts(entries))))
@@ -727,16 +789,42 @@ func sourceFromEntry(cmd *cobra.Command, l *ledger.Ledger, e *ledger.Entry) (nip
 // anything else (still live, or the check itself couldn't be completed)
 // is left exactly as it was — never guessed at either way. Returns the
 // local IDs it could confirm gone, for the caller's own error message.
+//
+// What counts as proof: a "spent" TOMBSTONE, and nothing else. A Hub retains a
+// deleted bill for a window precisely so its holder gets a definitive answer
+// instead of having to infer one, and that is the only answer here that actually
+// means "this bill's value has moved".
+//
+// It used to accept nipcash.ErrClaimNotFound as proof, which is a different
+// statement — "this token does not name you" — and at least three live,
+// non-consumed states produce it:
+//
+//   - a connection_key row can NEVER match: nipcash.MatchClaimAuto only matches
+//     cash and pubkey rows, so every live connection_key source read as consumed,
+//     deterministically and with no race;
+//   - a pubkey source under --as, because the credential honours the override
+//     while the pubkey compared against it was read from the LOCAL identity;
+//   - a cash-mode source whose PendingCashSecret is the wrong one, since a wrong
+//     secret also declines NOT_FOUND.
+//
+// Writing one of those off set StatusConsolidated, which removes the entry from
+// Held() — so it vanished from redeem, redeem --all, wallet balance and --token
+// resolution, while the user was told it had been "confirmed consumed on the Hub".
+// For the cash-mode case it was worse than cosmetic: it disabled the one code path
+// that could ever have discovered which secret was live.
+//
+// The new failure mode is the safe one. A bill that really is gone, but whose Hub
+// has passed its retention window and fallen silent, is now left alone rather than
+// marked — a stale entry the user can see and retry, instead of a live one that
+// disappeared.
 func reconcileAmbiguousSources(cmd *cobra.Command, l *ledger.Ledger, localIDs []string) []string {
-	myPubHex, _ := localPubKeyHex(cmd)
 	var confirmedGone []string
 	for _, id := range localIDs {
 		e, ok := l.Find(id)
 		if !ok {
 			continue
 		}
-		tok, decErr := nipcash.Decode(e.Token)
-		if decErr != nil {
+		if _, decErr := nipcash.Decode(e.Token); decErr != nil {
 			continue
 		}
 		func() {
@@ -747,7 +835,15 @@ func reconcileAmbiguousSources(cmd *cobra.Command, l *ledger.Ledger, localIDs []
 				return // inconclusive — this source's own Hub might just be slow/unreachable right now
 			}
 			defer client.Close()
-			if _, claimErr := client.CheckClaim(ctx, tok, myPubHex); errors.Is(claimErr, nipcash.ErrClaimNotFound) {
+			cred, credErr := resolveCredential(cmd, e)
+			if credErr != nil {
+				return // inconclusive: without a credential we cannot ask at all
+			}
+			status, statusErr := client.CashStatus(ctx, cred, nipcash.ScopeMine)
+			if statusErr != nil {
+				return // inconclusive: an error is not evidence either way
+			}
+			if status.IsSpent() {
 				_ = l.SetStatus(id, ledger.StatusConsolidated)
 				confirmedGone = append(confirmedGone, id)
 			}
@@ -849,7 +945,13 @@ func attemptCashConsolidate(dialToken string, sources []nipcash.Source, target n
 		return nil, err
 	}
 	defer client.Close()
-	return client.CashConsolidate(ctx, nipcash.CashConsolidateParams{Sources: sources, To: target})
+	// The call itself is authorized by the first source's own credential: the caller
+	// proves control of every source individually inside Sources, and any one of them
+	// is equally a proof that this caller may make the call.
+	if len(sources) == 0 {
+		return nil, errors.New("attemptCashConsolidate: no sources")
+	}
+	return client.CashConsolidate(ctx, sources[0].Credential, nipcash.CashConsolidateParams{Sources: sources, To: target})
 }
 
 // attemptCashConsolidateFn is attemptCashConsolidate by default — a

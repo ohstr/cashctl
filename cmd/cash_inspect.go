@@ -13,12 +13,19 @@ import (
 	"github.com/ohstr/cashctl/internal/output"
 )
 
-func newCashListRecipientsCmd() *cobra.Command {
+func newCashStatusCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:     "list-recipients",
+		Use: "status",
+		// The old name stays as an alias. The METHOD alias `list_recipients` was
+		// removed from the wire (nothing had been minted against it), but a CLI name
+		// is a different surface: it appears in scripts, in skills/cashctl-cash and
+		// in AGENTS.md, and breaking it buys nothing. The command is renamed because
+		// `cash_status` is now the only method it calls, so the old name described
+		// something that no longer exists.
+		Aliases: []string{"list-recipients"},
 		Short:   "Check your allocation and co-recipients of a held token",
 		Long:    `Shows your share and co-recipients of a held token's mint batch.`,
-		Example: `  cashctl cash list-recipients`,
+		Example: `  cashctl cash status`,
 		Args:    output.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := rejectConnectionFlag(cmd); err != nil {
@@ -33,7 +40,7 @@ func newCashListRecipientsCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			var result *nipcash.ListRecipientsResult
+			var result *nipcash.CashStatusResult
 			var dialErr bool
 			err = WithSpinner(jsonMode, "Fetching recipients...", func() error {
 				ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -44,7 +51,13 @@ func newCashListRecipientsCmd() *cobra.Command {
 					return cErr
 				}
 				defer client.Close()
-				r, cErr := client.ListRecipients(ctx)
+				cred, credErr := resolveCredential(cmd, entry)
+				if credErr != nil {
+					return credErr
+				}
+				// ScopeAll: `cash list-recipients` exists to show the co-recipients,
+				// which is the one place asking for the shared roster is the point.
+				r, cErr := client.CashStatus(ctx, cred, nipcash.ScopeAll)
 				if cErr != nil {
 					return cErr
 				}
@@ -62,6 +75,27 @@ func newCashListRecipientsCmd() *cobra.Command {
 				output.PrintJSON(result)
 				return nil
 			}
+			// A tombstone before the roster, because a spent bill HAS no roster and
+			// would otherwise render as zero bytes and exit 0 — silence, which is
+			// exactly what this command is asked to distinguish from.
+			//
+			// This is the CLI's own prescribed recovery step: after a redeem whose
+			// reply never arrived, applyRedeemResults tells the user to run
+			// `cashctl cash status --token <id>` to find out whether their money
+			// moved. Printing nothing answered that question with silence, and the
+			// answer was available — the Hub retains a deleted bill precisely so its
+			// holder gets a definitive "spent" instead of having to guess. Past
+			// retention the Hub does fall silent, and explainNoAnswer covers that
+			// well; the gap was the window where the Hub tells the truth.
+			if result.IsSpent() {
+				fmt.Println("This bill is spent — its value has already moved, and the bill itself is gone.")
+				if result.RetainedUntil != nil {
+					fmt.Printf("The Hub will keep answering about it until %s; after that it goes silent.\n",
+						time.Unix(*result.RetainedUntil, 0).UTC().Format("2006-01-02 15:04 UTC"))
+				}
+				return nil
+			}
+
 			for _, r := range result.Recipients {
 				status := "unclaimed"
 				if r.Claimed {

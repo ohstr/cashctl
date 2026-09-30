@@ -331,12 +331,38 @@ func protectRekeyOnly(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entry,
 		printProtectAmbiguousFailure(jsonMode, err)
 		return protectedStatus{Status: "failed", Error: err.Error(), PendingSecretUnresolved: true}, entry
 	}
-	_ = result // the Hub never returns the secret itself for this call — see CashTransferResult's own doc comment; bt.Secret() IS the new secret
+	// The Hub never returns the secret itself for this call — see
+	// CashTransferResult's own doc comment; bt.Secret() IS the new secret.
+	//
+	// But it does not always re-key IN PLACE. When this bill has changed hands
+	// before, the Hub carves the slice into a brand-new wallet instead, because
+	// re-keying in place would leave the new secret on a connection a previous
+	// holder still reaches — that connection's secret is derived from the app ID
+	// and cannot be rotated, so giving a bill away never gives up access to it.
+	// Carving is what makes this protection real.
+	//
+	// So the bill may have MOVED, and following it is not optional: the carve
+	// drains and deletes the old wallet, so keeping the old token here leaves
+	// every later command addressing a bill that no longer exists — the Hub
+	// answers "no bill with this target wallet_pubkey" and the funds look gone.
+	// The new token arrives inside the private transport's own sealed reply, so
+	// only this caller can read it.
+	moved := result != nil && result.NewWalletToken != ""
+	if moved {
+		entry.Token = result.NewWalletToken
+		if result.NewWalletPubkey != "" {
+			entry.WalletPubkey = result.NewWalletPubkey
+		}
+	}
 
 	entry.CashSecret = bt.Secret()
 	entry.PendingCashSecret = ""
 	entry.CashProtection = ledger.CashProtected
-	l.AppendHistory("secure", "re-keyed this cash so the shared secret can no longer spend it")
+	if moved {
+		l.AppendHistory("secure", "re-keyed this cash into a new bill so the shared secret can no longer spend it, and the previous holder's connection no longer reaches it")
+	} else {
+		l.AppendHistory("secure", "re-keyed this cash so the shared secret can no longer spend it")
+	}
 	if err := l.Save(); err != nil {
 		// The rekey is CONFIRMED (the call above returned no error) — but
 		// this save's own failure is harmless data-safety-wise: SQLite
@@ -360,15 +386,16 @@ func protectRekeyOnly(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entry,
 // buildConsolidateWith finds other held, consolidation-eligible entries
 // sharing entry's own MinterPubkey — cashctl's own client-side "same
 // issuer" signal (see internal/ledger/cashselect.go's own reasoning,
-// already used for transfer's auto-consolidate step). No MinterPubkey at
-// all (no verified mint signature) means no reliable way to group at
-// all, so it always returns empty in that case, never a false positive.
+// already used for transfer's auto-consolidate step). A bill naming no
+// issuing Hub cannot be grouped at all, so it always returns empty in that
+// case, never a false positive.
 func buildConsolidateWith(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entry) ([]nipcash.Source, []string, error) {
-	if entry.MinterPubkey == nil {
+	hubKey := ledger.HubGroupKey(*entry)
+	if hubKey == "" {
 		return nil, nil, nil
 	}
-	groups := ledger.GroupByMinter(ledger.GroupableForConsolidation(l.Held()))
-	group := groups[*entry.MinterPubkey]
+	groups := ledger.GroupByHub(ledger.GroupableForConsolidation(l.Held()))
+	group := groups[hubKey]
 	var sources []nipcash.Source
 	var ids []string
 	for i := range group {
