@@ -165,8 +165,15 @@ func fetchExpiresAt(cmd *cobra.Command, token string) *int64 {
 		return nil
 	}
 	defer client.Close()
+	// Derived from the token string itself: this runs before any ledger entry
+	// exists, and bill methods authorize per item now.
+	_, embeddedSecret := nipcash.SplitCashSliceString(token)
+	cred, credErr := credentialForToken(cmd, embeddedSecret)
+	if credErr != nil {
+		return nil
+	}
 	myPubHex, _ := localPubKeyHex(cmd)
-	result, err := client.CheckClaim(ctx, tok, myPubHex)
+	result, err := client.CheckClaim(ctx, cred, tok, myPubHex)
 	return expiresAtFromCheck(result, err)
 }
 
@@ -597,7 +604,24 @@ func printAndSaveTransferResult(cmd *cobra.Command, l *ledger.Ledger, transferRe
 		remainder.Token = transferResult.RemainderWalletToken
 		remainder.WalletPubkey = transferResult.RemainderWalletPubkey
 		remainderEntry, _ = l.Add(remainder)
-		if transferResult.RemainingAmountMillis != nil {
+		// Bounded before it is recorded, like every other Hub-supplied amount that
+		// reaches the ledger (validateQuotedAmounts, cash_receive.go). One figure past
+		// math.MaxInt64 goes negative at the FormatAmount call three lines down and at
+		// summarizeHeldTokens' running total, so it would report a negative balance for
+		// the whole wallet, not just this remainder.
+		//
+		// Dropped rather than refused, unlike the quote paths: the transfer has ALREADY
+		// happened by the time this runs, so erroring would report a failure that did
+		// not occur. Leaving the amount nil is a state this code already handles — the
+		// history line below and `wallet show` both degrade to naming the token without
+		// a figure, which is the honest answer when the only source for it is a number
+		// that cannot be true.
+		//
+		// The signed-provenance ceiling deliberately does NOT apply here: the remainder
+		// is a NEW wallet with its own token and its own mint signature, which nothing
+		// on this path has verified, and the original bill's attestation covers the
+		// original wallet rather than this one.
+		if transferResult.RemainingAmountMillis != nil && *transferResult.RemainingAmountMillis <= maxSaneAmountMillis {
 			remainderEntry.AmountMillis = transferResult.RemainingAmountMillis
 		}
 		if remainderEntry.AmountMillis != nil {

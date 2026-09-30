@@ -87,11 +87,6 @@ func runCashRedeem(cmd *cobra.Command, args []string) error {
 		intoValue = conn
 	}
 
-	mode, err := parseTransportMode(cmd)
-	if err != nil {
-		return err
-	}
-
 	l, err := ledger.Load()
 	if err != nil {
 		return output.RuntimeError(cmd, err)
@@ -116,13 +111,7 @@ func runCashRedeem(cmd *cobra.Command, args []string) error {
 	// a cash-mode token with no stored secret comes first, and
 	// TestRedeem_NoWalletConfigured's reasoning depends on exactly that
 	// precedence.
-	// Asked once, up front, and reused for BOTH the quote and the spend. Opening
-	// it only for the spend would leave the quotes on the standard transport,
-	// each tagged with its own bill — republishing the very linkable set that
-	// batching the spend exists to hide.
-	sessions, sessionErrs := openRedeemSessions(ctx, entries, mode, jsonMode)
-
-	plans, outcomes := prepareRedeems(ctx, cmd, l, entries, explicitInvoice, jsonMode, sessions)
+	plans, outcomes := prepareRedeems(ctx, cmd, l, entries, explicitInvoice, jsonMode)
 	defer func() {
 		for _, p := range plans {
 			// Nil for a bill quoted in a batch: nothing about it was ever
@@ -211,7 +200,7 @@ func runCashRedeem(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	executeRedeems(ctx, cmd, l, plans, outcomes, destName, jsonMode, mode, sessions, sessionErrs)
+	executeRedeems(ctx, cmd, l, plans, outcomes, destName, jsonMode)
 
 	// Unlike consolidate/transfer, there's no new token to lose here — the cash
 	// was paid out for real (each result's Preimage proves it) and no longer
@@ -305,7 +294,6 @@ func prepareRedeems(
 	entries []*ledger.Entry,
 	explicitInvoice string,
 	jsonMode bool,
-	sessions redeemSessions,
 ) ([]redeemPlan, []redeemOutcome) {
 	outcomes := make([]redeemOutcome, len(entries))
 	plans := make([]redeemPlan, 0, len(entries))
@@ -324,26 +312,28 @@ func prepareRedeems(
 		creds[entry.ID] = cred
 	}
 
-	// One cash_status request per HUB rather than per bill, wherever the hub
-	// offers a batch inbox. This is not only fewer round trips: a standard
-	// cash_status is tagged with its own bill's wallet pubkey, so quoting forty
-	// bills one at a time republishes precisely the linkable set that batching
-	// the spend exists to hide.
+	// One cash_status request per HUB rather than per bill. Not only fewer round
+	// trips: each request is tagged with its own bill, so quoting forty bills one at
+	// a time republishes precisely the linkable set that batching the spend hides.
 	quotes := map[string]redeemQuote{}
 	quoteErrs := map[string]error{}
 	if explicitInvoice == "" {
-		for hub, session := range sessions {
-			group := entriesForHub(entries, hub, creds)
-			if len(group) == 0 {
-				continue
-			}
-			gotQuotes, gotErrs := quoteGroupPrivately(ctx, cmd, l, session, group, creds, jsonMode)
+		groups, ungrouped := groupEntriesByHub(entries)
+		for _, g := range groups {
+			gotQuotes, gotErrs := quoteHubGroup(ctx, cmd, l, g, creds, jsonMode)
 			for id, q := range gotQuotes {
 				quotes[id] = q
 			}
 			for id, e := range gotErrs {
 				quoteErrs[id] = e
 			}
+		}
+		// A bill with no recoverable minter cannot be quoted at all: there is no hub
+		// identity to verify an announcement against, and no other transport serves
+		// bill methods. Recorded per bill rather than aborting the run.
+		for _, e := range ungrouped {
+			quoteErrs[e.ID] = output.InvalidInputError(cmd, e.ID,
+				fmt.Errorf("this token has no verifiable mint signature, so its hub cannot be identified and it cannot be spent"))
 		}
 	}
 
@@ -412,32 +402,6 @@ func prepareRedeems(
 	return plans, outcomes
 }
 
-// entriesForHub is the subset of entries belonging to one hub that still have a
-// usable credential.
-//
-// Credential-less bills are excluded rather than sent and omitted: an omission
-// is information-free, so a bill dropped for a reason we already know locally
-// would come back indistinguishable from one the hub refused to serve.
-func entriesForHub(entries []*ledger.Entry, hub string, creds map[string]nipcash.Credential) []*ledger.Entry {
-	var out []*ledger.Entry
-	for _, e := range entries {
-		// batchableHub, not MinterPubkey: a bill can name the right hub and still
-		// be unbatchable — a cash-mode bill with an unresolved secret is decided by
-		// a live decline, which this transport answers with silence instead.
-		// Matching on the minter alone put exactly such a bill back into the quote
-		// batch after the send path had correctly excluded it.
-		hubOf := batchableHub(e)
-		if hubOf == nil || *hubOf != hub {
-			continue
-		}
-		if _, ok := creds[e.ID]; !ok {
-			continue
-		}
-		out = append(out, e)
-	}
-	return out
-}
-
 // connectPlan opens the standard-transport connection a plan needs, recording a
 // failure as that bill's own outcome. Reports whether the plan is usable.
 func connectPlan(ctx context.Context, cmd *cobra.Command, plan *redeemPlan, outcomes []redeemOutcome, i, total int, jsonMode bool) bool {
@@ -502,19 +466,17 @@ func makeRedeemInvoices(
 	return ready
 }
 
-// executeRedeems places each prepared bill's cash_redeem call and records what
-// happened, writing outcomes in place.
+// executeRedeems places the cash_redeem calls and records what happened, writing
+// outcomes in place.
 //
-// Chooses the wire path per hub: bills whose hub announces a batch inbox travel
-// together in one relay event (redeemGroupPrivately), the rest go one at a time.
-// The split is per hub because an envelope's items must all bind to the same hub,
-// and bills from different hubs simply cannot share one.
+// One request per HUB, carrying every one of that hub's bills. The split is per hub
+// because an envelope's items must all bind to one hub, and bills from two hubs cannot
+// share a request however few they are.
 //
-// Falling back is safe because every reason a group cannot be batched is
-// discovered before anything is published — a missing announcement at session
-// setup, an unbatchable credential or an oversized item during packing. Once a
-// request is on the wire there is no fallback, since re-sending a cash_redeem
-// could double-spend.
+// Never stops early. Each hub's request is a separate, irreversible payout, so
+// abandoning the rest on one failure would leave a caller unable to tell which bills
+// paid out — and unlike consolidate there is nothing to re-merge: the cash is gone or
+// it is not.
 func executeRedeems(
 	ctx context.Context,
 	cmd *cobra.Command,
@@ -523,103 +485,20 @@ func executeRedeems(
 	outcomes []redeemOutcome,
 	destName string,
 	jsonMode bool,
-	mode transportMode,
-	sessions redeemSessions,
-	sessionErrs map[string]error,
 ) {
-	if mode == transportStandard {
-		executeRedeemsOneByOne(ctx, cmd, l, plans, outcomes, destName, jsonMode)
-		return
-	}
-
 	groups, ungrouped := groupPlansByHub(plans)
 	for _, g := range groups {
-		session := sessions[g.HubXOnly]
-		var served bool
-		setupErr := sessionErrs[g.HubXOnly]
-		if session != nil {
-			served, setupErr = redeemGroupPrivately(ctx, cmd, l, session, g, outcomes, destName, jsonMode)
-		}
-		if served {
-			continue
-		}
-		// Nothing was published for this group — every refusal above happens
-		// before the first envelope goes out — so falling back cannot
-		// double-spend.
-		if mode == transportPrivate {
-			// Asked for the private transport specifically, so a silent
-			// fallback would make a broken transport look like a working one.
-			for _, p := range g.Plans {
-				outcomes[p.Index].Err = output.NetworkError(cmd, fmt.Errorf(
-					"--transport private was requested but this hub's batch inbox could not be used: %v", setupErr))
-			}
-			continue
-		}
-		output.Notef(jsonMode, "This hub has no batch inbox — redeeming one token at a time.")
-		executeRedeemsOneByOne(ctx, cmd, l, g.Plans, outcomes, destName, jsonMode)
+		redeemHubGroup(ctx, cmd, l, g, outcomes, destName, jsonMode)
 	}
-
-	if len(ungrouped) > 0 {
-		if mode == transportPrivate {
-			for _, p := range ungrouped {
-				outcomes[p.Index].Err = output.InvocationError(cmd, fmt.Errorf(
-					"--transport private was requested but this token has no verifiable mint signature, so there is no hub identity to check an announcement against"))
-			}
-		} else {
-			executeRedeemsOneByOne(ctx, cmd, l, ungrouped, outcomes, destName, jsonMode)
-		}
+	// Unreachable in practice: a bill with no recoverable minter fails at the quote
+	// stage and never reaches here. Recorded rather than dropped, because silently
+	// losing a prepared bill is the one outcome a money path must not produce.
+	for _, p := range ungrouped {
+		outcomes[p.Index].Err = output.InvalidInputError(cmd, p.Entry.ID,
+			fmt.Errorf("this token has no verifiable mint signature, so its hub cannot be identified and it cannot be spent"))
 	}
 }
 
-// executeRedeemsOneByOne is the standard transport: one request event per bill.
-//
-// Never stops early. Each call is a separate, irreversible payout, so abandoning
-// the rest on one failure would leave a caller unable to tell which bills paid
-// out — and unlike consolidate there is nothing to re-merge: the cash is simply
-// gone or not.
-func executeRedeemsOneByOne(
-	ctx context.Context,
-	cmd *cobra.Command,
-	l *ledger.Ledger,
-	plans []redeemPlan,
-	outcomes []redeemOutcome,
-	destName string,
-	jsonMode bool,
-) {
-	for i := range plans {
-		p := plans[i]
-		// A bill quoted in a batch has no connection of its own — nothing about
-		// it was opened outside the shared envelope. Reaching here means its
-		// group could not be batched after all, so it needs one now. Safe at
-		// this point precisely because a batch that got as far as publishing
-		// never falls back.
-		if p.Client == nil {
-			if !connectPlan(ctx, cmd, &p, outcomes, p.Index, len(plans), jsonMode) {
-				continue
-			}
-			defer p.Client.Close()
-		}
-
-		var result *nipcash.CashRedeemResult
-		err := WithSpinner(jsonMode, redeemStep(len(plans), i, "Redeeming..."), func() error {
-			r, cErr := spendCashEntry(p.Entry, p.Cred, func(c nipcash.Credential) (*nipcash.CashRedeemResult, error) {
-				return p.Client.CashRedeem(ctx, nipcash.CashRedeemParams{Invoice: p.Invoice, Credential: c})
-			})
-			if cErr != nil {
-				return cErr
-			}
-			result = r
-			return nil
-		})
-		if err != nil {
-			outcomes[p.Index].Err = classifyCashTokenNWCErr(cmd, err)
-			continue
-		}
-
-		outcomes[p.Index].Result = result
-		recordRedeemed(l, p.Entry, destName)
-	}
-}
 
 // redeemStep labels a spinner with which bill of how many it is working on, so a
 // multi-bill run does not sit on an unchanging "Redeeming..." with no sense of
@@ -916,7 +795,7 @@ func pickHeldTokens(cmd *cobra.Command, l *ledger.Ledger, held []ledger.Entry) (
 	case strings.EqualFold(choice, "all"):
 		picked = held
 	case choice == "":
-		// A bare Enter is NOT "all" here, unlike pickMinterGroups', because
+		// A bare Enter is NOT "all" here, unlike pickHubGroups', because
 		// this one pays out irreversibly: the cheap default must be the one
 		// that spends nothing.
 		return nil, tooManyErr()
@@ -1212,13 +1091,33 @@ func resolveAmount(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entry, so
 	// already bounds itself the same way).
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
+	// The credential is resolved here rather than passed in: bill methods authorize
+	// per item now, so even this read has to say who is asking.
+	cred, err := resolveCredential(cmd, entry)
+	if err != nil {
+		return 0, err
+	}
 	myPubHex, _ := localPubKeyHex(cmd)
-	result, err := sourceClient.CheckClaim(ctx, tok, myPubHex)
+	result, err := sourceClient.CheckClaim(ctx, cred, tok, myPubHex)
 	if errors.Is(err, nipcash.ErrClaimNotFound) {
 		return 0, output.NotFoundError(cmd, entry.ID, fmt.Errorf("couldn't determine this token's amount — check `cashctl wallet show`, or that it's still valid"))
 	}
 	if err != nil {
 		return 0, classifyCashTokenNWCErr(cmd, err)
+	}
+	// Same guard as the two quote paths, for the same reason and against the same
+	// attacker: this also persists a Hub-supplied amount and sets Verified = true, and
+	// it is reached by redeem, transfer AND consolidate, so it is the widest of the
+	// three. The slice-aware validator rather than receive's, because the figure is
+	// this holder's slice, which may legitimately be smaller than the bill's signed
+	// total — see that function's own comment on why the ceiling carries over and the
+	// floor does not.
+	if vErr := validateQuotedAmounts(cmd, tok, result.MinterPubkey, redeemQuote{
+		AmountMillis:        result.AmountMillis,
+		RedeemFeeMillis:     result.RedeemFeeMillis,
+		NetRedeemableMillis: result.NetRedeemableMillis,
+	}); vErr != nil {
+		return 0, vErr
 	}
 	entry.AmountMillis = &result.AmountMillis
 	entry.ExpiresAt = result.ExpiresAt
@@ -1239,6 +1138,17 @@ type redeemQuote struct {
 	RedeemFeeMillis     uint64
 	NetRedeemableMillis uint64
 	ExpiresAt           *int64
+	// AttestedAmountMillis is the whole bill's signed denomination, set only when the
+	// mint signature actually verified.
+	//
+	// It exists because validateQuotedAmounts can only bound the Hub's figure from
+	// ABOVE: a quote below the attested amount is what every slice of a
+	// multi-recipient bill legitimately looks like, so it cannot be refused — but it
+	// is also exactly what a Hub under-reporting a single-recipient bill looks like,
+	// and the difference stays with the Hub. Since the client cannot tell those apart,
+	// previewSuffix shows the user both numbers and lets them. Silently persisting
+	// only the Hub's was the defect.
+	AttestedAmountMillis *uint64
 }
 
 // resolveRedeemQuote is redeem's one live CheckClaim call for the
@@ -1260,23 +1170,36 @@ func resolveRedeemQuote(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entr
 	// see its doc comment.
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
+	cred, err := resolveCredential(cmd, entry)
+	if err != nil {
+		return redeemQuote{}, err
+	}
 	myPubHex, _ := localPubKeyHex(cmd)
-	result, err := sourceClient.CheckClaim(ctx, tok, myPubHex)
+	result, err := sourceClient.CheckClaim(ctx, cred, tok, myPubHex)
 	if errors.Is(err, nipcash.ErrClaimNotFound) {
 		return redeemQuote{}, output.NotFoundError(cmd, entry.ID, fmt.Errorf("couldn't determine this token's amount — check `cashctl wallet show`, or that it's still valid"))
 	}
 	if err != nil {
 		return redeemQuote{}, classifyCashTokenNWCErr(cmd, err)
 	}
-	entry.AmountMillis = &result.AmountMillis
-	entry.ExpiresAt = result.ExpiresAt
-	_ = l.SetVerified(entry.ID, true)
-	return redeemQuote{
+	q := redeemQuote{
 		AmountMillis:        result.AmountMillis,
 		RedeemFeeMillis:     result.RedeemFeeMillis,
 		NetRedeemableMillis: result.NetRedeemableMillis,
 		ExpiresAt:           result.ExpiresAt,
-	}, nil
+	}
+	if result.MinterPubkey != nil {
+		q.AttestedAmountMillis = tok.AttestedAmountMillis
+	}
+	// Before the ledger sees any of it. Persisting first and validating after would
+	// leave the poison behind even on the refusal path.
+	if err := validateQuotedAmounts(cmd, tok, result.MinterPubkey, q); err != nil {
+		return redeemQuote{}, err
+	}
+	entry.AmountMillis = &result.AmountMillis
+	entry.ExpiresAt = result.ExpiresAt
+	_ = l.SetVerified(entry.ID, true)
+	return q, nil
 }
 
 // redeemInvoiceAmount is the amount to request from the destination
@@ -1334,9 +1257,20 @@ func redeemInvoiceAmount(q redeemQuote) uint64 {
 // expiryWarningSuffix (cash_transfer.go) — same wording `transfer`/
 // `consolidate` already use, rather than a second copy of it here.
 func previewSuffix(q redeemQuote) string {
-	if q.RedeemFeeMillis == 0 {
-		return ""
+	var parts []string
+	if q.RedeemFeeMillis > 0 {
+		parts = append(parts, fmt.Sprintf(
+			"Fee: %s (you receive %s). Rejected instead of waived on a same-node match — retry with --invoice if so.",
+			output.FormatAmount(int64(q.RedeemFeeMillis)), output.FormatAmount(int64(q.NetRedeemableMillis))))
 	}
-	return fmt.Sprintf("Fee: %s (you receive %s). Rejected instead of waived on a same-node match — retry with --invoice if so.",
-		output.FormatAmount(int64(q.RedeemFeeMillis)), output.FormatAmount(int64(q.NetRedeemableMillis)))
+	// Deliberately NOT gated on the fee being nonzero: a Hub deflating the amount
+	// reports a zero fee precisely so that the fee line — the only line there used to
+	// be — stays hidden. Shown whenever the two figures disagree at all, since for a
+	// slice of a multi-recipient bill they always will and that is worth seeing too.
+	if q.AttestedAmountMillis != nil && *q.AttestedAmountMillis != q.AmountMillis {
+		parts = append(parts, fmt.Sprintf(
+			"This bill's signed provenance attests %s in total; the Hub quotes %s as yours.",
+			output.FormatAmount(int64(*q.AttestedAmountMillis)), output.FormatAmount(int64(q.AmountMillis))))
+	}
+	return strings.Join(parts, " ")
 }

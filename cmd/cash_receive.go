@@ -74,7 +74,7 @@ func runCashReceive(cmd *cobra.Command, args []string) error {
 	if isCash && embeddedSecret == "" {
 		printCashBill(jsonMode, tok, isCash)
 		if shouldRunCheck(cmd, jsonMode, false, "Verify online?") {
-			checkResult, checkErr := checkClaimOnce(cmd, input, tok)
+			checkResult, checkErr := checkClaimOnce(cmd, input, embeddedSecret, tok)
 			if !jsonMode {
 				if checkErr == nil {
 					fmt.Printf("check: matches (%s)\n", output.FormatAmount(int64(checkResult.AmountMillis)))
@@ -107,7 +107,7 @@ func runCashReceive(cmd *cobra.Command, args []string) error {
 
 	printCashBill(jsonMode, tok, isCash)
 
-	result, err := checkClaimWithCashHub(cmd, input, tok)
+	result, err := checkClaimWithCashHub(cmd, input, embeddedSecret, tok)
 	if err != nil {
 		return err
 	}
@@ -255,8 +255,7 @@ func minterPubkeyFromToken(tok nipcash.Token) *string {
 // so checking that instead of re-verifying here can't be fooled by a
 // tampered signature paired with a forged attested amount.
 func validateClaimedAmount(cmd *cobra.Command, tok nipcash.Token, result *nipcash.CheckClaimResult) error {
-	const maxSaneAmountMloki = uint64(math.MaxInt64)
-	if result.AmountMillis > maxSaneAmountMloki {
+	if result.AmountMillis > maxSaneAmountMillis {
 		return output.InvalidInputError(cmd, "", fmt.Errorf(
 			"the Hub reports an amount (%d mloki) too large to be real — refusing to trust it", result.AmountMillis))
 	}
@@ -268,7 +267,71 @@ func validateClaimedAmount(cmd *cobra.Command, tok nipcash.Token, result *nipcas
 	return nil
 }
 
-func checkClaimWithCashHub(cmd *cobra.Command, input string, tok nipcash.Token) (*nipcash.CheckClaimResult, error) {
+// maxSaneAmountMillis is the ceiling every Hub-supplied amount is held to before it
+// can reach the ledger or an invoice: what a real int64 mloki quantity can hold.
+// Anything past it goes NEGATIVE at the first int64 cast — output.FormatAmount's own
+// signature, ledger.Entry.AmountMillis's later casts, summarizeHeldTokens' running
+// total — so one poisoned figure makes `wallet balance` report a negative total for
+// the WHOLE wallet, not only the bill it arrived on.
+const maxSaneAmountMillis = uint64(math.MaxInt64)
+
+// validateQuotedAmounts bounds the three amounts a redeem quote takes from the Hub,
+// before any of them is persisted, rendered, or turned into an invoice.
+//
+// A second validator rather than reusing validateClaimedAmount, for one reason: that
+// one demands EXACT equality with the token's signed provenance, which is right at
+// receive time — the whole bill is being claimed, so the mint signature's amount IS
+// the claim's amount — and wrong here. A redeem quote is for THIS holder's slice, and
+// a slice of a multi-recipient bill is legitimately smaller than what the mint
+// signature commits to. Only the UPPER bound carries over: the Hub may quote less than
+// the bill was minted for, never more.
+//
+// verifiedMinter is the caller's live proof that the provenance signature actually
+// verified (ledger.Entry.MinterPubkey, or CheckClaimResult.MinterPubkey — both set
+// only after nipcash.VerifyProvenance confirmed it), for the same reason
+// validateClaimedAmount takes it: tok.HasProvenance() only means a signature and an
+// attested amount are both PRESENT, so trusting it would let a tampered signature
+// paired with a forged attested amount raise the ceiling at will.
+func validateQuotedAmounts(cmd *cobra.Command, tok nipcash.Token, verifiedMinter *string, q redeemQuote) error {
+	// Bound each figure first, so the sum below cannot itself overflow.
+	for _, f := range []struct {
+		name  string
+		value uint64
+	}{
+		{"amount", q.AmountMillis},
+		{"redeem fee", q.RedeemFeeMillis},
+		{"net redeemable amount", q.NetRedeemableMillis},
+	} {
+		if f.value > maxSaneAmountMillis {
+			return output.InvalidInputError(cmd, "", fmt.Errorf(
+				"the Hub quotes a %s (%d mloki) too large to be real — refusing to trust it", f.name, f.value))
+		}
+	}
+
+	// net == amount - fee is the protocol's own definition, a plain subtraction at
+	// lokihub's single construction site (nip47/controllers/cash_status_controller.go,
+	// which carries a //nolint:gosec asserting fee <= amount by construction). Worth
+	// asserting rather than assuming, because redeemInvoiceAmount returns net and
+	// lokihub's cash_redeem enforces an EXACT match against either the full amount or
+	// amount-minus-fee: a quote where these three don't add up cannot produce an
+	// invoice that matches either value, so such a redeem was going to fail anyway.
+	// Failing here instead makes it a legible refusal rather than a puzzling
+	// BAD_REQUEST after an invoice has already been minted on the destination wallet.
+	if q.NetRedeemableMillis+q.RedeemFeeMillis != q.AmountMillis {
+		return output.InvalidInputError(cmd, "", fmt.Errorf(
+			"the Hub's quote doesn't add up: %d mloki net + %d mloki fee != %d mloki amount — refusing to trust it",
+			q.NetRedeemableMillis, q.RedeemFeeMillis, q.AmountMillis))
+	}
+
+	if verifiedMinter != nil && tok.AttestedAmountMillis != nil && q.AmountMillis > *tok.AttestedAmountMillis {
+		return output.InvalidInputError(cmd, "", fmt.Errorf(
+			"the Hub quotes %s for this bill, but its own signed provenance attests the whole bill is only %s — refusing to trust it",
+			output.FormatAmount(int64(q.AmountMillis)), output.FormatAmount(int64(*tok.AttestedAmountMillis))))
+	}
+	return nil
+}
+
+func checkClaimWithCashHub(cmd *cobra.Command, input, embeddedSecret string, tok nipcash.Token) (*nipcash.CheckClaimResult, error) {
 	jsonMode, _ := cmd.Flags().GetBool("json")
 	var result *nipcash.CheckClaimResult
 	noMatch := false
@@ -281,8 +344,12 @@ func checkClaimWithCashHub(cmd *cobra.Command, input string, tok nipcash.Token) 
 		}
 		defer client.Close()
 
+		cred, credErr := credentialForToken(cmd, embeddedSecret)
+		if credErr != nil {
+			return credErr
+		}
 		myPubHex, _ := localPubKeyHex(cmd) // best-effort; empty means no pubkey match attempted
-		r, err := client.CheckClaim(ctx, tok, myPubHex)
+		r, err := client.CheckClaim(ctx, cred, tok, myPubHex)
 		if errors.Is(err, nipcash.ErrClaimNotFound) {
 			noMatch = true
 			return fmt.Errorf("the Cash Hub has no matching recipient for this token — refusing to receive it")
@@ -313,7 +380,7 @@ func checkClaimWithCashHub(cmd *cobra.Command, input string, tok nipcash.Token) 
 // there's nothing to save regardless of what this reports, so the
 // caller just prints whatever comes back (a match, a miss, or a dial
 // failure) and moves on.
-func checkClaimOnce(cmd *cobra.Command, input string, tok nipcash.Token) (*nipcash.CheckClaimResult, error) {
+func checkClaimOnce(cmd *cobra.Command, input, embeddedSecret string, tok nipcash.Token) (*nipcash.CheckClaimResult, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	client, err := nipcashclient.Connect(ctx, input)
@@ -321,5 +388,9 @@ func checkClaimOnce(cmd *cobra.Command, input string, tok nipcash.Token) (*nipca
 		return nil, err
 	}
 	defer client.Close()
-	return client.CheckClaim(ctx, tok, nipcash.NoLocalIdentity)
+	cred, err := credentialForToken(cmd, embeddedSecret)
+	if err != nil {
+		return nil, err
+	}
+	return client.CheckClaim(ctx, cred, tok, nipcash.NoLocalIdentity)
 }
