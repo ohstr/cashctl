@@ -72,6 +72,32 @@ func runCashReceive(cmd *cobra.Command, args []string) error {
 	// propose securing) rather than erroring. This is an expected
 	// outcome, not a usage mistake.
 	if isCash && embeddedSecret == "" {
+		// Before giving up on the strength of a local guess, ask the Hub.
+		//
+		// identity_required can go stale in the direction that STRANDS a bill. A
+		// cash-mode bill reassigned to a pubkey identity by cash_transfer keeps its
+		// token string — that is the documented in-place reassignment the ledger
+		// check below relies on — so the token still says identity_required: false
+		// while the Hub now requires identity. The guess then sends a bill its
+		// rightful holder CAN claim down this dead end, which never saves anything,
+		// and there is no other way in: every later operation needs a ledger entry.
+		//
+		// The live answer discriminates the two cases exactly, which the guess cannot:
+		// a genuinely cash-mode bill has no credential to offer without its secret, so
+		// the call is refused or omitted, while a reassigned one resolves against the
+		// local identity. Note checkClaimOnce below passes NoLocalIdentity and so
+		// cannot see such a claim at all — right for reading a cash bill, blind here.
+		//
+		// The cost is one bounded network attempt on a path that used to be able to
+		// answer offline. Paid deliberately: the alternative is a bill that cannot be
+		// received by anyone.
+		if live, liveErr := checkClaimAsLocalIdentity(cmd, input, tok); liveErr == nil && !live.IsCash {
+			isCash = false
+			output.Notef(jsonMode, "This bill is identity-bound now, though its own metadata still says cash-mode — reassigned by a transfer. Continuing with your local identity.")
+		}
+	}
+
+	if isCash && embeddedSecret == "" {
 		printCashBill(jsonMode, tok, isCash)
 		if shouldRunCheck(cmd, jsonMode, false, "Verify online?") {
 			checkResult, checkErr := checkClaimOnce(cmd, input, embeddedSecret, tok)
@@ -380,6 +406,31 @@ func checkClaimWithCashHub(cmd *cobra.Command, input, embeddedSecret string, tok
 // there's nothing to save regardless of what this reports, so the
 // caller just prints whatever comes back (a match, a miss, or a dial
 // failure) and moves on.
+// checkClaimAsLocalIdentity asks the Hub whether this bill resolves against the
+// LOCAL identity, which is the question identity_required's stale hint cannot answer.
+//
+// checkClaimOnce's sibling, and the difference is the whole point: that one passes
+// nipcash.NoLocalIdentity, correct for reading a cash-mode bill nobody here can claim,
+// and blind to a claim bound to this machine's pubkey.
+func checkClaimAsLocalIdentity(cmd *cobra.Command, input string, tok nipcash.Token) (*nipcash.CheckClaimResult, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	client, err := nipcashclient.Connect(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+	defer client.Close()
+	cred, err := localCashCredential(cmd)
+	if err != nil {
+		return nil, err
+	}
+	myPubHex, err := localPubKeyHex(cmd)
+	if err != nil {
+		return nil, err
+	}
+	return client.CheckClaim(ctx, cred, tok, myPubHex)
+}
+
 func checkClaimOnce(cmd *cobra.Command, input, embeddedSecret string, tok nipcash.Token) (*nipcash.CheckClaimResult, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
