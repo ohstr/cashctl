@@ -23,8 +23,14 @@ test:
 # Run the integration suite against a real, already-running lokihub
 # instance (needs integration/config.local.yaml — see integration/README.md);
 # not run in CI.
+# -count=1 is NOT optional. The suite builds the CLI binary inside the test run
+# (integration/binary.go, under a sync.Once), so it WOULD pick up a cmd/ change —
+# but Go keys its cache on the test package's own sources. Change only cmd/, run
+# this without -count=1, and Go reports `ok (cached)`: the tests never ran, so the
+# binary was never rebuilt, and the pass is stale. That happened during the
+# 2026-09-30 audit rounds and a CLI fix read as verified while nothing had run.
 test-integration:
-    go test -tags integration -v ./integration/...
+    go test -tags integration -count=1 -v ./integration/...
 
 # Run the live-agent eval suite (real, billed Claude sessions against the
 # published Docker image — see integration/agent-eval/README.md); not run
