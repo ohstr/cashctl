@@ -43,7 +43,7 @@ import (
 	"time"
 
 	"github.com/ohstr/nmilat/nip47"
-	nipcashclient "github.com/ohstr/nmilat/nipcash/client"
+	"github.com/ohstr/nmilat/nipcash"
 )
 
 // runConcurrently launches len(calls) real cashctl subprocesses against f,
@@ -230,7 +230,7 @@ func TestRace_ConcurrentRedeemSameToken(t *testing.T) {
 	// it -- there is no longer a recipient list to ask for. The archive is
 	// where a spent slice's outcome now lives, and it answers the question
 	// this test actually asks: was the slice paid out exactly once?
-	requireBillSpentAway(t, token, "the redeemed bill")
+	requireBillSpentAway(t, admin, hub.ID, token, "the redeemed bill")
 
 	claims, err := admin.listCashWalletClaims(hub.ID)
 	if err != nil {
@@ -317,42 +317,35 @@ func TestRace_TransferConsolidateDisjointTokens_LostUpdate(t *testing.T) {
 	}
 
 	// Ground truth first, independent of either command's own self-report.
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-	origAClient, err := nipcashclient.Connect(ctx, tokenA)
+	// Read through the ADMIN API, not through A's own connection.
+	//
+	// A was just transferred away, so this caller holds no slice of it — and bill
+	// methods run over the private transport, which scopes a roster to the recipient
+	// asking. Dialling A would now (correctly) show this caller nothing. The
+	// operator's view is the right ground truth for "did the server really do it",
+	// and reading it through a holder's connection only ever worked because that
+	// connection over-shared.
+	tokA, err := nipcash.Decode(tokenA)
 	if err != nil {
-		t.Fatalf("dial original A connection: %v", err)
+		t.Fatalf("decode token A: %v", err)
 	}
-	defer origAClient.Close()
-	aRecipients, err := origAClient.ListRecipients(ctx)
-	if err != nil {
-		t.Fatalf("list_recipients (A): %v", err)
-	}
-	foundTarget := false
-	for _, r := range aRecipients.Recipients {
-		if r.IdentityType == "pubkey" && r.IdentityValue == targetHex {
-			foundTarget = true
-			if r.AmountMillis != amountA {
-				t.Errorf("server: A reassigned to target with amount %d, want %d", r.AmountMillis, amountA)
-			}
-		}
-	}
+	aWalletID := walletAppIDForPubkey(t, admin, hub.ID, tokA.WalletPubkey)
+	aClaims := liveClaimsForWallet(t, admin, hub.ID, aWalletID)
+	targetClaim, foundTarget := aClaims[targetHex]
 	if !foundTarget {
-		t.Errorf("server: A's connection doesn't show the reassignment to target: %+v", aRecipients.Recipients)
+		t.Errorf("server: A was not reassigned to target: %+v", aClaims)
+	} else if uint64(targetClaim.AmountMloki) != amountA {
+		t.Errorf("server: A reassigned to target with amount %d, want %d", targetClaim.AmountMloki, amountA)
 	}
 
-	newClient, err := nipcashclient.Connect(ctx, newToken)
+	tokNew, err := nipcash.Decode(newToken)
 	if err != nil {
-		t.Fatalf("dial new consolidated token: %v", err)
+		t.Fatalf("decode consolidated token: %v", err)
 	}
-	defer newClient.Close()
-	newRecipients, err := newClient.ListRecipients(ctx)
-	if err != nil {
-		t.Fatalf("list_recipients (new consolidated token): %v", err)
-	}
+	newWalletID := walletAppIDForPubkey(t, admin, hub.ID, tokNew.WalletPubkey)
 	var newTotal uint64
-	for _, r := range newRecipients.Recipients {
-		newTotal += r.AmountMillis
+	for _, r := range liveClaimsForWallet(t, admin, hub.ID, newWalletID) {
+		newTotal += uint64(r.AmountMloki)
 	}
 	if newTotal != amountB+amountC {
 		t.Errorf("server: consolidated token totals %d, want %d", newTotal, amountB+amountC)

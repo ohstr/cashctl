@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"testing"
 	"net/http"
 	"strings"
 	"time"
@@ -155,6 +156,19 @@ func (c *adminClient) deleteIdentityAuthority(pubkeyHex string) error {
 type adminCashWalletClaim struct {
 	ID          uint `json:"id"`
 	WalletAppID uint `json:"wallet_app_id"`
+	// Identity/amount, as the Hub owner sees them. These are how a test verifies
+	// server-side truth now: a holder can no longer read the roster of a bill they
+	// do not hold a slice of, because bill methods are served over the private
+	// transport and it authorizes per recipient. The operator's own view is the
+	// right channel for "did the server really do this", and always was — reading it
+	// through a holder's connection only worked because that connection over-shared.
+	IdentityType  string `json:"identity_type"`
+	IdentityValue string `json:"identity_value"`
+	AmountMloki   int64  `json:"amount_mloki"`
+	Claimed       bool   `json:"claimed"`
+	// WalletPubkey identifies the bill itself, which is what a test holds — it knows
+	// a token, not an admin-side app id.
+	WalletPubkey string `json:"wallet_pubkey,omitempty"`
 	// Archived marks a slice whose bill no longer exists. The Hub deletes a
 	// bill once nothing is left on it and keeps its slices in an archive, so
 	// this listing returns both and a caller asserting on live state must
@@ -243,4 +257,45 @@ func (c *adminClient) addCircleAllowlistMember(hubAppID uint, pubkeyHex string) 
 	}
 	body := map[string][]string{"pubkeys": append(current.Pubkeys, pubkeyHex)}
 	return c.doBody(http.MethodPut, fmt.Sprintf("/api/apps/%d/circle/allowlist", hubAppID), body, nil)
+}
+
+// liveClaimsForWallet returns a wallet's LIVE slices as the Hub owner sees them,
+// keyed by identity value.
+//
+// The verification channel for "did the server actually do this". A holder's own
+// connection cannot answer it any more: bill methods run over the private transport,
+// which scopes a roster to the recipient asking, so a caller who transferred a bill
+// away sees nothing of it. That is the point of the transport, not a gap — and the
+// operator's view was always the more honest ground truth anyway.
+func liveClaimsForWallet(t *testing.T, admin *adminClient, hubAppID, walletAppID uint) map[string]adminCashWalletClaim {
+	t.Helper()
+	rows, err := admin.listCashWalletClaims(hubAppID)
+	if err != nil {
+		t.Fatalf("list cash wallet claims: %v", err)
+	}
+	out := map[string]adminCashWalletClaim{}
+	for _, r := range rows {
+		if r.Archived || r.WalletAppID != walletAppID {
+			continue
+		}
+		out[r.IdentityValue] = r
+	}
+	return out
+}
+
+// walletAppIDForPubkey resolves a bill's wallet pubkey to the admin-side app id that
+// liveClaimsForWallet needs.
+func walletAppIDForPubkey(t *testing.T, admin *adminClient, hubAppID uint, walletPubkey string) uint {
+	t.Helper()
+	rows, err := admin.listCashWalletClaims(hubAppID)
+	if err != nil {
+		t.Fatalf("list cash wallet claims: %v", err)
+	}
+	for _, r := range rows {
+		if r.WalletPubkey == walletPubkey {
+			return r.WalletAppID
+		}
+	}
+	t.Fatalf("no cash wallet under hub %d has wallet pubkey %s", hubAppID, walletPubkey)
+	return 0
 }

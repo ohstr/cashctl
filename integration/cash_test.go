@@ -615,7 +615,11 @@ func TestCashTransfer_Full(t *testing.T) {
 	}
 
 	const amountMillis = uint64(400_000)
-	token := mintPubkeyToken(t, admin, myPubHex, amountMillis)
+	// Mint from a hub this test holds a handle to, rather than
+	// mintPubkeyToken's own ephemeral one: the verification below reads the
+	// operator's view, which is addressed by hub app id.
+	hub := setUpCashHub(t, admin)
+	token := mintPubkeyTokenFromHub(t, hub, myPubHex, amountMillis)
 	if res := f.run("receive", token); res.ExitCode != 0 {
 		t.Fatalf("receive: exit %d\nstderr: %s", res.ExitCode, res.Stderr)
 	}
@@ -637,28 +641,28 @@ func TestCashTransfer_Full(t *testing.T) {
 		t.Errorf("transfer (full, pubkey target): expected an in-place reassignment (empty new_wallet_token), got %q", nwt)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-	verifyClient, err := nipcashclient.Connect(ctx, token)
+	// Verified through the ADMIN API, not the original token's connection.
+	// The reassignment moved the slice to targetHex, an identity this test
+	// does not control; bill methods run over the private transport, which
+	// answers each recipient with their own slice only, so dialling the
+	// original token now correctly shows this caller nothing. The operator's
+	// view is the honest ground truth for "did the server really do it".
+	tok, err := nipcash.Decode(token)
 	if err != nil {
-		t.Fatalf("dial the original token's connection: %v", err)
+		t.Fatalf("decode token: %v", err)
 	}
-	defer verifyClient.Close()
-	recipients, err := verifyClient.ListRecipients(ctx)
-	if err != nil {
-		t.Fatalf("list_recipients on the original (now-reassigned) connection: %v", err)
-	}
-	found := false
-	for _, r := range recipients.Recipients {
-		if r.IdentityType == "pubkey" && r.IdentityValue == targetHex {
-			found = true
-			if r.AmountMillis != amountMillis {
-				t.Errorf("transferred amount = %d, want %d", r.AmountMillis, amountMillis)
-			}
-		}
-	}
+	walletID := walletAppIDForPubkey(t, admin, hub.ID, tok.WalletPubkey)
+	claims := liveClaimsForWallet(t, admin, hub.ID, walletID)
+	claim, found := claims[targetHex]
 	if !found {
-		t.Errorf("original connection's recipients don't reflect the reassignment to %s: %+v", targetHex, recipients.Recipients)
+		t.Errorf("server: the slice was not reassigned to %s: %+v", targetHex, claims)
+	} else {
+		if claim.IdentityType != "pubkey" {
+			t.Errorf("reassigned slice identity_type = %q, want pubkey", claim.IdentityType)
+		}
+		if uint64(claim.AmountMloki) != amountMillis {
+			t.Errorf("transferred amount = %d, want %d", claim.AmountMloki, amountMillis)
+		}
 	}
 }
 
@@ -764,23 +768,21 @@ func TestCashConsolidate(t *testing.T) {
 		t.Errorf("consolidate: new_entry.amount_millis = %v, want %d", newEntry["amount_millis"], amount1+amount2)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-	verifyClient, err := nipcashclient.Connect(ctx, newToken)
+	// Server-side total, read through the admin API. The holder could ask its
+	// own connection and would see its own slice, but that proves only what
+	// the hub told this caller; what is under test is what the hub actually
+	// committed onto the new bill.
+	tokNew, err := nipcash.Decode(newToken)
 	if err != nil {
-		t.Fatalf("dial the consolidated token: %v", err)
+		t.Fatalf("decode consolidated token: %v", err)
 	}
-	defer verifyClient.Close()
-	recipients, err := verifyClient.ListRecipients(ctx)
-	if err != nil {
-		t.Fatalf("list_recipients on consolidated token: %v", err)
-	}
+	newWalletID := walletAppIDForPubkey(t, admin, hub.ID, tokNew.WalletPubkey)
 	var total uint64
-	for _, r := range recipients.Recipients {
-		total += r.AmountMillis
+	for _, r := range liveClaimsForWallet(t, admin, hub.ID, newWalletID) {
+		total += uint64(r.AmountMloki)
 	}
 	if total != amount1+amount2 {
-		t.Errorf("consolidated token's total = %d, want %d", total, amount1+amount2)
+		t.Errorf("consolidated bill's server-side total = %d, want %d", total, amount1+amount2)
 	}
 }
 

@@ -280,7 +280,7 @@ func TestMultiParty_ForwardPortionKeepRemainder_AtoBtoC(t *testing.T) {
 	// Independently verify server-side: both of B's original tokens were
 	// spent away, not just reported as such by cashctl.
 	for _, tok := range []string{token1, token2} {
-		requireBillSpentAway(t, tok, "forwarded source")
+		requireBillSpentAway(t, admin, hub.ID, tok, "forwarded source")
 	}
 }
 

@@ -266,6 +266,6 @@ func TestCashTransfer_CashSelection_AutoConsolidate(t *testing.T) {
 	// Independently verify server-side: both original bills were
 	// consolidated away, so neither exists any more.
 	for _, tok := range []string{token1, token2} {
-		requireBillSpentAway(t, tok, "consolidated source")
+		requireBillSpentAway(t, admin, hub.ID, tok, "consolidated source")
 	}
 }

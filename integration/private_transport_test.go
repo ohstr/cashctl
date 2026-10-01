@@ -115,8 +115,9 @@ func countPrivateRequests(t *testing.T, relayURL, inbox string) (stop func() int
 // cashctl's own output. Two bills redeemed over one request is the entire claim;
 // counting them anywhere else would be trusting the thing under test.
 //
-// --transport private is deliberate: it refuses to fall back, so a broken
-// transport cannot pass by silently redeeming over the standard path instead.
+// There is no fallback left to disguise a failure: bill methods are served over
+// the private transport only, so a broken transport is a failed redeem, not a
+// quiet reroute onto the standard path.
 func TestPrivateTransport_RedeemsManyBillsInOneRelayEvent(t *testing.T) {
 	const billCount = 3
 
@@ -168,7 +169,7 @@ func TestPrivateTransport_RedeemsManyBillsInOneRelayEvent(t *testing.T) {
 	client := &nipcashclient.Client{}
 	session, err := client.NewBatchSession(ctx, hubXOnly, relays)
 	if err != nil {
-		t.Fatalf("this hub publishes no usable private-transport announcement (%v) — enable PRIVATE_TRANSPORT_ENABLED on it before running this test", err)
+		t.Fatalf("this hub publishes no usable private-transport announcement: %v", err)
 	}
 	inbox := session.Inbox()
 	if inbox == "" {
@@ -178,11 +179,11 @@ func TestPrivateTransport_RedeemsManyBillsInOneRelayEvent(t *testing.T) {
 
 	stop := countPrivateRequests(t, relays[0], inbox)
 
-	res := f.run("redeem", "--all", "--into", "dest", "--transport", "private", "--json", "--yes")
+	res := f.run("redeem", "--all", "--into", "dest", "--json", "--yes")
 	requests := stop()
 
 	if res.ExitCode != 0 {
-		t.Fatalf("redeem --transport private: exit %d\nstdout: %s\nstderr: %s", res.ExitCode, res.Stdout, res.Stderr)
+		t.Fatalf("redeem: exit %d\nstdout: %s\nstderr: %s", res.ExitCode, res.Stdout, res.Stderr)
 	}
 
 	// Both bills paid out, read from the per-bill report.
@@ -235,7 +236,8 @@ func TestPrivateTransport_RedeemsManyBillsInOneRelayEvent(t *testing.T) {
 // verified — but on the first live run the hub unwrapped the envelope and then
 // omitted the item, which reaches a caller as "may or may not have been redeemed".
 //
-// --transport private, so a fallback cannot disguise the failure.
+// With no standard path left for bill methods, that omission is now an outright
+// failure rather than a silent reroute — which is what makes this worth pinning.
 func TestPrivateTransport_DerivedBillIsServed(t *testing.T) {
 	admin := adminOrSkip(t)
 	hub := setUpCashHub(t, admin)
@@ -268,7 +270,7 @@ func TestPrivateTransport_DerivedBillIsServed(t *testing.T) {
 
 	f.mustJSON("connect", "add", "dest", hub.PairingUri)
 
-	res := f.run("redeem", "--token", derivedID, "--into", "dest", "--transport", "private", "--json", "--yes")
+	res := f.run("redeem", "--token", derivedID, "--into", "dest", "--json", "--yes")
 	if res.ExitCode != 0 {
 		t.Fatalf("redeeming a cashctl-derived bill over the private transport: exit %d\nstdout: %s\nstderr: %s",
 			res.ExitCode, res.Stdout, res.Stderr)
@@ -326,23 +328,23 @@ func TestPrivateTransport_CashModeBillIsServed(t *testing.T) {
 		t.Fatalf("receive produced no entry: %v", receiveResp)
 	}
 
-	// The evidence for the mismatch, read from the hub rather than asserted.
+	// The evidence for the shape, read from the hub rather than asserted — and
+	// read through the ADMIN API, because this is a precondition check, not the
+	// behaviour under test. Asking the bill's own connection would make the
+	// precondition depend on the very private-transport path the test exists to
+	// exercise, so a regression there would turn this test green by skipping it.
 	mergedToken, _ := entry["token"].(string)
 	hubSaysCashMode := false
 	if mergedToken != "" {
-		statusCtx, statusCancel := context.WithTimeout(context.Background(), 20*time.Second)
-		if c, dialErr := nipcashclient.Connect(statusCtx, mergedToken); dialErr == nil {
-			if roster, rErr := c.CashStatus(statusCtx); rErr == nil && roster != nil {
-				for _, r := range roster.Recipients {
-					t.Logf("hub roster: identity_type=%q amount=%d claimed=%v", r.IdentityType, r.AmountMillis, r.Claimed)
-					if r.IsCash() {
-						hubSaysCashMode = true
-					}
+		if tokMerged, decErr := nipcash.Decode(mergedToken); decErr == nil {
+			mergedWalletID := walletAppIDForPubkey(t, admin, hub.ID, tokMerged.WalletPubkey)
+			for _, r := range liveClaimsForWallet(t, admin, hub.ID, mergedWalletID) {
+				t.Logf("hub roster: identity_type=%q amount=%d claimed=%v", r.IdentityType, r.AmountMloki, r.Claimed)
+				if r.IdentityType == "cash" {
+					hubSaysCashMode = true
 				}
 			}
-			c.Close()
 		}
-		statusCancel()
 	}
 
 	f.mustJSON("connect", "add", "dest", hub.PairingUri)
@@ -355,7 +357,7 @@ func TestPrivateTransport_CashModeBillIsServed(t *testing.T) {
 	// was fixed: a cash-mode bill is proofless BY DESIGN, and a nil proof serialized
 	// as `"proof":null` decoded to four bytes on the hub, so every bearer item looked
 	// like it carried an unverifiable proof and was omitted.
-	res := f.run("redeem", "--token", mergedID, "--into", "dest", "--transport", "private", "--json", "--yes")
+	res := f.run("redeem", "--token", mergedID, "--into", "dest", "--json", "--yes")
 	if res.ExitCode != 0 {
 		t.Fatalf("a merged cash-mode receipt must redeem over the private transport: exit %d\nstdout: %s\nstderr: %s",
 			res.ExitCode, res.Stdout, res.Stderr)

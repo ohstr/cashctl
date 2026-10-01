@@ -300,7 +300,7 @@ func TestCashReceive_AutoSecuresCashReceipt_MergesWithExistingHolding(t *testing
 	// Independently verify server-side: both original sources were merged
 	// away, so neither bill exists any more.
 	for _, tok := range []string{existingToken, cashResult.CashToken} {
-		requireBillSpentAway(t, tok, "merged source")
+		requireBillSpentAway(t, admin, hub.ID, tok, "merged source")
 	}
 
 	hubClient := dialNWC(t, ctx, hub.PairingUri)

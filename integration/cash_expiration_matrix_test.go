@@ -632,12 +632,24 @@ func TestDecodeCheck_ExpiredCashToken_ReportsAccurateDeadlineMessage(t *testing.
 	}
 
 	f := newFixture(t)
-	f.mustJSON("wallet", "init")
+	initResp := f.mustJSON("wallet", "init")
+	npub, _ := initResp["npub"].(string)
+	myPubHex, err := npubToHex(npub)
+	if err != nil {
+		t.Fatalf("decode local identity npub: %v", err)
+	}
 
 	hub := setUpCashHubOpts(t, admin, cashHubOpts{MaxExpSecs: shortCashExpirySecs})
-	// Doesn't matter who it's addressed to — decode --check never needs a
-	// local identity match to report the Hub's own decline.
-	token := mintPubkeyTokenFromHub(t, hub, fakeHex32(t), 5_000)
+	// Addressed to the LOCAL identity, which this test used to say did not
+	// matter. It does now.
+	//
+	// The Hub authorizes a private-transport item before it consults
+	// permissions, so a caller who holds no slice of the named bill is omitted
+	// and learns nothing — not the expiry, not anything. Addressed to a stranger
+	// this test would assert on an omission while claiming to assert on the
+	// expiry message, and would pass as soon as any wording happened to contain
+	// the word "expired".
+	token := mintPubkeyTokenFromHub(t, hub, myPubHex, 5_000)
 
 	waitPastCashExpiry()
 
@@ -650,8 +662,15 @@ func TestDecodeCheck_ExpiredCashToken_ReportsAccurateDeadlineMessage(t *testing.
 		t.Fatalf("decode --check on an expired token: ok = true, want false: %v", check)
 	}
 	errText, _ := check["error"].(string)
-	if !strings.Contains(errText, "deadline") && !strings.Contains(errText, "expired") {
-		t.Errorf("decode --check error = %q, want it to name the actual expiry (lokihub's own AppKindCashWallet deadline message), not a generic decline", errText)
+	// The Hub's OWN deadline message, which names the timestamp. Asserting on
+	// "expired" alone is too weak: the omission wording lists expiry as one of
+	// several possibilities it cannot distinguish, so a bare substring match
+	// would pass on the case this test exists to rule out.
+	if !strings.Contains(errText, "deadline") {
+		t.Errorf("decode --check error = %q, want the Hub's own accurate deadline message (lokihub's AppKindCashWallet branch of permissions.HasPermission), not a generic decline", errText)
+	}
+	if strings.Contains(errText, "does not name you") {
+		t.Errorf("decode --check error = %q — an expired bill the caller DOES hold a slice of must report the expiry, not an information-free omission", errText)
 	}
 }
 
