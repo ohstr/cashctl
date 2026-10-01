@@ -1,11 +1,40 @@
 package ledger
 
 import (
+	"bytes"
+	"encoding/hex"
+
 	"errors"
+	"github.com/ohstr/nmilat/nipcash"
 	"testing"
 )
 
 func amountPtr(v uint64) *uint64 { return &v }
+
+// hubToken builds a real, decodable cash token whose hub-group fingerprint derives
+// from hub — needed because grouping now reads the ISSUING HUB out of the token
+// rather than trusting MinterPubkey.
+//
+// That change is the point of these fixtures: a mint signature names the minting
+// NODE, and one node runs several Hubs, so two bills sharing a minter are not
+// necessarily consolidatable. The fingerprint is what says they are.
+func hubToken(hub string) string {
+	amt := uint64(1)
+	tok, err := nipcash.Encode(nipcash.Token{
+		HRP:                  "lokicash",
+		WalletPubkey:         hex.EncodeToString(bytes.Repeat([]byte{0xab}, 32)),
+		Secret:               hex.EncodeToString(bytes.Repeat([]byte{0xcd}, 32)),
+		RelayURLs:            []string{"wss://relay.test"},
+		MintSignature:        bytes.Repeat([]byte{0x01}, 65),
+		AttestedAmountMillis: &amt,
+		HubGroup:             nipcash.HubGroupFor(hub),
+	})
+	if err != nil {
+		panic(err)
+	}
+	return tok
+}
+
 func minterPtr(s string) *string { return &s }
 func boolPtr(b bool) *bool       { return &b }
 
@@ -56,9 +85,9 @@ func TestSelectForAmount_BestFitSplit(t *testing.T) {
 
 func TestSelectForAmount_ConsolidatesSameMinterSubset(t *testing.T) {
 	held := []Entry{
-		{ID: "tok-1", AmountMillis: amountPtr(2000), MinterPubkey: minterPtr(minterA)},
-		{ID: "tok-2", AmountMillis: amountPtr(3000), MinterPubkey: minterPtr(minterA)},
-		{ID: "tok-3", AmountMillis: amountPtr(1000), MinterPubkey: minterPtr(minterA)},
+		{ID: "tok-1", AmountMillis: amountPtr(2000), MinterPubkey: minterPtr(minterA), Token: hubToken(minterA)},
+		{ID: "tok-2", AmountMillis: amountPtr(3000), MinterPubkey: minterPtr(minterA), Token: hubToken(minterA)},
+		{ID: "tok-3", AmountMillis: amountPtr(1000), MinterPubkey: minterPtr(minterA), Token: hubToken(minterA)},
 	}
 	// No single token covers 4000, but 2+3 = 5000 does. Greedy-largest-first
 	// should pick {tok-2 (3000), tok-1 (2000)} = 5000, skipping tok-3.
@@ -86,8 +115,8 @@ func TestSelectForAmount_ConsolidatesSameMinterSubset(t *testing.T) {
 
 func TestSelectForAmount_ConsolidatedSumExactMatch(t *testing.T) {
 	held := []Entry{
-		{ID: "tok-1", AmountMillis: amountPtr(2000), MinterPubkey: minterPtr(minterA)},
-		{ID: "tok-2", AmountMillis: amountPtr(3000), MinterPubkey: minterPtr(minterA)},
+		{ID: "tok-1", AmountMillis: amountPtr(2000), MinterPubkey: minterPtr(minterA), Token: hubToken(minterA)},
+		{ID: "tok-2", AmountMillis: amountPtr(3000), MinterPubkey: minterPtr(minterA), Token: hubToken(minterA)},
 	}
 	plan, err := SelectForAmount(held, 5000)
 	if err != nil {
@@ -104,9 +133,9 @@ func TestSelectForAmount_ConsolidatedSumExactMatch(t *testing.T) {
 func TestSelectForAmount_ExcludesCashAndConnectionKeyFromGrouping(t *testing.T) {
 	nonCash := false
 	held := []Entry{
-		{ID: "tok-cash", AmountMillis: amountPtr(3000), MinterPubkey: minterPtr(minterA), IdentityRequired: &nonCash},
-		{ID: "tok-connkey", AmountMillis: amountPtr(3000), MinterPubkey: minterPtr(minterA), ConnectionKeyPlatform: "discord"},
-		{ID: "tok-pubkey", AmountMillis: amountPtr(3000), MinterPubkey: minterPtr(minterA)},
+		{ID: "tok-cash", AmountMillis: amountPtr(3000), MinterPubkey: minterPtr(minterA), Token: hubToken(minterA), IdentityRequired: &nonCash},
+		{ID: "tok-connkey", AmountMillis: amountPtr(3000), MinterPubkey: minterPtr(minterA), Token: hubToken(minterA), ConnectionKeyPlatform: "discord"},
+		{ID: "tok-pubkey", AmountMillis: amountPtr(3000), MinterPubkey: minterPtr(minterA), Token: hubToken(minterA)},
 	}
 	// Only tok-pubkey is eligible for grouping; alone it can't reach 5000.
 	_, err := SelectForAmount(held, 5000)
@@ -128,8 +157,8 @@ func TestSelectForAmount_ExcludesNoMinterFromGrouping(t *testing.T) {
 
 func TestSelectForAmount_DifferentMintersNotGroupedTogether(t *testing.T) {
 	held := []Entry{
-		{ID: "tok-1", AmountMillis: amountPtr(3000), MinterPubkey: minterPtr(minterA)},
-		{ID: "tok-2", AmountMillis: amountPtr(3000), MinterPubkey: minterPtr(minterB)},
+		{ID: "tok-1", AmountMillis: amountPtr(3000), MinterPubkey: minterPtr(minterA), Token: hubToken(minterA)},
+		{ID: "tok-2", AmountMillis: amountPtr(3000), MinterPubkey: minterPtr(minterB), Token: hubToken(minterB)},
 	}
 	// 3000+3000=6000 would cover 5000, but they're from different minters
 	// and must never be grouped together.
@@ -147,7 +176,7 @@ func TestSelectForAmount_DifferentMintersNotGroupedTogether(t *testing.T) {
 // does; it must now say plainly that there isn't enough.
 func TestSelectForAmount_InsufficientFunds(t *testing.T) {
 	held := []Entry{
-		{ID: "tok-1", AmountMillis: amountPtr(1000), MinterPubkey: minterPtr(minterA)},
+		{ID: "tok-1", AmountMillis: amountPtr(1000), MinterPubkey: minterPtr(minterA), Token: hubToken(minterA)},
 	}
 	_, err := SelectForAmount(held, 5000)
 	if !errors.Is(err, ErrInsufficientFunds) {
@@ -179,11 +208,11 @@ func TestSelectForAmount_UnknownAmountEntriesIgnored(t *testing.T) {
 func TestSelectForAmount_FallsThroughToASecondMinterGroupThatCovers(t *testing.T) {
 	held := []Entry{
 		// minterA's tokens sum to 3000 — never enough for a 5000 target.
-		{ID: "tok-a1", AmountMillis: amountPtr(1000), MinterPubkey: minterPtr(minterA)},
-		{ID: "tok-a2", AmountMillis: amountPtr(2000), MinterPubkey: minterPtr(minterA)},
+		{ID: "tok-a1", AmountMillis: amountPtr(1000), MinterPubkey: minterPtr(minterA), Token: hubToken(minterA)},
+		{ID: "tok-a2", AmountMillis: amountPtr(2000), MinterPubkey: minterPtr(minterA), Token: hubToken(minterA)},
 		// minterB's do cover it.
-		{ID: "tok-b1", AmountMillis: amountPtr(2500), MinterPubkey: minterPtr(minterB)},
-		{ID: "tok-b2", AmountMillis: amountPtr(2500), MinterPubkey: minterPtr(minterB)},
+		{ID: "tok-b1", AmountMillis: amountPtr(2500), MinterPubkey: minterPtr(minterB), Token: hubToken(minterB)},
+		{ID: "tok-b2", AmountMillis: amountPtr(2500), MinterPubkey: minterPtr(minterB), Token: hubToken(minterB)},
 	}
 	plan, err := SelectForAmount(held, 5000)
 	if err != nil {
@@ -201,9 +230,9 @@ func TestSelectForAmount_FallsThroughToASecondMinterGroupThatCovers(t *testing.T
 
 func TestSelectForAmount_GroupNeedsAllThreeEntries(t *testing.T) {
 	held := []Entry{
-		{ID: "tok-1", AmountMillis: amountPtr(1000), MinterPubkey: minterPtr(minterA)},
-		{ID: "tok-2", AmountMillis: amountPtr(1000), MinterPubkey: minterPtr(minterA)},
-		{ID: "tok-3", AmountMillis: amountPtr(1000), MinterPubkey: minterPtr(minterA)},
+		{ID: "tok-1", AmountMillis: amountPtr(1000), MinterPubkey: minterPtr(minterA), Token: hubToken(minterA)},
+		{ID: "tok-2", AmountMillis: amountPtr(1000), MinterPubkey: minterPtr(minterA), Token: hubToken(minterA)},
+		{ID: "tok-3", AmountMillis: amountPtr(1000), MinterPubkey: minterPtr(minterA), Token: hubToken(minterA)},
 	}
 	plan, err := SelectForAmount(held, 2500)
 	if err != nil {
@@ -237,10 +266,10 @@ func TestSelectForAmount_MultipleCoveringMintersPicksLexicographicallyFirst(t *t
 		// cover it. minterB sorts AFTER minterA lexicographically, but is
 		// listed first here — proves the choice isn't "whichever happens
 		// to appear earlier in `held`," only sortedKeys' own ordering.
-		{ID: "tok-b1", AmountMillis: amountPtr(3000), MinterPubkey: minterPtr(minterB)},
-		{ID: "tok-b2", AmountMillis: amountPtr(3000), MinterPubkey: minterPtr(minterB)},
-		{ID: "tok-a1", AmountMillis: amountPtr(3000), MinterPubkey: minterPtr(minterA)},
-		{ID: "tok-a2", AmountMillis: amountPtr(3000), MinterPubkey: minterPtr(minterA)},
+		{ID: "tok-b1", AmountMillis: amountPtr(3000), MinterPubkey: minterPtr(minterB), Token: hubToken(minterB)},
+		{ID: "tok-b2", AmountMillis: amountPtr(3000), MinterPubkey: minterPtr(minterB), Token: hubToken(minterB)},
+		{ID: "tok-a1", AmountMillis: amountPtr(3000), MinterPubkey: minterPtr(minterA), Token: hubToken(minterA)},
+		{ID: "tok-a2", AmountMillis: amountPtr(3000), MinterPubkey: minterPtr(minterA), Token: hubToken(minterA)},
 	}
 	plan, err := SelectForAmount(held, 5000)
 	if err != nil {
@@ -329,9 +358,9 @@ func TestSumAmounts(t *testing.T) {
 // not out of the bill being cashed.
 func TestSelectForAmount_NetPlusFeeAcrossBills(t *testing.T) {
 	held := []Entry{
-		{ID: "tok-100", AmountMillis: amountPtr(100), MinterPubkey: minterPtr(minterA), IdentityRequired: boolPtr(true)},
-		{ID: "tok-400", AmountMillis: amountPtr(400), MinterPubkey: minterPtr(minterA), IdentityRequired: boolPtr(true)},
-		{ID: "tok-50", AmountMillis: amountPtr(50), MinterPubkey: minterPtr(minterA), IdentityRequired: boolPtr(true)},
+		{ID: "tok-100", AmountMillis: amountPtr(100), MinterPubkey: minterPtr(minterA), Token: hubToken(minterA), IdentityRequired: boolPtr(true)},
+		{ID: "tok-400", AmountMillis: amountPtr(400), MinterPubkey: minterPtr(minterA), Token: hubToken(minterA), IdentityRequired: boolPtr(true)},
+		{ID: "tok-50", AmountMillis: amountPtr(50), MinterPubkey: minterPtr(minterA), Token: hubToken(minterA), IdentityRequired: boolPtr(true)},
 	}
 	plan, err := SelectForAmount(held, 506) // 500 net + 6 worst-case fee
 	if err != nil {
@@ -373,8 +402,8 @@ func TestSelectForAmount_FeeIsWhatTipsItOverTheEdge(t *testing.T) {
 // added, not silently become a cross-minter redeem.
 func TestSelectForAmount_FeeShortfallAcrossMintersIsFragmented(t *testing.T) {
 	held := []Entry{
-		{ID: "tok-a", AmountMillis: amountPtr(300), MinterPubkey: minterPtr(minterA), IdentityRequired: boolPtr(true)},
-		{ID: "tok-b", AmountMillis: amountPtr(300), MinterPubkey: minterPtr(minterB), IdentityRequired: boolPtr(true)},
+		{ID: "tok-a", AmountMillis: amountPtr(300), MinterPubkey: minterPtr(minterA), Token: hubToken(minterA), IdentityRequired: boolPtr(true)},
+		{ID: "tok-b", AmountMillis: amountPtr(300), MinterPubkey: minterPtr(minterB), Token: hubToken(minterB), IdentityRequired: boolPtr(true)},
 	}
 	_, err := SelectForAmount(held, 506)
 	if !errors.Is(err, ErrFundsFragmented) {

@@ -1,8 +1,11 @@
 package ledger
 
 import (
+	"encoding/hex"
+
 	"errors"
 	"fmt"
+	"github.com/ohstr/nmilat/nipcash"
 	"sort"
 )
 
@@ -113,7 +116,7 @@ func SelectForAmount(held []Entry, target uint64) (*SelectionPlan, error) {
 		return &SelectionPlan{Entry: bestFit, Split: true}, nil
 	}
 
-	groups := GroupByMinter(GroupableForConsolidation(held))
+	groups := GroupByHub(GroupableForConsolidation(held))
 	var totalHeld uint64
 	for _, e := range held {
 		if e.AmountMillis != nil {
@@ -150,12 +153,12 @@ func SumAmounts(entries []Entry) uint64 {
 // GroupableForConsolidation returns the subset of held eligible to be
 // grouped for auto-consolidation: pubkey-mode (not cash-mode, not
 // connection-key-bound — cash_consolidate only accepts pubkey-identified
-// sources) with a known MinterPubkey (the only client-side "same minter"
-// signal cashctl has) and a known amount (nothing to sum otherwise).
+// sources), with a known amount (nothing to sum otherwise) and a known
+// issuing Hub (nothing to group by otherwise).
 func GroupableForConsolidation(held []Entry) []Entry {
 	var out []Entry
 	for _, e := range held {
-		if e.AmountMillis == nil || e.MinterPubkey == nil {
+		if e.AmountMillis == nil || HubGroupKey(e) == "" {
 			continue
 		}
 		isCash := e.IdentityRequired != nil && !*e.IdentityRequired
@@ -167,15 +170,44 @@ func GroupableForConsolidation(held []Entry) []Entry {
 	return out
 }
 
-// GroupByMinter buckets entries (already filtered to consolidation-
-// eligible ones — see GroupableForConsolidation) by their own
-// MinterPubkey. Every entry passed in is assumed to have one set; panics
-// otherwise (guaranteed by GroupableForConsolidation's own filter, not
-// re-checked here).
-func GroupByMinter(entries []Entry) map[string][]Entry {
+// HubGroupKey returns the issuing Cash Hub's fingerprint for e, as a hex string,
+// or "" when the bill does not name one.
+//
+// Read from the token itself rather than a stored column: the token is kept verbatim
+// and is the authority on its own contents, so there is no second copy to migrate or
+// to fall out of step with it.
+//
+// This replaced grouping by MinterPubkey, which was wrong in a way that only showed
+// up against a real deployment. A mint signature identifies the minting NODE, and one
+// node routinely runs several Cash Hubs — so same-minter grouping merged bills from
+// sibling Hubs, the Hub refused the whole selection ("all sources must belong to the
+// same Cash Hub"), and a holder's ordinary `consolidate` failed outright with a
+// protocol error they had not caused.
+//
+// Returns "" rather than a shared placeholder when a bill carries no fingerprint.
+// Bills that merely agree on "unknown" MUST NOT group: that is precisely the mistake
+// above, and it would reintroduce it for every bill minted before this field existed.
+func HubGroupKey(e Entry) string {
+	tok, err := nipcash.Decode(e.Token)
+	if err != nil || len(tok.HubGroup) == 0 {
+		return ""
+	}
+	return hex.EncodeToString(tok.HubGroup)
+}
+
+// GroupByHub buckets entries (already filtered to consolidation-eligible ones — see
+// GroupableForConsolidation) by their issuing Cash Hub's fingerprint.
+//
+// Grouping by Hub rather than by minter is what makes the resulting groups actually
+// consolidatable: cash_consolidate requires every source to descend from ONE Cash
+// Hub, and value is deliberately not allowed to cross Hubs — each Hub is its own
+// funded book, and an expired bill's remainder is reclaimed into its own parent.
+func GroupByHub(entries []Entry) map[string][]Entry {
 	groups := make(map[string][]Entry)
 	for _, e := range entries {
-		groups[*e.MinterPubkey] = append(groups[*e.MinterPubkey], e)
+		if key := HubGroupKey(e); key != "" {
+			groups[key] = append(groups[key], e)
+		}
 	}
 	return groups
 }
