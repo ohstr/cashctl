@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"bytes"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"reflect"
@@ -69,223 +71,271 @@ func TestResolveConsolidateSources_BothGivenErrors(t *testing.T) {
 	}
 }
 
-// --- mergeableMinterGroups / pickMinterGroups: the no-args/no---sources
+// --- mergeableHubGroups / pickHubGroups: the no-args/no---sources
 // default's auto-detection — grouping held tokens by minter (only
 // same-minter sources can actually be merged) instead of naively trying
 // to merge everything, and letting an interactive session choose which
 // group(s) to process when more than one qualifies.
 
 // groupableEntry builds a pubkey-mode, consolidation-eligible held entry
-// (ledger.GroupableForConsolidation's own contract: known amount, known
-// minter, not cashMode, not connection-key-bound) for a given minter.
-func groupableEntry(id, minter string, amountMillis uint64) ledger.Entry {
+// (ledger.GroupableForConsolidation's own contract: known amount, known issuing
+// Hub, not cashMode, not connection-key-bound) for a given Hub.
+//
+// The entry carries a real token, because grouping reads the issuing Hub out of the
+// token rather than from a column. That is the change these tests exist to pin: a
+// mint signature names the minting NODE, and one node routinely runs several Hubs,
+// so same-minter grouping merged bills the Hub then refused.
+func groupableEntry(id, hub string, amountMillis uint64) ledger.Entry {
 	return ledger.Entry{
 		ID:           id,
 		Status:       ledger.StatusHeld,
 		AmountMillis: ptrTo(amountMillis),
-		MinterPubkey: ptrTo(minter),
+		MinterPubkey: ptrTo("minter-shared"),
+		Token:        hubToken(hub),
 	}
 }
 
-func TestMergeableMinterGroups_NothingHeldIsEmpty(t *testing.T) {
-	if got := mergeableMinterGroups(nil); len(got) != 0 {
-		t.Errorf("mergeableMinterGroups(nil) = %v, want empty", got)
+// hubToken builds a real token whose hub-group fingerprint derives from hub.
+//
+// Note every groupableEntry shares ONE minter above, deliberately: on a real
+// deployment that is the normal case (one node, several Hubs), and it is exactly the
+// case the old grouping got wrong. If grouping ever reverted to the minter, every
+// multi-Hub test here would collapse into a single group and fail.
+func hubToken(hub string) string {
+	amt := uint64(1)
+	tok, err := nipcash.Encode(nipcash.Token{
+		HRP:                  "lokicash",
+		WalletPubkey:         hex.EncodeToString(bytes.Repeat([]byte{0xab}, 32)),
+		Secret:               hex.EncodeToString(bytes.Repeat([]byte{0xcd}, 32)),
+		RelayURLs:            []string{"wss://relay.test"},
+		MintSignature:        bytes.Repeat([]byte{0x01}, 65),
+		AttestedAmountMillis: &amt,
+		HubGroup:             nipcash.HubGroupFor(hub),
+	})
+	if err != nil {
+		panic(err)
+	}
+	return tok
+}
+
+// hubKey is the map key groups are bucketed under: the fingerprint, hex-encoded.
+func hubKey(hub string) string {
+	return hex.EncodeToString(nipcash.HubGroupFor(hub))
+}
+
+func TestMergeableHubGroups_NothingHeldIsEmpty(t *testing.T) {
+	if got := mergeableHubGroups(nil); len(got) != 0 {
+		t.Errorf("mergeableHubGroups(nil) = %v, want empty", got)
 	}
 }
 
-func TestMergeableMinterGroups_SingletonMinterExcluded(t *testing.T) {
-	held := []ledger.Entry{groupableEntry("tok-a", "minter-a", 1000)}
-	if got := mergeableMinterGroups(held); len(got) != 0 {
-		t.Errorf("mergeableMinterGroups(1 entry, 1 minter) = %v, want empty (nothing to merge a singleton into)", got)
+func TestMergeableHubGroups_SingletonHubExcluded(t *testing.T) {
+	held := []ledger.Entry{groupableEntry("tok-a", "hub-a", 1000)}
+	if got := mergeableHubGroups(held); len(got) != 0 {
+		t.Errorf("mergeableHubGroups(1 entry, 1 Hub) = %v, want empty (nothing to merge a singleton into)", got)
 	}
 }
 
-func TestMergeableMinterGroups_TwoSameMinterTokensGroup(t *testing.T) {
+func TestMergeableHubGroups_TwoSameHubTokensGroup(t *testing.T) {
 	held := []ledger.Entry{
-		groupableEntry("tok-a", "minter-a", 1000),
-		groupableEntry("tok-b", "minter-a", 2000),
+		groupableEntry("tok-a", "hub-a", 1000),
+		groupableEntry("tok-b", "hub-a", 2000),
 	}
-	got := mergeableMinterGroups(held)
+	got := mergeableHubGroups(held)
 	if len(got) != 1 {
-		t.Fatalf("mergeableMinterGroups() = %d groups, want 1", len(got))
+		t.Fatalf("mergeableHubGroups() = %d groups, want 1", len(got))
 	}
-	group, ok := got["minter-a"]
+	group, ok := got[hubKey("hub-a")]
 	if !ok || len(group) != 2 {
-		t.Fatalf("got[\"minter-a\"] = %v, want both entries", group)
+		t.Fatalf("got[hub-a] = %v, want both entries", group)
 	}
 }
 
-func TestMergeableMinterGroups_TwoDifferentMintersBothGroup(t *testing.T) {
+func TestMergeableHubGroups_TwoDifferentHubsBothGroup(t *testing.T) {
 	held := []ledger.Entry{
-		groupableEntry("tok-a", "minter-a", 1000),
-		groupableEntry("tok-b", "minter-a", 2000),
-		groupableEntry("tok-c", "minter-b", 500),
-		groupableEntry("tok-d", "minter-b", 700),
+		groupableEntry("tok-a", "hub-a", 1000),
+		groupableEntry("tok-b", "hub-a", 2000),
+		groupableEntry("tok-c", "hub-b", 500),
+		groupableEntry("tok-d", "hub-b", 700),
 	}
-	got := mergeableMinterGroups(held)
+	got := mergeableHubGroups(held)
 	if len(got) != 2 {
-		t.Fatalf("mergeableMinterGroups() = %d groups, want 2 (one per minter)", len(got))
+		t.Fatalf("mergeableHubGroups() = %d groups, want 2 (one per Hub)", len(got))
 	}
-	if len(got["minter-a"]) != 2 || len(got["minter-b"]) != 2 {
-		t.Errorf("got = %v, want 2 entries in each minter's group", got)
+	if len(got[hubKey("hub-a")]) != 2 || len(got[hubKey("hub-b")]) != 2 {
+		t.Errorf("got = %v, want 2 entries in each Hub's group", got)
 	}
 }
 
-func TestMergeableMinterGroups_MixOfSingletonAndGroupableExcludesSingleton(t *testing.T) {
+func TestMergeableHubGroups_MixOfSingletonAndGroupableExcludesSingleton(t *testing.T) {
 	held := []ledger.Entry{
-		groupableEntry("tok-a", "minter-a", 1000), // alone under minter-a
-		groupableEntry("tok-b", "minter-b", 500),
-		groupableEntry("tok-c", "minter-b", 700),
+		groupableEntry("tok-a", "hub-a", 1000), // alone under hub-a
+		groupableEntry("tok-b", "hub-b", 500),
+		groupableEntry("tok-c", "hub-b", 700),
 	}
-	got := mergeableMinterGroups(held)
+	got := mergeableHubGroups(held)
 	if len(got) != 1 {
-		t.Fatalf("mergeableMinterGroups() = %d groups, want 1 (minter-a's lone token excluded)", len(got))
+		t.Fatalf("mergeableHubGroups() = %d groups, want 1 (hub-a's lone token excluded)", len(got))
 	}
-	if _, ok := got["minter-a"]; ok {
-		t.Error("minter-a (a singleton) present in result, want excluded")
+	if _, ok := got[hubKey("hub-a")]; ok {
+		t.Error("hub-a (a singleton) present in result, want excluded")
 	}
 }
 
-func TestMergeableMinterGroups_CashAndConnectionKeyEntriesExcluded(t *testing.T) {
-	cashMode := groupableEntry("tok-a", "minter-a", 1000)
+func TestMergeableHubGroups_CashAndConnectionKeyEntriesExcluded(t *testing.T) {
+	cashMode := groupableEntry("tok-a", "hub-a", 1000)
 	cashMode.IdentityRequired = ptrTo(false)
-	connKey := groupableEntry("tok-b", "minter-a", 1000)
+	connKey := groupableEntry("tok-b", "hub-a", 1000)
 	connKey.ConnectionKeyPlatform = "some-platform"
-	held := []ledger.Entry{cashMode, connKey, groupableEntry("tok-c", "minter-a", 1000)}
+	held := []ledger.Entry{cashMode, connKey, groupableEntry("tok-c", "hub-a", 1000)}
 
-	got := mergeableMinterGroups(held)
+	got := mergeableHubGroups(held)
 	if len(got) != 0 {
-		t.Errorf("mergeableMinterGroups() = %v, want empty (cash/connection-key entries aren't groupable, leaving only 1 eligible entry for minter-a)", got)
+		t.Errorf("mergeableHubGroups() = %v, want empty (cash/connection-key entries aren't groupable, leaving only 1 eligible entry for hub-a)", got)
 	}
 }
 
-func TestPickMinterGroups_JSONModeReturnsAllWithoutPrompting(t *testing.T) {
+func TestPickHubGroups_JSONModeReturnsAllWithoutPrompting(t *testing.T) {
 	cmd := testCmdWithFlags(true, false)
 	groups := map[string][]ledger.Entry{
-		"minter-a": {groupableEntry("tok-a", "minter-a", 1000), groupableEntry("tok-b", "minter-a", 1000)},
-		"minter-b": {groupableEntry("tok-c", "minter-b", 500), groupableEntry("tok-d", "minter-b", 500)},
+		hubKey("hub-a"): {groupableEntry("tok-a", "hub-a", 1000), groupableEntry("tok-b", "hub-a", 1000)},
+		hubKey("hub-b"): {groupableEntry("tok-c", "hub-b", 500), groupableEntry("tok-d", "hub-b", 500)},
 	}
-	got, err := pickMinterGroups(cmd, groups)
+	got, err := pickHubGroups(cmd, groups)
 	if err != nil {
-		t.Fatalf("pickMinterGroups() error = %v", err)
+		t.Fatalf("pickHubGroups() error = %v", err)
 	}
 	if len(got) != 2 {
-		t.Fatalf("pickMinterGroups() = %d groups, want 2 (every qualifying group, no terminal to prompt from)", len(got))
+		t.Fatalf("pickHubGroups() = %d groups, want 2 (every qualifying group, no terminal to prompt from)", len(got))
 	}
 }
 
-func TestPickMinterGroups_YesFlagReturnsAllWithoutPrompting(t *testing.T) {
+func TestPickHubGroups_YesFlagReturnsAllWithoutPrompting(t *testing.T) {
 	cmd := testCmdWithFlags(false, true)
 	groups := map[string][]ledger.Entry{
-		"minter-a": {groupableEntry("tok-a", "minter-a", 1000), groupableEntry("tok-b", "minter-a", 1000)},
-		"minter-b": {groupableEntry("tok-c", "minter-b", 500), groupableEntry("tok-d", "minter-b", 500)},
+		hubKey("hub-a"): {groupableEntry("tok-a", "hub-a", 1000), groupableEntry("tok-b", "hub-a", 1000)},
+		hubKey("hub-b"): {groupableEntry("tok-c", "hub-b", 500), groupableEntry("tok-d", "hub-b", 500)},
 	}
-	got, err := pickMinterGroups(cmd, groups)
+	got, err := pickHubGroups(cmd, groups)
 	if err != nil {
-		t.Fatalf("pickMinterGroups() error = %v", err)
+		t.Fatalf("pickHubGroups() error = %v", err)
 	}
 	if len(got) != 2 {
-		t.Fatalf("pickMinterGroups() = %d groups, want 2", len(got))
+		t.Fatalf("pickHubGroups() = %d groups, want 2", len(got))
 	}
 }
 
-func TestPickMinterGroups_SingleGroupNeedsNoPrompt(t *testing.T) {
+func TestPickHubGroups_SingleGroupNeedsNoPrompt(t *testing.T) {
 	// No stdin queued at all — if this fell through to PromptLine, reading
 	// from an empty reader would hang/EOF instead of just returning.
 	cmd := testCmdWithFlags(false, false)
 	groups := map[string][]ledger.Entry{
-		"minter-a": {groupableEntry("tok-a", "minter-a", 1000), groupableEntry("tok-b", "minter-a", 1000)},
+		"minter-a": {groupableEntry("tok-a", "hub-a", 1000), groupableEntry("tok-b", "hub-a", 1000)},
 	}
-	got, err := pickMinterGroups(cmd, groups)
+	got, err := pickHubGroups(cmd, groups)
 	if err != nil {
-		t.Fatalf("pickMinterGroups() error = %v", err)
+		t.Fatalf("pickHubGroups() error = %v", err)
 	}
 	if len(got) != 1 || len(got[0]) != 2 {
-		t.Fatalf("pickMinterGroups() = %v, want the single group untouched", got)
+		t.Fatalf("pickHubGroups() = %v, want the single group untouched", got)
 	}
 }
 
-func TestPickMinterGroups_InteractiveBareEnterPicksAll(t *testing.T) {
+func TestPickHubGroups_InteractiveBareEnterPicksAll(t *testing.T) {
 	stubStdin(t, "\n")
 	cmd := testCmdWithFlags(false, false)
 	groups := map[string][]ledger.Entry{
-		"minter-a": {groupableEntry("tok-a", "minter-a", 1000), groupableEntry("tok-b", "minter-a", 1000)},
-		"minter-b": {groupableEntry("tok-c", "minter-b", 500), groupableEntry("tok-d", "minter-b", 500)},
+		hubKey("hub-a"): {groupableEntry("tok-a", "hub-a", 1000), groupableEntry("tok-b", "hub-a", 1000)},
+		hubKey("hub-b"): {groupableEntry("tok-c", "hub-b", 500), groupableEntry("tok-d", "hub-b", 500)},
 	}
 	var got [][]ledger.Entry
 	var err error
 	withStdoutSuppressed(func() {
-		got, err = pickMinterGroups(cmd, groups)
+		got, err = pickHubGroups(cmd, groups)
 	})
 	if err != nil {
-		t.Fatalf("pickMinterGroups() error = %v", err)
+		t.Fatalf("pickHubGroups() error = %v", err)
 	}
 	if len(got) != 2 {
-		t.Fatalf("pickMinterGroups(bare Enter) = %d groups, want 2 (all)", len(got))
+		t.Fatalf("pickHubGroups(bare Enter) = %d groups, want 2 (all)", len(got))
 	}
 }
 
-func TestPickMinterGroups_InteractivePicksSpecificByNumber(t *testing.T) {
+func TestPickHubGroups_InteractivePicksSpecificByNumber(t *testing.T) {
 	stubStdin(t, "2\n")
 	cmd := testCmdWithFlags(false, false)
 	groups := map[string][]ledger.Entry{
-		"minter-a": {groupableEntry("tok-a", "minter-a", 1000), groupableEntry("tok-b", "minter-a", 1000)},
-		"minter-b": {groupableEntry("tok-c", "minter-b", 500), groupableEntry("tok-d", "minter-b", 500)},
+		hubKey("hub-a"): {groupableEntry("tok-a", "hub-a", 1000), groupableEntry("tok-b", "hub-a", 1000)},
+		hubKey("hub-b"): {groupableEntry("tok-c", "hub-b", 500), groupableEntry("tok-d", "hub-b", 500)},
 	}
+	// Which Hub is offered as "2" depends on how the fingerprints sort, not on the
+	// names this test gave them — so the expectation is derived the same way the
+	// picker derives its numbering. Hard-coding it would make the test depend on the
+	// hash of a string, which is not what it is asserting.
+	secondKey := sortedHubKeys(groups)[1]
+	wantIDs := map[string]bool{}
+	for _, e := range groups[secondKey] {
+		wantIDs[e.ID] = true
+	}
+
 	var got [][]ledger.Entry
 	var err error
 	withStdoutSuppressed(func() {
-		got, err = pickMinterGroups(cmd, groups)
+		got, err = pickHubGroups(cmd, groups)
 	})
 	if err != nil {
-		t.Fatalf("pickMinterGroups() error = %v", err)
+		t.Fatalf("pickHubGroups() error = %v", err)
 	}
 	if len(got) != 1 {
-		t.Fatalf("pickMinterGroups(\"2\") = %d groups, want 1", len(got))
+		t.Fatalf("pickHubGroups(\"2\") = %d groups, want 1", len(got))
 	}
-	// sortedMinterKeys orders alphabetically: minter-a=1, minter-b=2.
-	if got[0][0].MinterPubkey == nil || *got[0][0].MinterPubkey != "minter-b" {
-		t.Errorf("pickMinterGroups(\"2\") picked minter %v, want minter-b", got[0][0].MinterPubkey)
+	if len(got[0]) != 2 {
+		t.Fatalf("picked group has %d entries, want 2", len(got[0]))
+	}
+	for _, e := range got[0] {
+		if !wantIDs[e.ID] {
+			t.Errorf("pickHubGroups(\"2\") picked entry %q, which is not in the second Hub's group", e.ID)
+		}
 	}
 }
 
-func TestPickMinterGroups_InvalidChoiceErrors(t *testing.T) {
+func TestPickHubGroups_InvalidChoiceErrors(t *testing.T) {
 	stubStdin(t, "9\n")
 	cmd := testCmdWithFlags(false, false)
 	groups := map[string][]ledger.Entry{
-		"minter-a": {groupableEntry("tok-a", "minter-a", 1000), groupableEntry("tok-b", "minter-a", 1000)},
-		"minter-b": {groupableEntry("tok-c", "minter-b", 500), groupableEntry("tok-d", "minter-b", 500)},
+		hubKey("hub-a"): {groupableEntry("tok-a", "hub-a", 1000), groupableEntry("tok-b", "hub-a", 1000)},
+		hubKey("hub-b"): {groupableEntry("tok-c", "hub-b", 500), groupableEntry("tok-d", "hub-b", 500)},
 	}
 	var err error
 	withStdoutSuppressed(func() {
-		_, err = pickMinterGroups(cmd, groups)
+		_, err = pickHubGroups(cmd, groups)
 	})
 	if err == nil {
 		t.Fatal("expected an error for an out-of-range choice")
 	}
 }
 
-// TestPickMinterGroups_NeverPrintsRawID is the consolidate-side regression
+// TestPickHubGroups_NeverPrintsRawID is the consolidate-side regression
 // guard docs/private/wallet-abstraction-plan.md calls for: a human
 // choosing among minter groups sees index + token count + total amount,
 // never a raw ledger.Entry.ID (mirrors TestPickHeldToken_NeverPrintsRawID
 // in cash_redeem_test.go for the identical concern in the single-select
 // picker).
-func TestPickMinterGroups_NeverPrintsRawID(t *testing.T) {
+func TestPickHubGroups_NeverPrintsRawID(t *testing.T) {
 	stubStdin(t, "1\n")
 	cmd := testCmdWithFlags(false, false)
 	groups := map[string][]ledger.Entry{
-		"minter-a": {groupableEntry("tok-a", "minter-a", 1000), groupableEntry("tok-b", "minter-a", 1000)},
-		"minter-b": {groupableEntry("tok-c", "minter-b", 500), groupableEntry("tok-d", "minter-b", 500)},
+		hubKey("hub-a"): {groupableEntry("tok-a", "hub-a", 1000), groupableEntry("tok-b", "hub-a", 1000)},
+		hubKey("hub-b"): {groupableEntry("tok-c", "hub-b", 500), groupableEntry("tok-d", "hub-b", 500)},
 	}
 	printed := withCapturedOutput(func() {
-		_, _ = pickMinterGroups(cmd, groups)
+		_, _ = pickHubGroups(cmd, groups)
 	})
 	if strings.Contains(printed, "tok-") {
-		t.Fatalf("pickMinterGroups printed a raw ledger ID:\n%s", printed)
+		t.Fatalf("pickHubGroups printed a raw ledger ID:\n%s", printed)
 	}
 	if !strings.Contains(printed, "2 tokens") {
-		t.Fatalf("pickMinterGroups didn't print the expected group summary:\n%s", printed)
+		t.Fatalf("pickHubGroups didn't print the expected group summary:\n%s", printed)
 	}
 }
 
@@ -547,8 +597,8 @@ func consolidateOK(amountMillis uint64) *consolidateResult {
 // two same-minter sources.
 func twoGroups() [][]ledger.Entry {
 	return [][]ledger.Entry{
-		{groupableEntry("tok-a1", "minter-a", 1000), groupableEntry("tok-a2", "minter-a", 2000)},
-		{groupableEntry("tok-b1", "minter-b", 3000), groupableEntry("tok-b2", "minter-b", 4000)},
+		{groupableEntry("tok-a1", "hub-a", 1000), groupableEntry("tok-a2", "hub-a", 2000)},
+		{groupableEntry("tok-b1", "hub-b", 3000), groupableEntry("tok-b2", "hub-b", 4000)},
 	}
 }
 
@@ -576,10 +626,16 @@ func TestConsolidateGroups_FailureInOneGroupDoesNotStopTheNext(t *testing.T) {
 	if outcomes[1].Result == nil {
 		t.Errorf("outcomes[1].Result = nil, want the second group to have gone ahead anyway")
 	}
-	// The minter is what names a group in output; without it a failure is not
-	// actionable when several groups are in play.
-	if outcomes[0].Minter != "minter-a" || outcomes[1].Minter != "minter-b" {
-		t.Errorf("minters = (%q, %q), want (minter-a, minter-b)", outcomes[0].Minter, outcomes[1].Minter)
+	// The Hub fingerprint is what names a group in output; without it a failure is
+	// not actionable when several groups are in play. It replaced the shared MINTER,
+	// which became useless for this the moment groups became Hubs: one node runs
+	// several Hubs, so every group would have reported the same minter.
+	if outcomes[0].Hub != hubKey("hub-a") || outcomes[1].Hub != hubKey("hub-b") {
+		t.Errorf("hubs = (%q, %q), want (%q, %q)",
+			outcomes[0].Hub, outcomes[1].Hub, hubKey("hub-a"), hubKey("hub-b"))
+	}
+	if outcomes[0].Hub == outcomes[1].Hub {
+		t.Error("both groups reported the same Hub; they are different Hubs and must be distinguishable in output")
 	}
 }
 
@@ -640,7 +696,7 @@ func TestConsolidateGroups_DeclineIsNeitherSuccessNorFailure(t *testing.T) {
 // array is only for runs with several groups or a non-success — states where this
 // command previously printed no result at all, so nothing can depend on them.
 func TestPrintConsolidateOutcomes_SingleSuccessKeepsTheLegacyJSONShape(t *testing.T) {
-	outcomes := []consolidateOutcome{{Minter: "minter-a", IDs: []string{"tok-a1", "tok-a2"}, Result: consolidateOK(3000)}}
+	outcomes := []consolidateOutcome{{Hub: hubKey("hub-a"), IDs: []string{"tok-a1", "tok-a2"}, Result: consolidateOK(3000)}}
 	out := withCapturedStdout(func() { printConsolidateOutcomes(true, outcomes) })
 
 	var got map[string]any
@@ -662,8 +718,8 @@ func TestPrintConsolidateOutcomes_SingleSuccessKeepsTheLegacyJSONShape(t *testin
 func TestFirstOutcomeError_PreservesClassification(t *testing.T) {
 	classified := output.NetworkError(&cobra.Command{}, errors.New("relay unreachable"))
 	outcomes := []consolidateOutcome{
-		{Minter: "minter-a", Result: consolidateOK(1000)},
-		{Minter: "minter-b", Err: classified},
+		{Hub: hubKey("hub-a"), Result: consolidateOK(1000)},
+		{Hub: hubKey("hub-b"), Err: classified},
 	}
 	got := firstOutcomeError(outcomes)
 	if got == nil {
@@ -674,5 +730,105 @@ func TestFirstOutcomeError_PreservesClassification(t *testing.T) {
 	}
 	if output.AsCLIError(got).Code != "network" {
 		t.Errorf("code = %q, want network", output.AsCLIError(got).Code)
+	}
+}
+
+// The cross-Hub refusal, recognised AFTER classification.
+//
+// The bug these cover is a silent one: isCrossHubSourcesDecline matches a raw
+// *relayclient.WalletError, but consolidateItemsFn returns an error already run
+// through NWCErrorForCashToken, which builds a fresh CLIError around a plainError
+// and drops the WalletError from the chain. errors.As then never matches, the
+// mapping never fires, and the user sees the raw protocol text — with no failing
+// test anywhere, because nothing exercised the classified shape.
+func TestIsCrossHubDeclineClassified_MatchesBothShapes(t *testing.T) {
+	raw := &relayclient.WalletError{
+		Method:  "cash_consolidate",
+		Code:    "BAD_REQUEST",
+		Message: "all sources must belong to the same Cash Hub",
+	}
+	if !isCrossHubDeclineClassified(raw) {
+		t.Error("a raw WalletError must still match")
+	}
+
+	// The shape that actually reaches consolidateGroups.
+	classified := output.NWCErrorForCashToken(&cobra.Command{}, raw)
+	if !isCrossHubDeclineClassified(classified) {
+		t.Error("a CLIError-classified refusal must match — this is the shape consolidateItemsFn returns, and the one that silently did not match")
+	}
+
+	// And it must not match unrelated failures.
+	for _, other := range []*relayclient.WalletError{
+		{Method: "cash_consolidate", Code: "QUOTA_EXCEEDED", Message: "amount exceeds the per-wallet maximum"},
+		{Method: "cash_consolidate", Code: "NOT_FOUND", Message: "no slice registered for this identity"},
+	} {
+		if isCrossHubDeclineClassified(other) {
+			t.Errorf("%s must not be read as a cross-Hub refusal", other.Code)
+		}
+		if isCrossHubDeclineClassified(output.NWCErrorForCashToken(&cobra.Command{}, other)) {
+			t.Errorf("classified %s must not be read as a cross-Hub refusal", other.Code)
+		}
+	}
+}
+
+// consolidateGroups must REPLACE a cross-Hub refusal with the explanation, and
+// leave every other failure's own classification untouched.
+func TestConsolidateGroups_ExplainsACrossHubRefusal(t *testing.T) {
+	orig := consolidateItemsFn
+	defer func() { consolidateItemsFn = orig }()
+
+	consolidateItemsFn = func(cmd *cobra.Command, l *ledger.Ledger, ids []string, toFlag string, jsonMode, yesFlag bool) (*consolidateResult, error) {
+		return nil, output.NWCErrorForCashToken(cmd, &relayclient.WalletError{
+			Method:  "cash_consolidate",
+			Code:    "BAD_REQUEST",
+			Message: "all sources must belong to the same Cash Hub",
+		})
+	}
+
+	outcomes := consolidateGroups(&cobra.Command{}, &ledger.Ledger{}, twoGroups(), "", true, true)
+	if len(outcomes) != 2 {
+		t.Fatalf("want an outcome per group, got %d", len(outcomes))
+	}
+	for i, o := range outcomes {
+		if o.Err == nil {
+			t.Fatalf("group %d: want a failure", i)
+		}
+		msg := o.Err.Error()
+		for _, want := range []string{"same Lightning node", "Nothing was changed", "--sources"} {
+			if !strings.Contains(msg, want) {
+				t.Errorf("group %d error = %q, want it to contain %q", i, msg, want)
+			}
+		}
+		if ce := output.AsCLIError(o.Err); ce == nil || ce.Code != output.CodeInvalidInput {
+			t.Errorf("group %d: want invalid_input classification, got %+v", i, ce)
+		}
+	}
+}
+
+// An unrelated failure must pass through with its own classification and text —
+// the mapping must not swallow every error into the cross-Hub explanation.
+func TestConsolidateGroups_LeavesOtherFailuresAlone(t *testing.T) {
+	orig := consolidateItemsFn
+	defer func() { consolidateItemsFn = orig }()
+
+	consolidateItemsFn = func(cmd *cobra.Command, l *ledger.Ledger, ids []string, toFlag string, jsonMode, yesFlag bool) (*consolidateResult, error) {
+		return nil, output.NWCErrorForCashToken(cmd, &relayclient.WalletError{
+			Method:  "cash_consolidate",
+			Code:    "NOT_FOUND",
+			Message: "no slice registered for this identity",
+		})
+	}
+
+	outcomes := consolidateGroups(&cobra.Command{}, &ledger.Ledger{}, twoGroups(), "", true, true)
+	for i, o := range outcomes {
+		if o.Err == nil {
+			t.Fatalf("group %d: want a failure", i)
+		}
+		if strings.Contains(o.Err.Error(), "same Lightning node") {
+			t.Errorf("group %d: an unrelated failure was rewritten as a cross-Hub refusal: %v", i, o.Err)
+		}
+		if ce := output.AsCLIError(o.Err); ce == nil || ce.NWCCode != "NOT_FOUND" {
+			t.Errorf("group %d: the original NWC code must survive, got %+v", i, ce)
+		}
 	}
 }

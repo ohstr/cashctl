@@ -6,11 +6,41 @@ import (
 	"fmt"
 	"strings"
 
+	nipcashclient "github.com/ohstr/nmilat/nipcash/client"
 	relayclient "github.com/ohstr/nmilat/relay/client"
 	"github.com/spf13/cobra"
 
 	"github.com/ohstr/cashctl/internal/output"
 )
+
+// explainNoAnswer turns an omission into text a person can act on, and reports
+// whether err was one.
+//
+// The private transport's equivalent of the silence classifyCashTokenNWCErr also
+// handles, but it arrives far more often, because it is equally what a caller
+// gets for a bill that simply does not name them — the single most likely mistake
+// with a pasted token.
+//
+// The Hub genuinely cannot tell these cases apart and must not try: an omission
+// is information-free by design, since an answer distinguishing "no such bill"
+// from "not yours" would confirm a guessed bill exists. So this names every
+// possibility and asserts none. Picking one — "expired", say — would present a
+// guess as the Hub's own finding.
+//
+// One function because two call sites need the same words: the classified path,
+// and `decode --check`, which deliberately bypasses classification to stay soft.
+func explainNoAnswer(err error) (error, bool) {
+	var notServed *nipcashclient.NotServedError
+	if !errors.As(err, &notServed) {
+		return err, false
+	}
+	return fmt.Errorf(
+		"the Hub gave no answer for this bill. Any of these produces exactly this result, "+
+			"and the Hub deliberately does not distinguish them: the bill does not name you, "+
+			"it has already been spent, it has expired, or the Hub is unreachable. "+
+			"If you expected it to be yours, check the identity it was addressed to; "+
+			"do not resend a redeem or transfer blind, since an unanswered spend may already have happened: %w", err), true
+}
 
 // classifyNWCErr turns a wallet-call error into cashctl's own classified
 // *CLIError: a *relayclient.WalletError becomes output.NWCError (plain-
@@ -34,6 +64,9 @@ func classifyCashTokenNWCErr(cmd *cobra.Command, err error) error {
 	var walletErr *relayclient.WalletError
 	if errors.As(err, &walletErr) {
 		return output.NWCErrorForCashToken(cmd, walletErr)
+	}
+	if err, ok := explainNoAnswer(err); ok {
+		return output.NetworkError(cmd, err)
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		// A Hub deletes a bill once nothing is left on it, and answers

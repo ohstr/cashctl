@@ -82,7 +82,7 @@ func newDecodeCmd() *cobra.Command {
 
 			switch dial.Sniff(value) {
 			case dial.KindCashToken:
-				return decodeCashToken(cmd, value, jsonMode, check, embeddedSecret != "")
+				return decodeCashToken(cmd, value, embeddedSecret, jsonMode, check)
 			case dial.KindCircleHub:
 				return decodeCircleHub(cmd, value, jsonMode, check)
 			case dial.KindNWCURI:
@@ -102,13 +102,14 @@ func newDecodeCmd() *cobra.Command {
 	return cmd
 }
 
-func decodeCashToken(cmd *cobra.Command, value string, jsonMode, check, hasEmbeddedCashSecret bool) error {
+func decodeCashToken(cmd *cobra.Command, value, embeddedCashSecret string, jsonMode, check bool) error {
 	tok, err := nipcash.Decode(value)
 	if err != nil {
 		return output.InvalidInputError(cmd, value, err)
 	}
 	// See cash_receive.go: tok.IdentityRequired can go stale, an embedded
 	// cash_secret overrides it.
+	hasEmbeddedCashSecret := embeddedCashSecret != ""
 	isCash := (tok.IdentityRequired != nil && !*tok.IdentityRequired) || hasEmbeddedCashSecret
 
 	if !jsonMode {
@@ -151,7 +152,7 @@ func decodeCashToken(cmd *cobra.Command, value string, jsonMode, check, hasEmbed
 	}
 
 	if shouldCheckCashToken(cmd, jsonMode, check, isCash) {
-		result := checkCashTokenAgainstHub(cmd, jsonMode, value, tok)
+		result := checkCashTokenAgainstHub(cmd, jsonMode, value, embeddedCashSecret, tok)
 		if jsonMode {
 			out["check"] = result
 		} else {
@@ -340,7 +341,7 @@ type cashCheckResult struct {
 	Error        string  `json:"error,omitempty"`
 }
 
-func checkCashTokenAgainstHub(cmd *cobra.Command, jsonMode bool, value string, tok nipcash.Token) cashCheckResult {
+func checkCashTokenAgainstHub(cmd *cobra.Command, jsonMode bool, value, embeddedCashSecret string, tok nipcash.Token) cashCheckResult {
 	var amount uint64
 	var expiresAt *int64
 	err := WithSpinner(jsonMode, "Checking...", func() error {
@@ -353,12 +354,19 @@ func checkCashTokenAgainstHub(cmd *cobra.Command, jsonMode bool, value string, t
 		defer client.Close()
 
 		// CheckClaim tries pubkey then cash mode live; no need to pre-decide.
+		cred, credErr := credentialForToken(cmd, embeddedCashSecret)
+		if credErr != nil {
+			return credErr
+		}
 		myPubHex, _ := localPubKeyHex(cmd)
-		result, err := client.CheckClaim(ctx, tok, myPubHex)
+		result, err := client.CheckClaim(ctx, cred, tok, myPubHex)
 		if errors.Is(err, nipcash.ErrClaimNotFound) {
 			return fmt.Errorf("no matching recipient found on the Hub")
 		}
 		if err != nil {
+			if explained, ok := explainNoAnswer(err); ok {
+				return explained
+			}
 			return err
 		}
 		amount = result.AmountMillis
@@ -367,14 +375,17 @@ func checkCashTokenAgainstHub(cmd *cobra.Command, jsonMode bool, value string, t
 	})
 	if err != nil {
 		// Sanitized: a raw Hub error, not cashctl's own text — this soft
-		// check bypasses NWCError's own sanitizing. Note this already
-		// covers the token's own wallet having expired: CheckClaim's
-		// underlying list_recipients call is gated by the exact same
-		// generic Hub-side permission-expiry check as every other
-		// cash_wallet method, so an expired token surfaces here as this
-		// wallet's own accurate deadline message (lokihub's
-		// nip47/permissions.HasPermission, AppKindCashWallet branch), not
-		// a generic "no matching recipient."
+		// check bypasses NWCError's own sanitizing.
+		//
+		// An expired bill still surfaces its own accurate deadline message,
+		// because cash_status is gated by the same generic Hub-side
+		// permission-expiry check as every other cash_wallet method (lokihub's
+		// nip47/permissions.HasPermission, AppKindCashWallet branch) — but ONLY
+		// for a caller who holds a slice of it. A caller who does not is omitted
+		// during authorization, before permissions are ever consulted, so no
+		// reason of any kind comes back. explainNoAnswer above is what that case
+		// gets; it deliberately does not claim expiry, since the Hub did not say
+		// so.
 		return cashCheckResult{OK: false, Error: output.Sanitize(err.Error())}
 	}
 	return cashCheckResult{OK: true, AmountMillis: &amount, ExpiresAt: expiresAt}
