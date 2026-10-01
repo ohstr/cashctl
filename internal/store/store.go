@@ -56,7 +56,8 @@ CREATE TABLE IF NOT EXISTS entries (
 	ia_pubkey                  TEXT,
 	pending_cash_secret      TEXT,
 	expires_at                 INTEGER,
-	cash_protection          TEXT
+	cash_protection          TEXT,
+	pending_destination_cash_secret TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_entries_status_minter ON entries(status, minter_pubkey);
 
@@ -167,6 +168,18 @@ var addedColumns = []struct{ table, column, ddl string }{
 	// two apart after the fact — a declined/failed protect left the same
 	// CashSecret shape as a genuinely re-keyed one.
 	{"entries", "cash_protection", `ALTER TABLE entries ADD COLUMN cash_protection TEXT`},
+	// pending_destination_cash_secret: the cash secret of a bill some OTHER
+	// row's spend is about to create — `transfer --to cash` and
+	// `consolidate --to cash` both mint one locally and only a one-way
+	// commitment of it ever crosses the wire, so between the request
+	// leaving and the reply landing it exists nowhere but one process's
+	// heap. Persisted against the SOURCE row before the call, for the same
+	// reason pending_cash_secret is: a kill in that window must cost a
+	// reconciliation, never the money. Deliberately NOT pending_cash_secret
+	// itself — that column means "a candidate for THIS row's own
+	// credential" and is consumed as one (cmd/pending_secret_fallback.go,
+	// cmd/redeem_private.go), which a different bill's secret is not.
+	{"entries", "pending_destination_cash_secret", `ALTER TABLE entries ADD COLUMN pending_destination_cash_secret TEXT`},
 }
 
 // addColumnsIfMissing applies addedColumns' migrations exactly once each,

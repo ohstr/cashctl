@@ -867,6 +867,16 @@ func doCashConsolidate(cmd *cobra.Command, l *ledger.Ledger, dialCandidates []st
 		// runCashConsolidate's own text-mode print (*newEntry.AmountMillis).
 		return nil, nil, output.RuntimeError(cmd, fmt.Errorf("doCashConsolidate: no dial candidates given"))
 	}
+	// Written to disk BEFORE the first attempt, and outside the retry loop:
+	// every candidate carries the same target, so the secret at risk is the
+	// same one on every pass — see parkDestinationCashSecret for why the
+	// window it closes destroys money rather than merely inconveniencing a
+	// retry (D-CLI-1).
+	parked, err := parkDestinationCashSecret(l, localIDs, target)
+	if err != nil {
+		return nil, nil, output.RuntimeError(cmd, err)
+	}
+
 	var lastErr error
 	for i, dialToken := range dialCandidates {
 		result, callErr := attemptCashConsolidateFn(dialToken, sources, target)
@@ -907,6 +917,13 @@ func doCashConsolidate(cmd *cobra.Command, l *ledger.Ledger, dialCandidates []st
 			} else {
 				newEntry = &newLedgerEntry
 			}
+			// The destination secret now lives on the new entry's own
+			// CashSecret, so the parked copy has done its job. Cleared
+			// here rather than Saved here: this function never Saves —
+			// its callers do, immediately — and that caller's single
+			// write is the one that must carry both the result and this
+			// clear, so a failed write keeps the park (see release()).
+			parked.release()
 			l.AppendHistory("consolidate", fmt.Sprintf("consolidated %d tokens into one %s note", len(localIDs), output.FormatAmount(int64(result.AmountMillis))))
 			return newEntry, result.ExpiresAt, nil
 		}

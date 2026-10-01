@@ -26,6 +26,20 @@ package cmd
 // secret for a wallet that does not exist yet — by parking it on the SOURCE
 // entry's PendingCashSecret. The mechanism is built, documented and used; it is
 // simply not wired into the two paths below.
+//
+// FIXED 2026-10-01. parkDestinationCashSecret (cmd/cash_writeahead.go) wires
+// that discipline into all three sites that reach a cash-mode destination —
+// runCashTransfer, transferWithAutoConsolidate and doCashConsolidate — against
+// a dedicated Entry.PendingDestinationCashSecret rather than
+// PendingCashSecret, because that field means "a candidate for THIS row's own
+// credential" and is PROMOTED onto CashSecret as one by spendCashEntry and
+// retryWithPendingSecrets; a different bill's secret is not that.
+//
+// So the assertion below is inverted from the one this file shipped with: it
+// now requires the secret to be on disk at the instant the request is in
+// flight, which is the property the fix buys. The probe either side of it is
+// kept exactly as it was — it is what made the original finding credible, and
+// it is equally what would catch the fix regressing.
 
 import (
 	"os"
@@ -68,14 +82,14 @@ func auditDLedgerBytesContain(t *testing.T, needle string) bool {
 	return strings.Contains(string(b), needle)
 }
 
-// TestAuditD_CLI_ConsolidateToCash_SecretNotWrittenAheadOfWireCall is the
-// demonstration for D-CLI-1.
+// TestAuditD_CLI_ConsolidateToCash_SecretIsWrittenAheadOfWireCall is the
+// regression test for D-CLI-1.
 //
 // attemptCashConsolidateFn is the package-var seam the existing suite already
 // uses to stand in for the network. Inside it, the request is — by construction
 // — at the Hub. That is the exact instant a SIGINT, a closed terminal or a power
 // loss destroys the money, so that is where this test looks at the disk.
-func TestAuditD_CLI_ConsolidateToCash_SecretNotWrittenAheadOfWireCall(t *testing.T) {
+func TestAuditD_CLI_ConsolidateToCash_SecretIsWrittenAheadOfWireCall(t *testing.T) {
 	auditDTempLedger(t)
 
 	l, err := ledger.Load()
@@ -120,7 +134,10 @@ func TestAuditD_CLI_ConsolidateToCash_SecretNotWrittenAheadOfWireCall(t *testing
 		}
 		for _, e := range fresh.Entries {
 			if e.PendingCashSecret != "" {
-				pendingAtWireTime = append(pendingAtWireTime, e.ID+"="+e.PendingCashSecret)
+				pendingAtWireTime = append(pendingAtWireTime, e.ID+" PendingCashSecret="+e.PendingCashSecret)
+			}
+			if e.PendingDestinationCashSecret != "" {
+				pendingAtWireTime = append(pendingAtWireTime, e.ID+" PendingDestinationCashSecret="+e.PendingDestinationCashSecret)
 			}
 			if e.CashSecret == secret {
 				pendingAtWireTime = append(pendingAtWireTime, e.ID+" holds the destination secret as CashSecret")
@@ -145,30 +162,56 @@ func TestAuditD_CLI_ConsolidateToCash_SecretNotWrittenAheadOfWireCall(t *testing
 			"this path is supposed to be the only holder of it", newEntryCashSecret(newEntry), secret)
 	}
 
-	if len(pendingAtWireTime) > 0 {
-		t.Logf("in-flight ledger did carry something: %v", pendingAtWireTime)
+	if !onDiskAtWireTime {
+		t.Fatal("D-CLI-1 HAS REGRESSED: at the instant the cash_consolidate request was in " +
+			"flight with the Hub, the destination bill's cash secret was nowhere in " +
+			"cashctl.db. A kill in that window (Ctrl-C, closed terminal, OOM, power loss) " +
+			"destroys the only copy of it, and the resulting bill is funded and " +
+			"permanently unspendable by anyone.")
 	}
-	if onDiskAtWireTime {
-		t.Fatal("UNEXPECTED (finding would be refuted): the destination cash secret WAS on " +
-			"disk while the consolidate request was in flight — consolidate --to cash does " +
-			"have write-ahead persistence after all")
+	// Not just "some bytes matching the secret are in the file" — the specific
+	// field, on a specific row, as a fresh process would actually read it.
+	// Without this the byte scan above could be satisfied by the secret landing
+	// anywhere at all, including somewhere no code ever looks.
+	var parkedOn []string
+	for _, line := range pendingAtWireTime {
+		if strings.Contains(line, secret) {
+			parkedOn = append(parkedOn, line)
+		}
 	}
-	t.Log("D-CLI-1 demonstrated: at the instant the cash_consolidate request is in flight " +
-		"with the Hub, the destination bill's cash secret appears NOWHERE in cashctl.db. " +
-		"A kill in this window (Ctrl-C, closed terminal, OOM, power loss) destroys the only " +
-		"copy of it; the resulting bill is funded and permanently unspendable.")
+	if len(parkedOn) == 0 {
+		t.Fatalf("the secret is in cashctl.db's bytes but no reloaded entry exposes it as a "+
+			"destination park — a fresh process could not find it where the recovery path "+
+			"looks. in-flight rows carrying anything: %v", pendingAtWireTime)
+	}
+	t.Logf("D-CLI-1 fixed: the destination secret is on disk, and readable as a park, while "+
+		"the cash_consolidate request is still in flight: %v", parkedOn)
 
-	// And it only reaches disk once the reply has already come back — i.e. the
-	// window is real, not an artefact of the probe.
+	// And the park is cleared once the outcome IS recorded, so it never
+	// accumulates on a successful send — the other half of the contract, and
+	// the half a careless fix gets wrong by parking and never releasing.
 	if err := l.Save(); err != nil {
 		t.Fatalf("post-call l.Save() error = %v", err)
 	}
-	if !auditDLedgerBytesContain(t, secret) {
-		t.Fatal("the secret is not on disk even AFTER a successful Save — the probe is wrong, " +
-			"discount the finding above until that is explained")
+	reloaded, err := ledger.Load()
+	if err != nil {
+		t.Fatalf("post-call ledger.Load() error = %v", err)
 	}
-	t.Log("…and it IS on disk after the reply + Save, confirming the probe works and the " +
-		"gap is precisely the in-flight window.")
+	for _, e := range reloaded.Entries {
+		if e.PendingDestinationCashSecret != "" {
+			t.Fatalf("entry %s still carries a destination park (%s) after the reply was "+
+				"recorded — a successful send must release it, or `wallet show` warns about "+
+				"money that is not actually at risk", e.ID, e.PendingDestinationCashSecret)
+		}
+	}
+	// The secret itself must still be on disk, now as the merged entry's own
+	// spending credential rather than a park.
+	if !auditDLedgerBytesContain(t, secret) {
+		t.Fatal("the secret left the database entirely when the park was released — the " +
+			"release cleared the wrong thing")
+	}
+	t.Log("…and the park is released once the outcome is recorded, with the secret now held " +
+		"as the merged entry's own CashSecret.")
 }
 
 func newEntryCashSecret(e *ledger.Entry) string {

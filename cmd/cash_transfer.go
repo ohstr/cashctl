@@ -390,6 +390,17 @@ func transferWithAutoConsolidate(cmd *cobra.Command, l *ledger.Ledger, group []l
 	for i := range group {
 		dialCandidates[i] = group[i].Token
 	}
+	// The third site of D-CLI-1, and the easiest to miss: this path reaches a
+	// `--to cash` destination too, so the same locally-minted secret is at
+	// the same risk here as on the direct transfer path. Parked against the
+	// first source row that is still in the ledger — the interim wallet this
+	// call mints has no row of its own by design (see the full-success branch
+	// below), so a source is the only thing on disk to hang it from.
+	parked, parkErr := parkDestinationCashSecret(l, sourceIDs, target.Target)
+	if parkErr != nil {
+		return output.RuntimeError(cmd, parkErr)
+	}
+
 	var result *nipcashclient.TransferFromSourcesResult
 	var ffsErr error
 	_ = WithSpinner(jsonMode, "Transferring...", func() error {
@@ -410,6 +421,15 @@ func transferWithAutoConsolidate(cmd *cobra.Command, l *ledger.Ledger, group []l
 		// prior test ever tried to actually receive an
 		// auto-consolidated transfer's result on the other end).
 		markSourcesConsolidated(l, sourceIDs, result.ConsolidatedFirst.AmountMillis)
+		// In memory only, for printAndSaveTransferResult's own Save to carry
+		// — same reasoning as the direct path's. Deliberately NOT cleared on
+		// either failure branch below: the partial case means the interim
+		// consolidate landed and the transfer onward from it did not, and a
+		// "did not" that arrives as a lost or unreadable reply is
+		// indistinguishable from a transfer that actually happened. Keeping
+		// the park there costs a stale warning; dropping it could drop the
+		// only copy of a live bill's secret.
+		parked.release()
 		// The transfer's actual source here is the interim wallet, which
 		// TransferFromSources minted under the caller's own pubkey
 		// (InterimIdentity above) — so any remainder is pubkey-mode too.
@@ -993,6 +1013,17 @@ func runCashTransfer(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
+	// After the confirm, immediately before the call: a declined confirm must
+	// not leave a secret for a bill that was never asked for, and the window
+	// this closes opens at the call itself. See parkDestinationCashSecret —
+	// for a `--to cash` gift this write is the only thing standing between a
+	// Ctrl-C during the spinner below and a funded, unspendable bill
+	// (D-CLI-1). A no-op for every other target kind.
+	parked, parkErr := parkDestinationCashSecret(l, []string{entry.ID}, target.Target)
+	if parkErr != nil {
+		return output.RuntimeError(cmd, parkErr)
+	}
+
 	var result *nipcash.CashTransferResult
 	err = WithSpinner(jsonMode, "Transferring...", func() error {
 		r, cErr := spendCashEntry(entry, cred, func(c nipcash.Credential) (*nipcash.CashTransferResult, error) {
@@ -1011,6 +1042,13 @@ func runCashTransfer(cmd *cobra.Command, args []string) error {
 	}
 
 	_ = l.SetStatus(entry.ID, ledger.StatusTransferred)
+	// Cleared in memory only — printAndSaveTransferResult's own Save, below,
+	// is what persists it, together with the result it belongs to. If that
+	// Save fails the park stays on disk, which is correct: that is the one
+	// case where it is still the only copy of a secret for a bill the Hub
+	// really did create (reportUnsavedResult prints the handoff string, but
+	// only if this process lives long enough to print it).
+	parked.release()
 	// The remainder is a brand-new wallet the same Hub split off entry, so
 	// it inherits entry's verified minter (see sharedMinter) — without this
 	// a split remainder silently fell out of cash-selection's same-minter

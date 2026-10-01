@@ -173,6 +173,17 @@ func newWalletShowCmd() *cobra.Command {
 				status += ", " + cashModeLabel(e)
 				fmt.Printf("  %d) %s   received %s   %s\n", i+1, amount, formatReceivedDate(e.ReceivedAt), status)
 			}
+			// Last, and only when there is something to say: an interrupted
+			// `--to cash` send whose destination secret was written ahead of
+			// the call but never reconciled. This is the one place that
+			// secret is ever readable again, so it is worth pushing past the
+			// routine summary above — see unreconciledDestinationParks.
+			if parks := unreconciledDestinationParks(l); len(parks) > 0 {
+				fmt.Printf("\nUnfinished cash sends: %d\n", len(parks))
+				for _, line := range parks {
+					fmt.Println(line)
+				}
+			}
 			return nil
 		},
 	}
