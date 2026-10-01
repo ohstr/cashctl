@@ -26,10 +26,10 @@ commands run unattended). `NO_COLOR` disables ANSI color on stderr.
 | `cashctl connect add <name> <connection>` / `list` / `rm <name>` | Register/list/remove any other NWC connection |
 | `cashctl decode <string> [--check]` | Inspect any cash token, Circle Hub connection (`circlehub1...`), or NWC URI locally, no network call; `--check` opts into a read-only Hub check (cash token: matching recipient; circle hub: can we join) |
 | `cashctl receive <token>` | Decode a cash token, print its details, then cross-check it against the Cash Hub before adding it to your wallet — refuses anything that doesn't check out. A cash-mode token's `cash_secret` must be embedded, `<token>#<cash_secret>` (NIP-CASH's combined cash-mode slice presentation) — pasted bare, it degrades to a read-only report instead of erroring. A saved cash-mode receipt is then offered automatic protecting: re-keyed under a fresh secret (and merged with any other same-issuer holding), reported under `"secured"` |
-| `cashctl redeem [wallet] [--token <id>...] [--all] [--invoice <bolt11>] [--as <credential>] [--transport auto\|private\|standard]` | Redeem held token(s) into a wallet (positional, or `--into`) or a raw invoice. `--token` is repeatable/comma-separated and `--all` takes every held token; each token is paid into its own invoice, so `--invoice` accepts only one. Every selected token is attempted: one failing never cancels or hides the others (see **Partial success**). `--transport` picks the wire path — `standard` (default) is one event per token; `auto` batches each hub's redeems into one relay event where the hub offers it |
+| `cashctl redeem [wallet] [--token <id>...] [--all] [--invoice <bolt11>] [--as <credential>]` | Redeem held token(s) into a wallet (positional, or `--into`) or a raw invoice. `--token` is repeatable/comma-separated and `--all` takes every held token; each token is paid into its own invoice, so `--invoice` accepts only one. Every selected token is attempted: one failing never cancels or hides the others (see **Partial success**). Redeems travel over the private transport only and are batched automatically: every token against the same hub goes out in one relay event, with no flag and no fallback |
 | `cashctl transfer [amount] [target] [--as <credential>]` | Send a held token — amount and target are positional (either order), or `--to`/`--amount`. An amount with no target defaults to a cash note (a `<token>#<secret>` string to hand anyone); neither one is a usage error. With an amount and no `--token`, cash selection picks which held token(s) reach it exactly (auto-consolidating a same-minter subset first if no single token covers it) instead of just picking one token to act on |
 | `cashctl consolidate [id...] [--to <target>]` | Merge several held tokens into one — positional IDs, or `--sources`, for exact control (IDs discoverable via `wallet show --json`; plain-text `wallet show` never prints them). With neither, auto-groups held tokens by minter (only same-minter tokens can merge) and consolidates each group with 2+ tokens — one group proceeds directly, several prompt interactively (or all process under `--json`/`--yes`). Every chosen group is attempted: one failing never cancels or hides the others (see **Partial success**) |
-| `cashctl cash list-recipients [--token <id>]` | Your allocation + co-recipients of a held token (network) |
+| `cashctl cash status [--token <id>]` | Your allocation + co-recipients of a held token (network) |
 | `cashctl cash receive` / `redeem` / `transfer` / `consolidate` | Same as the top-level forms above — the canonical, fully-namespaced versions |
 | `cashctl version` | Print the cashctl version |
 
@@ -67,7 +67,7 @@ always, never stdout — a script parsing stdout never has to distinguish a
 success shape from a failure shape on the same stream. `--json`, `-c/
 --connection`, `--yes`, and `--config-dir` are global flags declared once
 on the root command — except `-c/--connection`, which `receive`,
-`transfer`, `consolidate`, `cash list-recipients`, and `decode` reject
+`transfer`, `consolidate`, `cash status`, and `decode` reject
 outright (`usage`, exit 2): none of them ever dial a registered wallet, so
 there's nothing for it to override. `--yes` (or `--json`, which implies
 it) skips confirmation prompts. Every command is JSON-only-on-request

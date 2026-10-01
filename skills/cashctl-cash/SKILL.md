@@ -1,12 +1,12 @@
 ---
 name: cashctl-cash
-description: Receive a NIP-CASH token into your local wallet (`cashctl receive`), redeem a held token into a Lightning wallet or raw invoice (`cashctl redeem`), send a held token to someone else (`cashctl transfer`), merge several held tokens into one (`cashctl consolidate`), and check its Hub-side recipients (`cashctl cash list-recipients`). For local-only inspection of a token string itself (no network call, including mint-signature verification), see `cashctl decode` in `skills/cashctl-wallet/SKILL.md`. Use whenever an agent is handed a lokicash1... (or other cash-token-family) string, needs to cash it out to Lightning, needs to forward it to another identity, or needs to combine multiple small tokens.
+description: Receive a NIP-CASH token into your local wallet (`cashctl receive`), redeem a held token into a Lightning wallet or raw invoice (`cashctl redeem`), send a held token to someone else (`cashctl transfer`), merge several held tokens into one (`cashctl consolidate`), and check its Hub-side recipients (`cashctl cash status`). For local-only inspection of a token string itself (no network call, including mint-signature verification), see `cashctl decode` in `skills/cashctl-wallet/SKILL.md`. Use whenever an agent is handed a lokicash1... (or other cash-token-family) string, needs to cash it out to Lightning, needs to forward it to another identity, or needs to combine multiple small tokens.
 license: Unlicense
 ---
 
 <!-- Mirrors ohstr/cashctl's cmd/cash_receive.go, cmd/cash_redeem.go,
 cmd/cash_transfer.go, cmd/cash_consolidate.go, and cmd/cash_inspect.go
-(list-recipients) as of writing. See skills/cashctl-wallet/SKILL.md for
+(cash status) as of writing. See skills/cashctl-wallet/SKILL.md for
 cmd/decode.go. Self-contained by design — update by hand if flags/schemas
 change. -->
 
@@ -21,7 +21,7 @@ cashctl receive lokicash1...#deadbeef --json                   # cash-mode: the 
 
 Always a network call: receive prints the token's details, then
 cross-checks it against the Cash Hub (the same `list_recipients` call
-`cashctl cash list-recipients` makes) before saving anything. Anything
+`cashctl cash status` makes) before saving anything. Anything
 that doesn't check out — no matching recipient on the Cash Hub, or the
 Cash Hub can't be reached at all — is refused outright; nothing gets
 added to your wallet. Pasting a Circle Hub (`circlehub1...`) or Cash Hub
@@ -112,25 +112,25 @@ anything. A `preimage` is the only proof a given payout happened, so if
 recording the run locally fails afterwards, every preimage is named in the
 error message for reconciliation.
 
-**Wire path (`--transport`).** `standard` (the **default**) sends one event
-per token, exactly as before batching existed. `auto` batches for every hub
-that announces a batch inbox and falls back per token for the rest;
-`private` refuses to fall back, so a test can be certain which path ran.
+**Wire path.** There is nothing to choose. `redeem`, `transfer`,
+`consolidate` and `cash_status` are served over the private transport only,
+and cashctl batches automatically: every token redeemed against the same hub
+in one run travels in one relay event, whatever the count. No flag, no
+fallback, no per-token path to opt into.
 
-The default is deliberately conservative: a bill cashctl derived itself —
-a consolidate's merged output, a split's remainder — inherits its sources'
-minter rather than carrying its own mint signature, and against a live hub
-such a bill's items come back **omitted** for a reason not yet identified.
-Omission is information-free, so that reaches you as "may or may not have
-been redeemed", which is not a default worth having on a money path. Opt in
-with `--transport auto` once you know your bills carry their own mint
-signatures. Batching
-matters for privacy, not just round trips: on the standard transport each
-request is tagged with its own token's wallet pubkey, so redeeming forty
-tokens publishes forty events seconds apart and ties them together for
-anyone watching the relay. Both halves of a redeem travel this way — the
-fee quote (`cash_status`) and the spend (`cash_redeem`) share one session
-per hub, so neither republishes the set the other is hiding.
+Batching is why the transport exists, and it is a privacy property rather
+than a round-trip saving. A per-token request is tagged with that token's own
+wallet pubkey, so redeeming forty tokens that way publishes forty events
+seconds apart and ties them together for anyone watching the relay. Both
+halves of a redeem share one session per hub — the fee quote (`cash_status`)
+and the spend (`cash_redeem`) — so neither republishes the set the other is
+hiding.
+
+This also means an unsigned bill cannot be spent at all: the mint signature
+is the only thing a token carries that identifies its minting hub, and so the
+only thing a hub's announcement can be verified against. Hubs now sign every
+mint with their Lightning identity, and a mint that cannot be signed fails
+outright rather than producing a bill nobody can redeem.
 
 A batched token whose hub returns **no answer** is reported as `failed`
 with code `conflict`, and that case needs care: an omission is deliberately
@@ -138,7 +138,7 @@ information-free (it is the same answer for a token the hub does not hold,
 a proof that did not verify, and a method it will not serve — telling them
 apart would make batching an oracle for which tokens a hub holds), so it is
 indistinguishable from a redemption whose reply was lost. Never retry it
-blind; check with `cashctl cash list-recipients --token <id>` first.
+blind; check with `cashctl cash status --token <id>` first.
 
 If you hold more than one token and none of
 `--token`/`--all`/`--json`/`--yes` is given, `redeem` (and
@@ -274,10 +274,14 @@ exit nonzero.
 fresh, anonymous cash note instead (same keyword `transfer` uses) —
 requires a Hub that accepts a cash-mode `cash_consolidate` target.
 
-## `cashctl cash list-recipients`
+## `cashctl cash status`
+
+Renamed from `cash list-recipients`, which still works as an alias — the command
+calls `cash_status` and nothing else, so the old name described a method that no
+longer exists.
 
 ```sh
-cashctl cash list-recipients --token tok-a1b2 --json  # network call — your allocation + co-recipients
+cashctl cash status --token tok-a1b2 --json  # network call — your allocation + co-recipients
 ```
 
 For mint-signature verification or a plain field dump of a token
