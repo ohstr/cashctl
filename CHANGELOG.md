@@ -1,8 +1,11 @@
 # Changelog
 
-## [0.5.0]
+## [Unreleased]
 
 - `transfer --to cash` and `consolidate --to cash` write the destination bill's cash secret to the ledger *before* placing the call, not after the reply. That secret is generated locally and only a one-way commitment of it ever reaches the Hub, so a Ctrl-C or crash while the request was in flight used to destroy the only copy in existence and leave a bill that was funded and unspendable by anyone. `wallet show` now lists any such unfinished send, with the secret, so an interrupted one can still be recovered with the Hub's help. (Audit finding D-CLI-1; the same discipline `wallet protect` has had since 0.3.0.)
+
+## [0.5.0]
+
 - `--yes` no longer turns on `decode`'s and `receive`'s "verify online" check. That prompt is an opt-in to a network call you didn't ask for, not a confirmation, so skipping it now takes its default (no). `--check` still opts in. ([#20](https://github.com/ohstr/cashctl/pull/20))
 - `cashctl join <hub> 0` says 0 isn't a spend cap instead of claiming the amount is missing. There is no "0 means unlimited" convention here. ([#20](https://github.com/ohstr/cashctl/pull/20))
 
