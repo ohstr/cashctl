@@ -109,15 +109,16 @@ func protectCashReceipt(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entr
 		return protectedStatus{Status: "failed", Error: err.Error()}, entry
 	}
 
-	// The no-merge case gets its own, write-ahead-safe path (see its own
-	// doc comment on why) rather than nipcashclient.RekeyCashSlice.
-	// The merge case still needs RekeyCashSlice's own multi-step
-	// composite (an interim reassignment onto a pubkey identity, THEN a
-	// consolidate) — its own fresh secret is generated deep inside that
-	// call, not accessible to persist ahead of time without reimplementing
-	// the composite here, which would risk the exact class of interop bug
-	// this same call already has server-side (see docs/private's audit of
-	// this Hub's "decrypt delivery" failures on this path).
+	// The no-merge case gets its own path (see protectRekeyOnly's doc comment);
+	// the merge case needs RekeyCashSlice's multi-step composite — an interim
+	// reassignment onto a pubkey identity, THEN a consolidate.
+	//
+	// Both are now write-ahead safe. They were not: RekeyCashSlice used to generate
+	// the destination secret deep inside itself, where nothing could persist it ahead
+	// of the call, and that is why this comment used to explain the asymmetry instead
+	// of fixing it. The SDK now takes the target as a parameter precisely so a caller
+	// can write the secret down first, so this path does the same thing
+	// protectRekeyOnly does.
 	if len(consolidateWith) == 0 {
 		return protectRekeyOnly(cmd, l, entry, jsonMode)
 	}
@@ -135,6 +136,26 @@ func protectCashReceipt(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entr
 		printProtectFailure(jsonMode, err)
 		return protectedStatus{Status: "failed", Error: err.Error()}, entry
 	}
+	// Minted here and persisted BEFORE the call, the same write-ahead discipline
+	// protectRekeyOnly uses: only a one-way commitment crosses the wire, so placing
+	// the call must not be the difference between "the secret is on disk" and "the
+	// secret existed only in this process until it died".
+	//
+	// Parked on the SOURCE entry, although the secret belongs to a wallet that does
+	// not exist yet. That is the only row on disk at this point, and it is the row
+	// whose consolidation produces that wallet, so it is where a later reconciliation
+	// would look. Cleared on success, where result.NewSecret carries the same value
+	// onto the new entry.
+	bt := nipcash.NewCashTarget()
+	entry.PendingCashSecret = bt.Secret()
+	if saveErr := l.Save(); saveErr != nil {
+		// Nothing has reached the Hub yet, so entry.CashSecret is still the only real
+		// secret — an ordinary failure.
+		entry.PendingCashSecret = ""
+		printProtectFailure(jsonMode, saveErr)
+		return protectedStatus{Status: "failed", Error: saveErr.Error()}, entry
+	}
+
 	params := nipcashclient.RekeyCashSliceParams{
 		CashSlice: nipcash.Source{
 			WalletPubkey: entry.WalletPubkey,
@@ -144,6 +165,7 @@ func protectCashReceipt(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entr
 		InterimIdentity:   nipcash.Pubkey(myPubHex),
 		InterimCredential: cred,
 		ConsolidateWith:   consolidateWith,
+		NewTarget:         bt,
 	}
 
 	var dialErr bool
@@ -196,8 +218,13 @@ func protectCashReceipt(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entr
 			reportErr := err
 			if isAmbiguousDeliveryErr(err) {
 				if gone := reconcileAmbiguousSources(cmd, l, consolidateWithIDs); len(gone) > 0 {
-					reportErr = fmt.Errorf("%w (confirmed consumed on the Hub despite the unreadable reply: %s — marked accordingly so they won't be offered again, though the merged result itself could not be recovered)",
-						err, strings.Join(gone, ", "))
+					// No longer "could not be recovered": the destination secret was
+					// minted here and is on disk, parked on this entry, so a merged
+					// wallet the Hub really did create can still be opened once its
+					// token is recovered from the Hub. Necessary, not sufficient —
+					// without the secret it was impossible even with the Hub's help.
+					reportErr = fmt.Errorf("%w (confirmed consumed on the Hub despite the unreadable reply: %s — marked accordingly so they won't be offered again; the merged wallet's own secret is preserved on entry %s, so it can still be opened if the Hub did create it)",
+						err, strings.Join(gone, ", "), entry.ID)
 				} else {
 					reportErr = warnAmbiguousDelivery(err, consolidateWithIDs)
 				}
@@ -243,6 +270,9 @@ func protectCashReceipt(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entr
 		printProtectFailure(jsonMode, addErr)
 		return protectedStatus{Status: "failed", Error: addErr.Error()}, entry
 	}
+	// The destination secret is now the new entry's own CashSecret, so the parked
+	// copy has done its job.
+	entry.PendingCashSecret = ""
 	l.AppendHistory("secure", fmt.Sprintf("combined with %d other holding(s) from the same issuer into one %s note", len(consolidateWithIDs), output.FormatAmount(int64(result.AmountMillis))))
 	if err := l.Save(); err != nil {
 		printProtectFailure(jsonMode, err)
