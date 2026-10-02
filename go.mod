@@ -6,7 +6,7 @@ require (
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.0
 	github.com/flokiorg/go-flokicoin v0.26.1-alpha
 	github.com/ohstr/ncli v0.6.0
-	github.com/ohstr/nmilat v0.4.0
+	github.com/ohstr/nmilat v0.5.0-rc.2
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
 	golang.org/x/term v0.45.0
@@ -33,13 +33,3 @@ require (
 	modernc.org/memory v1.12.1 // indirect
 	sigs.k8s.io/yaml v1.4.0 // indirect
 )
-
-// TEMPORARY — do not release with this in place.
-//
-// Points at the local nmilat checkout so cashctl can be built against the SDK changes it
-// needs and which are committed there but untagged: the batch API for the private
-// transport, the available_mloki -> available_millis rename, and the codec requiring at
-// least one non-empty relay in every credential.
-//
-// Remove this and pin a real version once nmilat is released.
-replace github.com/ohstr/nmilat => /u/flzpace/xgit/orgs/ohstr/nmilat
