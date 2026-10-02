@@ -499,7 +499,6 @@ func executeRedeems(
 	}
 }
 
-
 // redeemStep labels a spinner with which bill of how many it is working on, so a
 // multi-bill run does not sit on an unchanging "Redeeming..." with no sense of
 // progress. Single-bill runs keep the original bare label.

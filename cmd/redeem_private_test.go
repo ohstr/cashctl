@@ -272,4 +272,3 @@ func TestApplyRedeemResults_UnknownIDIsIgnored(t *testing.T) {
 		t.Errorf("ledger status = %q, want untouched", l.Entries[0].Status)
 	}
 }
-

@@ -181,8 +181,8 @@ func cmdToken(a *admin, st *state, args []string) {
 		target = nipcash.Pubkey(toHex(*forPub))
 	}
 	res, err := client.MintCash(ctx, nipcash.MintCashParams{
-		Recipients:    []nipcash.Allocation{nipcash.Send(target, *amount)},
-		Expiry:        time.Duration(*expires) * time.Second,
+		Recipients: []nipcash.Allocation{nipcash.Send(target, *amount)},
+		Expiry:     time.Duration(*expires) * time.Second,
 	})
 	must(err)
 	ag.MintedMloki += *amount

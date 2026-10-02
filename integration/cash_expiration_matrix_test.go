@@ -84,8 +84,8 @@ func mintSignedPubkeyTokenExpiry(t *testing.T, f *fixture, hub adminCreateAppRes
 	defer cancel()
 	cashClient := dialCash(t, ctx, hub.PairingUri)
 	result, err := cashClient.MintCash(ctx, nipcash.MintCashParams{
-		Recipients:    []nipcash.Allocation{nipcash.Send(nipcash.Pubkey(pubkeyHex), amountMillis)},
-		Expiry:        time.Duration(expirySecs) * time.Second,
+		Recipients: []nipcash.Allocation{nipcash.Send(nipcash.Pubkey(pubkeyHex), amountMillis)},
+		Expiry:     time.Duration(expirySecs) * time.Second,
 	})
 	if err != nil {
 		t.Fatalf("mint_cash (expiry=%ds, MintSignature: true): %v", expirySecs, err)
