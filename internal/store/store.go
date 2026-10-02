@@ -187,35 +187,51 @@ var addedColumns = []struct{ table, column, ddl string }{
 // error text — errors.Is has nothing to match here (modernc.org/sqlite
 // doesn't export a typed error for it), and pragma_table_info is the
 // direct, unambiguous way to ask "does this column exist" instead.
+//
+// It runs on one connection under BEGIN IMMEDIATE, exactly as
+// renameColumnsIfNeeded does, so that question and the ADD answering it
+// cannot be split by another process asking it too.
 func addColumnsIfMissing(db *sql.DB) error {
-	present := map[[2]string]bool{}
+	ctx := context.Background()
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = conn.Close() }()
+
+	// Without the write lock, two cashctl processes opening a pre-column
+	// ledger within the same instant both read the column as missing and both
+	// ALTER it in: the loser fails on "duplicate column name" and Open
+	// reports a migration error for a ledger that is, by then, correctly
+	// migrated. busy_timeout(5000) (see Open) instead parks the loser until
+	// the winner commits, after which it sees the column and skips it.
+	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+		return fmt.Errorf("taking the ledger write lock: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = conn.ExecContext(ctx, `ROLLBACK`)
+		}
+	}()
+
 	for _, c := range addedColumns {
-		rows, err := db.Query(`SELECT name FROM pragma_table_info(?)`, c.table)
+		has, err := columnExists(ctx, conn, c.table, c.column)
 		if err != nil {
-			return fmt.Errorf("inspecting table %s: %w", c.table, err)
-		}
-		for rows.Next() {
-			var name string
-			if err := rows.Scan(&name); err != nil {
-				_ = rows.Close()
-				return err
-			}
-			present[[2]string{c.table, name}] = true
-		}
-		if err := rows.Err(); err != nil {
-			_ = rows.Close()
 			return err
 		}
-		_ = rows.Close()
-	}
-	for _, c := range addedColumns {
-		if present[[2]string{c.table, c.column}] {
+		if has {
 			continue
 		}
-		if _, err := db.Exec(c.ddl); err != nil {
+		if _, err := conn.ExecContext(ctx, c.ddl); err != nil {
 			return fmt.Errorf("adding %s.%s: %w", c.table, c.column, err)
 		}
 	}
+
+	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
+		return fmt.Errorf("committing the ledger column add: %w", err)
+	}
+	committed = true
 	return nil
 }
 

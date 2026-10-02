@@ -3,6 +3,7 @@
 ## [0.6.0-rc.1]
 
 - `transfer --to cash` and `consolidate --to cash` write the destination bill's cash secret to the ledger *before* placing the call, not after the reply. That secret is generated locally and only a one-way commitment of it ever reaches the Hub, so a Ctrl-C or crash while the request was in flight used to destroy the only copy in existence and leave a bill that was funded and unspendable by anyone. `wallet show` now lists any such unfinished send, with the secret, so an interrupted one can still be recovered with the Hub's help. (Audit finding D-CLI-1; the same discipline `wallet protect` has had since 0.3.0.)
+- Two `cashctl` processes that open a ledger predating this release's new column at the same instant no longer race: both read the column as missing, both added it, and the loser failed with `duplicate column name` for a ledger the winner had just migrated correctly. The column add now takes the same write lock the 0.4.0 column rename already took.
 
 ## [0.5.0]
 
