@@ -70,9 +70,9 @@ func newConnectAddCmd() *cobra.Command {
 				output.PrintJSON(map[string]any{"name": name, "default": setDefault})
 				return nil
 			}
-			fmt.Printf("Saved connection: %s.\n", name)
+			output.Printf("Saved connection: %s.\n", name)
 			if setDefault {
-				fmt.Printf("Default wallet set to %s.\n", name)
+				output.Printf("Default wallet set to %s.\n", name)
 			}
 			return nil
 		},
@@ -95,7 +95,7 @@ func newConnectListCmd() *cobra.Command {
 				return nil
 			}
 			if s.IsEmpty() {
-				fmt.Println("No connections registered yet. Run `cashctl init` or `cashctl connect add`.")
+				output.Println("No connections registered yet. Run `cashctl init` or `cashctl connect add`.")
 				return nil
 			}
 			for _, c := range s.Connections {
@@ -103,7 +103,7 @@ func newConnectListCmd() *cobra.Command {
 				if c.Name == s.Default {
 					marker = " [default]"
 				}
-				fmt.Printf("%s%s\n", c.Name, marker)
+				output.Printf("%s%s\n", c.Name, marker)
 			}
 			return nil
 		},
@@ -140,7 +140,7 @@ func runWalletUse(cmd *cobra.Command, args []string) error {
 		output.PrintJSON(map[string]any{"default": args[0]})
 		return nil
 	}
-	fmt.Printf("Default wallet set to %s.\n", args[0])
+	output.Printf("Default wallet set to %s.\n", args[0])
 	return nil
 }
 
@@ -165,7 +165,7 @@ func newConnectRmCmd() *cobra.Command {
 				output.PrintJSON(map[string]any{"removed": args[0]})
 				return nil
 			}
-			fmt.Printf("Removed %s.\n", args[0])
+			output.Printf("Removed %s.\n", args[0])
 			return nil
 		},
 	}

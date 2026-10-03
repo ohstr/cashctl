@@ -220,6 +220,12 @@ type Ledger struct {
 	// behavior — a fresh, never-persisted Ledger has nothing to lose by
 	// being written in full.
 	loaded map[string]Entry
+	// loadedVersions is each entry's optimistic-concurrency token as of Load,
+	// keyed by id. Deliberately NOT a field on Entry: it is a concurrency
+	// token, not ledger data, and nothing outside this file has any business
+	// reading or setting it. Absent means 0, which is also what a row written
+	// before the version column existed reads as.
+	loadedVersions map[string]int64
 	// historyLoaded is len(History) as of Load — Save only appends rows
 	// beyond it. History has no natural per-row key to diff by the way
 	// Entries has ID, so "only append the tail this process actually
@@ -254,6 +260,7 @@ func load() (*Ledger, error) {
 	defer func() { _ = db.Close() }()
 
 	l := &Ledger{}
+	versions := map[string]int64{}
 	// ORDER BY rowid (SQLite's own implicit insertion-order column — the
 	// `id TEXT PRIMARY KEY` above doesn't replace it) rather than
 	// received_at: that timestamp only has 1-second precision, so two
@@ -264,7 +271,8 @@ func load() (*Ledger, error) {
 	rows, err := db.Query(`SELECT id, token, wallet_pubkey, minter_pubkey, secret, relay_urls,
 		identity_required, amount_millis, received_at, verified, status, cash_secret,
 		connection_key_platform, connection_key_external_id, attestation_event_id, ia_pubkey,
-		pending_cash_secret, expires_at, cash_protection, pending_destination_cash_secret
+		pending_cash_secret, expires_at, cash_protection, pending_destination_cash_secret,
+		COALESCE(version, 0)
 		FROM entries ORDER BY rowid`)
 	if err != nil {
 		return nil, fmt.Errorf("cashctl.db: reading entries: %w", err)
@@ -273,10 +281,11 @@ func load() (*Ledger, error) {
 		var e Entry
 		var relayURLs, pendingCashSecret, cashProtection, pendingDestCashSecret sql.NullString
 		var identityRequired, amountMillis, expiresAt sql.NullInt64
+		var version int64
 		if err := rows.Scan(&e.ID, &e.Token, &e.WalletPubkey, &e.MinterPubkey, &e.Secret, &relayURLs,
 			&identityRequired, &amountMillis, &e.ReceivedAt, &e.Verified, &e.Status, &e.CashSecret,
 			&e.ConnectionKeyPlatform, &e.ConnectionKeyExternalID, &e.AttestationEventID, &e.IAPubkey,
-			&pendingCashSecret, &expiresAt, &cashProtection, &pendingDestCashSecret); err != nil {
+			&pendingCashSecret, &expiresAt, &cashProtection, &pendingDestCashSecret, &version); err != nil {
 			_ = rows.Close()
 			return nil, fmt.Errorf("cashctl.db: reading entries: %w", err)
 		}
@@ -308,6 +317,7 @@ func load() (*Ledger, error) {
 			e.ExpiresAt = &v
 		}
 		l.Entries = append(l.Entries, e)
+		versions[e.ID] = version
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("cashctl.db: reading entries: %w", err)
@@ -334,6 +344,7 @@ func load() (*Ledger, error) {
 	for _, e := range l.Entries {
 		l.loaded[e.ID] = e
 	}
+	l.loadedVersions = versions
 	l.historyLoaded = len(l.History)
 	return l, nil
 }
@@ -390,8 +401,19 @@ func (l *Ledger) save() error {
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	// newVersions is the baseline this Save is about to create, applied only
+	// once the transaction commits. Save CAN be called twice on one *Ledger —
+	// the D-CLI-1 write-ahead path parks a destination secret, places the wire
+	// call, then saves again — so leaving loadedVersions at its Load value would
+	// make that second save compare against a version its own first save had
+	// already bumped, and report a conflict with no second process involved.
+	newVersions := make(map[string]int64, len(l.Entries))
 	for _, e := range l.Entries {
+		expectedVersion := l.loadedVersions[e.ID]
+		_, known := l.loaded[e.ID]
 		if prior, ok := l.loaded[e.ID]; ok && entriesEqual(prior, e) {
+			// Untouched, so not written and its version does not move.
+			newVersions[e.ID] = expectedVersion
 			continue
 		}
 		var relayURLs sql.NullString
@@ -418,11 +440,15 @@ func (l *Ledger) save() error {
 		if e.ExpiresAt != nil {
 			expiresAt = sql.NullInt64{Int64: *e.ExpiresAt, Valid: true}
 		}
-		_, err := tx.Exec(`INSERT INTO entries (id, token, wallet_pubkey, minter_pubkey, secret, relay_urls,
+		// expectedVersion (computed above) is this row's version as of Load, 0 for
+		// a row this process is adding. The WHERE below makes the update
+		// conditional on it, so a row another process changed in between is left
+		// alone rather than overwritten (D-CLI-4).
+		res, err := tx.Exec(`INSERT INTO entries (id, token, wallet_pubkey, minter_pubkey, secret, relay_urls,
 			identity_required, amount_millis, received_at, verified, status, cash_secret,
 			connection_key_platform, connection_key_external_id, attestation_event_id, ia_pubkey,
-			pending_cash_secret, expires_at, cash_protection, pending_destination_cash_secret)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			pending_cash_secret, expires_at, cash_protection, pending_destination_cash_secret, version)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
 			ON CONFLICT(id) DO UPDATE SET
 				token = excluded.token, wallet_pubkey = excluded.wallet_pubkey,
 				minter_pubkey = excluded.minter_pubkey, secret = excluded.secret,
@@ -436,11 +462,14 @@ func (l *Ledger) save() error {
 				pending_cash_secret = excluded.pending_cash_secret,
 				expires_at = excluded.expires_at,
 				cash_protection = excluded.cash_protection,
-				pending_destination_cash_secret = excluded.pending_destination_cash_secret`,
+				pending_destination_cash_secret = excluded.pending_destination_cash_secret,
+				version = COALESCE(entries.version, 0) + 1
+			WHERE COALESCE(entries.version, 0) = ?`,
 			e.ID, e.Token, e.WalletPubkey, e.MinterPubkey, e.Secret, relayURLs,
 			identityRequired, amountMillis, e.ReceivedAt, e.Verified, e.Status, e.CashSecret,
 			e.ConnectionKeyPlatform, e.ConnectionKeyExternalID, e.AttestationEventID, e.IAPubkey,
-			e.PendingCashSecret, expiresAt, e.CashProtection, e.PendingDestinationCashSecret)
+			e.PendingCashSecret, expiresAt, e.CashProtection, e.PendingDestinationCashSecret,
+			expectedVersion)
 		if err != nil {
 			// entries.id collisions are handled by ON CONFLICT above — the
 			// only other constraint this table has is token's own UNIQUE,
@@ -458,6 +487,22 @@ func (l *Ledger) save() error {
 			}
 			return fmt.Errorf("cashctl.db: saving entry %s: %w", e.ID, err)
 		}
+		// Zero rows means the DO UPDATE's WHERE did not match, i.e. the row's
+		// version moved since Load. Checked only for a row this process LOADED:
+		// for a row it is adding, an id conflict is effectively unreachable (ids
+		// are freshly generated; the real duplicate-receive collision is token's
+		// own UNIQUE, handled as ErrAlreadyHeld above), and treating that path as
+		// a conflict could only produce a spurious one.
+		if known {
+			n, raErr := res.RowsAffected()
+			if raErr == nil && n == 0 {
+				return fmt.Errorf("%w (entry %s)", ErrConcurrentUpdate, e.ID)
+			}
+			newVersions[e.ID] = expectedVersion + 1
+		} else {
+			// Inserted with version 0 by the VALUES clause above.
+			newVersions[e.ID] = 0
+		}
 	}
 
 	if l.historyLoaded < 0 || l.historyLoaded > len(l.History) {
@@ -473,14 +518,16 @@ func (l *Ledger) save() error {
 		return err
 	}
 
-	// Re-baseline against what was just committed — a no-op for every
-	// current caller (each only calls Save once per process), but keeps a
-	// hypothetical second Save on the same *Ledger correct rather than
-	// silently relying on that never happening.
+	// Re-baseline against what was just committed. This is NOT hypothetical, and
+	// the comment here used to say it was ("a no-op for every current caller"):
+	// the D-CLI-1 write-ahead path saves twice on one *Ledger, so the versions
+	// have to move with the rows or that second save conflicts with its own
+	// first one.
 	l.loaded = make(map[string]Entry, len(l.Entries))
 	for _, e := range l.Entries {
 		l.loaded[e.ID] = e
 	}
+	l.loadedVersions = newVersions
 	l.historyLoaded = len(l.History)
 	return nil
 }
@@ -535,6 +582,20 @@ func isSQLiteConstraint(err error) bool {
 
 // ErrAlreadyHeld is returned by Add when token has already been recorded.
 var ErrAlreadyHeld = errors.New("this token is already in your ledger")
+
+// ErrConcurrentUpdate is returned by Save when a row it meant to update was
+// changed by another process between this process's Load and this Save.
+//
+// Save is diff-based, so this does NOT fire for the ordinary case of two
+// processes touching different entries — only when both touched the SAME one,
+// which is the window that used to lose one of the two transitions silently
+// (D-CLI-4). Losing it silently is the part that mattered: the state at stake is
+// a bill's held/spent status and its pending secrets.
+//
+// Deliberately NOT routed through store.WithBusyRetry. This is not SQLITE_BUSY —
+// retrying replays the same stale version and fails identically every time. The
+// caller has to re-Load to make progress, which is why the message says so.
+var ErrConcurrentUpdate = errors.New("this wallet's local record was changed by another cashctl process while this command was running; nothing was overwritten — re-run the command")
 
 // FindByToken looks up an entry by its original token string — used to
 // reject re-receiving the same token twice.

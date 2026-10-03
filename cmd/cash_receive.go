@@ -103,9 +103,9 @@ func runCashReceive(cmd *cobra.Command, args []string) error {
 			checkResult, checkErr := checkClaimOnce(cmd, input, embeddedSecret, tok)
 			if !jsonMode {
 				if checkErr == nil {
-					fmt.Printf("check: matches (%s)\n", output.FormatAmount(int64(checkResult.AmountMillis)))
+					output.Printf("check: matches (%s)\n", output.FormatAmount(int64(checkResult.AmountMillis)))
 				} else {
-					fmt.Printf("check: %s\n", checkErr)
+					output.Printf("check: %s\n", checkErr)
 				}
 			}
 		}
@@ -113,8 +113,8 @@ func runCashReceive(cmd *cobra.Command, args []string) error {
 			output.PrintJSON(map[string]any{"received": false, "reason": "no_embedded_secret"})
 			return nil
 		}
-		fmt.Println()
-		fmt.Println(`No spending secret — ask for the full "token#secret" string, or run "cashctl decode".`)
+		output.Println()
+		output.Println(`No spending secret — ask for the full "token#secret" string, or run "cashctl decode".`)
 		return nil
 	}
 
@@ -189,7 +189,7 @@ func runCashReceive(cmd *cobra.Command, args []string) error {
 	}
 
 	if !jsonMode {
-		fmt.Printf("Received %s.\n", output.FormatAmount(int64(result.AmountMillis)))
+		output.Printf("Received %s.\n", output.FormatAmount(int64(result.AmountMillis)))
 	}
 
 	// result.IsCash, not the pre-check guess above.
