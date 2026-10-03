@@ -972,7 +972,7 @@ func pickHeldToken(cmd *cobra.Command, held []ledger.Entry) (*ledger.Entry, erro
 // doc comment on why only a *reference* is stored); everything else
 // defaults to the local identity.
 func resolveCredential(cmd *cobra.Command, entry *ledger.Entry) (nipcash.Credential, error) {
-	if as, _ := cmd.Flags().GetString("as"); as != "" {
+	if as := asCredentialValue(cmd); as != "" {
 		cred, err := credential.ParseCash(as)
 		if err != nil {
 			return nil, output.InvalidInputError(cmd, output.RedactSecretInput(as), err)

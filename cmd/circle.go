@@ -127,7 +127,7 @@ func runCircleJoin(cmd *cobra.Command, args []string) error {
 	maxAmountFlag, _ := cmd.Flags().GetString("max-amount")
 	expiry, _ := cmd.Flags().GetDuration("expiry")
 	budgetRenewal, _ := cmd.Flags().GetString("budget-renewal")
-	asFlag, _ := cmd.Flags().GetString("as")
+	asFlag := asCredentialValue(cmd)
 
 	positionalHub, positionalMaxAmount := disambiguateJoinArgs(args)
 
