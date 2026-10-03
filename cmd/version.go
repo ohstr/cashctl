@@ -1,8 +1,6 @@
 package cmd
 
 import (
-	"fmt"
-
 	"github.com/spf13/cobra"
 
 	"github.com/ohstr/cashctl/internal/output"
@@ -24,7 +22,7 @@ func newVersionCmd() *cobra.Command {
 				output.PrintJSON(map[string]any{"version": Version})
 				return nil
 			}
-			fmt.Println(Version)
+			output.Println(Version)
 			return nil
 		},
 	}

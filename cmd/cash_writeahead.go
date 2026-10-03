@@ -141,10 +141,17 @@ func (p parkedCashSecret) release() {
 // excludes by definition.
 //
 // The secret is printed in full, deliberately. cashctl already prints
-// `<token>#<secret>` to stdout on the ordinary success path and on
-// reportUnsavedResult's recovery path, with the same "save this now" framing —
-// so this is not a new class of exposure, and the alternative is a value no
-// user can act on.
+// `<token>#<secret>` on the ordinary success path with the same "save this now"
+// framing — so this is not a new class of exposure, and the alternative is a
+// value no user can act on.
+//
+// This comment used to cite reportUnsavedResult's recovery path as a second
+// precedent for printing it. That was false: until D-CLI-6 that path had its
+// secret removed by wrapCLIError's catch-all RedactSecretInput, whose
+// giftSecretPattern matches `#<64 hex>`, so it printed `#<redacted>` and no
+// secret at all. It genuinely does print one now, through CLIError.Recovery.
+// Worth keeping as a note: the reasoning here was sound but rested on a
+// neighbouring behaviour nobody had tested.
 func unreconciledDestinationParks(l *ledger.Ledger) []string {
 	var lines []string
 	for _, e := range l.Entries {

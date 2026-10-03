@@ -279,7 +279,7 @@ func protectCashReceipt(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entr
 		return protectedStatus{Status: "failed", Error: err.Error()}, entry
 	}
 	if !jsonMode {
-		fmt.Printf("Protected and merged %d holding(s) into %s.\n", len(consolidateWithIDs), output.FormatAmount(int64(result.AmountMillis)))
+		output.Printf("Protected and merged %d holding(s) into %s.\n", len(consolidateWithIDs), output.FormatAmount(int64(result.AmountMillis)))
 	}
 	return protectedStatus{Status: "consolidated", ConsolidatedWith: consolidateWithIDs, FinalEntryID: newEntry.ID}, newEntry
 }
@@ -408,7 +408,7 @@ func protectRekeyOnly(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entry,
 		return protectedStatus{Status: "failed", Error: err.Error(), PendingSecretUnresolved: true}, entry
 	}
 	if !jsonMode {
-		fmt.Println("Protected.")
+		output.Println("Protected.")
 	}
 	return protectedStatus{Status: "rekeyed"}, entry
 }
@@ -447,7 +447,7 @@ func printProtectFailure(jsonMode bool, err error) {
 	if jsonMode {
 		return
 	}
-	fmt.Printf("Received, but protecting failed (%v) — still shared. Retry: `cashctl wallet protect`.\n", err)
+	output.Printf("Received, but protecting failed (%v) — still shared. Retry: `cashctl wallet protect`.\n", err)
 }
 
 // printProtectAmbiguousFailure is printProtectFailure's counterpart for a
@@ -460,7 +460,7 @@ func printProtectAmbiguousFailure(jsonMode bool, err error) {
 	if jsonMode {
 		return
 	}
-	fmt.Printf("Received, but couldn't confirm protecting worked (%v).\nMay have worked anyway — no action needed, your next spend tries both.\n", err)
+	output.Printf("Received, but couldn't confirm protecting worked (%v).\nMay have worked anyway — no action needed, your next spend tries both.\n", err)
 }
 
 // printProtectFailureWrongSecret is printProtectFailure's counterpart for
@@ -472,12 +472,12 @@ func printProtectFailureWrongSecret(jsonMode bool, err error) {
 	if jsonMode {
 		return
 	}
-	fmt.Printf("Received, but the secret doesn't match (%v) — likely wrong/truncated. Ask for the full \"token#secret\" string again.\n", err)
+	output.Printf("Received, but the secret doesn't match (%v) — likely wrong/truncated. Ask for the full \"token#secret\" string again.\n", err)
 }
 
 func printProtectPartialFailure(jsonMode bool, err error) {
 	if jsonMode {
 		return
 	}
-	fmt.Printf("Received — old secret is dead and this is yours alone now; only the merge failed (%v). Nothing at risk; merge later with `cashctl consolidate`.\n", err)
+	output.Printf("Received — old secret is dead and this is yours alone now; only the merge failed (%v). Nothing at risk; merge later with `cashctl consolidate`.\n", err)
 }

@@ -5,8 +5,11 @@
 package output
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"strconv"
@@ -129,10 +132,83 @@ func NonNil[T any](s []T) []T {
 // the operation's actual result, never narration or errors (see
 // EmitError, which always writes to stderr instead).
 func PrintJSON(v any) {
-	enc := json.NewEncoder(os.Stdout)
-	enc.SetIndent("", "  ")
-	if err := enc.Encode(v); err != nil {
+	raw, err := json.Marshal(v)
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "cashctl: failed to encode JSON output: %s\n", err)
+		return
+	}
+	// Sanitized generically, over the encoded tree, rather than per command.
+	// Every --json shape carries Hub-chosen strings somewhere (a label, a relay
+	// URL, an identity_value, a wallet's own error text), and doing it at each
+	// call site is what failed: `decode` sanitized a Hub label for human output
+	// and emitted it raw into --json four lines below, and `cash status`
+	// sanitized identity_type/identity_value while `transfer` put the same two
+	// fields in raw. Doing it here covers every existing shape and every future
+	// one, with no per-command edits to forget.
+	//
+	// Worth being exact about the threat, because the bytes look safe:
+	// encoding/json escapes ESC to \u001b, so stdout is inert until something
+	// parses it — and `jq -r '.label'` is precisely that something, turning it
+	// back into a live escape sequence on the operator's terminal. C1 and bidi
+	// are not escaped at all, so those reach a terminal with no parsing step.
+	if safe, sErr := sanitizeJSONBytes(raw); sErr == nil {
+		raw = safe
+	}
+	// Hardening must never be why a correct result fails to print: on any error
+	// above, raw is still the faithful encoding and goes out as-is.
+	var buf bytes.Buffer
+	if err := json.Indent(&buf, raw, "", "  "); err != nil {
+		buf.Reset()
+		buf.Write(raw)
+	}
+	buf.WriteByte('\n')
+	if _, err := os.Stdout.Write(buf.Bytes()); err != nil {
+		fmt.Fprintf(os.Stderr, "cashctl: failed to write JSON output: %s\n", err)
+	}
+}
+
+// sanitizeJSONBytes re-encodes raw with every string sanitized.
+//
+// UseNumber is not optional. Decoding into `any` without it turns every number
+// into a float64, and an amount is bounded at math.MaxInt64 — so any figure above
+// 2^53 would come back out having silently lost precision. Losing a digit off an
+// amount would be a far worse bug than the one this function exists to fix.
+// json.Number re-marshals as its original literal, so numbers round-trip exactly.
+func sanitizeJSONBytes(raw []byte) ([]byte, error) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var tree any
+	if err := dec.Decode(&tree); err != nil {
+		return nil, err
+	}
+	return json.Marshal(sanitizeJSONValue(tree))
+}
+
+// sanitizeJSONValue walks a decoded JSON tree sanitizing every string, map KEYS
+// included — a hostile key reaches a terminal through `jq` just as readily as a
+// hostile value, and a Hub gets to choose keys wherever a map is keyed by
+// something it supplied.
+//
+// SanitizeText, not Sanitize: a JSON string value may legitimately hold newlines
+// (multi-line advice, a composed recovery line), and a newline cannot rewrite a
+// terminal the way CR and the escape introducers can.
+func sanitizeJSONValue(v any) any {
+	switch t := v.(type) {
+	case string:
+		return SanitizeText(t)
+	case []any:
+		for i, e := range t {
+			t[i] = sanitizeJSONValue(e)
+		}
+		return t
+	case map[string]any:
+		out := make(map[string]any, len(t))
+		for k, e := range t {
+			out[SanitizeText(k)] = sanitizeJSONValue(e)
+		}
+		return out
+	default:
+		return v
 	}
 }
 
@@ -159,16 +235,29 @@ func EmitError(cmd *cobra.Command, err error) {
 		if ce.RawMessage != "" {
 			errMessage = ce.RawMessage
 		}
+		// Sanitized here rather than relying on PrintJSON's generic round trip:
+		// EmitError writes its own encoder to stderr, and these fields are few
+		// and known, so doing it explicitly keeps it auditable. SanitizeText for
+		// the message, which is composed and may legitimately be multi-line
+		// (noWalletConfiguredMsg is three lines); strict Sanitize for the single
+		// discrete values, where a newline would mean nothing good.
 		payload := map[string]any{
-			"error":     errMessage,
-			"code":      string(ce.Code),
+			"error":     SanitizeText(errMessage),
+			"code":      Sanitize(string(ce.Code)),
 			"retryable": retryableCodes[ce.Code],
 		}
 		if ce.Input != "" {
-			payload["input"] = ce.Input
+			payload["input"] = Sanitize(ce.Input)
 		}
 		if ce.NWCCode != "" {
-			payload["nwc_code"] = ce.NWCCode
+			payload["nwc_code"] = Sanitize(ce.NWCCode)
+		}
+		// Sanitized but never capped (see CLIError.Recovery): a truncated
+		// <token>#<secret> is as useless as a redacted one. Sanitize cannot
+		// shorten it — it substitutes rune-for-rune — so this is safe here in a
+		// way a length bound would not be.
+		if ce.Recovery != "" {
+			payload["recovery"] = Sanitize(ce.Recovery)
 		}
 		enc := json.NewEncoder(os.Stderr)
 		enc.SetIndent("", "  ")
@@ -189,7 +278,17 @@ func EmitError(cmd *cobra.Command, err error) {
 	if ce.RawMessage != "" && ce.RawMessage != msg {
 		msg = fmt.Sprintf("%s (%s)", msg, ce.RawMessage)
 	}
-	fmt.Fprintf(os.Stderr, "%s %s\n", errorPrefix(isColorTerminal(os.Stderr)), msg)
+	// SanitizeText at the sink: msg is cashctl's own sentence with a wallet's
+	// own text appended, and until now nothing on this path sanitized either, so
+	// a Hub could rewrite or hide what the user was shown. Newline-permitting,
+	// because several of cashctl's own messages are deliberately multi-line.
+	fmt.Fprintf(os.Stderr, "%s %s\n", errorPrefix(isColorTerminal(os.Stderr)), SanitizeText(msg))
+	// On its own line, with no "Error:" prefix, so it can be selected and
+	// copied as-is — this is the one error whose text the user has to act on
+	// character-for-character.
+	if ce.Recovery != "" {
+		fmt.Fprintf(os.Stderr, "%s\n", Sanitize(ce.Recovery))
+	}
 	// ShowUsage (InvocationError, see its own doc comment): a genuine
 	// malformed-invocation error — wrong arg count, unknown flag/command, a
 	// missing or conflicting flag — follows the "Error: ..." line with the
@@ -237,14 +336,42 @@ func isColorTerminal(w *os.File) bool {
 // control (a Hub's label, a relay URL, get_info fields, an NWC error
 // message, ...) before printing — otherwise it could rewrite or hide
 // what's shown. Replaced, not deleted, so tampering stays visible.
-func Sanitize(s string) string {
+func Sanitize(s string) string { return sanitizeRunes(s, nil) }
+
+// SanitizeText is Sanitize for COMPOSED text — an error message, a JSON string
+// value — rather than for one discrete value. It permits tab and newline, and
+// nothing else extra.
+//
+// It has to exist because cashctl composes multi-line text of its own:
+// noWalletConfiguredMsg is three lines, so running the strict Sanitize over an
+// error message would turn cashctl's own newlines into U+FFFD and wreck the
+// output it was meant to protect.
+//
+// Carriage return is deliberately NOT permitted. A bare CR returns the cursor to
+// the start of the line, so it lets injected text overwrite what was already
+// printed — the same spoofing the escape sequences are stripped for — and nothing
+// in cashctl emits one.
+func SanitizeText(s string) string { return sanitizeRunes(s, isLayoutWhitespace) }
+
+// isLayoutWhitespace is the leniency SanitizeText adds: whitespace that shapes a
+// layout without being able to rewrite one.
+func isLayoutWhitespace(r rune) bool { return r == '\t' || r == '\n' }
+
+// sanitizeRunes substitutes U+FFFD for every unsafe rune that permitted does not
+// explicitly allow. A nil permitted means "allow nothing extra", which is
+// Sanitize's original behaviour exactly.
+func sanitizeRunes(s string, permitted func(rune) bool) string {
 	var b strings.Builder
+	b.Grow(len(s))
 	for _, r := range s {
-		if isUnsafeControlRune(r) {
+		switch {
+		case permitted != nil && permitted(r):
+			b.WriteRune(r)
+		case isUnsafeControlRune(r):
 			b.WriteRune('�')
-			continue
+		default:
+			b.WriteRune(r)
 		}
-		b.WriteRune(r)
 	}
 	return b.String()
 }
@@ -304,4 +431,71 @@ func Notef(jsonMode bool, format string, args ...any) {
 		return
 	}
 	fmt.Fprintf(os.Stderr, format+"\n", args...)
+}
+
+// Printf, Println, Fprintf, Fprint and Fprintln are sanitizing drop-in
+// replacements for their fmt counterparts, and package cmd uses them instead of
+// fmt for anything that reaches a terminal.
+//
+// Why these exist alongside Linef/Notef, which are still the preferred helpers
+// for new code: closing the escape-injection hole structurally means getting
+// every print in cmd/ to go through this package, and there were 105 of them.
+// Rewriting each one into Linef/Notef would have meant touching control flow at
+// every site — most sit inside an `if !jsonMode` guard that Linef subsumes — and
+// changing newline semantics, since Linef appends one and Printf does not. A
+// hundred small semantic edits to output paths is a poor trade for a change whose
+// entire purpose is that nothing about the output changes except sanitization.
+// These make that conversion a rename.
+//
+// They sanitize the ARGUMENTS, not the formatted result: format strings are
+// cashctl's own literals and several deliberately contain \n or \t, which
+// SanitizeText would keep but which there is no reason to run through at all.
+// Strings and errors are sanitized; everything else is passed through, so a %d
+// stays a number.
+//
+// Known limit, same as Linef/Notef: a %v over a struct whose fields carry
+// hostile strings is not covered, because the formatting happens inside fmt. The
+// AST boundary test is what keeps new direct fmt prints out; this is what makes
+// the ones that exist safe.
+func Printf(format string, args ...any) {
+	_, _ = fmt.Fprintf(os.Stdout, format, sanitizeArgs(args)...)
+}
+
+func Println(args ...any) {
+	_, _ = fmt.Fprintln(os.Stdout, sanitizeArgs(args)...)
+}
+
+func Fprintf(w io.Writer, format string, args ...any) {
+	_, _ = fmt.Fprintf(w, format, sanitizeArgs(args)...)
+}
+
+func Fprint(w io.Writer, args ...any) {
+	_, _ = fmt.Fprint(w, sanitizeArgs(args)...)
+}
+
+func Fprintln(w io.Writer, args ...any) {
+	_, _ = fmt.Fprintln(w, sanitizeArgs(args)...)
+}
+
+// sanitizeArgs returns args with every string and error sanitized.
+//
+// An error is rebuilt rather than sanitized in place: its Error() is what fmt
+// will call, and a wallet's own decline text arrives that way more often than as
+// a bare string.
+func sanitizeArgs(args []any) []any {
+	if len(args) == 0 {
+		return args
+	}
+	out := make([]any, len(args))
+	for i, a := range args {
+		switch v := a.(type) {
+		case string:
+			out[i] = SanitizeText(v)
+		case error:
+			out[i] = errors.New(SanitizeText(v.Error()))
+		default:
+			out[i] = a
+		}
+	}
+	return out
 }
