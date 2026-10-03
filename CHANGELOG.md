@@ -1,9 +1,27 @@
 # Changelog
 
-## [0.6.0-rc.1]
+## [0.6.0]
 
-- `transfer --to cash` and `consolidate --to cash` write the destination bill's cash secret to the ledger *before* placing the call, not after the reply. That secret is generated locally and only a one-way commitment of it ever reaches the Hub, so a Ctrl-C or crash while the request was in flight used to destroy the only copy in existence and leave a bill that was funded and unspendable by anyone. `wallet show` now lists any such unfinished send, with the secret, so an interrupted one can still be recovered with the Hub's help. (Audit finding D-CLI-1; the same discipline `wallet protect` has had since 0.3.0.)
-- Two `cashctl` processes that open a ledger predating this release's new column at the same instant no longer race: both read the column as missing, both added it, and the loser failed with `duplicate column name` for a ledger the winner had just migrated correctly. The column add now takes the same write lock the 0.4.0 column rename already took.
+- **Breaking:** `cash list-recipients` is now `cash status`, following the Hub dropping the alias.
+- **Breaking:** `redeem --transport` is gone. Redeems travel over the private transport only and batch automatically — one relay event per Hub, no flag and no fallback. The flag had already stopped being read, so it was accepted and ignored; it is now rejected. ([#24](https://github.com/ohstr/cashctl/pull/24))
+- **Breaking:** bill methods (`redeem`, `consolidate`, `cash status`) are served over the private transport only and never fall back, so this release needs a Hub that serves them that way.
+- `transfer --to cash` and `consolidate --to cash` write the destination bill's cash secret to the ledger *before* placing the call, not after the reply. That secret is generated locally and only a one-way commitment of it ever reaches the Hub, so a Ctrl-C or crash mid-flight used to destroy the only copy in existence and leave a bill funded and unspendable by anyone. `wallet show` now lists any such unfinished send, with the secret, so an interrupted one can still be recovered with the Hub's help. (Audit finding D-CLI-1.)
+- `redeem` takes several tokens in one command: `--token` is repeatable and comma-separated, and `--all` redeems every held token. Each token is paid into its own invoice, so `--invoice` still accepts only one.
+- `redeem` and `consolidate` attempt and report every selected token or group instead of stopping at the first failure, and exit nonzero if any failed. A nonzero exit from either no longer means nothing happened — stdout still carries the complete result.
+- Redeems against the same Hub, fee quotes included, go out in one relay event rather than one per bill, so a holder's bills are no longer published as a linkable set of individually tagged events.
+- `consolidate` groups bills by issuing Hub instead of by minter. One node can run several Hubs, so an ordinary `consolidate` could be refused outright with "all sources must belong to the same Cash Hub".
+- `transfer` reports cross-Hub sources as fragmented funds, naming the held total and the requested amount, instead of passing the Hub's internal grouping rule through as if the input were malformed.
+- `receive` asks the Hub before refusing a cash-mode bill on the token's `identity_required` hint. The hint goes stale when a bill is reassigned in place, which left a bill its rightful holder could not receive at all.
+- `receive`'s merge path writes the destination secret down before the call, as `wallet protect` and the no-merge path already did.
+- Auto-protect keeps the wallet the Hub carves for a re-key. It used to discard that result, leaving the ledger pointing at a wallet the carve had drained and deleted, and every later command addressing a bill that no longer existed.
+- `cash status` on a spent bill prints the Hub's tombstone instead of nothing at exit 0 — this is the recovery step cashctl itself prescribes after a redeem whose reply never arrived.
+- `consolidate` no longer writes a live source off as consumed. "This token does not name you" was being read as proof the bill was gone, which hid still-spendable bills from `redeem`, `wallet balance` and `--token` resolution.
+- Every Hub-supplied amount is bounded before it reaches the ledger, so whoever answers `cash_status` on a token's own relays cannot persist an arbitrary "verified" balance.
+- `decode --check` on a `<token>#<secret>` string can verify the bill it was handed. Bill methods authorize per item now, so even a read has to say who is asking.
+- A Hub that answers nothing for a bill now gets text naming every possibility rather than asserting one. The most likely is that the bill simply doesn't name you, and the Hub cannot tell that apart from "no such bill" without confirming a guess.
+- `wallet protect` rejects `-c/--connection` instead of silently ignoring it. It re-keys through the holding's own Hub and never dials a registered wallet. ([#24](https://github.com/ohstr/cashctl/pull/24))
+- Two `cashctl` processes that open a pre-0.6.0 ledger at the same instant no longer race on this release's new column: both read it as missing, both added it, and the loser failed with `duplicate column name` for a ledger the winner had just migrated correctly. The column add now takes the same write lock the 0.4.0 column rename already took.
+- Bumped `nmilat` to v0.5.0-rc.2.
 
 ## [0.5.0]
 

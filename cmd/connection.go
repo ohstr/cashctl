@@ -56,11 +56,11 @@ func nostrEntityMessage(hrp string) string {
 // rejectConnectionFlag fails a command that never dials a registered wallet
 // when -c/--connection was passed anyway. The flag is global, so cobra
 // accepts it everywhere — but on `transfer`, `consolidate`, `receive`,
-// `decode` and `list-recipients` it used to do nothing at all, silently: a
-// script that names a wallet expects that wallet to be the one involved, and
-// nothing here is (cash tokens are spent through their own Hub). Failing
-// fast, before anything runs, keeps that expectation from going unnoticed;
-// nothing has moved when this fires.
+// `decode`, `cash status` and `wallet protect` it used to do nothing at all,
+// silently: a script that names a wallet expects that wallet to be the one
+// involved, and nothing here is (cash tokens are spent through their own
+// Hub). Failing fast, before anything runs, keeps that expectation from
+// going unnoticed; nothing has moved when this fires.
 func rejectConnectionFlag(cmd *cobra.Command) error {
 	if c, _ := cmd.Flags().GetString("connection"); c != "" {
 		return output.InvocationError(cmd, fmt.Errorf(

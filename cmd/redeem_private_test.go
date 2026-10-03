@@ -272,3 +272,17 @@ func TestApplyRedeemResults_UnknownIDIsIgnored(t *testing.T) {
 		t.Errorf("ledger status = %q, want untouched", l.Entries[0].Status)
 	}
 }
+
+// TestCashRedeemCmd_HasNoTransportFlag pins the private transport as the
+// only wire path a redeem has. The flag outlived the code that read it —
+// the read went away with the amount-bounding work and the registration
+// survived the CLI-contract pass — so `redeem --transport standard` was
+// accepted and then ignored, while its own help text went on describing a
+// choice between wire paths that no longer exists. AGENTS.md and
+// skills/cashctl-cash/SKILL.md already say there is no flag; this is what
+// keeps the command from drifting back to claiming otherwise.
+func TestCashRedeemCmd_HasNoTransportFlag(t *testing.T) {
+	if f := newCashRedeemCmd().Flags().Lookup("transport"); f != nil {
+		t.Errorf("redeem registers --transport (default %q), but nothing reads it: redeems batch over the private transport only, with no flag and no fallback", f.DefValue)
+	}
+}
