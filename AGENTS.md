@@ -67,12 +67,12 @@ always, never stdout — a script parsing stdout never has to distinguish a
 success shape from a failure shape on the same stream. `--json`, `-c/
 --connection`, `--yes`, and `--config-dir` are global flags declared once
 on the root command — except `-c/--connection`, which `receive`,
-`transfer`, `consolidate`, `cash status`, and `decode` reject
-outright (`usage`, exit 2): none of them ever dial a registered wallet, so
-there's nothing for it to override. `--yes` (or `--json`, which implies
-it) skips confirmation prompts. Every command is JSON-only-on-request
-(human text by default, `--json` for the machine shape) — there is no
-command that is JSON-only always.
+`transfer`, `consolidate`, `cash status`, `decode`, and `wallet protect`
+reject outright (`usage`, exit 2): none of them ever dial a registered
+wallet, so there's nothing for it to override. `--yes` (or `--json`, which
+implies it) skips confirmation prompts. Every command is
+JSON-only-on-request (human text by default, `--json` for the machine
+shape) — there is no command that is JSON-only always.
 
 **Failures**: exactly one top-level error report, always on stderr — a
 plain `Error: ...` line by default, or `{"error", "code", "retryable",

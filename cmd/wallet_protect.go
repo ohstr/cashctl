@@ -37,6 +37,9 @@ func newWalletProtectCmd() *cobra.Command {
 }
 
 func runWalletProtect(cmd *cobra.Command, args []string) error {
+	if err := rejectConnectionFlag(cmd); err != nil {
+		return err
+	}
 	jsonMode, _ := cmd.Flags().GetBool("json")
 	l, err := ledger.Load()
 	if err != nil {

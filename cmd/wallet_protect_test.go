@@ -6,6 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/ohstr/cashctl/internal/appdir"
 	"github.com/ohstr/cashctl/internal/ledger"
 	"github.com/ohstr/cashctl/internal/output"
 )
@@ -151,5 +152,34 @@ func TestResolveUnprotectedCashHolding_PositionalArg(t *testing.T) {
 	}
 	if e.ID != "shared-one" {
 		t.Errorf("resolved ID = %q, want %q", e.ID, "shared-one")
+	}
+}
+
+// TestRunWalletProtect_RejectsConnectionFlag puts `wallet protect` in the
+// same class as `receive`, `transfer`, `consolidate`, `cash status` and
+// `decode`: it re-keys a held holding through that holding's own Hub and
+// never dials a registered wallet, so -c/--connection has nothing to
+// override. It used to be accepted and ignored, which is the failure worth
+// guarding — a script that names a wallet got the default wallet's
+// holdings instead, with no indication the flag had been dropped on the
+// floor. The reject has to land before ledger.Load, so the appdir override
+// is what proves it: a temp dir holds no entries at all, and reaching the
+// ledger at all would surface as not_found rather than usage.
+func TestRunWalletProtect_RejectsConnectionFlag(t *testing.T) {
+	appdir.SetOverride(t.TempDir())
+	t.Cleanup(func() { appdir.SetOverride("") })
+
+	cmd := newTestProtectCmd(false, false)
+	cmd.Flags().String("connection", "savings", "")
+
+	err := runWalletProtect(cmd, nil)
+	if err == nil {
+		t.Fatal("runWalletProtect(-c savings) = nil error, want rejected")
+	}
+	if got := output.ExitCode(err); got != 2 {
+		t.Errorf("ExitCode = %d, want 2 (usage)", got)
+	}
+	if !strings.Contains(err.Error(), "-c/--connection doesn't apply") {
+		t.Errorf("error = %q, want it to name the flag that doesn't apply", err)
 	}
 }
