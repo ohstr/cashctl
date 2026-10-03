@@ -19,10 +19,10 @@
 - Every Hub-supplied amount is bounded before it reaches the ledger, so whoever answers `cash_status` on a token's own relays cannot persist an arbitrary "verified" balance.
 - `decode --check` on a `<token>#<secret>` string can verify the bill it was handed. Bill methods authorize per item now, so even a read has to say who is asking.
 - A Hub that answers nothing for a bill now gets text naming every possibility rather than asserting one. The most likely is that the bill simply doesn't name you, and the Hub cannot tell that apart from "no such bill" without confirming a guess.
-- `wallet protect` rejects `-c/--connection` instead of silently ignoring it. It re-keys through the holding's own Hub and never dials a registered wallet. ([#24](https://github.com/ohstr/cashctl/pull/24))
-- Two `cashctl` processes that open a pre-0.6.0 ledger at the same instant no longer race on this release's new column: both read it as missing, both added it, and the loser failed with `duplicate column name` for a ledger the winner had just migrated correctly. The column add now takes the same write lock the 0.4.0 column rename already took.
 - `wallet history` no longer keeps a transfer target's `nconnection1...` string. It was recorded verbatim, so a value whose every byte is part of a dialing secret persisted in the action log and was reprinted on every `wallet history`. The record now names the platform and Identity Authority instead; a pubkey, `name@domain` or the explicit `connection:...` form is still shown in full, since none of those is secret. ([#34](https://github.com/ohstr/cashctl/pull/34))
 - `--as`'s credential can come from `CASHCTL_AS` instead of the command line, which keeps it out of `ps` and the shell's history file. The flag still wins when both are set. ([#34](https://github.com/ohstr/cashctl/pull/34))
+- `wallet protect` rejects `-c/--connection` instead of silently ignoring it. It re-keys through the holding's own Hub and never dials a registered wallet. ([#24](https://github.com/ohstr/cashctl/pull/24))
+- Two `cashctl` processes that open a pre-0.6.0 ledger at the same instant no longer race on this release's new column: both read it as missing, both added it, and the loser failed with `duplicate column name` for a ledger the winner had just migrated correctly. The column add now takes the same write lock the 0.4.0 column rename already took.
 - Bumped `nmilat` to v0.5.0-rc.2.
 
 ## [0.5.0]
