@@ -363,7 +363,7 @@ func transferWithAutoConsolidate(cmd *cobra.Command, l *ledger.Ledger, group []l
 	}
 	// defaultYes=false: moves real money — never accept on a bare Enter.
 	if !Confirm(cmd, false, message) {
-		fmt.Println("Cancelled.")
+		output.Println("Cancelled.")
 		return nil
 	}
 
@@ -772,14 +772,14 @@ func printAndSaveTransferResult(cmd *cobra.Command, l *ledger.Ledger, transferRe
 	// corrupting it.
 	switch {
 	case isCash && cashToSend != "":
-		fmt.Printf("Transferred %s as cash. Save this now, it won't be shown again:\ncashctl receive %s\n",
+		output.Printf("Transferred %s as cash. Save this now, it won't be shown again:\ncashctl receive %s\n",
 			output.FormatAmount(int64(sentAmount)), cashToSend)
 	case isCash:
-		fmt.Printf("Transferred %s as cash.\n", output.FormatAmount(int64(sentAmount)))
+		output.Printf("Transferred %s as cash.\n", output.FormatAmount(int64(sentAmount)))
 	default:
-		fmt.Printf("Transferred %s %s.\n", output.FormatAmount(int64(sentAmount)), targetClause(toValue, target.Kind))
+		output.Printf("Transferred %s %s.\n", output.FormatAmount(int64(sentAmount)), targetClause(toValue, target.Kind))
 		if recipientToken != "" {
-			fmt.Printf("Give this to them: cashctl receive %s\n", recipientToken)
+			output.Printf("Give this to them: cashctl receive %s\n", recipientToken)
 		}
 	}
 	return nil
@@ -1045,7 +1045,7 @@ func runCashTransfer(cmd *cobra.Command, args []string) error {
 	}
 	// defaultYes=false: moves real money — never accept on a bare Enter.
 	if !Confirm(cmd, false, message) {
-		fmt.Println("Cancelled.")
+		output.Println("Cancelled.")
 		return nil
 	}
 

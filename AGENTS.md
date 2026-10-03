@@ -83,7 +83,7 @@ shape) — there is no command that is JSON-only always.
 
 **Failures**: exactly one top-level error report, always on stderr — a
 plain `Error: ...` line by default, or `{"error", "code", "retryable",
-"input"?, "nwc_code"?}` with `--json`:
+"input"?, "nwc_code"?, "recovery"?}` with `--json`:
 
 | `code` | exit | retryable | meaning |
 |---|---|---|---|
@@ -106,9 +106,18 @@ again (everything else) without string-matching the message. `nwc_code`,
 when present, is the raw NIP-47 error code (`RESTRICTED`, `EXPIRED`,
 `INSUFFICIENT_BALANCE`, ...) a wallet returned — cashctl's own 7-code table
 is deliberately coarse, so this is there for an agent that needs
-finer-grained branching. A usage mistake in `--json` mode skips the
-human-readable help dump (which would otherwise land on stdout) in favor
-of the structured error alone.
+finer-grained branching. `recovery`, when present, is text you must keep
+verbatim: it appears only when a Hub-side mutation is confirmed to have
+happened and recording it locally then failed, and it carries whatever
+makes that money reachable again — for a cash-mode bill the
+`<token>#<cash_secret>` handoff, which nothing else will show again. It is
+human-readable text that can name more than one (a `transfer` reports the
+recipient's bill and your own remainder), so match the handoffs inside it
+rather than expecting one bare value. It is the one field deliberately
+exempt from secret redaction, and it is never truncated; in text mode it is
+printed on its own unprefixed line so it can be copied as-is. A usage
+mistake in `--json` mode skips the human-readable help dump (which would
+otherwise land on stdout) in favor of the structured error alone.
 
 **Partial success**: a command that performs several independently
 committed operations — `consolidate` when it auto-groups held tokens by

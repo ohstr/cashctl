@@ -138,28 +138,28 @@ func newWalletShowCmd() *cobra.Command {
 			}
 
 			if npub != "" {
-				fmt.Printf("Identity: %s (%s)\n", npub, source)
+				output.Printf("Identity: %s (%s)\n", npub, source)
 			} else {
-				fmt.Println("No local identity configured yet — cash holdings below still work fine without one. Run `cashctl init` if you need a pubkey-mode identity.")
+				output.Println("No local identity configured yet — cash holdings below still work fine without one. Run `cashctl init` if you need a pubkey-mode identity.")
 			}
-			fmt.Println()
+			output.Println()
 			if s.IsEmpty() {
-				fmt.Println("No wallets registered yet. Run `cashctl join <hub-connection>` or `cashctl connect add`.")
+				output.Println("No wallets registered yet. Run `cashctl join <hub-connection>` or `cashctl connect add`.")
 			} else {
-				fmt.Println("Wallets:")
+				output.Println("Wallets:")
 				for _, c := range s.Connections {
 					marker := ""
 					if c.Name == s.Default {
 						marker = " [default]"
 					}
-					fmt.Printf("  %s%s\n", c.Name, marker)
+					output.Printf("  %s%s\n", c.Name, marker)
 				}
 			}
 			held := l.Held()
 			if len(held) == 0 {
-				fmt.Println("\nNo held cash tokens.")
+				output.Println("\nNo held cash tokens.")
 			} else {
-				fmt.Printf("\nHeld cash tokens: %d\n", len(held))
+				output.Printf("\nHeld cash tokens: %d\n", len(held))
 			}
 			for i, e := range held {
 				amount := "unknown amount"
@@ -171,7 +171,7 @@ func newWalletShowCmd() *cobra.Command {
 					status = "unverified"
 				}
 				status += ", " + cashModeLabel(e)
-				fmt.Printf("  %d) %s   received %s   %s\n", i+1, amount, formatReceivedDate(e.ReceivedAt), status)
+				output.Printf("  %d) %s   received %s   %s\n", i+1, amount, formatReceivedDate(e.ReceivedAt), status)
 			}
 			// Last, and only when there is something to say: an interrupted
 			// `--to cash` send whose destination secret was written ahead of
@@ -179,9 +179,9 @@ func newWalletShowCmd() *cobra.Command {
 			// secret is ever readable again, so it is worth pushing past the
 			// routine summary above — see unreconciledDestinationParks.
 			if parks := unreconciledDestinationParks(l); len(parks) > 0 {
-				fmt.Printf("\nUnfinished cash sends: %d\n", len(parks))
+				output.Printf("\nUnfinished cash sends: %d\n", len(parks))
 				for _, line := range parks {
-					fmt.Println(line)
+					output.Println(line)
 				}
 			}
 			return nil
@@ -205,11 +205,11 @@ func newWalletHistoryCmd() *cobra.Command {
 				return nil
 			}
 			if len(l.History) == 0 {
-				fmt.Println("No local action history yet.")
+				output.Println("No local action history yet.")
 				return nil
 			}
 			for _, h := range l.History {
-				fmt.Printf("%s  %-12s %s\n", h.At, h.Action, h.Detail)
+				output.Printf("%s  %-12s %s\n", h.At, h.Action, h.Detail)
 			}
 			return nil
 		},
@@ -295,9 +295,9 @@ func newWalletGetInfoCmd() *cobra.Command {
 			for i, m := range info.Methods {
 				methods[i] = output.Sanitize(m)
 			}
-			fmt.Printf("alias:   %s\n", output.Sanitize(info.Alias))
-			fmt.Printf("network: %s\n", output.Sanitize(info.Network))
-			fmt.Printf("methods: %s\n", strings.Join(methods, ", "))
+			output.Printf("alias:   %s\n", output.Sanitize(info.Alias))
+			output.Printf("network: %s\n", output.Sanitize(info.Network))
+			output.Printf("methods: %s\n", strings.Join(methods, ", "))
 			// CircleWallet is only ever set when the dialed connection IS a
 			// circle_hub's own connection (never a joined member's own
 			// circle_wallet) — see nip47.GetInfoResult.CircleWallet's doc
@@ -305,9 +305,9 @@ func newWalletGetInfoCmd() *cobra.Command {
 			// against a raw Circle Hub connection show its forwarding-fee
 			// rate before joining, matching what `--json` already exposes.
 			if cw := info.CircleWallet; cw != nil {
-				fmt.Printf("circle policy:    %s\n", output.Sanitize(cw.CirclePolicy))
-				fmt.Printf("circle fee:       %d ppm\n", cw.FeesPpm)
-				fmt.Printf("circle available: %s\n", output.FormatAmount(cw.AvailableMillis))
+				output.Printf("circle policy:    %s\n", output.Sanitize(cw.CirclePolicy))
+				output.Printf("circle fee:       %d ppm\n", cw.FeesPpm)
+				output.Printf("circle available: %s\n", output.FormatAmount(cw.AvailableMillis))
 			}
 			return nil
 		},

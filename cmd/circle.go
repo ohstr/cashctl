@@ -292,11 +292,11 @@ func runCircleJoin(cmd *cobra.Command, args []string) error {
 	if renewal == "" {
 		renewal = "never"
 	}
-	fmt.Printf("%s New wallet: %s (max %s/%s)\n", greeting, name, output.FormatAmount(int64(maxAmount)), output.Sanitize(renewal))
+	output.Printf("%s New wallet: %s (max %s/%s)\n", greeting, name, output.FormatAmount(int64(maxAmount)), output.Sanitize(renewal))
 	if setDefault {
-		fmt.Printf("Default wallet set to %s.\n", name)
+		output.Printf("Default wallet set to %s.\n", name)
 	} else if !wasEmpty {
-		fmt.Printf("Saved as %s. Switch anytime with `cashctl wallet use %s`.\n", name, name)
+		output.Printf("Saved as %s. Switch anytime with `cashctl wallet use %s`.\n", name, name)
 	}
 	return nil
 }

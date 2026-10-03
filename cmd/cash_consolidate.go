@@ -142,13 +142,13 @@ func printConsolidateOutcomes(jsonMode bool, outcomes []consolidateOutcome) {
 	for _, o := range outcomes {
 		switch {
 		case o.Result != nil:
-			fmt.Printf("Consolidated into one %s note, saved to your wallet.\n", output.FormatAmount(int64(*o.Result.NewEntry.AmountMillis)))
+			output.Printf("Consolidated into one %s note, saved to your wallet.\n", output.FormatAmount(int64(*o.Result.NewEntry.AmountMillis)))
 		case o.declined():
 			// consolidateItems already printed "Cancelled." for this group.
 		default:
 			// Named by Hub and source count: with several groups in play,
 			// "it failed" without saying which one is not actionable.
-			fmt.Printf("Failed to consolidate %d tokens from Cash Hub %s: %v\n",
+			output.Printf("Failed to consolidate %d tokens from Cash Hub %s: %v\n",
 				len(o.IDs), output.Sanitize(shortHub(o.Hub)), output.AsCLIError(o.Err).Err)
 		}
 	}
@@ -156,7 +156,7 @@ func printConsolidateOutcomes(jsonMode bool, outcomes []consolidateOutcome) {
 	// through the returned error's own "Error:" line, and repeating a count of
 	// one would be noise.
 	if len(outcomes) > 1 && !allOK {
-		fmt.Printf("%d of %d groups consolidated.\n", len(succeeded), len(outcomes))
+		output.Printf("%d of %d groups consolidated.\n", len(succeeded), len(outcomes))
 	}
 }
 
@@ -212,7 +212,7 @@ func runCashConsolidate(cmd *cobra.Command, args []string) error {
 		if jsonMode {
 			output.PrintJSON(map[string]any{"consolidated": []any{}})
 		} else {
-			fmt.Println("Nothing to consolidate — no minter has more than one held token.")
+			output.Println("Nothing to consolidate — no minter has more than one held token.")
 		}
 		return nil
 	}
@@ -486,7 +486,7 @@ func consolidateItems(cmd *cobra.Command, l *ledger.Ledger, items []string, toFl
 	// either), so a declined group is always an interactive choice, never
 	// something a script/agent needs to handle.
 	if !Confirm(cmd, false, message) {
-		fmt.Println("Cancelled.")
+		output.Println("Cancelled.")
 		return nil, nil
 	}
 
@@ -544,7 +544,7 @@ func printConsolidateResults(jsonMode bool, results []*consolidateResult) {
 		return
 	}
 	for _, r := range results {
-		fmt.Printf("Consolidated into one %s note, saved to your wallet.\n", output.FormatAmount(int64(*r.NewEntry.AmountMillis)))
+		output.Printf("Consolidated into one %s note, saved to your wallet.\n", output.FormatAmount(int64(*r.NewEntry.AmountMillis)))
 	}
 }
 
