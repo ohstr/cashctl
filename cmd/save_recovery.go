@@ -51,7 +51,7 @@ func entryRecoveryHint(e *ledger.Entry) string {
 func reportUnsavedResult(cmd *cobra.Command, saveErr error, verb, recoveryHint string) error {
 	msg := fmt.Sprintf("%s succeeded on the Hub, but saving that locally failed (%v) — your wallet's local record does not match reality.", verb, saveErr)
 	if recoveryHint == "" {
-		msg += " Check `cashctl wallet show`/`cashctl cash list-recipients` and try again before assuming anything failed."
+		msg += " Check `cashctl wallet show`/`cashctl cash status` and try again before assuming anything failed."
 		return output.RuntimeError(cmd, fmt.Errorf("%s", msg))
 	}
 	// The hint travels as Recovery, NOT appended to msg. Appended, it went
