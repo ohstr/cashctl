@@ -111,17 +111,17 @@ func runWalletBalance(cmd *cobra.Command, args []string) error {
 
 	switch {
 	case stranded > 0 && expiredHeld > 0:
-		fmt.Printf("%s total — %s stranded (expired wallet), %s in expired held tokens (not counted)\n",
+		output.Printf("%s total — %s stranded (expired wallet), %s in expired held tokens (not counted)\n",
 			output.FormatAmount(total), output.FormatAmount(stranded), output.FormatAmount(expiredHeld))
 	case stranded > 0:
-		fmt.Printf("%s total — %s stranded (expired)\n", output.FormatAmount(total), output.FormatAmount(stranded))
+		output.Printf("%s total — %s stranded (expired)\n", output.FormatAmount(total), output.FormatAmount(stranded))
 	case expiredHeld > 0:
-		fmt.Printf("%s total — %s in expired held tokens (not counted)\n", output.FormatAmount(total), output.FormatAmount(expiredHeld))
+		output.Printf("%s total — %s in expired held tokens (not counted)\n", output.FormatAmount(total), output.FormatAmount(expiredHeld))
 	default:
-		fmt.Printf("%s total\n", output.FormatAmount(total))
+		output.Printf("%s total\n", output.FormatAmount(total))
 	}
 	if len(unreachable) > 0 {
-		fmt.Printf("(couldn't reach %s — not counted, may still hold funds)\n", strings.Join(unreachable, ", "))
+		output.Printf("(couldn't reach %s — not counted, may still hold funds)\n", strings.Join(unreachable, ", "))
 	}
 	if breakdown {
 		for _, line := range lines {
@@ -129,7 +129,7 @@ func runWalletBalance(cmd *cobra.Command, args []string) error {
 			if line.Expired || line.Stranded {
 				marker = " [expired]"
 			}
-			fmt.Printf("  %-20s %s%s\n", line.DisplayName, output.FormatAmount(line.AmountMloki), marker)
+			output.Printf("  %-20s %s%s\n", line.DisplayName, output.FormatAmount(line.AmountMloki), marker)
 		}
 	}
 	return nil
@@ -185,7 +185,7 @@ func runWalletBalanceFrom(cmd *cobra.Command, from string, jsonMode bool) error 
 			output.PrintJSON(map[string]any{"name": from, "amount_mloki": amount, "stranded": stranded})
 			return nil
 		}
-		fmt.Printf("%s\n", output.FormatAmount(amount))
+		output.Printf("%s\n", output.FormatAmount(amount))
 		return nil
 	}
 	l, err := ledger.Load()
@@ -204,7 +204,7 @@ func runWalletBalanceFrom(cmd *cobra.Command, from string, jsonMode bool) error 
 			output.PrintJSON(map[string]any{"name": from, "amount_mloki": *e.AmountMillis})
 			return nil
 		}
-		fmt.Printf("%s\n", output.FormatAmount(int64(*e.AmountMillis)))
+		output.Printf("%s\n", output.FormatAmount(int64(*e.AmountMillis)))
 		return nil
 	}
 	return output.NotFoundError(cmd, from, fmt.Errorf("no wallet or held token named %q", from))

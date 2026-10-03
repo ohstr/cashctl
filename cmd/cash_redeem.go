@@ -195,7 +195,7 @@ func runCashRedeem(cmd *cobra.Command, args []string) error {
 	// defaultYes=false: moves real money — never accept on a bare Enter.
 	// --yes/--json skip this entirely, unaffected.
 	if !Confirm(cmd, false, redeemConfirmMessage(plans, destName)) {
-		fmt.Println("Cancelled.")
+		output.Println("Cancelled.")
 		return nil
 	}
 
@@ -607,18 +607,18 @@ func printRedeemOutcomes(jsonMode bool, outcomes []redeemOutcome, destName, expl
 			if o.AmountMillis != nil {
 				amount = " " + output.FormatAmount(int64(*o.AmountMillis))
 			}
-			fmt.Printf("Redeemed%s → %s.\n", amount, destName)
+			output.Printf("Redeemed%s → %s.\n", amount, destName)
 			if o.Result.FeesPaid > 0 {
-				fmt.Printf("Fee: %s.\n", output.FormatAmount(int64(o.Result.FeesPaid)))
+				output.Printf("Fee: %s.\n", output.FormatAmount(int64(o.Result.FeesPaid)))
 			}
 		case o.Err != nil:
 			// Named by token id: with several bills in play, "it failed"
 			// without saying which one is not actionable.
-			fmt.Printf("Failed to redeem %s: %v\n", output.Sanitize(o.EntryID), output.AsCLIError(o.Err).Err)
+			output.Printf("Failed to redeem %s: %v\n", output.Sanitize(o.EntryID), output.AsCLIError(o.Err).Err)
 		}
 	}
 	if len(outcomes) > 1 {
-		fmt.Printf("%d of %d tokens redeemed.\n", paid, len(outcomes))
+		output.Printf("%d of %d tokens redeemed.\n", paid, len(outcomes))
 	}
 }
 

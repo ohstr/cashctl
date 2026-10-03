@@ -88,9 +88,9 @@ func newCashStatusCmd() *cobra.Command {
 			// retention the Hub does fall silent, and explainNoAnswer covers that
 			// well; the gap was the window where the Hub tells the truth.
 			if result.IsSpent() {
-				fmt.Println("This bill is spent — its value has already moved, and the bill itself is gone.")
+				output.Println("This bill is spent — its value has already moved, and the bill itself is gone.")
 				if result.RetainedUntil != nil {
-					fmt.Printf("The Hub will keep answering about it until %s; after that it goes silent.\n",
+					output.Printf("The Hub will keep answering about it until %s; after that it goes silent.\n",
 						time.Unix(*result.RetainedUntil, 0).UTC().Format("2006-01-02 15:04 UTC"))
 				}
 				return nil
@@ -110,7 +110,7 @@ func newCashStatusCmd() *cobra.Command {
 				if r.IdentityValue != "" {
 					identity = fmt.Sprintf("%s:%s", output.Sanitize(r.IdentityType), output.Sanitize(r.IdentityValue))
 				}
-				fmt.Printf("%-40s %14s   %s\n", identity, output.FormatAmount(int64(r.AmountMillis)), status)
+				output.Printf("%-40s %14s   %s\n", identity, output.FormatAmount(int64(r.AmountMillis)), status)
 			}
 			// ExpiresAt is identical on every row (NIP-CASH §Listing
 			// Recipients: one shared wallet-level deadline) — shown once,
@@ -120,7 +120,7 @@ func newCashStatusCmd() *cobra.Command {
 			// pure inspection with nothing to gate, so it's always shown,
 			// not just when it's close.
 			if len(result.Recipients) > 0 && result.Recipients[0].ExpiresAt != nil {
-				fmt.Println(formatExpiry(*result.Recipients[0].ExpiresAt))
+				output.Println(formatExpiry(*result.Recipients[0].ExpiresAt))
 			}
 			return nil
 		},

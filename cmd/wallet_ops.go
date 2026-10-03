@@ -43,11 +43,11 @@ func newWalletBudgetCmd() *cobra.Command {
 				output.PrintJSON(budget)
 				return nil
 			}
-			fmt.Printf("used:    %s\n", output.FormatAmount(budget.UsedBudgetMloki))
-			fmt.Printf("total:   %s\n", output.FormatAmount(budget.TotalBudgetMloki))
-			fmt.Printf("renewal: %s\n", output.Sanitize(budget.RenewalPeriod))
+			output.Printf("used:    %s\n", output.FormatAmount(budget.UsedBudgetMloki))
+			output.Printf("total:   %s\n", output.FormatAmount(budget.TotalBudgetMloki))
+			output.Printf("renewal: %s\n", output.Sanitize(budget.RenewalPeriod))
 			if budget.RenewsAt != nil {
-				fmt.Printf("renews:  %s\n", time.Unix(*budget.RenewsAt, 0).UTC().Format(time.RFC3339))
+				output.Printf("renews:  %s\n", time.Unix(*budget.RenewsAt, 0).UTC().Format(time.RFC3339))
 			}
 			return nil
 		},
@@ -94,7 +94,7 @@ func newWalletInvoiceCmd() *cobra.Command {
 				output.PrintJSON(tx)
 				return nil
 			}
-			fmt.Println(tx.Invoice)
+			output.Println(tx.Invoice)
 			return nil
 		},
 	}
@@ -126,7 +126,7 @@ func newWalletPayCmd() *cobra.Command {
 			}
 			// defaultYes=false: moves real money — never accept on a bare Enter.
 			if !Confirm(cmd, false, message) {
-				fmt.Println("Cancelled.")
+				output.Println("Cancelled.")
 				return nil
 			}
 			var result *nip47.PayInvoiceResult
@@ -163,9 +163,9 @@ func newWalletPayCmd() *cobra.Command {
 			// different thing (a Hub policy charge, not network cost) and is
 			// 0/absent for every non-circle wallet.
 			if result.FeeSkimMloki > 0 {
-				fmt.Printf("Paid. Fee: %s (+ %s circle forwarding fee).\n", output.FormatAmount(result.FeesPaidMloki), output.FormatAmount(result.FeeSkimMloki))
+				output.Printf("Paid. Fee: %s (+ %s circle forwarding fee).\n", output.FormatAmount(result.FeesPaidMloki), output.FormatAmount(result.FeeSkimMloki))
 			} else {
-				fmt.Printf("Paid. Fee: %s.\n", output.FormatAmount(result.FeesPaidMloki))
+				output.Printf("Paid. Fee: %s.\n", output.FormatAmount(result.FeesPaidMloki))
 			}
 			return nil
 		},
@@ -213,7 +213,7 @@ func newWalletListTxCmd() *cobra.Command {
 				// Sanitize call site in this package. Type/State too, on
 				// the same "anything from a wallet reply" principle, cheap
 				// insurance against a misbehaving wallet.
-				fmt.Printf("%-9s %-9s %12s %s\n",
+				output.Printf("%-9s %-9s %12s %s\n",
 					output.Sanitize(tx.Type), output.Sanitize(tx.State),
 					output.FormatAmount(tx.AmountMloki), output.Sanitize(tx.Description))
 			}
@@ -255,7 +255,7 @@ func newWalletSignMessageCmd() *cobra.Command {
 				output.PrintJSON(result)
 				return nil
 			}
-			fmt.Println(result.Signature)
+			output.Println(result.Signature)
 			return nil
 		},
 	}

@@ -75,6 +75,18 @@ type CLIError struct {
 	NWCCode    string
 	RawMessage string
 	ShowUsage  bool
+	// Recovery is text that must reach the user VERBATIM, deliberately not
+	// passed through RedactSecretInput and never length-capped. It exists for
+	// one situation: a Hub-side mutation that is confirmed to have happened
+	// whose local Save then failed, where the only thing that makes the money
+	// reachable again is a <token>#<cash_secret> handoff. A cash secret is
+	// exactly 64 hex characters, so giftSecretPattern matched it and the
+	// catch-all redaction in wrapCLIError rewrote the one message whose whole
+	// purpose is handing the secret over (D-CLI-6). The catch-all is right and
+	// stays; this is the channel past it. EmitError prints it on its own line
+	// in human mode, so it can be copied, and as the "recovery" key under
+	// --json. A cap here would destroy money the same way the redaction did.
+	Recovery string
 }
 
 func (e *CLIError) Error() string { return e.Err.Error() }
@@ -203,6 +215,24 @@ func AuthError(cmd *cobra.Command, err error) error {
 func RuntimeError(cmd *cobra.Command, err error) error {
 	silence(cmd)
 	return wrapCLIError(CodeInternal, "", err)
+}
+
+// RecoveryError is RuntimeError plus a verbatim recovery handoff — see
+// CLIError.Recovery for why that channel exists.
+//
+// err itself still goes through wrapCLIError, so the MESSAGE keeps the
+// catch-all redaction every other error gets; only recovery is exempt. That
+// split is the point: the message is composed text that could pick up a secret
+// by accident, while recovery is a value the caller has decided the user must
+// see in full.
+func RecoveryError(cmd *cobra.Command, err error, recovery string) error {
+	silence(cmd)
+	wrapped := wrapCLIError(CodeInternal, "", err)
+	var ce *CLIError
+	if errors.As(wrapped, &ce) {
+		ce.Recovery = recovery
+	}
+	return wrapped
 }
 
 // ExitCode returns the process exit code for err (0 if err is nil).
