@@ -21,6 +21,8 @@
 - A Hub that answers nothing for a bill now gets text naming every possibility rather than asserting one. The most likely is that the bill simply doesn't name you, and the Hub cannot tell that apart from "no such bill" without confirming a guess.
 - `wallet protect` rejects `-c/--connection` instead of silently ignoring it. It re-keys through the holding's own Hub and never dials a registered wallet. ([#24](https://github.com/ohstr/cashctl/pull/24))
 - Two `cashctl` processes that open a pre-0.6.0 ledger at the same instant no longer race on this release's new column: both read it as missing, both added it, and the loser failed with `duplicate column name` for a ledger the winner had just migrated correctly. The column add now takes the same write lock the 0.4.0 column rename already took.
+- The local ledger runs in SQLite's WAL mode, so a read and a write no longer block each other — the contention this wallet's Load/network-call/Save shape invites. Durability is unchanged (`synchronous` stays at its default), and a filesystem that cannot support WAL, which includes most network mounts, still opens exactly as before.
+- The ledger's journal files (`cashctl.db-wal`, `-shm`, `-journal`) are restricted to 0600 like the database itself. They hold the same plaintext spending secrets, and `-wal` is persistent where `-journal` was transient, so a backup tool globbing `cashctl.db*` could have carried a readable copy off the machine.
 - Bumped `nmilat` to v0.5.0-rc.2.
 
 ## [0.5.0]

@@ -8,6 +8,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -87,9 +88,27 @@ func Path() (string, error) {
 // created at a different location than the one chmod'd afterwards, with
 // default permissions, and init failed. Only those three characters need
 // escaping; everything else in a path is literal in URI mode.
+// journal_mode(WAL): the default rollback journal makes a writer block readers
+// and a reader block the writer, which is this ledger's exact access pattern —
+// Load, a network round trip, then Save, on two independent connections, plus
+// two BEGIN IMMEDIATE migrations on every Open. Under WAL neither blocks the
+// other. 25d70a7 (two processes both adding a column) and the -race-widened
+// SQLITE_BUSY window in TestOpen_RenameConcurrent both came out of that
+// contention.
+//
+// `synchronous` is deliberately left at its default. WAL plus synchronous(NORMAL)
+// is the usual pairing, and it can lose the last committed transaction on power
+// loss — here that transaction is a redeem whose money has already moved on the
+// Hub. No durability trade on this database for a throughput win.
+//
+// A failed mode change is NOT fatal, and nothing below asserts the result: WAL
+// needs shared memory and does not work on most network filesystems, so a
+// --config-dir on NFS has to keep opening. SQLite answers a journal_mode pragma
+// it cannot honour by reporting the mode it kept, not by failing, so this
+// degrades to the previous behaviour on its own.
 func sqliteDSN(path string) string {
 	esc := strings.NewReplacer("%", "%25", "?", "%3F", "#", "%23").Replace(path)
-	return "file:" + esc + "?_pragma=busy_timeout(5000)"
+	return "file:" + esc + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
 }
 
 // Open opens (creating and migrating if needed) cashctl's single local
@@ -137,7 +156,35 @@ func Open() (*sql.DB, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := chmodJournalSidecars(path); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	return db, nil
+}
+
+// chmodJournalSidecars restricts cashctl.db's journal files to 0600, the same as
+// the database itself.
+//
+// They hold the same plaintext an identity privkey and cash-mode spending
+// secrets are stored in, and they are created with the process umask, so
+// chmodding only cashctl.db left them readable (D-CLI-11). appdir.Dir()'s own
+// 0700 contains that today, which is why this is a small fix rather than an
+// urgent one — but -wal is PERSISTENT where -journal is transient, so a backup
+// or sync tool globbing cashctl.db* would otherwise carry a world-readable file
+// full of spending secrets off the machine. That is why it lands with WAL rather
+// than after it.
+//
+// Called after the migrations, so a -wal created by those writes already exists.
+// A sidecar that is absent is not an error: which ones exist depends on the
+// journal mode and on whether a connection is currently open.
+func chmodJournalSidecars(path string) error {
+	for _, suffix := range []string{"-wal", "-shm", "-journal"} {
+		if err := os.Chmod(path+suffix, 0600); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("restricting %s permissions: %w", filepath.Base(path+suffix), err)
+		}
+	}
+	return nil
 }
 
 // addedColumns lists every column added to an existing table after that
