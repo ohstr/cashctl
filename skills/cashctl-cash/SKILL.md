@@ -157,6 +157,15 @@ cashctl does not auto-refresh a connection-key credential from a relay
 (a deliberate scope limit: re-deriving a fresh live attestation isn't
 automatic), so the error names exactly what to pass.
 
+Pass that credential through `CASHCTL_AS` rather than `--as` in anything
+scripted. `--as` is always secret-bearing, and a value on the command line
+is visible to `ps` for as long as the process runs and lands in the shell's
+history file; the env var keeps it out of both. `--as` still wins when both
+are set, so a one-off override works as before. Not airtight — an
+environment variable is inherited by child processes and readable from
+`/proc/<pid>/environ` by the same user — but strictly better than argv, and
+argv is the one exposure a process cannot do anything about from the inside.
+
 In an interactive (non-`--json`/`--yes`) session, the confirmation prompt
 shows the expected fee (only if non-zero) and warns if the token's own
 redemption deadline is close or already passed, and — like `transfer`/

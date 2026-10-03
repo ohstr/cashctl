@@ -92,6 +92,42 @@ func resolveTarget(cmd *cobra.Command, s string) (credential.ResolvedTarget, err
 // spendable money, not a code — see printAndSaveTransferResult's own
 // framing of it. Shared by the plain transfer path and
 // transferWithAutoConsolidate so both name the destination identically.
+// historyTargetClause is targetClause for the PERSISTED action log.
+//
+// targetClause interpolates the raw --to value, which is right for the confirm
+// prompt and the success line — showing someone the value they just typed is what
+// makes a confirmation mean anything. It is wrong for the action log, which keeps
+// that text on disk and reprints it on every `wallet history`: an nconnection1...
+// target carries its own dialing secret as a single TLV-packed blob with no
+// substring that is safe to reveal, which is exactly why RedactSecretInput strips
+// those wholesale (D-CLI-5). The user typing it is not new exposure; persisting
+// and redisplaying it is.
+//
+// ResolvedTarget.Resolved is the public description for that case — platform plus
+// Identity Authority — and is what belongs in a durable record. Where it is empty,
+// which is the explicit connection:<platform>:<external-id>:<ia-pubkey> form and
+// carries no secret, the value goes through RedactSecretInput so the one existing
+// policy decides rather than a second rule being invented here.
+//
+// Deliberately NOT a blanket use of Resolved, and deliberately NOT redaction
+// applied to every kind:
+//
+//   - For a cash target Resolved is "Generated a cash secret: <secret>", so using
+//     it unconditionally would write a spending secret into the log. The cash
+//     branch of targetClause interpolates no value at all and must stay that way.
+//   - RedactSecretInput blanks a bare 64-hex string entirely, and a pubkey target
+//     IS bare 64-hex. Applying it outside the connection branch would erase a
+//     perfectly public destination from the history line.
+func historyTargetClause(toValue string, target credential.ResolvedTarget) string {
+	if target.Kind != credential.TargetKindConnection {
+		return targetClause(toValue, target.Kind)
+	}
+	if target.Resolved != "" {
+		return fmt.Sprintf("to %s as web identity cash", target.Resolved)
+	}
+	return targetClause(output.RedactSecretInput(toValue), target.Kind)
+}
+
 func targetClause(toValue string, kind credential.TargetKind) string {
 	switch kind {
 	case credential.TargetKindConnection:
@@ -616,7 +652,7 @@ func markSourcesConsolidated(l *ledger.Ledger, sourceIDs []string, amountMillis 
 // be spendable the same way the source was.
 func printAndSaveTransferResult(cmd *cobra.Command, l *ledger.Ledger, transferResult *nipcash.CashTransferResult, sentAmount uint64, toValue string, target credential.ResolvedTarget, consolidatedFrom []string, remainderMode ledger.Entry, originalToken string) error {
 	jsonMode, _ := cmd.Flags().GetBool("json")
-	l.AppendHistory("transfer", fmt.Sprintf("transferred %s %s", output.FormatAmount(int64(sentAmount)), targetClause(toValue, target.Kind)))
+	l.AppendHistory("transfer", fmt.Sprintf("transferred %s %s", output.FormatAmount(int64(sentAmount)), historyTargetClause(toValue, target)))
 
 	var remainderEntry *ledger.Entry
 	if transferResult.RemainderWalletToken != "" {
