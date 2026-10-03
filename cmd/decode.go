@@ -113,15 +113,15 @@ func decodeCashToken(cmd *cobra.Command, value, embeddedCashSecret string, jsonM
 	isCash := (tok.IdentityRequired != nil && !*tok.IdentityRequired) || hasEmbeddedCashSecret
 
 	if !jsonMode {
-		fmt.Println("type: cash_token")
-		fmt.Printf("wallet_pubkey: %s\n", tok.WalletPubkey)
-		fmt.Printf("relays: %s\n", joinStrings(tok.RelayURLs))
+		output.Println("type: cash_token")
+		output.Printf("wallet_pubkey: %s\n", tok.WalletPubkey)
+		output.Printf("relays: %s\n", joinStrings(tok.RelayURLs))
 		if tok.IdentityRequired != nil {
-			fmt.Printf("identity_required: %v\n", *tok.IdentityRequired)
+			output.Printf("identity_required: %v\n", *tok.IdentityRequired)
 		}
 		printMintSignatureStatus(tok)
 		if hasEmbeddedCashSecret {
-			fmt.Println("cash_secret: embedded — `cashctl receive` uses it automatically")
+			output.Println("cash_secret: embedded — `cashctl receive` uses it automatically")
 		}
 	}
 
@@ -172,15 +172,15 @@ func decodeCircleHub(cmd *cobra.Command, value string, jsonMode, check bool) err
 	}
 
 	if !jsonMode {
-		fmt.Println("type: circlehub")
-		fmt.Printf("wallet_pubkey: %s\n", conn.WalletPubkey)
-		fmt.Printf("relays: %s\n", joinStrings(conn.RelayURLs))
+		output.Println("type: circlehub")
+		output.Printf("wallet_pubkey: %s\n", conn.WalletPubkey)
+		output.Printf("relays: %s\n", joinStrings(conn.RelayURLs))
 		if conn.Label != "" {
 			// Sanitized: an attacker-controlled Circle Hub connection's own
 			// label has no character restrictions at decode time (see
 			// nipcw.DecodeCircleHubConnection) — this is exactly the
 			// inspect-before-you-trust output `decode` exists for.
-			fmt.Printf("label: %s\n", output.Sanitize(conn.Label))
+			output.Printf("label: %s\n", output.Sanitize(conn.Label))
 		}
 	}
 
@@ -219,9 +219,9 @@ func decodeNWCURI(cmd *cobra.Command, value string, jsonMode bool) error {
 		})
 		return nil
 	}
-	fmt.Println("type: nwc_uri")
-	fmt.Printf("wallet_pubkey: %s\n", pairing.WalletPubkey)
-	fmt.Printf("relays: %s\n", joinStrings(pairing.RelayURLs))
+	output.Println("type: nwc_uri")
+	output.Printf("wallet_pubkey: %s\n", pairing.WalletPubkey)
+	output.Printf("relays: %s\n", joinStrings(pairing.RelayURLs))
 	return nil
 }
 
@@ -267,9 +267,9 @@ func formatMinterStatus(tok nipcash.Token) (minterLine, amountLine string) {
 // of formatMinterStatus's result.
 func printMintSignatureStatus(tok nipcash.Token) {
 	minterLine, amountLine := formatMinterStatus(tok)
-	fmt.Println(minterLine)
+	output.Println(minterLine)
 	if amountLine != "" {
-		fmt.Println(amountLine)
+		output.Println(amountLine)
 	}
 }
 
@@ -393,12 +393,12 @@ func checkCashTokenAgainstHub(cmd *cobra.Command, jsonMode bool, value, embedded
 
 func printCashCheck(r cashCheckResult) {
 	if !r.OK {
-		fmt.Printf("check: %s\n", r.Error)
+		output.Printf("check: %s\n", r.Error)
 		return
 	}
-	fmt.Printf("check: matches (%s)\n", output.FormatAmount(int64(*r.AmountMillis)))
+	output.Printf("check: matches (%s)\n", output.FormatAmount(int64(*r.AmountMillis)))
 	if r.ExpiresAt != nil {
-		fmt.Println(formatExpiry(*r.ExpiresAt))
+		output.Println(formatExpiry(*r.ExpiresAt))
 	}
 }
 
@@ -470,8 +470,8 @@ func checkCircleHubJoinable(jsonMode bool, conn nipcw.CircleHubConnection) circl
 
 func printCircleCheck(r circleCheckResult) {
 	if r.OK {
-		fmt.Printf("check: appears joinable (%s)\n", r.Note)
+		output.Printf("check: appears joinable (%s)\n", r.Note)
 		return
 	}
-	fmt.Printf("check: %s\n", r.Error)
+	output.Printf("check: %s\n", r.Error)
 }

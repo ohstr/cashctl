@@ -7,7 +7,9 @@ package output
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"strconv"
@@ -429,4 +431,71 @@ func Notef(jsonMode bool, format string, args ...any) {
 		return
 	}
 	fmt.Fprintf(os.Stderr, format+"\n", args...)
+}
+
+// Printf, Println, Fprintf, Fprint and Fprintln are sanitizing drop-in
+// replacements for their fmt counterparts, and package cmd uses them instead of
+// fmt for anything that reaches a terminal.
+//
+// Why these exist alongside Linef/Notef, which are still the preferred helpers
+// for new code: closing the escape-injection hole structurally means getting
+// every print in cmd/ to go through this package, and there were 105 of them.
+// Rewriting each one into Linef/Notef would have meant touching control flow at
+// every site — most sit inside an `if !jsonMode` guard that Linef subsumes — and
+// changing newline semantics, since Linef appends one and Printf does not. A
+// hundred small semantic edits to output paths is a poor trade for a change whose
+// entire purpose is that nothing about the output changes except sanitization.
+// These make that conversion a rename.
+//
+// They sanitize the ARGUMENTS, not the formatted result: format strings are
+// cashctl's own literals and several deliberately contain \n or \t, which
+// SanitizeText would keep but which there is no reason to run through at all.
+// Strings and errors are sanitized; everything else is passed through, so a %d
+// stays a number.
+//
+// Known limit, same as Linef/Notef: a %v over a struct whose fields carry
+// hostile strings is not covered, because the formatting happens inside fmt. The
+// AST boundary test is what keeps new direct fmt prints out; this is what makes
+// the ones that exist safe.
+func Printf(format string, args ...any) {
+	_, _ = fmt.Fprintf(os.Stdout, format, sanitizeArgs(args)...)
+}
+
+func Println(args ...any) {
+	_, _ = fmt.Fprintln(os.Stdout, sanitizeArgs(args)...)
+}
+
+func Fprintf(w io.Writer, format string, args ...any) {
+	_, _ = fmt.Fprintf(w, format, sanitizeArgs(args)...)
+}
+
+func Fprint(w io.Writer, args ...any) {
+	_, _ = fmt.Fprint(w, sanitizeArgs(args)...)
+}
+
+func Fprintln(w io.Writer, args ...any) {
+	_, _ = fmt.Fprintln(w, sanitizeArgs(args)...)
+}
+
+// sanitizeArgs returns args with every string and error sanitized.
+//
+// An error is rebuilt rather than sanitized in place: its Error() is what fmt
+// will call, and a wallet's own decline text arrives that way more often than as
+// a bare string.
+func sanitizeArgs(args []any) []any {
+	if len(args) == 0 {
+		return args
+	}
+	out := make([]any, len(args))
+	for i, a := range args {
+		switch v := a.(type) {
+		case string:
+			out[i] = SanitizeText(v)
+		case error:
+			out[i] = errors.New(SanitizeText(v.Error()))
+		default:
+			out[i] = a
+		}
+	}
+	return out
 }

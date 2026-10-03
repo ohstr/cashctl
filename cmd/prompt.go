@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/ohstr/cashctl/internal/output"
 	"golang.org/x/term"
 )
 
@@ -35,7 +37,7 @@ func Confirm(cmd *cobra.Command, defaultYes bool, message string) bool {
 	}
 	// stderr, like every prompt (ssh, sudo, git): stdout carries only what a
 	// command produced, so `cashctl ... > out` never captures the question.
-	fmt.Fprintf(os.Stderr, "%s %s ", message, suffix)
+	output.Fprintf(os.Stderr, "%s %s ", message, suffix)
 	line, _ := stdin.ReadString('\n')
 	line = strings.ToLower(strings.TrimSpace(line))
 	if line == "" {
@@ -68,6 +70,18 @@ func withSpinner(w io.Writer, animate bool, message string, fn func() error) err
 	if !animate {
 		return fn()
 	}
+	// The three writes below are the one place in cmd/ that deliberately emits
+	// raw control characters — \r to redraw a frame in place and \033[K to erase
+	// the line — so they cannot go through output's sanitizing wrappers, which
+	// would replace exactly those with U+FFFD and leave a trail of broken frames
+	// instead of an animation. cmd/auditD_cli_output_boundary_test.go allowlists
+	// this function by name for that reason.
+	//
+	// The MESSAGE still has to be sanitized, and separately: a caller builds it
+	// from a wallet name or a Hub's own label, so leaving it raw next to a
+	// hand-written \r would be a hole in exactly the surface the rest of this
+	// change closes. Sanitized once here rather than per frame.
+	message = output.Sanitize(message)
 	stop := make(chan struct{})
 	stopped := make(chan struct{})
 	go func() {
@@ -95,7 +109,7 @@ func withSpinner(w io.Writer, animate bool, message string, fn func() error) err
 
 // PromptLine asks for a single line of free-text input.
 func PromptLine(message string) (string, error) {
-	fmt.Fprint(os.Stderr, message)
+	output.Fprint(os.Stderr, message)
 	line, err := stdin.ReadString('\n')
 	if err != nil {
 		return "", err
@@ -115,9 +129,9 @@ func ResolveVaultPassword(jsonMode bool) (string, error) {
 	if jsonMode {
 		return "", fmt.Errorf("vault password required: set NCLI_VAULT_PASSWORD (no interactive prompt under --json)")
 	}
-	fmt.Fprint(os.Stderr, "Vault password: ")
+	output.Fprint(os.Stderr, "Vault password: ")
 	pw, err := term.ReadPassword(int(syscall.Stdin))
-	fmt.Fprintln(os.Stderr)
+	output.Fprintln(os.Stderr)
 	if err != nil {
 		return "", err
 	}

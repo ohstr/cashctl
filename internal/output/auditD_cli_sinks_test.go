@@ -28,6 +28,7 @@ package output
 import (
 	"encoding/json"
 	"math"
+	"os"
 	"strings"
 	"testing"
 
@@ -209,3 +210,70 @@ func TestAuditD_CLI_SanitizeIsIdempotent(t *testing.T) {
 type plainErr struct{ msg string }
 
 func (e *plainErr) Error() string { return e.msg }
+
+// TestAuditD_CLI_PrintWrappersSanitizeArgs covers the drop-in wrappers package
+// cmd was converted onto. Without these the AST boundary test would be enforcing
+// a route to a function that did nothing — the invariant is "every print goes
+// through output" only because output sanitizes.
+func TestAuditD_CLI_PrintWrappersSanitizeArgs(t *testing.T) {
+	hostile := escClearScreen + "label" + c1CSI + bidiOverride
+
+	t.Run("Printf", func(t *testing.T) {
+		out := string(captureStdout(t, func() { Printf("hub says: %s\n", hostile) }))
+		for _, bad := range allHostile {
+			if strings.Contains(out, bad) {
+				t.Errorf("Printf passed %q through: %q", bad, out)
+			}
+		}
+		if !strings.Contains(out, "hub says:") {
+			t.Errorf("Printf lost its own format text: %q", out)
+		}
+	})
+
+	t.Run("Println", func(t *testing.T) {
+		out := string(captureStdout(t, func() { Println(hostile) }))
+		for _, bad := range allHostile {
+			if strings.Contains(out, bad) {
+				t.Errorf("Println passed %q through: %q", bad, out)
+			}
+		}
+	})
+
+	t.Run("Fprintf to stderr", func(t *testing.T) {
+		out := string(captureStderr(t, func() { Fprintf(os.Stderr, "%s", hostile) }))
+		for _, bad := range allHostile {
+			if strings.Contains(out, bad) {
+				t.Errorf("Fprintf passed %q through: %q", bad, out)
+			}
+		}
+	})
+
+	// An error argument is the common shape for a wallet's own decline text, so
+	// it is sanitized too rather than only plain strings.
+	t.Run("error argument", func(t *testing.T) {
+		out := string(captureStderr(t, func() { Fprintf(os.Stderr, "%v", &plainErr{hostile}) }))
+		for _, bad := range allHostile {
+			if strings.Contains(out, bad) {
+				t.Errorf("an error argument passed %q through: %q", bad, out)
+			}
+		}
+	})
+
+	// Non-string arguments must survive untouched — sanitizing must not turn a
+	// number into something else on its way to a %d.
+	t.Run("numbers untouched", func(t *testing.T) {
+		out := string(captureStdout(t, func() { Printf("%d/%d", 42, int64(9223372036854775807)) }))
+		if out != "42/9223372036854775807" {
+			t.Errorf("numeric args were altered: %q", out)
+		}
+	})
+
+	// Format strings are cashctl's own and may deliberately contain newlines or
+	// tabs; only the args are sanitized, so those survive.
+	t.Run("format newlines survive", func(t *testing.T) {
+		out := string(captureStdout(t, func() { Printf("a\n\tb %s\n", "x") }))
+		if out != "a\n\tb x\n" {
+			t.Errorf("format whitespace was altered: %q", out)
+		}
+	})
+}
