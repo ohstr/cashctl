@@ -244,6 +244,18 @@ var addedColumns = []struct{ table, column, ddl string }{
 	// two apart after the fact — a declined/failed protect left the same
 	// CashSecret shape as a genuinely re-keyed one.
 	{"entries", "cash_protection", `ALTER TABLE entries ADD COLUMN cash_protection TEXT`},
+	// version: an optimistic-concurrency token, not ledger data. ledger.Save
+	// bumps it on every row it updates and refuses an update whose observed
+	// version has moved, so two processes that both Load and then both write
+	// THE SAME row cannot silently lose one of the two transitions (D-CLI-4).
+	// Save is already diff-based, so a row only one process touched was never
+	// at risk — this closes the narrower case where both touched it.
+	//
+	// Nullable with no default, like every other column in this list: NULL
+	// means version 0 and Save reads it through COALESCE, so rows written
+	// before this column existed need no backfill and SQLite never rewrites
+	// them.
+	{"entries", "version", `ALTER TABLE entries ADD COLUMN version INTEGER`},
 	// pending_destination_cash_secret: the cash secret of a bill some OTHER
 	// row's spend is about to create — `transfer --to cash` and
 	// `consolidate --to cash` both mint one locally and only a one-way
