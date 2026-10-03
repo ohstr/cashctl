@@ -47,7 +47,6 @@ so a failure part-way through must not hide which ones already paid.`,
 	// so nothing that already worked changes.
 	cmd.Flags().StringSlice("token", nil, "which held token(s) to redeem — repeatable, or comma-separated (auto-picked if you only hold one)")
 	cmd.Flags().Bool("all", false, "redeem every held token")
-	cmd.Flags().String("transport", "standard", "wire path: standard (one event per token, the default), auto (batch where the hub offers it), private (batch only, never falls back)")
 	cmd.Flags().String("into", "", "which wallet to redeem into (defaults to your default wallet)")
 	cmd.Flags().String("invoice", "", "redeem straight into this external invoice")
 	cmd.Flags().String("as", "", "override credential (pubkey:<priv> | connection-key:... | cash:<secret>)")

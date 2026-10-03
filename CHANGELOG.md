@@ -3,6 +3,7 @@
 ## [0.6.0]
 
 - **Breaking:** `cash list-recipients` is now `cash status`, following the Hub dropping the alias.
+- **Breaking:** `redeem --transport` is gone. Redeems travel over the private transport only and batch automatically — one relay event per Hub, no flag and no fallback. The flag had already stopped being read, so it was accepted and ignored; it is now rejected.
 - **Breaking:** bill methods (`redeem`, `consolidate`, `cash status`) are served over the private transport only and never fall back, so this release needs a Hub that serves them that way.
 - `transfer --to cash` and `consolidate --to cash` write the destination bill's cash secret to the ledger *before* placing the call, not after the reply. That secret is generated locally and only a one-way commitment of it ever reaches the Hub, so a Ctrl-C or crash mid-flight used to destroy the only copy in existence and leave a bill funded and unspendable by anyone. `wallet show` now lists any such unfinished send, with the secret, so an interrupted one can still be recovered with the Hub's help. (Audit finding D-CLI-1.)
 - `redeem` takes several tokens in one command: `--token` is repeatable and comma-separated, and `--all` redeems every held token. Each token is paid into its own invoice, so `--invoice` still accepts only one.
