@@ -1,10 +1,10 @@
 # Changelog
 
-## [0.6.0]
+## [0.6.0-rc.2]
 
 - **Breaking:** `cash list-recipients` is now `cash status`, following the Hub dropping the alias.
 - **Breaking:** `redeem --transport` is gone. Redeems travel over the private transport only and batch automatically — one relay event per Hub, no flag and no fallback. The flag had already stopped being read, so it was accepted and ignored; it is now rejected. ([#24](https://github.com/ohstr/cashctl/pull/24))
-- **Breaking:** bill methods (`redeem`, `consolidate`, `cash status`) are served over the private transport only and never fall back, so this release needs a Hub that serves them that way.
+- **Breaking:** bill methods (`redeem`, `consolidate`, `cash status`) are served over the private transport only and never fall back. No tagged lokihub release is confirmed to serve them that way yet — this is verified only against the live Hub this project's integration suite runs against (`lab.in.ionance.com:5610`). An older or unsupporting Hub rejects these calls outright.
 - `transfer --to cash` and `consolidate --to cash` write the destination bill's cash secret to the ledger *before* placing the call, not after the reply. That secret is generated locally and only a one-way commitment of it ever reaches the Hub, so a Ctrl-C or crash mid-flight used to destroy the only copy in existence and leave a bill funded and unspendable by anyone. `wallet show` now lists any such unfinished send, with the secret, so an interrupted one can still be recovered with the Hub's help. (Audit finding D-CLI-1.)
 - A failed local save after a Hub-side spend now hands back the `<token>#<cash_secret>` recovery string in full, on its own line in text mode and as a new `recovery` key under `--json`. A cash secret is exactly 64 hex characters, so the redaction that keeps secrets out of error text was rewriting it to `#<redacted>` — the one message whose purpose is handing over the only remaining copy of a spending secret printed everything except the secret. ([#27](https://github.com/ohstr/cashctl/pull/27))
 - That same failure's fallback advice names `cashctl cash status`, not the `cash list-recipients` spelling this release renamed. ([#27](https://github.com/ohstr/cashctl/pull/27))
