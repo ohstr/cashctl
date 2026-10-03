@@ -50,10 +50,15 @@ func entryRecoveryHint(e *ledger.Entry) string {
 // pointing at wallet show / the Hub's own records.
 func reportUnsavedResult(cmd *cobra.Command, saveErr error, verb, recoveryHint string) error {
 	msg := fmt.Sprintf("%s succeeded on the Hub, but saving that locally failed (%v) — your wallet's local record does not match reality.", verb, saveErr)
-	if recoveryHint != "" {
-		msg += " " + recoveryHint
-	} else {
+	if recoveryHint == "" {
 		msg += " Check `cashctl wallet show`/`cashctl cash list-recipients` and try again before assuming anything failed."
+		return output.RuntimeError(cmd, fmt.Errorf("%s", msg))
 	}
-	return output.RuntimeError(cmd, fmt.Errorf("%s", msg))
+	// The hint travels as Recovery, NOT appended to msg. Appended, it went
+	// through wrapCLIError's catch-all RedactSecretInput, whose
+	// giftSecretPattern matches `#<64 hex>` — exactly the shape of a cash
+	// secret — and rewrote the handoff to `#<redacted>`. So the one message
+	// that exists to hand over the only copy of a spending secret printed
+	// everything except the secret (D-CLI-6).
+	return output.RecoveryError(cmd, fmt.Errorf("%s", msg), recoveryHint)
 }
