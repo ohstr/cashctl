@@ -88,27 +88,53 @@ func Path() (string, error) {
 // created at a different location than the one chmod'd afterwards, with
 // default permissions, and init failed. Only those three characters need
 // escaping; everything else in a path is literal in URI mode.
-// journal_mode(WAL): the default rollback journal makes a writer block readers
-// and a reader block the writer, which is this ledger's exact access pattern —
-// Load, a network round trip, then Save, on two independent connections, plus
-// two BEGIN IMMEDIATE migrations on every Open. Under WAL neither blocks the
-// other. 25d70a7 (two processes both adding a column) and the -race-widened
-// SQLITE_BUSY window in TestOpen_RenameConcurrent both came out of that
-// contention.
-//
-// `synchronous` is deliberately left at its default. WAL plus synchronous(NORMAL)
-// is the usual pairing, and it can lose the last committed transaction on power
-// loss — here that transaction is a redeem whose money has already moved on the
-// Hub. No durability trade on this database for a throughput win.
-//
-// A failed mode change is NOT fatal, and nothing below asserts the result: WAL
-// needs shared memory and does not work on most network filesystems, so a
-// --config-dir on NFS has to keep opening. SQLite answers a journal_mode pragma
-// it cannot honour by reporting the mode it kept, not by failing, so this
-// degrades to the previous behaviour on its own.
+// journal_mode is deliberately NOT set here — see enableWAL, which does it after
+// the connection is up precisely because a DSN pragma that fails takes the whole
+// connection down with it.
 func sqliteDSN(path string) string {
 	esc := strings.NewReplacer("%", "%25", "?", "%3F", "#", "%23").Replace(path)
-	return "file:" + esc + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
+	return "file:" + esc + "?_pragma=busy_timeout(5000)"
+}
+
+// enableWAL switches the database to WAL, best effort, reporting nothing.
+//
+// Why WAL: the default rollback journal makes a writer block readers and a reader
+// block the writer, which is this ledger's exact access pattern — Load, a network
+// round trip, then Save, on two independent connections, plus two BEGIN IMMEDIATE
+// migrations on every Open. 25d70a7 (two processes both adding a column) and the
+// -race-widened SQLITE_BUSY window in TestOpen_RenameConcurrent both came out of
+// that contention.
+//
+// Why best effort, and why not in the DSN — this is the part that was learned the
+// hard way. Changing journal_mode needs an exclusive lock, and SQLite answers a
+// WAL transition it cannot take with SQLITE_BUSY *immediately*: busy_timeout does
+// not apply to it. Set as a DSN pragma, that failure took the connection itself
+// down and surfaced on the first statement as
+// "cashctl.db schema migration: database is locked (5) (SQLITE_BUSY)". Five
+// concurrent `cashctl init` runs on one fresh directory then failed about once in
+// fifty, measured, against zero in fifty without WAL. A wallet must not fail to
+// initialise because another copy of it was initialising at the same instant.
+//
+// Doing it here is safe because WAL is a PERSISTENT property of the database
+// file: it only has to be set successfully once, ever. Whichever process wins
+// sets it for every later one, and until then the database behaves exactly as it
+// did before. WithBusyRetry absorbs brief contention; a lasting failure is
+// ignored, which also covers the filesystem that cannot support WAL at all (it
+// needs shared memory, so most network mounts cannot) — a --config-dir on NFS
+// keeps working rather than becoming unopenable.
+//
+// `synchronous` is deliberately left alone. WAL plus synchronous(NORMAL) is the
+// usual pairing and can lose the last committed transaction on power loss — here
+// that transaction is a redeem whose money has already moved on the Hub. No
+// durability trade on this database for a throughput win.
+func enableWAL(db *sql.DB) {
+	// QueryRow, not Exec: the pragma answers with the resulting mode, and the row
+	// has to be consumed. The result is intentionally discarded — nothing about
+	// correctness here depends on which mode we ended up in.
+	var mode string
+	_ = WithBusyRetry(func() error {
+		return db.QueryRow(`PRAGMA journal_mode = WAL`).Scan(&mode)
+	})
 }
 
 // Open opens (creating and migrating if needed) cashctl's single local
@@ -136,6 +162,9 @@ func Open() (*sql.DB, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Before the first statement, so the migrations below run under WAL, but
+	// tolerant of failing: see enableWAL for why it must never be fatal.
+	enableWAL(db)
 	if _, err := db.Exec(schema); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("cashctl.db schema migration: %w", err)
