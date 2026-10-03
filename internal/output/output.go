@@ -170,6 +170,13 @@ func EmitError(cmd *cobra.Command, err error) {
 		if ce.NWCCode != "" {
 			payload["nwc_code"] = ce.NWCCode
 		}
+		// Sanitized but never capped (see CLIError.Recovery): a truncated
+		// <token>#<secret> is as useless as a redacted one. Sanitize cannot
+		// shorten it — it substitutes rune-for-rune — so this is safe here in a
+		// way a length bound would not be.
+		if ce.Recovery != "" {
+			payload["recovery"] = Sanitize(ce.Recovery)
+		}
 		enc := json.NewEncoder(os.Stderr)
 		enc.SetIndent("", "  ")
 		_ = enc.Encode(payload)
@@ -190,6 +197,12 @@ func EmitError(cmd *cobra.Command, err error) {
 		msg = fmt.Sprintf("%s (%s)", msg, ce.RawMessage)
 	}
 	fmt.Fprintf(os.Stderr, "%s %s\n", errorPrefix(isColorTerminal(os.Stderr)), msg)
+	// On its own line, with no "Error:" prefix, so it can be selected and
+	// copied as-is — this is the one error whose text the user has to act on
+	// character-for-character.
+	if ce.Recovery != "" {
+		fmt.Fprintf(os.Stderr, "%s\n", Sanitize(ce.Recovery))
+	}
 	// ShowUsage (InvocationError, see its own doc comment): a genuine
 	// malformed-invocation error — wrong arg count, unknown flag/command, a
 	// missing or conflicting flag — follows the "Error: ..." line with the
