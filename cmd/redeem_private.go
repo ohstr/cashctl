@@ -270,9 +270,14 @@ func redeemHubGroup(
 		items = append(items, nipcashclient.BatchRedeem{
 			// The ledger id, so every outcome joins straight back to its entry
 			// without relying on ordering.
-			ID:     p.Entry.ID,
-			Bill:   bill,
-			Params: nipcash.CashRedeemParams{Invoice: p.Invoice, Credential: p.Cred},
+			ID:   p.Entry.ID,
+			Bill: bill,
+			// Amount nil for everything except an explicit, amountless
+			// --invoice paired with --amount (invoiceAmountOverride) — the
+			// one case where the invoice itself has nothing to encode and
+			// the override is the only source of truth for how much to pay
+			// out of this bill.
+			Params: nipcash.CashRedeemParams{Invoice: p.Invoice, Credential: p.Cred, Amount: p.InvoiceAmount},
 		})
 	}
 	if len(items) == 0 {

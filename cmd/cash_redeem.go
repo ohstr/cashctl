@@ -37,6 +37,7 @@ so a failure part-way through must not hide which ones already paid.`,
   cashctl redeem savings --token tok-abc123
   cashctl redeem --token tok-abc123,tok-def456
   cashctl redeem --all
+  cashctl redeem --amount 300
   cashctl redeem --invoice lnbc1...`,
 		Args: output.MaximumNArgs(1),
 		RunE: runCashRedeem,
@@ -47,6 +48,11 @@ so a failure part-way through must not hide which ones already paid.`,
 	// so nothing that already worked changes.
 	cmd.Flags().StringSlice("token", nil, "which held token(s) to redeem — repeatable, or comma-separated (auto-picked if you only hold one)")
 	cmd.Flags().Bool("all", false, "redeem every held token")
+	// String, not a positional: redeem's own positional slot already means the
+	// destination wallet, so an amount has nowhere to go but a flag. Net, not
+	// gross — see selectHeldTokensForRedeemAmount's own doc comment for why,
+	// and for the one case it's deliberately NOT built to handle yet.
+	cmd.Flags().String("amount", "", fmt.Sprintf("redeem this much, in %s, landing at the destination after any fee — selects which held token(s) cover it exactly (mutually exclusive with --token/--all)", output.CurrencyUnit))
 	cmd.Flags().String("into", "", "which wallet to redeem into (defaults to your default wallet)")
 	cmd.Flags().String("invoice", "", "redeem straight into this external invoice")
 	cmd.Flags().String("as", "", "override credential (pubkey:<priv> | connection-key:... | cash:<secret>)")
@@ -57,10 +63,16 @@ func runCashRedeem(cmd *cobra.Command, args []string) error {
 	jsonMode, _ := cmd.Flags().GetBool("json")
 	explicitInvoice, _ := cmd.Flags().GetString("invoice")
 	intoFlagValue, _ := cmd.Flags().GetString("into")
+	var invoiceOverrideAmount *uint64
 	if explicitInvoice != "" {
 		if err := validateInvoiceShape(explicitInvoice); err != nil {
 			return output.InvalidInputError(cmd, explicitInvoice, err)
 		}
+		amt, err := invoiceAmountOverride(cmd, explicitInvoice)
+		if err != nil {
+			return err
+		}
+		invoiceOverrideAmount = amt
 	}
 
 	var positionalInto string
@@ -110,7 +122,7 @@ func runCashRedeem(cmd *cobra.Command, args []string) error {
 	// a cash-mode token with no stored secret comes first, and
 	// TestRedeem_NoWalletConfigured's reasoning depends on exactly that
 	// precedence.
-	plans, outcomes := prepareRedeems(ctx, cmd, l, entries, explicitInvoice, jsonMode)
+	plans, outcomes := prepareRedeems(ctx, cmd, l, entries, explicitInvoice, invoiceOverrideAmount, jsonMode)
 	defer func() {
 		for _, p := range plans {
 			// Nil for a bill quoted in a batch: nothing about it was ever
@@ -268,6 +280,13 @@ type redeemPlan struct {
 	Client  *nipcashclient.Client
 	Quote   redeemQuote
 	Invoice string
+	// InvoiceAmount overrides Invoice's own encoded amount — set only for an
+	// explicit, amountless --invoice paired with --amount, mirroring
+	// nip47.PayInvoiceParams' own override. nil for everything else: a
+	// fixed-amount invoice's own encoding is authoritative and --amount is
+	// refused alongside one (invoiceAmountOverride), and the batched/no-
+	// --invoice path has nothing to override at all.
+	InvoiceAmount *uint64
 }
 
 // redeemOutcome is what happened to one selected bill. Three states, matching
@@ -292,6 +311,7 @@ func prepareRedeems(
 	l *ledger.Ledger,
 	entries []*ledger.Entry,
 	explicitInvoice string,
+	invoiceOverrideAmount *uint64,
 	jsonMode bool,
 ) ([]redeemPlan, []redeemOutcome) {
 	outcomes := make([]redeemOutcome, len(entries))
@@ -352,6 +372,28 @@ func prepareRedeems(
 			plan.Invoice = explicitInvoice
 			if entry.AmountMillis != nil {
 				plan.Quote = redeemQuote{AmountMillis: *entry.AmountMillis}
+			}
+			if invoiceOverrideAmount != nil {
+				// A real quote, not the bare AmountMillis placeholder two
+				// lines up: bounding a Hub-supplied ceiling against a
+				// locally-specified amount needs the actual
+				// NetRedeemableMillis, the same invariant this package's
+				// audit guard (validateQuotedAmounts, referenced from every
+				// other site that persists a Hub-supplied amount) already
+				// enforces everywhere else.
+				q, qErr := resolveRedeemQuote(cmd, l, entry, plan.Client)
+				if qErr != nil {
+					outcomes[i] = redeemOutcome{EntryID: entry.ID, Err: qErr}
+					continue
+				}
+				plan.Quote = q
+				if *invoiceOverrideAmount > q.NetRedeemableMillis {
+					outcomes[i] = redeemOutcome{EntryID: entry.ID, Err: output.InvalidInputError(cmd, "",
+						fmt.Errorf("--amount %s exceeds this bill's own net redeemable value of %s",
+							output.FormatAmount(int64(*invoiceOverrideAmount)), output.FormatAmount(int64(q.NetRedeemableMillis))))}
+					continue
+				}
+				plan.InvoiceAmount = invoiceOverrideAmount
 			}
 			plans = append(plans, plan)
 			continue
@@ -693,9 +735,28 @@ func redeemRecoveryHint(outcomes []redeemOutcome) string {
 func resolveHeldTokensForRedeem(cmd *cobra.Command, l *ledger.Ledger) ([]*ledger.Entry, error) {
 	ids, _ := cmd.Flags().GetStringSlice("token")
 	all, _ := cmd.Flags().GetBool("all")
+	amountFlag, _ := cmd.Flags().GetString("amount")
+	explicitInvoice, _ := cmd.Flags().GetString("invoice")
 
 	if len(ids) > 0 && all {
 		return nil, output.InvocationError(cmd, fmt.Errorf("got both --token and --all — pass one or the other"))
+	}
+
+	// --amount means something ENTIRELY different with --invoice (an override
+	// for an amountless invoice, already fully validated and consumed by
+	// invoiceAmountOverride before this function is ever reached) than
+	// without it (which held token(s) to select). Only the latter belongs
+	// here — an explicit --invoice still resolves its one bill through
+	// --token/bare-pick below, exactly as it always has.
+	if amountFlag != "" && explicitInvoice == "" {
+		if len(ids) > 0 || all {
+			return nil, output.InvocationError(cmd, fmt.Errorf("got --amount with --token/--all — pass one or the other"))
+		}
+		target, err := output.ParseAmount(amountFlag)
+		if err != nil {
+			return nil, output.InvalidInputError(cmd, amountFlag, err)
+		}
+		return selectHeldTokensForRedeemAmount(cmd, l, target)
 	}
 
 	if len(ids) > 0 {
@@ -1326,4 +1387,201 @@ func entryPointers(entries []ledger.Entry) []*ledger.Entry {
 		out[i] = &e
 	}
 	return out
+}
+
+// selectHeldTokensForRedeemAmount is --amount's own selection: which held
+// token(s) land exactly target at the destination, net of whatever fee the
+// Hub quotes, with none of it the caller's job to work out.
+//
+// Deliberately scoped to the two cases that are fully deterministic from
+// data already in hand — an exact single-token match, or an exact same-Hub
+// sum — and no further. A carve (splitting an existing token to hit an
+// amount nothing already matches) is NOT attempted here, and that is a
+// confirmed limit, not a shortcut: NIP-CASH's own quote response
+// (RecipientStatus) exposes only AmountMillis/RedeemFeeMillis/
+// NetRedeemableMillis/MinTransferMillis, never the raw redeem_fee_ppm/
+// redeem_fee_base rate. One quote is one (gross, fee) sample; the fee
+// formula has two independent unknowns, so the exact face value to carve
+// for an arbitrary target cannot be computed in one deterministic pass —
+// resolving it needs a second measurement (carve an estimate, quote the
+// real fee, carve a corrective top-up, consolidate, redeem), which is its
+// own design and audit pass, not a line item here. See
+// docs/private/amount-first-decisions.md for the full trace, including the
+// two earlier, wrong guesses this took to reach.
+//
+// Net, not gross: `redeem 500` means 500 lands at the destination, matching
+// both LN convention (an invoice's amount is what the payee receives) and
+// redeemInvoiceAmount's own existing rule for a whole-bill redeem. Matching
+// is therefore against NetRedeemableMillis, each candidate's OWN live
+// quote — not AmountMillis, the cached face value, which a nonzero fee
+// would make wrong.
+func selectHeldTokensForRedeemAmount(cmd *cobra.Command, l *ledger.Ledger, target uint64) ([]*ledger.Entry, error) {
+	held := l.Held()
+	if len(held) == 0 {
+		return nil, output.NotFoundError(cmd, "", fmt.Errorf("you have no held cash tokens — receive one first with `cashctl receive <token>`"))
+	}
+
+	type quotedEntry struct {
+		entry *ledger.Entry
+		net   uint64
+		hub   string
+	}
+	quotes := make([]quotedEntry, 0, len(held))
+	var totalNet uint64
+	for _, h := range held {
+		if h.AmountMillis == nil {
+			continue // nothing to quote; same guard SelectForAmount uses
+		}
+		e, ok := l.Find(h.ID)
+		if !ok {
+			continue
+		}
+		q, err := quoteHeldCandidate(cmd, e)
+		if err != nil {
+			// Best-effort: one candidate this process can't currently quote
+			// (expired, a transient network hiccup, a credential this
+			// invocation doesn't have) just isn't considered — it does not
+			// fail the whole selection, the same way a single bad entry
+			// doesn't abort consolidate's own auto-grouping.
+			continue
+		}
+		totalNet += q.NetRedeemableMillis
+		if q.NetRedeemableMillis == target {
+			return []*ledger.Entry{e}, nil // exact single match — short-circuit, no further quoting needed
+		}
+		quotes = append(quotes, quotedEntry{entry: e, net: q.NetRedeemableMillis, hub: ledger.HubGroupKey(*e)})
+	}
+
+	byHub := make(map[string][]quotedEntry)
+	for _, q := range quotes {
+		if q.hub == "" {
+			continue // no recoverable issuing Hub — ungroupable, same as consolidate's own rule
+		}
+		byHub[q.hub] = append(byHub[q.hub], q)
+	}
+	for _, group := range byHub {
+		nets := make([]uint64, len(group))
+		for i, g := range group {
+			nets[i] = g.net
+		}
+		if idxs, ok := exactSubsetSumNet(nets, target); ok {
+			out := make([]*ledger.Entry, len(idxs))
+			for i, idx := range idxs {
+				out[i] = group[idx].entry
+			}
+			return out, nil
+		}
+	}
+
+	// Classified here, not left as the raw ledger error types transfer's own
+	// SelectForAmount returns to ITS caller for classification — this
+	// function has no other caller, so there is no benefit to deferring it,
+	// and an unclassified error reaching EmitError would fall back to a
+	// generic internal (exit 1) rather than the specific, actionable code
+	// transfer's own identical cases already get.
+	if totalNet < target {
+		return nil, output.InvalidInputError(cmd, "", fmt.Errorf("not enough funds: you hold %s net redeemable, need %s",
+			output.FormatAmount(int64(totalNet)), output.FormatAmount(int64(target))))
+	}
+	return nil, output.UsageError(cmd, fmt.Errorf("%w: you hold %s total, but no single Hub's tokens sum to exactly the %s you're redeeming",
+		ledger.ErrFundsFragmented, output.FormatAmount(int64(totalNet)), output.FormatAmount(int64(target))))
+}
+
+// quoteHeldCandidate dials entry's own token standalone and returns its live
+// redeem quote — the same resolveRedeemQuote every other redeem path uses,
+// just with its own connection rather than a shared one, since selection
+// runs before any entry has been committed to.
+func quoteHeldCandidate(cmd *cobra.Command, entry *ledger.Entry) (redeemQuote, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	client, err := nipcashclient.Connect(ctx, entry.Token)
+	if err != nil {
+		return redeemQuote{}, err
+	}
+	defer client.Close()
+	l, err := ledger.Load()
+	if err != nil {
+		return redeemQuote{}, err
+	}
+	return resolveRedeemQuote(cmd, l, entry, client)
+}
+
+// exactSubsetSumNetLimit bounds the subset-sum search below, so a holder
+// with an unusually large number of same-Hub tokens degrades to "no exact
+// sum found" (same outcome as fragmentation) rather than a 2^N search —
+// conservative, and documented rather than silent.
+const exactSubsetSumNetLimit = 20
+
+// exactSubsetSumNet finds indices into nets whose values sum to EXACTLY
+// target, or reports none found. Exhaustive but bounded
+// (exactSubsetSumNetLimit); realistic holdings are small, and this is
+// selection logic, not a hot path. Plain []uint64 rather than a generic
+// constraint: the only caller already has the net values in hand, and a
+// method on a function-local struct type isn't legal Go anyway.
+func exactSubsetSumNet(nets []uint64, target uint64) ([]int, bool) {
+	if len(nets) > exactSubsetSumNetLimit {
+		return nil, false
+	}
+	n := len(nets)
+	for mask := 1; mask < (1 << n); mask++ {
+		var sum uint64
+		for i := 0; i < n; i++ {
+			if mask&(1<<i) != 0 {
+				sum += nets[i]
+			}
+		}
+		if sum == target {
+			var idxs []int
+			for i := 0; i < n; i++ {
+				if mask&(1<<i) != 0 {
+					idxs = append(idxs, i)
+				}
+			}
+			return idxs, true
+		}
+	}
+	return nil, false
+}
+
+// invoiceAmountOverride is --invoice's own interaction with --amount
+// (decided in docs/private/amount-first-decisions.md, question 3), mirroring
+// how every LN wallet treats a pasted invoice's own amount field: locked
+// when the invoice already fixes one, the only source of truth when it
+// doesn't.
+//
+//   - invoice fixes an amount, --amount also given → usage error, naming the
+//     invoice's own amount, so the conflict is legible rather than a silent
+//     "which one wins".
+//   - invoice is open (no encoded amount) and --amount is NOT given → usage
+//     error. There is no other source for the figure; letting this reach the
+//     Hub as a bare amountless request would fail far less legibly than
+//     cashctl can fail it itself.
+//   - invoice is open and --amount IS given → that amount is the answer,
+//     returned here to travel as redeemPlan.InvoiceAmount. Bound-checked
+//     against the bill's own live quote where the plan is built — not here,
+//     before any bill is even selected.
+//   - no --invoice at all → not called.
+func invoiceAmountOverride(cmd *cobra.Command, invoice string) (*uint64, error) {
+	amountFlag, _ := cmd.Flags().GetString("amount")
+	fixedMloki, err := bolt11AmountMloki(invoice)
+	if err != nil {
+		return nil, output.InvalidInputError(cmd, invoice, err)
+	}
+	if fixedMloki != nil {
+		if amountFlag != "" {
+			return nil, output.InvocationError(cmd, fmt.Errorf(
+				"this invoice already asks for %s — --amount is only for an invoice that doesn't fix one",
+				output.FormatAmount(*fixedMloki)))
+		}
+		return nil, nil
+	}
+	if amountFlag == "" {
+		return nil, output.InvocationError(cmd, fmt.Errorf(
+			"this invoice doesn't encode an amount — pass --amount to say how much to redeem into it"))
+	}
+	amt, err := output.ParseAmount(amountFlag)
+	if err != nil {
+		return nil, output.InvalidInputError(cmd, amountFlag, err)
+	}
+	return &amt, nil
 }
