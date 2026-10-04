@@ -144,3 +144,19 @@ identity is allowlisted to join" (only `cashctl join` itself, by actually
 attempting it, can tell you that). `--check` is a no-op for an NWC URI —
 `cashctl connect add` already answers "is it reachable" by dialing for
 real.
+
+## End-to-end: first-time setup through a paid invoice
+
+Each command above in isolation; chained, a fresh agentic session goes
+from nothing to a paid invoice in four calls:
+
+```sh
+cashctl init --json                                    # fresh identity, no wallet connection yet
+cashctl connect add work nostr+walletconnect://... --json  # register a wallet; first one is auto-set default
+cashctl wallet get-info --json                         # confirm it's actually reachable before relying on it
+cashctl wallet pay lnbc1... --json                     # pays from "work", the now-current default
+```
+
+Swap the last call for `cashctl wallet invoice 5 --json` instead to
+*receive* 5 loki rather than pay — same default-wallet resolution either
+way.
