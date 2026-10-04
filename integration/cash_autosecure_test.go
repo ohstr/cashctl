@@ -313,3 +313,117 @@ func TestCashReceive_AutoSecuresCashReceipt_MergesWithExistingHolding(t *testing
 		t.Errorf("redeem (merged holding): empty preimage: %v", redeemResp)
 	}
 }
+
+// TestCashReceive_AutoSecuresCashReceipt_ExcludesExpiredSiblingFromMerge is
+// TestCashReceive_AutoSecuresCashReceipt_MergesWithExistingHolding's
+// counterpart once the existing same-minter holding is already expired by
+// the time the fresh gift arrives: buildConsolidateWith now excludes a
+// confirmed-expired sibling from the merge rather than poisoning the
+// fresh receipt's own good deadline with it (NIP-CASH's merge rule
+// inherits the earliest expiry across every source). The only other
+// candidate is excluded, so the merge set is empty and protectCashReceipt
+// falls back to its no-merge rekey-only path — the fresh receipt still
+// ends up protected, just not merged, and the expired sibling is left
+// exactly as it was.
+func TestCashReceive_AutoSecuresCashReceipt_ExcludesExpiredSiblingFromMerge(t *testing.T) {
+	cfg, err := LoadConfig("")
+	if err != nil {
+		t.Skipf("skipping: could not load integration config (%v) — see integration/README.md", err)
+	}
+	admin, ok := newAdminClient(cfg)
+	if !ok {
+		t.Skip("skipping: admin_api not configured — see integration/README.md")
+	}
+
+	f := newFixture(t)
+	initResp := f.mustJSON("wallet", "init")
+	npub, _ := initResp["npub"].(string)
+	myPubHex, err := npubToHex(npub)
+	if err != nil {
+		t.Fatalf("decode local identity npub: %v", err)
+	}
+
+	hub := setUpCashHub(t, admin) // default 1h ceiling — plenty for the fresh gift
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cashClient := dialCash(t, ctx, hub.PairingUri)
+
+	const (
+		existingAmount = uint64(20_000)
+		cashAmount     = uint64(40_000)
+	)
+
+	// The existing holding, mint-signed, deliberately short-lived — same
+	// helper cash_expiration_matrix_test.go's own expiry tests use.
+	existingToken, minter1, ok1 := mintSignedPubkeyTokenExpiry(t, f, hub, myPubHex, existingAmount, shortCashExpirySecs)
+	if !ok1 {
+		t.Skip("skipping: this Hub did not attach a mint signature (best-effort — see NIP-CASH §Mint Provenance) — same-minter grouping can't be exercised without one")
+	}
+	receiveExisting := f.mustJSON("receive", existingToken)
+	existingID, _ := receiveExisting["entry"].(map[string]any)["id"].(string)
+	if existingID == "" {
+		t.Fatalf("receive (existing holding): missing entry id: %v", receiveExisting)
+	}
+
+	waitPastCashExpiry()
+
+	// Minted AFTER the wait: the fresh gift itself must stay healthy, only
+	// the existing sibling is expired.
+	cashResult, err := cashClient.MintCash(ctx, nipcash.MintCashParams{
+		Recipients: []nipcash.Allocation{nipcash.Send(nipcash.Anyone(), cashAmount)},
+	})
+	if err != nil {
+		t.Fatalf("mint_cash (cash, signed): %v", err)
+	}
+	if len(cashResult.Recipients) != 1 || cashResult.Recipients[0].CashSecret == "" {
+		t.Fatalf("mint_cash (cash, signed): expected exactly one recipient with a cash_secret: %+v", cashResult.Recipients)
+	}
+	decodeResp := f.mustJSON("decode", cashResult.CashToken)
+	minter2, valid := decodeResp["minter_pubkey"].(string)
+	if !valid || minter2 == "" {
+		t.Skip("skipping: this Hub did not attach a mint signature to the cash-mode mint")
+	}
+	if minter1 != minter2 {
+		t.Skipf("skipping: the two tokens' recovered minter pubkeys differ (%s vs %s) — can't exercise same-minter grouping", minter1, minter2)
+	}
+
+	giftString := cashResult.CashToken + "#" + cashResult.Recipients[0].CashSecret
+	receiveResp := f.mustJSON("receive", giftString)
+	secured, _ := receiveResp["secured"].(map[string]any)
+	if secured == nil {
+		t.Fatalf("receive: no \"secured\" report in response: %v", receiveResp)
+	}
+	// Not "consolidated": the only other same-minter candidate is already
+	// expired and must be excluded, leaving nothing to merge with.
+	if secured["status"] != "rekeyed" {
+		t.Fatalf(`receive: secured.status = %v, want "rekeyed" (the only same-minter sibling is expired and must be excluded, not merged); secured.error = %v`, secured["status"], secured["error"])
+	}
+
+	entry, _ := receiveResp["entry"].(map[string]any)
+	gotAmount, _ := entry["amount_millis"].(float64)
+	if uint64(gotAmount) != cashAmount {
+		t.Errorf("final entry amount_millis = %v, want %d (rekeyed alone, not merged with the expired sibling)", entry["amount_millis"], cashAmount)
+	}
+
+	// The expired sibling is left exactly as it was: still held, under its
+	// own ID, same amount — never touched by the merge it was excluded
+	// from.
+	showResp := f.mustJSON("wallet", "show")
+	held, _ := showResp["held_tokens"].([]any)
+	if len(held) != 2 {
+		t.Fatalf("wallet show: held_tokens = %v, want exactly 2 (expired sibling untouched, fresh receipt rekeyed separately)", held)
+	}
+	var foundExisting bool
+	for _, h := range held {
+		row, _ := h.(map[string]any)
+		if row["id"] == existingID {
+			foundExisting = true
+			if got, _ := row["amount_millis"].(float64); uint64(got) != existingAmount {
+				t.Errorf("existing (expired) entry amount_millis = %v, want unchanged %d", row["amount_millis"], existingAmount)
+			}
+		}
+	}
+	if !foundExisting {
+		t.Errorf("existing (expired) entry %s no longer held — must not be consumed by the excluded merge", existingID)
+	}
+}
