@@ -62,7 +62,12 @@ receive). A wire failure here reports `{"status": "failed", "error":
 "..."}` but never fails `receive` itself — the cash is already genuinely
 yours; retry protecting later with `cashctl wallet protect [id]` (or
 `--token <id>`, same effect — re-keys a single still-shared holding in
-place; `consolidate --to cash` needs 2+ sources). Because the secret is always captured — and kept current
+place; `consolidate --to cash` needs 2+ sources). With no id and more than
+one still-shared holding, re-keys **every** one of them instead of asking
+which — unlike `redeem`, nothing here leaves your control, so an
+ambiguous selection has nothing to lose, and `--json`/`--yes` with several
+eligible returns an array (`{"protected": [...]}`, each row carrying
+`id`) rather than refusing as ambiguous. Because the secret is always captured — and kept current
 — up front, `redeem`/`transfer` never need a `--as cash:<secret>`
 override for a held token.
 
@@ -73,6 +78,7 @@ cashctl redeem --json                              # auto-picks your one held to
 cashctl redeem work --token tok-a1b2 --json         # positional wallet name — or --into work
 cashctl redeem --token tok-a1b2,tok-c3d4 --json     # several at once — repeatable, or comma-separated
 cashctl redeem --all --json                        # every held token
+cashctl redeem --amount 300 --json                 # selects which held token(s) land exactly 300, net of any fee
 cashctl redeem --invoice lnbc1... --json           # bypasses both — any invoice, no cashctl wallet needed
 ```
 
@@ -82,6 +88,28 @@ comma-separated list); `--all` selects every held token. `--token` and
 (the second attempt could only fail, and would fail as a misleading
 network timeout, because a Hub deletes a spent slice and then stays silent
 about it).
+
+**`--amount`** selects which held token(s) to use, so there's no `--token`
+id to look up first: `redeem --amount 300` lands exactly 300 at the
+destination, after whatever fee the Hub quotes — an exact single-token net
+match, or an exact same-Hub net sum if no single token covers it alone
+(same reasoning as `transfer --amount`'s own coin-selection, but matched
+against each candidate's live net-redeemable quote, not its cached face
+value — a nonzero fee makes those different numbers). No combination found
+is a plain refusal naming what's held and what was asked for, not a guess:
+redeeming part of a token that doesn't already exist to hit an odd amount
+is **not attempted** — it would need a second live measurement to do
+exactly (the fee rate isn't exposed on the wire, only its effect on one
+already-existing amount), and that's a deliberately separate piece of work,
+not folded in here. `--amount` and `--token`/`--all` are mutually
+exclusive — pick one.
+
+With `--invoice`, `--amount` means something different: the invoice
+usually fixes its own amount, so pairing one that does with `--amount` is
+a usage error (same as pasting a fixed-amount invoice into any Lightning
+wallet — the amount field is locked). An amount-less invoice has no figure
+of its own, so there `--amount` is required, not just accepted, and is
+checked against the bill's own live quote before anything is sent.
 
 Each token is paid out into **its own invoice**: a slice pays out exactly
 once and an invoice is payable once, so N tokens need N invoices, all
@@ -146,9 +174,9 @@ If you hold more than one token and none of
 instead of failing outright — accepting a comma-separated selection or
 `all`, though a bare Enter is **not** "all" here, since redeeming pays out
 irreversibly and the cheap default must be the one that spends nothing.
-Under `--json`/`--yes`/a non-interactive script, `--token <id>` or `--all`
-is still required (`cashctl wallet show` lists held-token IDs), since
-there's no terminal to prompt from — note this is deliberately stricter
+Under `--json`/`--yes`/a non-interactive script, `--token <id>`, `--all`
+or `--amount` is still required (`cashctl wallet show` lists held-token
+IDs), since there's no terminal to prompt from — note this is deliberately stricter
 than `consolidate`, which does process every group non-interactively,
 because consolidating keeps the value yours and redeeming does not. A
 **connection-key-bound** token needs an explicit `--as
@@ -291,7 +319,14 @@ longer exists.
 
 ```sh
 cashctl cash status --token tok-a1b2 --json  # network call — your allocation + co-recipients
+cashctl cash status --json                   # with no id and several held, reports every one
 ```
+
+With no id and more than one held token, reports every one of them in a
+`{"statuses": [...]}` array instead of refusing — this is pure read
+access, so it's even less contentious than `wallet protect`'s own version
+of the same rule above: nothing moves at all, let alone leaves your
+control.
 
 For mint-signature verification or a plain field dump of a token
 (`wallet_pubkey`, `relays`, `mint_signature_valid`/`minter_pubkey` if
