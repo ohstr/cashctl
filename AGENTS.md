@@ -27,16 +27,16 @@ stderr.
 | `cashctl wallet history` | Local action log (receive/redeem/transfer/consolidate) |
 | `cashctl wallet use <name>` / `cashctl connect use <name>` | Switch your default wallet |
 | `cashctl wallet balance [--breakdown\|-v] [--from <name>]` | Unified balance: every wallet's live balance + every held token's value |
-| `cashctl wallet protect [id] [--token <id>]` | Re-key a still-shared cash-mode holding so the original code can no longer spend it — `receive` does this automatically; use this if that was declined or failed |
+| `cashctl wallet protect [id] [--token <id>]` | Re-key a still-shared cash-mode holding so the original code can no longer spend it — `receive` does this automatically; use this if that was declined or failed. With no id and more than one eligible, re-keys every one of them — unlike `redeem`, nothing here leaves your control, so an ambiguous selection has nothing to lose |
 | `cashctl wallet get-info` / `budget` / `invoice <amount>` / `pay <invoice>` / `list-tx` / `sign-message <msg>` | Ordinary NIP-47 calls against the current wallet |
 | `cashctl invoice <amount>` / `cashctl pay <invoice>` / `cashctl balance` | Top-level shortcuts for `wallet invoice`/`wallet pay`/`wallet balance` |
 | `cashctl connect add <name> <connection>` / `list` / `rm <name>` | Register/list/remove any other NWC connection |
 | `cashctl decode <string> [--check]` | Inspect any cash token, Circle Hub connection (`circlehub1...`), or NWC URI locally, no network call; `--check` opts into a read-only Hub check (cash token: matching recipient; circle hub: can we join) |
 | `cashctl receive <token>` | Decode a cash token, print its details, then cross-check it against the Cash Hub before adding it to your wallet — refuses anything that doesn't check out. A cash-mode token's `cash_secret` must be embedded, `<token>#<cash_secret>` (NIP-CASH's combined cash-mode slice presentation) — pasted bare, it degrades to a read-only report instead of erroring. A saved cash-mode receipt is then offered automatic protecting: re-keyed under a fresh secret (and merged with any other same-issuer holding), reported under `"secured"` |
-| `cashctl redeem [wallet] [--token <id>...] [--all] [--invoice <bolt11>] [--as <credential>]` | Redeem held token(s) into a wallet (positional, or `--into`) or a raw invoice. `--token` is repeatable/comma-separated and `--all` takes every held token; each token is paid into its own invoice, so `--invoice` accepts only one. Every selected token is attempted: one failing never cancels or hides the others (see **Partial success**). Redeems travel over the private transport only and are batched automatically: every token against the same hub goes out in one relay event, with no flag and no fallback |
+| `cashctl redeem [wallet] [--token <id>...] [--all] [--amount <n>] [--invoice <bolt11>] [--as <credential>]` | Redeem held token(s) into a wallet (positional, or `--into`) or a raw invoice. `--token` is repeatable/comma-separated and `--all` takes every held token; `--amount` selects which held token(s) land exactly that much (net of any fee) without naming any — an exact single match or an exact same-Hub sum, refusing plainly if nothing adds up; each token is paid into its own invoice, so `--invoice` accepts only one, and with `--invoice` on an amount-less invoice `--amount` is required instead (a fixed-amount invoice rejects `--amount`). Every selected token is attempted: one failing never cancels or hides the others (see **Partial success**). Redeems travel over the private transport only and are batched automatically: every token against the same hub goes out in one relay event, with no flag and no fallback |
 | `cashctl transfer [amount] [target] [--as <credential>]` | Send a held token — amount and target are positional (either order), or `--to`/`--amount`. An amount with no target defaults to a cash note (a `<token>#<secret>` string to hand anyone); neither one is a usage error. With an amount and no `--token`, cash selection picks which held token(s) reach it exactly (auto-consolidating a same-minter subset first if no single token covers it) instead of just picking one token to act on |
 | `cashctl consolidate [id...] [--to <target>]` | Merge several held tokens into one — positional IDs, or `--sources`, for exact control (IDs discoverable via `wallet show --json`; plain-text `wallet show` never prints them). With neither, auto-groups held tokens by minter (only same-minter tokens can merge) and consolidates each group with 2+ tokens — one group proceeds directly, several prompt interactively (or all process under `--json`/`--yes`). Every chosen group is attempted: one failing never cancels or hides the others (see **Partial success**) |
-| `cashctl cash status [--token <id>]` | Your allocation + co-recipients of a held token (network) |
+| `cashctl cash status [--token <id>]` | Your allocation + co-recipients of a held token (network). With no id and more than one held, reports every one — read-only, so the same "nothing to lose" rule as `wallet protect` applies |
 | `cashctl cash receive` / `redeem` / `transfer` / `consolidate` | Same as the top-level forms above — the canonical, fully-namespaced versions |
 | `cashctl version` | Print the cashctl version |
 
@@ -129,6 +129,16 @@ nothing happened: stdout is still a complete result document and must be
 read before deciding what to retry. The alternative would be worse than
 untidy — aborting on the first failure leaves the already-committed
 operations unreported, including any new token they produced.
+
+**Ambiguous selection, with nothing named and more than one candidate**:
+refuse (`usage`, exit 2) only when the operation pays value out of your
+control — `redeem` with no `--token`/`--all`/`--amount` and several held
+tokens. Every other case defaults to processing/showing every eligible
+candidate instead: `consolidate` auto-groups and merges all of them,
+`wallet protect` re-keys all of them, `cash status` reports all of them —
+because in each of those the value stays fully yours (or, for `status`,
+nothing moves at all), so there is nothing an ambiguous pick could lose. An
+explicit `--token`/selection still narrows to one in every case.
 
 ## Before attempting a task, read the matching skill
 
