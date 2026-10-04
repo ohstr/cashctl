@@ -3,6 +3,7 @@
 ## [0.6.0-rc.3]
 
 - `consolidate`, `transfer`'s auto-consolidate, and `receive`'s auto-protect merge no longer silently combine an already-expired cash source with a healthy one. NIP-CASH's merge rule inherits the earliest expiry across sources, so doing this used to kill the healthy source's own good deadline too. `consolidate`/`transfer` now refuse outright, even under `--json`/`--yes`; `receive` excludes the expired sibling and still protects the fresh receipt on its own. lokihub/NIP-CASH itself still permits this server-side today — tracked separately as follow-up. ([#41](https://github.com/ohstr/cashctl/pull/41))
+- Bumped `nmilat` to v0.5.0-rc.4. ([#47](https://github.com/ohstr/cashctl/pull/47))
 
 ## [0.6.0-rc.2]
 
