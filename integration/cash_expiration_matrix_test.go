@@ -281,34 +281,29 @@ func TestCashConsolidate_AllSourcesExpired_ClassifiedAsAuth(t *testing.T) {
 	}
 }
 
-// TestCashConsolidate_RescuesExpiredSourceViaHealthySibling is the
-// headline fix this audit angle found, and the important nuance it also
-// found while confirming it live: doCashConsolidate used to always dial
-// through localIDs[0] to place the cash_consolidate call. lokihub's
-// generic permission-expiry gate checks only the CALLING connection, not
-// any other source in the batch (confirmed by reading
-// cash_consolidate_controller.go's resolveConsolidateSource, which never
-// re-checks a non-dialed source's own wallet expiry) — so a batch
-// consolidating one already-expired token alongside a healthy one used to
-// fail to even PLACE outright whenever the expired one happened to be
-// dialed first, an arbitrary implementation detail. This mints the doomed
-// token first (so it lands at ledger index 0 and is named first in
-// --sources, the order consolidate dials through), waits for it alone to expire
-// while the healthy sibling is still good for another hour, and confirms
-// the merge now succeeds regardless.
+// TestCashConsolidate_RefusesExpiredSourceMixedWithHealthySibling used to
+// assert the opposite of what it asserts now. The earlier finding here
+// was that doCashConsolidate always dialed through localIDs[0], and
+// lokihub's generic permission-expiry gate checks only the CALLING
+// connection — so a batch consolidating one already-expired token
+// alongside a healthy one failed to even PLACE whenever the expired one
+// was dialed first, an arbitrary implementation detail. The fix at the
+// time (doCashConsolidate's sibling-dial-retry-on-EXPIRED loop) made the
+// call place deterministically regardless of dial order — but the
+// resulting merge was still accepted, and NIP-CASH's own merge rule
+// inherits the EARLIEST expiry across every source (§Consolidating
+// Tokens), so the "rescued" result was immediately just as dead as the
+// doomed source always was, dragging the healthy sibling's own
+// good-for-another-hour balance down with it.
 //
-// It is NOT a full rescue, and the second half of this test is the live
-// proof: NIP-CASH's own merge rule inherits the EARLIEST expiry across
-// every source (§Consolidating Tokens) — confirmed here by immediately
-// trying to list-recipients the freshly merged token and finding it's
-// ALSO already expired, dragging what would otherwise be the healthy
-// sibling's own good-for-another-hour balance down with it. The real,
-// narrower value: the call places at all (funds end up in one traceable
-// wallet an operator can act on) instead of failing on dial-order chance;
-// see cmd/cash_consolidate.go's own doCashConsolidate doc comment and
-// runCashConsolidate's pre-confirm contamination warning for the fix that
-// followed from this finding.
-func TestCashConsolidate_RescuesExpiredSourceViaHealthySibling(t *testing.T) {
+// That dial-retry loop is still in place (cmd/cash_consolidate.go's
+// doCashConsolidate) — it remains the correct behavior for an
+// ALL-expired batch, and as a backstop whenever this test's own pre-check
+// probe is itself inconclusive. What changed is the mixed case
+// specifically: cashctl now refuses outright, before anything is dialed,
+// rather than placing a merge that poisons the healthy source. This test
+// now proves that refusal instead of proving the old "rescue."
+func TestCashConsolidate_RefusesExpiredSourceMixedWithHealthySibling(t *testing.T) {
 	cfg, err := LoadConfig("")
 	if err != nil {
 		t.Skipf("skipping: could not load integration config (%v) — see integration/README.md", err)
@@ -330,7 +325,7 @@ func TestCashConsolidate_RescuesExpiredSourceViaHealthySibling(t *testing.T) {
 	healthy := mintPubkeyTokenExpiry(t, hub, myPubHex, 6_000, 0) // 0 -> Hub's own ceiling (1h)
 
 	// Received in this order so `doomed` lands first — the exact "index 0
-	// is the one that expired" case that used to fail the whole batch.
+	// is the one that expired" case the old dial-retry fix targeted.
 	receiveDoomed := f.mustJSON("receive", doomed)
 	receiveHealthy := f.mustJSON("receive", healthy)
 	doomedID, _ := receiveDoomed["entry"].(map[string]any)["id"].(string)
@@ -343,40 +338,27 @@ func TestCashConsolidate_RescuesExpiredSourceViaHealthySibling(t *testing.T) {
 
 	// Plain (unsigned) mints carry no minter pubkey, so a no-arg
 	// `consolidate` (which auto-groups by minter) would find nothing to
-	// merge — name both sources explicitly, doomed first (dial order).
-	resp := f.mustJSON("consolidate", "--sources", doomedID+","+healthyID, "--yes")
-	newEntry, _ := resp["new_entry"].(map[string]any)
-	if newEntry == nil {
-		t.Fatalf("consolidate: no new_entry in response: %v", resp)
+	// merge — name both sources explicitly. --yes (and f.run's own
+	// --json) confirms the refusal fires even with no prompt to decline.
+	res := f.run("consolidate", "--sources", doomedID+","+healthyID, "--yes")
+	if res.ExitCode != 3 {
+		t.Fatalf("consolidate (expired mixed with healthy): exit = %d, want 3 (invalid_input)\nstdout: %s\nstderr: %s", res.ExitCode, res.Stdout, res.Stderr)
 	}
-	if got, _ := newEntry["amount_millis"].(float64); uint64(got) != 10_000 {
-		t.Errorf("consolidated amount_millis = %v, want 10000 (the expired source's balance must still be merged in, not dropped)", newEntry["amount_millis"])
+	if got := errorCode(t, res); got != "invalid_input" {
+		t.Errorf("code = %q, want invalid_input", got)
 	}
-	if n := heldCount(t, f); n != 1 {
-		t.Fatalf("expected exactly the one merged token held afterward, got %d", n)
-	}
-
-	// The contamination half: the merged wallet inherited doomed's
-	// already-past deadline, so it's immediately just as unusable via NWC
-	// as doomed always was — even though healthy alone still had ~1h left
-	// before this merge.
-	id, _ := newEntry["id"].(string)
-	checkRes := f.run("cash", "list-recipients", "--token", id)
-	if checkRes.ExitCode != 7 {
-		t.Fatalf("list-recipients on the freshly merged (but expiry-contaminated) token: exit = %d, want 7 (auth) — expected this to already be dead too\nstdout: %s\nstderr: %s", checkRes.ExitCode, checkRes.Stdout, checkRes.Stderr)
-	}
-	if got := nwcCodeFromError(t, checkRes.Stderr); got != "EXPIRED" {
-		t.Errorf("nwc_code = %q, want EXPIRED", got)
+	if n := heldCount(t, f); n != 2 {
+		t.Fatalf("refused consolidate, but %d tokens are held afterward, want both untouched (nothing merged)", n)
 	}
 }
 
 // Merging a healthy token with one that has ALREADY expired strands the
 // healthy part inside a merged token that is born dead (it inherits the
-// earliest deadline). consolidate is supposed to warn before that happens —
-// but an expired wallet rejects the very CheckClaim call used to look its
-// deadline up, so the lookup failed, read as "no deadline known", and the
-// warning never fired: the user confirmed, and only found out afterwards.
-func TestCashConsolidate_WarnsWhenAMemberHasAlreadyExpired(t *testing.T) {
+// earliest deadline) — NIP-CASH's merge rule, §Consolidating Tokens.
+// cashctl refuses outright rather than warning and proceeding: nothing
+// moves, and the refusal fires even under --json/--yes, where a warning
+// would have gone unseen anyway.
+func TestCashConsolidate_RefusesWhenAMemberHasAlreadyExpired(t *testing.T) {
 	admin := adminOrSkip(t)
 	f := newFixture(t)
 	myPubHex, err := npubToHex(f.mustJSON("wallet", "init")["npub"].(string))
@@ -391,33 +373,35 @@ func TestCashConsolidate_WarnsWhenAMemberHasAlreadyExpired(t *testing.T) {
 
 	waitPastCashExpiry()
 
-	res := f.runInteractive("n\n", "consolidate", doomedID, healthyID)
-	if !strings.Contains(res.Combined(), "already expired") {
-		t.Errorf("consolidate of an already-expired token with a healthy one showed no expiry warning before the prompt:\nstdout: %s\nstderr: %s", res.Stdout, res.Stderr)
+	// No "n\n" to decline with: the refusal happens before any prompt is
+	// ever shown, interactive or not.
+	res := f.run("consolidate", doomedID, healthyID)
+	if res.ExitCode != 3 {
+		t.Fatalf("consolidate (expired mixed with healthy): exit = %d, want 3 (invalid_input)\nstdout: %s\nstderr: %s", res.ExitCode, res.Stdout, res.Stderr)
+	}
+	if got := errorCode(t, res); got != "invalid_input" {
+		t.Errorf("code = %q, want invalid_input", got)
 	}
 	if n := heldCount(t, f); n != 2 {
-		t.Errorf("answered n, but %d tokens are held afterward, want both untouched", n)
+		t.Errorf("refused consolidate, but %d tokens are held afterward, want both untouched", n)
 	}
 }
 
-// TestCashTransfer_AutoConsolidate_ExpiredSourceFailsButFundsAreRecorded is
+// TestCashTransfer_AutoConsolidate_RefusesWhenASourceHasAlreadyExpired is
 // cash selection's auto-consolidate-then-transfer path
 // (transferWithAutoConsolidate) under the same scenario as
-// TestCashConsolidate_RescuesExpiredSourceViaHealthySibling above, and
-// confirms it behaves differently, for a reason specific to this path: a
-// transfer needs a SECOND live call (the actual send) through the
-// just-merged wallet, and that wallet is born already expired whenever any
-// of its sources was — there is no sibling connection to retry that
-// specific leg through, unlike the interim consolidate leg itself (which
-// this path's own retry logic, mirroring doCashConsolidate's, does still
-// place successfully). So the overall transfer fails — but by design,
-// this is exactly the existing PartialProgressError handling already
-// covers (see transferWithAutoConsolidate's own doc comment): the merged
-// funds are NOT lost, they land in a new held ledger entry (equally
-// expiry-contaminated as the consolidate-only case above, and equally
-// recoverable only by contacting the Hub operator either way) instead of
-// silently vanishing or crashing.
-func TestCashTransfer_AutoConsolidate_ExpiredSourceFailsButFundsAreRecorded(t *testing.T) {
+// TestCashConsolidate_RefusesExpiredSourceMixedWithHealthySibling above.
+//
+// This used to let the interim consolidate land (merging 3000+5000 into
+// one, now-dead, 8000-mloki token) and only fail the second leg — the
+// actual send — reporting the stranded funds via PartialProgressError.
+// That was the existing accepted behavior, but it's the same hazard as
+// plain consolidate's: NIP-CASH's merge rule inherits the earliest expiry
+// across every source, so the interim merge was never actually safe just
+// because this path could still recover from its own failure afterward.
+// cashctl now refuses upfront instead — before the interim consolidate is
+// ever attempted — so both original sources stay held and untouched.
+func TestCashTransfer_AutoConsolidate_RefusesWhenASourceHasAlreadyExpired(t *testing.T) {
 	cfg, err := LoadConfig("")
 	if err != nil {
 		t.Skipf("skipping: could not load integration config (%v) — see integration/README.md", err)
@@ -458,29 +442,28 @@ func TestCashTransfer_AutoConsolidate_ExpiredSourceFailsButFundsAreRecorded(t *t
 	// Neither single token covers 6000 (3000 and 5000 each fall short) but
 	// their sum (8000) does — forces ledger.SelectForAmount's
 	// ConsolidateFirst path, exercising transferWithAutoConsolidate's own
-	// retry-on-EXPIRED loop and PartialProgressError handling, not
-	// doCashConsolidate's.
+	// mixed-expiry refusal rather than doCashConsolidate's.
 	res := f.run("transfer", fakeHex32(t), lokiArg(6_000), "--yes")
-	if res.ExitCode != 7 {
-		t.Fatalf("transfer (auto-consolidate, one source already expired): exit = %d, want 7 (auth) — the interim merge inherits the expired source's deadline, so the transfer leg can never go through\nstdout: %s\nstderr: %s", res.ExitCode, res.Stdout, res.Stderr)
+	if res.ExitCode != 3 {
+		t.Fatalf("transfer (auto-consolidate, one source already expired): exit = %d, want 3 (invalid_input) — nothing should be dialed at all\nstdout: %s\nstderr: %s", res.ExitCode, res.Stdout, res.Stderr)
 	}
-	if got := nwcCodeFromError(t, res.Stderr); got != "EXPIRED" {
-		t.Errorf("nwc_code = %q, want EXPIRED", got)
+	if got := errorCode(t, res); got != "invalid_input" {
+		t.Errorf("code = %q, want invalid_input", got)
 	}
-	// The interim consolidate still landed for real (8000 total) — the
-	// PartialProgressError branch must have recorded it as a new held
-	// token, not dropped it, even though the transfer itself failed.
-	if n := heldCount(t, f); n != 1 {
-		t.Fatalf("expected the interim-consolidated 8000-mloki token to still be recorded as held despite the failed transfer, got %d held", n)
-	}
+	// Nothing was attempted — both original sources remain held, separate.
 	showResp := f.mustJSON("wallet", "show")
 	held, _ := showResp["held_tokens"].([]any)
-	if len(held) != 1 {
-		t.Fatalf("wallet show: held_tokens = %v, want exactly 1", held)
+	if len(held) != 2 {
+		t.Fatalf("refused transfer, but wallet show: held_tokens = %v, want exactly 2 (both originals untouched, nothing merged)", held)
 	}
-	entry, _ := held[0].(map[string]any)
-	if got, _ := entry["amount_millis"].(float64); uint64(got) != 8_000 {
-		t.Errorf("recorded interim entry amount_millis = %v, want 8000 (3000+5000, nothing lost)", entry["amount_millis"])
+	var total uint64
+	for _, h := range held {
+		entry, _ := h.(map[string]any)
+		amt, _ := entry["amount_millis"].(float64)
+		total += uint64(amt)
+	}
+	if total != 8_000 {
+		t.Errorf("held total = %d, want 8000 (3000+5000, nothing lost, nothing merged)", total)
 	}
 }
 

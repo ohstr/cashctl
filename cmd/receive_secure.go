@@ -419,18 +419,37 @@ func protectRekeyOnly(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entry,
 // already used for transfer's auto-consolidate step). A bill naming no
 // issuing Hub cannot be grouped at all, so it always returns empty in that
 // case, never a false positive.
+//
+// Any confirmed-already-expired sibling is left out of the merge rather
+// than refused outright: unlike consolidate/transfer, this isn't an
+// explicit "merge exactly these" request, it's receive's own best-effort
+// protect step (protectCashReceipt's doc comment: a failure here never
+// fails receive itself) — so excluding the poisoned sibling and still
+// protecting the fresh receipt on its own (or merging with whatever
+// healthy siblings remain) is the right default, not refusing the whole
+// step. NIP-CASH's merge rule inherits the EARLIEST expiry across every
+// source, same reasoning as cash_consolidate.go's own refusal — merging
+// an expired sibling in would kill the fresh receipt's own good deadline
+// too.
 func buildConsolidateWith(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entry) ([]nipcash.Source, []string, error) {
 	hubKey := ledger.HubGroupKey(*entry)
 	if hubKey == "" {
 		return nil, nil, nil
 	}
+	jsonMode, _ := cmd.Flags().GetBool("json")
 	groups := ledger.GroupByHub(ledger.GroupableForConsolidation(l.Held()))
 	group := groups[hubKey]
 	var sources []nipcash.Source
-	var ids []string
+	var ids, excluded []string
 	for i := range group {
 		e := &group[i]
 		if e.ID == entry.ID {
+			continue
+		}
+		// Probed before sourceFromEntry's own dial, so an about-to-be-
+		// excluded sibling doesn't get needlessly resolved first.
+		if ea := fetchExpiresAt(cmd, e.Token); ea != nil && time.Until(time.Unix(*ea, 0)) <= 0 {
+			excluded = append(excluded, e.ID)
 			continue
 		}
 		src, err := sourceFromEntry(cmd, l, e)
@@ -439,6 +458,9 @@ func buildConsolidateWith(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.En
 		}
 		sources = append(sources, src)
 		ids = append(ids, e.ID)
+	}
+	if len(excluded) > 0 {
+		output.Notef(jsonMode, "Left out %s (already expired) — merging it in would have made the whole protected note unusable too.", strings.Join(excluded, ","))
 	}
 	return sources, ids, nil
 }

@@ -364,6 +364,13 @@ func consolidateItems(cmd *cobra.Command, l *ledger.Ledger, items []string, toFl
 	var localIDs []string
 	var earliestExpiresAt *int64
 	var expiredSources, healthySources int
+	// expiredIDs names which source(s) are confirmed already-expired —
+	// a local entry's own ID, or (no ID to name) a verbose source's
+	// redacted item string — for the hard refusal below. Never raw: a
+	// verbose entry's string carries a credential's secret component,
+	// same as the other error paths in this loop (output.RedactSecretInput
+	// at the verbose branch's own cred-parse failure, right below).
+	var expiredIDs []string
 	err := WithSpinner(jsonMode, "Checking sources...", func() error {
 		for _, item := range items {
 			item = strings.TrimSpace(item)
@@ -387,20 +394,21 @@ func consolidateItems(cmd *cobra.Command, l *ledger.Ledger, items []string, toFl
 				sourceTokens = append(sourceTokens, e.Token)
 				total += src.Amount
 				localIDs = append(localIDs, e.ID)
-				if !jsonMode && !yesFlag {
-					// Best-effort, interactive-only — see fetchExpiresAt's own
-					// doc comment on why this applies here too, not just to
-					// cash_redeem. Tracked per-source, not just as one overall
-					// earliest, because a MIX of already-expired and healthy
-					// sources needs a sharper warning than "expires soon" — see
-					// this function's own message-building below.
-					if ea := fetchExpiresAt(cmd, e.Token); ea != nil {
-						earliestExpiresAt = earliestExpiry(earliestExpiresAt, ea)
-						if time.Until(time.Unix(*ea, 0)) <= 0 {
-							expiredSources++
-						} else {
-							healthySources++
-						}
+				// Unconditional, not gated on !jsonMode && !yesFlag like the
+				// cosmetic "expires soon" warning below still is: this feeds
+				// the hard mixed-expiry refusal after this loop, which must
+				// fire under --json/--yes too — that's exactly the mode a
+				// scripted/agentic merge would otherwise poison a healthy
+				// source in with zero signal. src.Credential is already
+				// resolved above, so this probes with the real credential
+				// rather than fetchExpiresAt's own local-identity guess.
+				if ea := fetchExpiresAtWithCredential(cmd, e.Token, src.Credential); ea != nil {
+					earliestExpiresAt = earliestExpiry(earliestExpiresAt, ea)
+					if time.Until(time.Unix(*ea, 0)) <= 0 {
+						expiredSources++
+						expiredIDs = append(expiredIDs, e.ID)
+					} else {
+						healthySources++
 					}
 				}
 				continue
@@ -425,6 +433,18 @@ func consolidateItems(cmd *cobra.Command, l *ledger.Ledger, items []string, toFl
 			sources = append(sources, nipcash.Source{WalletPubkey: tok, Amount: amount, Credential: cred})
 			sourceTokens = append(sourceTokens, parts[0])
 			total += amount
+			// Same probe, same reasoning as the local-entry branch above —
+			// this verbose form had no expiry awareness at all before this,
+			// an obvious way to route around the refusal below otherwise.
+			if ea := fetchExpiresAtWithCredential(cmd, parts[0], cred); ea != nil {
+				earliestExpiresAt = earliestExpiry(earliestExpiresAt, ea)
+				if time.Until(time.Unix(*ea, 0)) <= 0 {
+					expiredSources++
+					expiredIDs = append(expiredIDs, output.RedactSecretInput(item))
+				} else {
+					healthySources++
+				}
+			}
 		}
 		return nil
 	})
@@ -433,6 +453,21 @@ func consolidateItems(cmd *cobra.Command, l *ledger.Ledger, items []string, toFl
 	}
 	if len(sources) < 2 {
 		return nil, output.UsageError(cmd, fmt.Errorf("consolidate needs at least 2 sources, got %d", len(sources)))
+	}
+	if expiredSources > 0 && healthySources > 0 {
+		// Hard refusal, not just a warning: NIP-CASH's merge rule inherits
+		// the EARLIEST expiry across every source (§Consolidating Tokens),
+		// so merging an already-expired source into a healthy one doesn't
+		// just fail — it silently kills the healthy source's own good
+		// deadline too, the instant the merge lands. Before target
+		// resolution and before Confirm: nothing has moved yet, so "Nothing
+		// was changed" is trivially true. Deliberately does NOT fire when
+		// every source is expired (healthySources == 0) — that's the Hub's
+		// own exit-7/auth/EXPIRED decline, already correct, left alone.
+		return nil, output.InvalidInputError(cmd, strings.Join(expiredIDs, ","), fmt.Errorf(
+			"%s already expired — merging with a healthy source would make the whole result "+
+				"unusable too. Nothing was changed. Drop it and retry with just the healthy source(s)",
+			strings.Join(expiredIDs, ",")))
 	}
 
 	var target nipcash.Target
@@ -463,23 +498,15 @@ func consolidateItems(cmd *cobra.Command, l *ledger.Ledger, items []string, toFl
 
 	message := fmt.Sprintf("Consolidate %d tokens (%s) into one%s?",
 		len(sources), output.FormatAmount(int64(total)), ifTargetIsSelf(toFlag))
-	if expiredSources > 0 && healthySources > 0 {
-		// Sharper than expiryWarningSuffix's generic "will likely be
-		// rejected": confirmed live (see docs/private/
-		// audit-round2-expiration-matrix.md) that this call actually
-		// SUCCEEDS — doCashConsolidate's own retry logic places it via a
-		// still-valid sibling connection — but NIP-CASH's merge rule
-		// inherits the EARLIEST expiry across every source
-		// (§Consolidating Tokens), so the merged result is born with the
-		// already-past deadline too. That's not a rejection; it's every
-		// healthy source's own money losing its own, later, still-good
-		// deadline in the process. This is the one case worth blocking on
-		// even under this command's ordinary "just note it" expiry
-		// posture.
-		output.Notef(jsonMode, "%d of these already expired — merging it in makes the WHOLE %s token unusable too. Leave it out to keep the rest spendable.",
-			expiredSources, output.FormatAmount(int64(total)))
-	} else if w := expiryWarningSuffix(earliestExpiresAt, "consolidate"); w != "" {
-		output.Notef(jsonMode, "%s", w)
+	// Mixed expired+healthy already refused above, unconditionally — this
+	// is only the cosmetic "expires soon, not yet" notice, so it keeps its
+	// original interactive-only gate: earliestExpiresAt is now always
+	// computed (the probe above runs regardless of mode), and without this
+	// explicit gate it would start printing under --yes too.
+	if !jsonMode && !yesFlag {
+		if w := expiryWarningSuffix(earliestExpiresAt, "consolidate"); w != "" {
+			output.Notef(jsonMode, "%s", w)
+		}
 	}
 	// defaultYes=false: moves real money — never accept on a bare Enter.
 	// Only reachable outside --json/--yes (Confirm auto-accepts under
