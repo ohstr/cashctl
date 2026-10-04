@@ -1,13 +1,10 @@
 # Changelog
 
-## [Unreleased]
+## [0.6.0-rc.2]
 
 - `redeem --amount <n>` selects which held token(s) land exactly that much, net of any fee, instead of naming a token ID yourself — an exact single match, or an exact same-Hub sum when no single token covers it. No combination found is a plain refusal naming what's held and what was asked for. Pairing `--invoice` with an amount-less invoice now requires `--amount`, since nothing else supplies the figure; pairing it with a fixed-amount invoice refuses `--amount`, matching how every Lightning wallet locks the amount field for one. ([#38](https://github.com/ohstr/cashctl/pull/38))
 - `wallet protect` and `cash status`, with no id and more than one eligible candidate, now process/report every one of them instead of refusing as ambiguous — re-keying or reading doesn't risk anything an ambiguous pick could lose, unlike `redeem`'s own irreversible payout. `--json`/`--yes` with several eligible returns an array instead of a usage error. ([#38](https://github.com/ohstr/cashctl/pull/38))
 - Bumped `nmilat` to v0.5.0-rc.3.
-
-## [0.6.0-rc.2]
-
 - **Breaking:** `cash list-recipients` is now `cash status`, following the Hub dropping the alias.
 - **Breaking:** `redeem --transport` is gone. Redeems travel over the private transport only and batch automatically — one relay event per Hub, no flag and no fallback. The flag had already stopped being read, so it was accepted and ignored; it is now rejected. ([#24](https://github.com/ohstr/cashctl/pull/24))
 - **Breaking:** bill methods (`redeem`, `consolidate`, `cash status`) are served over the private transport only and never fall back. No tagged lokihub release is confirmed to serve them that way yet — this is verified only against the live Hub this project's own integration suite runs against. An older or unsupporting Hub rejects these calls outright.
@@ -39,7 +36,6 @@
 - The local ledger runs in SQLite's WAL mode, so a read and a write no longer block each other — the contention this wallet's Load/network-call/Save shape invites. Durability is unchanged (`synchronous` stays at its default), and a filesystem that cannot support WAL, which includes most network mounts, still opens exactly as before. ([#32](https://github.com/ohstr/cashctl/pull/32))
 - The ledger's journal files (`cashctl.db-wal`, `-shm`, `-journal`) are restricted to 0600 like the database itself. They hold the same plaintext spending secrets, and `-wal` is persistent where `-journal` was transient, so a backup tool globbing `cashctl.db*` could have carried a readable copy off the machine. ([#32](https://github.com/ohstr/cashctl/pull/32))
 - A second `cashctl` process can no longer silently undo a change the first one made. Each held-token row carries a version, and a write whose row moved underneath it is refused — with nothing overwritten and a message saying to re-run — instead of reverting the other process's work. Only a row both processes touched is affected; a row just one of them changed was already safe. An existing ledger picks up the new column on first open, with its stored secrets untouched. ([#35](https://github.com/ohstr/cashctl/pull/35))
-- Bumped `nmilat` to v0.5.0-rc.2.
 
 ## [0.5.0]
 
