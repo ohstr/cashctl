@@ -387,24 +387,21 @@ func TestCashConsolidate_RefusesWhenAMemberHasAlreadyExpired(t *testing.T) {
 	}
 }
 
-// TestCashTransfer_AutoConsolidate_ExpiredSourceFailsButFundsAreRecorded is
+// TestCashTransfer_AutoConsolidate_RefusesWhenASourceHasAlreadyExpired is
 // cash selection's auto-consolidate-then-transfer path
 // (transferWithAutoConsolidate) under the same scenario as
-// TestCashConsolidate_RescuesExpiredSourceViaHealthySibling above, and
-// confirms it behaves differently, for a reason specific to this path: a
-// transfer needs a SECOND live call (the actual send) through the
-// just-merged wallet, and that wallet is born already expired whenever any
-// of its sources was — there is no sibling connection to retry that
-// specific leg through, unlike the interim consolidate leg itself (which
-// this path's own retry logic, mirroring doCashConsolidate's, does still
-// place successfully). So the overall transfer fails — but by design,
-// this is exactly the existing PartialProgressError handling already
-// covers (see transferWithAutoConsolidate's own doc comment): the merged
-// funds are NOT lost, they land in a new held ledger entry (equally
-// expiry-contaminated as the consolidate-only case above, and equally
-// recoverable only by contacting the Hub operator either way) instead of
-// silently vanishing or crashing.
-func TestCashTransfer_AutoConsolidate_ExpiredSourceFailsButFundsAreRecorded(t *testing.T) {
+// TestCashConsolidate_RefusesExpiredSourceMixedWithHealthySibling above.
+//
+// This used to let the interim consolidate land (merging 3000+5000 into
+// one, now-dead, 8000-mloki token) and only fail the second leg — the
+// actual send — reporting the stranded funds via PartialProgressError.
+// That was the existing accepted behavior, but it's the same hazard as
+// plain consolidate's: NIP-CASH's merge rule inherits the earliest expiry
+// across every source, so the interim merge was never actually safe just
+// because this path could still recover from its own failure afterward.
+// cashctl now refuses upfront instead — before the interim consolidate is
+// ever attempted — so both original sources stay held and untouched.
+func TestCashTransfer_AutoConsolidate_RefusesWhenASourceHasAlreadyExpired(t *testing.T) {
 	cfg, err := LoadConfig("")
 	if err != nil {
 		t.Skipf("skipping: could not load integration config (%v) — see integration/README.md", err)
@@ -445,29 +442,28 @@ func TestCashTransfer_AutoConsolidate_ExpiredSourceFailsButFundsAreRecorded(t *t
 	// Neither single token covers 6000 (3000 and 5000 each fall short) but
 	// their sum (8000) does — forces ledger.SelectForAmount's
 	// ConsolidateFirst path, exercising transferWithAutoConsolidate's own
-	// retry-on-EXPIRED loop and PartialProgressError handling, not
-	// doCashConsolidate's.
+	// mixed-expiry refusal rather than doCashConsolidate's.
 	res := f.run("transfer", fakeHex32(t), lokiArg(6_000), "--yes")
-	if res.ExitCode != 7 {
-		t.Fatalf("transfer (auto-consolidate, one source already expired): exit = %d, want 7 (auth) — the interim merge inherits the expired source's deadline, so the transfer leg can never go through\nstdout: %s\nstderr: %s", res.ExitCode, res.Stdout, res.Stderr)
+	if res.ExitCode != 3 {
+		t.Fatalf("transfer (auto-consolidate, one source already expired): exit = %d, want 3 (invalid_input) — nothing should be dialed at all\nstdout: %s\nstderr: %s", res.ExitCode, res.Stdout, res.Stderr)
 	}
-	if got := nwcCodeFromError(t, res.Stderr); got != "EXPIRED" {
-		t.Errorf("nwc_code = %q, want EXPIRED", got)
+	if got := errorCode(t, res); got != "invalid_input" {
+		t.Errorf("code = %q, want invalid_input", got)
 	}
-	// The interim consolidate still landed for real (8000 total) — the
-	// PartialProgressError branch must have recorded it as a new held
-	// token, not dropped it, even though the transfer itself failed.
-	if n := heldCount(t, f); n != 1 {
-		t.Fatalf("expected the interim-consolidated 8000-mloki token to still be recorded as held despite the failed transfer, got %d held", n)
-	}
+	// Nothing was attempted — both original sources remain held, separate.
 	showResp := f.mustJSON("wallet", "show")
 	held, _ := showResp["held_tokens"].([]any)
-	if len(held) != 1 {
-		t.Fatalf("wallet show: held_tokens = %v, want exactly 1", held)
+	if len(held) != 2 {
+		t.Fatalf("refused transfer, but wallet show: held_tokens = %v, want exactly 2 (both originals untouched, nothing merged)", held)
 	}
-	entry, _ := held[0].(map[string]any)
-	if got, _ := entry["amount_millis"].(float64); uint64(got) != 8_000 {
-		t.Errorf("recorded interim entry amount_millis = %v, want 8000 (3000+5000, nothing lost)", entry["amount_millis"])
+	var total uint64
+	for _, h := range held {
+		entry, _ := h.(map[string]any)
+		amt, _ := entry["amount_millis"].(float64)
+		total += uint64(amt)
+	}
+	if total != 8_000 {
+		t.Errorf("held total = %d, want 8000 (3000+5000, nothing lost, nothing merged)", total)
 	}
 }
 

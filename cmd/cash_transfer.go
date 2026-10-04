@@ -344,39 +344,53 @@ func transferWithAutoConsolidate(cmd *cobra.Command, l *ledger.Ledger, group []l
 	sum := ledger.SumAmounts(group)
 	message := fmt.Sprintf("Consolidate %d tokens (%s) then send %s %s?",
 		len(group), output.FormatAmount(int64(sum)), output.FormatAmount(int64(sendAmount)), targetClause(toValue, target.Kind))
-	if !jsonMode && !yesFlag {
-		// Best-effort, interactive-only — see fetchExpiresAt's own doc
-		// comment on why this applies here too, not just to cash_redeem.
-		// Earliest across the whole group: the interim cash_consolidate
-		// merges these into one wallet whose own expiry is the earliest of
-		// its sources (NIP-CASH §Consolidating Tokens) — confirmed live
-		// that this isn't just informational here: if that earliest
-		// figure is ALREADY past, the interim consolidate itself still
-		// succeeds (doCashConsolidate's sibling-retry logic, shared via
-		// isExpiredWalletErr, applies here too — see
-		// attemptTransferFromSources' own retry loop below) but the
-		// SECOND leg — the actual transfer onward to target — then always
-		// fails, because it has to act through that just-created,
-		// already-expired wallet specifically (no sibling to retry
-		// through for that leg). The funds aren't lost (the
-		// PartialProgressError branch below records them as a new held
-		// token either way), but the transfer itself will not go through
-		// — worth knowing before committing, not after.
-		var earliest *int64
-		var anyExpired bool
-		_ = WithSpinner(jsonMode, "Checking expiry...", func() error {
-			for i := range group {
-				ea := fetchExpiresAt(cmd, group[i].Token)
-				earliest = earliestExpiry(earliest, ea)
-				if ea != nil && time.Until(time.Unix(*ea, 0)) <= 0 {
-					anyExpired = true
-				}
+	// Unconditional, not gated on !jsonMode && !yesFlag: this decides a
+	// hard refusal below, which must fire under --json/--yes too — exactly
+	// the mode a scripted auto-consolidate-then-transfer would otherwise
+	// poison a healthy source in with zero signal. Every entry in group is
+	// pubkey-mode by construction (ledger.SelectForAmount's
+	// ConsolidateFirst only draws from GroupableForConsolidation-eligible
+	// entries), so fetchExpiresAt's own local-identity credential
+	// derivation is already correct here.
+	var earliest *int64
+	var expiredCount, healthyCount int
+	var expiredIDs []string
+	_ = WithSpinner(jsonMode, "Checking expiry...", func() error {
+		for i := range group {
+			ea := fetchExpiresAt(cmd, group[i].Token)
+			earliest = earliestExpiry(earliest, ea)
+			if ea == nil {
+				continue
 			}
-			return nil
-		})
-		if anyExpired {
-			output.Notef(jsonMode, "One source is expired — merge succeeds but the transfer onward will fail; funds land in a new held token instead.")
-		} else if w := expiryWarningSuffix(earliest, "transfer"); w != "" {
+			if time.Until(time.Unix(*ea, 0)) <= 0 {
+				expiredCount++
+				expiredIDs = append(expiredIDs, group[i].ID)
+			} else {
+				healthyCount++
+			}
+		}
+		return nil
+	})
+	if expiredCount > 0 && healthyCount > 0 {
+		// Hard refusal, not just a warning: the interim cash_consolidate
+		// merges these into one wallet whose own expiry is the earliest of
+		// its sources (NIP-CASH §Consolidating Tokens) — a doomed source
+		// mixed with a healthy one doesn't just fail, it kills the healthy
+		// source's own good deadline too, the instant the merge lands.
+		// Before Confirm, before any wire call: nothing has moved yet.
+		// Same reasoning as cash_consolidate.go's own refusal; deliberately
+		// doesn't fire when every source is expired (healthyCount == 0) —
+		// that case is unaffected, still the Hub's own exit-7/auth decline.
+		return output.InvalidInputError(cmd, strings.Join(expiredIDs, ","), fmt.Errorf(
+			"%s already expired — auto-consolidating it to cover this amount would make the "+
+				"whole result unusable too. Nothing was changed",
+			strings.Join(expiredIDs, ",")))
+	}
+	// Cosmetic-only "expires soon, not yet" notice keeps its original
+	// interactive-only gate — the probe above now always runs, but this
+	// particular print shouldn't start appearing under --yes too.
+	if !jsonMode && !yesFlag {
+		if w := expiryWarningSuffix(earliest, "transfer"); w != "" {
 			output.Notef(jsonMode, "%s", w)
 		}
 	}
