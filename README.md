@@ -185,15 +185,15 @@ money-moving confirmation (`redeem`/`transfer`/`consolidate`) defaults to
 Merge several held cash tokens into one.
 
 ```sh
-cashctl consolidate                             # auto-detects which held tokens share a minter and merges each group
+cashctl consolidate                             # auto-detects which held tokens share a Cash Hub and merges each group
 cashctl consolidate tok-a1b2 tok-c3d4            # just these two
 cashctl consolidate --sources tok-a1b2,lokicash1...:5:pubkey:<privkey> --to pubkey:<hex>
 ```
 
 With no IDs/`--sources` given, cashctl can't just merge *everything* —
-only tokens sharing a minter can actually be combined — so it groups your
-held tokens by minter and consolidates each group that has 2+ tokens
-(a lone token from a minter needs nothing merged, and is left alone).
+only tokens from the same Cash Hub can actually be combined — so it groups
+your held tokens by Hub and consolidates each group that has 2+ tokens
+(a lone token from a Hub needs nothing merged, and is left alone).
 One group: it just proceeds. More than one: an interactive session asks
 which group(s) to process (Enter for all); `--json`/`--yes` processes
 every qualifying group, since there's no terminal to ask from.

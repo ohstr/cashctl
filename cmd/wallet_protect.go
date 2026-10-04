@@ -24,12 +24,10 @@ func newWalletProtectCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "protect [id]",
 		Short: "Re-key a still-shared cash-mode holding so the original secret can no longer spend it",
-		Long: `Re-keys a cash-mode holding's spending secret in place — the same protection ` +
-			"`receive` offers automatically for a fresh cash gift, for a holding that missed it " +
-			"(declined, or the attempt failed) and is still shared with anyone who has the original secret.\n\n" +
-			"With no id and more than one eligible holding, re-keys every one of them: protecting " +
-			"keeps the value fully yours either way, so — unlike `redeem`, which pays out " +
-			"irreversibly — there is nothing an ambiguous selection here could lose.",
+		Long: `Re-keys a cash-mode holding that's still shared, so the original secret can ` +
+			"no longer spend it. `receive` does this automatically; use this if that was " +
+			"declined or failed.\n\n" +
+			"With no id and more than one eligible holding, re-keys every one of them.",
 		Example: `  cashctl wallet protect
   cashctl wallet protect <id>`,
 		Args: output.MaximumNArgs(1),
