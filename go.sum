@@ -39,8 +39,8 @@ github.com/ncruces/go-strftime v1.0.0 h1:HMFp8mLCTPp341M/ZnA4qaf7ZlsbTc+miZjCLOF
 github.com/ncruces/go-strftime v1.0.0/go.mod h1:Fwc5htZGVVkseilnfgOVb9mKy6w1naJmn9CehxcKcls=
 github.com/ohstr/ncli v0.6.0 h1:VsIv9CygNeFUE5+WuOLSuJpHYeGd8xpx+GBaDWECX30=
 github.com/ohstr/ncli v0.6.0/go.mod h1:5TLk/2cDTPKPfa8IRq+9Z9madxriommQixRsEQ6qzJ4=
-github.com/ohstr/nmilat v0.5.0-rc.2 h1:B8o6NfgImcv7HNy+i1EqzDrWZ8g/4dhedXrHVo0+8/o=
-github.com/ohstr/nmilat v0.5.0-rc.2/go.mod h1:+6B0CT40RAJmnZESl1sBukc07RkdyPn5/EQ8ROVof0Y=
+github.com/ohstr/nmilat v0.5.0-rc.3 h1:DMqkZ6M+FKY77WCZCwfUg25Tgf2X+z0sPWPFhQzL9vE=
+github.com/ohstr/nmilat v0.5.0-rc.3/go.mod h1:+6B0CT40RAJmnZESl1sBukc07RkdyPn5/EQ8ROVof0Y=
 github.com/pkg/errors v0.9.1/go.mod h1:bwawxfHBFNV+L2hUp1rHADufV3IMtnDRdf1r5NINEl0=
 github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 h1:Jamvg5psRIccs7FGNTlIRMkT8wgtp5eCXdBlqhYGL6U=
 github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
