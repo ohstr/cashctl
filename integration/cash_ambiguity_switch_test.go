@@ -13,6 +13,20 @@ import (
 	"testing"
 )
 
+// declineProtectOnReceive receives gift and explicitly declines its
+// auto-protect offer — "n", not a bare Enter. receive's own offer defaults
+// to YES (see TestWalletProtect_ManuallyProtectsADeclinedCashReceipt's own
+// doc comment), so without this every gift would already be protected by
+// the time a test's own `wallet protect` call runs, leaving nothing for it
+// to do.
+func declineProtectOnReceive(t *testing.T, f *fixture, gift string) {
+	t.Helper()
+	res := f.runInteractive("n\n", "receive", gift)
+	if res.ExitCode != 0 {
+		t.Fatalf("receive (decline protect): exit %d\nstdout: %s\nstderr: %s", res.ExitCode, res.Stdout, res.Stderr)
+	}
+}
+
 // TestWalletProtect_MultipleUnprotected_JSONModeProtectsAll is the live
 // proof of the switch: two unprotected cash-mode holdings, none named,
 // under --json — the case that used to be a usage refusal (ExitCode 2) and
@@ -23,8 +37,8 @@ func TestWalletProtect_MultipleUnprotected_JSONModeProtectsAll(t *testing.T) {
 	f := newFixture(t)
 	f.mustJSON("wallet", "init")
 
-	f.mustJSON("receive", mintCashGift(t, hub, 2_000))
-	f.mustJSON("receive", mintCashGift(t, hub, 3_000))
+	declineProtectOnReceive(t, f, mintCashGift(t, hub, 2_000))
+	declineProtectOnReceive(t, f, mintCashGift(t, hub, 3_000))
 
 	res := f.run("wallet", "protect", "--yes")
 	if res.ExitCode != 0 {
@@ -81,7 +95,7 @@ func TestWalletProtect_SingleUnprotected_KeepsOldBareShape(t *testing.T) {
 	hub := setUpCashHub(t, admin)
 	f := newFixture(t)
 	f.mustJSON("wallet", "init")
-	f.mustJSON("receive", mintCashGift(t, hub, 2_000))
+	declineProtectOnReceive(t, f, mintCashGift(t, hub, 2_000))
 
 	res := f.run("wallet", "protect", "--yes")
 	if res.ExitCode != 0 {

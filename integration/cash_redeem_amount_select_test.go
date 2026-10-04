@@ -29,6 +29,12 @@ func TestRedeemAmount_ExactSingleMatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The cash_hub app also serves ordinary NIP-47 wallet methods
+	// (cashHubOpts' own scopes include pay_invoice/make_invoice/get_balance),
+	// so registering its own PairingUri gives the auto-invoice redeem path a
+	// destination to pay into — same technique
+	// TestRedeem_ConnectionFlagChoosesTheDestination already uses.
+	f.mustJSON("connect", "add", "payout", hub.PairingUri)
 	f.mustJSON("receive", mintPubkeyTokenFromHub(t, hub, pub, 5_000))
 
 	res := f.run("redeem", "--amount", "5", "--yes") // loki, not millis — the CLI's own unit
@@ -55,6 +61,7 @@ func TestRedeemAmount_ExactSameHubSum(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	f.mustJSON("connect", "add", "payout", hub.PairingUri)
 	f.mustJSON("receive", mintPubkeyTokenFromHub(t, hub, pub, 2_000))
 	f.mustJSON("receive", mintPubkeyTokenFromHub(t, hub, pub, 3_000))
 
