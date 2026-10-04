@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.6.0-rc.3]
+
+- `consolidate`, `transfer`'s auto-consolidate, and `receive`'s auto-protect merge no longer silently combine an already-expired cash source with a healthy one. NIP-CASH's merge rule inherits the earliest expiry across sources, so doing this used to kill the healthy source's own good deadline too. `consolidate`/`transfer` now refuse outright, even under `--json`/`--yes`; `receive` excludes the expired sibling and still protects the fresh receipt on its own. lokihub/NIP-CASH itself still permits this server-side today — tracked separately as follow-up.
+
 ## [0.6.0-rc.2]
 
 - `redeem --amount <n>` selects which held token(s) land exactly that much, net of any fee, instead of naming a token ID yourself — an exact single match, or an exact same-Hub sum when no single token covers it. No combination found is a plain refusal naming what's held and what was asked for. Pairing `--invoice` with an amount-less invoice now requires `--amount`, since nothing else supplies the figure; pairing it with a fixed-amount invoice refuses `--amount`, matching how every Lightning wallet locks the amount field for one. ([#38](https://github.com/ohstr/cashctl/pull/38))
