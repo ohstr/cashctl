@@ -1272,3 +1272,58 @@ func previewSuffix(q redeemQuote) string {
 	}
 	return strings.Join(parts, " ")
 }
+
+// pickHeldTokensOrAll is pickHeldTokens' counterpart for a command in
+// consolidate's own stakes class, not redeem's — the holding stays fully
+// yours either way (a re-key, a status read), so there is nothing here an
+// ambiguous selection could lose. Mirrors pickHubGroups (cash_consolidate.go)
+// exactly, just over a plain []ledger.Entry instead of a hub-grouped map:
+// --json/--yes or a single candidate defaults to all of them, the
+// interactive prompt's bare Enter also means all, and an explicit selection
+// still works for the caller who wants one specific entry.
+func pickHeldTokensOrAll(cmd *cobra.Command, held []ledger.Entry) ([]*ledger.Entry, error) {
+	jsonMode, _ := cmd.Flags().GetBool("json")
+	yesFlag, _ := cmd.Flags().GetBool("yes")
+	if jsonMode || yesFlag || len(held) == 1 {
+		return entryPointers(held), nil
+	}
+
+	output.Notef(false, "You hold %d eligible tokens:", len(held))
+	for i, e := range held {
+		amount := "unknown amount"
+		if e.AmountMillis != nil {
+			amount = output.FormatAmount(int64(*e.AmountMillis))
+		}
+		output.Notef(false, "  %d) %s   received %s", i+1, amount, formatReceivedDate(e.ReceivedAt))
+	}
+	choice, err := PromptLine(fmt.Sprintf("Which one(s)? [1-%d, comma-separated, or Enter for all] ", len(held)))
+	if err != nil {
+		return nil, output.RuntimeError(cmd, err)
+	}
+	choice = strings.TrimSpace(choice)
+	if choice == "" || strings.EqualFold(choice, "all") {
+		return entryPointers(held), nil
+	}
+
+	var picked []ledger.Entry
+	for _, part := range strings.Split(choice, ",") {
+		idx := parseChoice(strings.TrimSpace(part), len(held))
+		if idx < 0 {
+			return nil, output.UsageError(cmd, fmt.Errorf("invalid selection %q", part))
+		}
+		picked = append(picked, held[idx])
+	}
+	return entryPointers(picked), nil
+}
+
+// entryPointers takes the address of each element of a fresh copy of
+// entries — never of the slice pickHeldTokensOrAll was handed, which may be
+// reused or reordered by its own caller afterward.
+func entryPointers(entries []ledger.Entry) []*ledger.Entry {
+	out := make([]*ledger.Entry, len(entries))
+	for i := range entries {
+		e := entries[i]
+		out[i] = &e
+	}
+	return out
+}
