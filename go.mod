@@ -6,7 +6,7 @@ require (
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.0
 	github.com/flokiorg/go-flokicoin v0.26.1-alpha
 	github.com/ohstr/ncli v0.6.0
-	github.com/ohstr/nmilat v0.5.0-rc.2
+	github.com/ohstr/nmilat v0.5.0-rc.3
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
 	golang.org/x/term v0.45.0
