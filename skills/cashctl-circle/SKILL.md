@@ -54,3 +54,19 @@ To inspect a `circlehub1...` connection locally without joining it, use
 the general-purpose `cashctl decode circlehub1...` (see
 `skills/cashctl-wallet/SKILL.md`) — the same TLV payload `join --hub`
 decodes internally before dialing, just exposed directly.
+
+## End-to-end: join, then use it like any other wallet
+
+"a circle membership is just an ordinary registered wallet from this
+point on" (above) means every `skills/cashctl-wallet/SKILL.md` NIP-47
+example applies immediately after joining, with no extra step:
+
+```sh
+cashctl join circlehub1... 100 --json         # {"wallet": "circle:1", "default": true, ...}
+cashctl wallet budget --json                  # confirm the spend cap the Hub actually granted
+cashctl wallet invoice 5 --desc "test" --json  # already the default wallet — no --connection needed
+```
+
+Use `-c circle:1` (the name `join` reported) on any `wallet ...` call to
+target this membership without it being the default, e.g. right after
+joining a second circle.

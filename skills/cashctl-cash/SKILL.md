@@ -53,7 +53,16 @@ entry, it asks to protect it immediately (defaults to yes; always
 proceeds non-interactively under `--yes`/`--json` — there's no separate
 flag to opt out). Protecting re-keys the slice under a fresh secret only
 your wallet knows, and — if you already hold other cash mint-signed by
-the same issuer — merges it into that holding in the same step. Reported
+the same issuer — merges it into that holding in the same step. A
+same-Hub holding that's already expired is left out of that merge
+instead of included: NIP-CASH's merge rule inherits the earliest expiry
+across every source, so folding a dead one in would kill the fresh
+receipt's own good deadline too. The fresh receipt still gets protected
+either way — just re-keyed alone (`"rekeyed"`) instead of merged
+(`"consolidated"`) whenever the only other same-Hub holding was the one
+excluded. There's no `--json` field naming what got left out (the
+in-process note is text-mode only); `secured.status` not matching what
+you expected given the holdings on record is the signal. Reported
 under `"secured"` in `--json` output: `{"status": "rekeyed"}` (re-keyed
 in place), `{"status": "consolidated", "consolidated_with": [...],
 "final_entry_id": "..."}` (merged into a new entry), `{"status":
@@ -68,8 +77,46 @@ which — unlike `redeem`, nothing here leaves your control, so an
 ambiguous selection has nothing to lose, and `--json`/`--yes` with several
 eligible returns an array (`{"protected": [...]}`, each row carrying
 `id`) rather than refusing as ambiguous. Because the secret is always captured — and kept current
-— up front, `redeem`/`transfer` never need a `--as cash:<secret>`
-override for a held token.
+— up front, `redeem`/`transfer` never *need* a `--as cash:<secret>`
+override for a held token's own call — the one real use is overriding
+the entry's on-disk secret with a fresher one you learned out-of-band
+(e.g. a `recovery` handoff for this exact entry, below) without editing
+the ledger first: `cashctl redeem --token tok-a1b2 --as cash:<secret> --json`.
+
+**`retryable`/`recovery` in practice.** Every error from `redeem`,
+`transfer`, and `consolidate` carries `retryable` (branch on it instead of
+the message: `true` means back off and retry, `false` means fix the input
+first) — this is the same top-level `{"error", "code", "retryable", ...}`
+shape AGENTS.md's error table describes for every command, not something
+special to this skill's own three. `recovery` is the one field exempt from
+secret redaction and never truncated, and it appears only when a Hub-side
+mutation is *confirmed* to have happened but the local save that was
+supposed to record it then failed — the money moved, your wallet just
+doesn't know it yet. For `consolidate`, that's the merged or
+sent-to-cash result's own `<token>#<cash_secret>` — the only copy that
+will ever be shown:
+
+```json
+{
+  "error": "Consolidate succeeded on the Hub, but saving that locally failed (disk full) — your wallet's local record does not match reality.",
+  "code": "internal",
+  "retryable": false,
+  "recovery": "The resulting token — save this now, it will not be shown again: lokicash1...#a1b2c3...(64 hex)"
+}
+```
+
+`recovery` is free text, not a fixed shape — it can name more than one
+handoff, so match what's actually inside it rather than expecting one
+bare value. `transfer`'s own version is the clearest case: a split send
+can fail to save with BOTH the recipient's bill and your own remainder
+still unrecorded, and both get named in one string ("Save these: the
+recipient's own — save this now, it will not be shown again: ...; your
+own remainder: ..."). `redeem`'s differs in shape entirely, since a
+payout has no secret to hand back: a `token=preimage` list per entry that
+paid, naming exactly which already-held entries will now incorrectly
+keep showing as held until reconciled. Either way: treat a nonzero exit
+carrying `recovery` as "money moved, ledger didn't" — never as "nothing
+happened, retry freely".
 
 ## `cashctl redeem` — cash it out
 
@@ -256,12 +303,23 @@ fails with `code: "usage"` naming exactly how much is held and that funds
 are fragmented across separate minters/Hubs, rather than silently
 splitting the send across several transfers.
 
+If that auto-consolidate subset would mix an already-expired source with
+a healthy one, the call refuses outright instead of merging them first:
+`code: "invalid_input"`, naming the expired source's own ID, nothing
+attempted — same reasoning as `consolidate`'s own refusal below (NIP-CASH's
+merge rule inherits the earliest expiry across every source, so merging a
+dead one in kills the healthy source's deadline too). An all-expired
+subset is unaffected: that still reaches the Hub and comes back
+`code: "auth"`/`nwc_code: "EXPIRED"` as always, since there's no healthy
+deadline left to protect.
+
 ## `cashctl consolidate` — merge several into one
 
 ```sh
 cashctl consolidate --json                                    # no sources given: auto-groups held tokens by Cash Hub, merges each group
 cashctl consolidate tok-a1b2 tok-c3d4 --json                   # positional IDs — or --sources tok-a1b2,tok-c3d4
 cashctl consolidate --sources tok-a1b2,lokicash1...:5:pubkey:<privkey> --to pubkey:<hex> --json
+cashctl consolidate --sources tok-a1b2,tok-c3d4 --to nconnection1... --ia ia@example.com --json
 ```
 
 Positional IDs, or `--sources` comma-separated: a bare ID already in your
@@ -282,6 +340,22 @@ tokens can actually be merged, so cashctl groups held tokens by Cash Hub
 and consolidates each group with 2+ tokens (a lone token from a Hub
 needs no merge, and is skipped) — under `--json`, every qualifying group
 is processed with no prompt.
+
+**A selection — explicit or auto-grouped — that mixes an already-expired
+source with a healthy one is refused, not merged.** NIP-CASH's merge rule
+inherits the earliest expiry across every source, so merging a dead one
+in would kill the healthy source's own good deadline too the instant the
+merge lands — cashctl checks every source's expiry live before attempting
+anything and refuses outright on a mix: `code: "invalid_input"`, naming
+the expired source(s), nothing attempted, even under `--json`/`--yes`.
+For an explicit `--sources`/positional call this is the whole command's
+error. For the no-args auto-grouped path, it's that one Hub group's own
+`"failed"` entry in `{"consolidated": [...]}` (same shape as any other
+group failure) — sibling groups are unaffected — unless it's the only
+group, in which case it's the top-level error the same way. An
+*all*-expired selection is unaffected either way: that still reaches the
+Hub and comes back `code: "auth"`/`nwc_code: "EXPIRED"`, since there's no
+healthy deadline left to protect.
 
 Every chosen group is attempted, and one group failing never stops the
 others: each group is its own separately committed `cash_consolidate`
@@ -334,3 +408,36 @@ present, ...), use the general-purpose `cashctl decode lokicash1...`
 instead (see `skills/cashctl-wallet/SKILL.md`) — it never touches the
 network, works on any token string held or not, and is the cheapest way to
 inspect one before deciding whether to `receive` it at all.
+
+## End-to-end scenarios
+
+Each command above in isolation; here's how they chain in practice.
+
+**Receive a gift, it auto-merges, redeem the result directly** — no need
+to look anything up between the two calls, `receive`'s own response names
+the entry to act on next:
+
+```sh
+cashctl receive lokicash1...#deadbeef --json
+# {"entry": {"id": "tok-new456", ...}, "secured": {"status": "consolidated", "final_entry_id": "tok-new456", "consolidated_with": ["tok-existing999"]}}
+cashctl redeem --token tok-new456 --json
+```
+
+**A transfer amount no single token covers, auto-consolidate fires, check
+what's left** — one command does both chained calls; the aftermath shows
+up in the next `wallet show`:
+
+```sh
+cashctl wallet balance --json                              # see what's held before
+cashctl transfer --to npub1w0lxfr9... --amount 12 --json    # consolidates a covering subset first, then sends
+cashctl wallet show --json                                  # held_tokens' new entry, if the send wasn't exact
+```
+
+**One of several named sources turns out to be expired — refused, retry
+without it:**
+
+```sh
+cashctl consolidate tok-a1b2 tok-c3d4 tok-e5f6 --json
+# {"error": "tok-a1b2 already expired — merging with a healthy source would make the whole result unusable too. Nothing was changed. Drop it and retry with just the healthy source(s)", "code": "invalid_input", "retryable": false, "input": "tok-a1b2"}
+cashctl consolidate tok-c3d4 tok-e5f6 --json                # drop the named source, retry with the healthy two
+```
