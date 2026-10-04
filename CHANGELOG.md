@@ -2,8 +2,8 @@
 
 ## [Unreleased]
 
-- `redeem --amount <n>` selects which held token(s) land exactly that much, net of any fee, instead of naming a token ID yourself — an exact single match, or an exact same-Hub sum when no single token covers it. No combination found is a plain refusal naming what's held and what was asked for. Pairing `--invoice` with an amount-less invoice now requires `--amount`, since nothing else supplies the figure; pairing it with a fixed-amount invoice refuses `--amount`, matching how every Lightning wallet locks the amount field for one.
-- `wallet protect` and `cash status`, with no id and more than one eligible candidate, now process/report every one of them instead of refusing as ambiguous — re-keying or reading doesn't risk anything an ambiguous pick could lose, unlike `redeem`'s own irreversible payout. `--json`/`--yes` with several eligible returns an array instead of a usage error.
+- `redeem --amount <n>` selects which held token(s) land exactly that much, net of any fee, instead of naming a token ID yourself — an exact single match, or an exact same-Hub sum when no single token covers it. No combination found is a plain refusal naming what's held and what was asked for. Pairing `--invoice` with an amount-less invoice now requires `--amount`, since nothing else supplies the figure; pairing it with a fixed-amount invoice refuses `--amount`, matching how every Lightning wallet locks the amount field for one. ([#38](https://github.com/ohstr/cashctl/pull/38))
+- `wallet protect` and `cash status`, with no id and more than one eligible candidate, now process/report every one of them instead of refusing as ambiguous — re-keying or reading doesn't risk anything an ambiguous pick could lose, unlike `redeem`'s own irreversible payout. `--json`/`--yes` with several eligible returns an array instead of a usage error. ([#38](https://github.com/ohstr/cashctl/pull/38))
 
 ## [0.6.0-rc.2]
 
