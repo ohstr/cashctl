@@ -21,16 +21,11 @@ func newCashConsolidateCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "consolidate [id...]",
 		Short: "Merge several held cash tokens into one",
-		Long: `Merges several held cash tokens into one. With no IDs/--sources given,
-auto-detects which of your held tokens share a minter (only same-minter
-tokens can actually be merged) and consolidates each such group — one
-call per minter, not a single "everything" attempt that would fail across
-minters. Interactive sessions are asked which group(s) to proceed with
-when more than one qualifies; --json/--yes processes every qualifying
-group. Every chosen group is attempted and reported even if another fails,
-since each group is a separate committed merge. Pass IDs/--sources for
-exact control instead (see "cashctl wallet show --json" for the IDs —
-plain-text "wallet show" never prints them).`,
+		Long: `Merges several held cash tokens into one. With no IDs/--sources,
+auto-groups held tokens by Cash Hub and merges each group — only
+same-Hub tokens can combine. Pass IDs/--sources for exact control; see
+"cashctl wallet show --json" for the IDs (plain-text output never prints
+them).`,
 		Example: `  cashctl consolidate
   cashctl consolidate tok-a tok-b
   cashctl consolidate --sources tok-a,tok-b --to cash`,

@@ -259,7 +259,7 @@ splitting the send across several transfers.
 ## `cashctl consolidate` — merge several into one
 
 ```sh
-cashctl consolidate --json                                    # no sources given: auto-groups held tokens by minter, merges each group
+cashctl consolidate --json                                    # no sources given: auto-groups held tokens by Cash Hub, merges each group
 cashctl consolidate tok-a1b2 tok-c3d4 --json                   # positional IDs — or --sources tok-a1b2,tok-c3d4
 cashctl consolidate --sources tok-a1b2,lokicash1...:5:pubkey:<privkey> --to pubkey:<hex> --json
 ```
@@ -277,9 +277,9 @@ Needs at least 2 sources per call. Like `transfer`, an `nconnection1...`
 its Identity Authority — an interactive session prompts for it if
 missing, a `--json`/`--yes` call gets `code: "usage"` naming `--ia`.
 
-With neither positional IDs nor `--sources` given: only same-minter
-tokens can actually be merged, so cashctl groups held tokens by minter
-and consolidates each group with 2+ tokens (a lone token from a minter
+With neither positional IDs nor `--sources` given: only same-Hub
+tokens can actually be merged, so cashctl groups held tokens by Cash Hub
+and consolidates each group with 2+ tokens (a lone token from a Hub
 needs no merge, and is skipped) — under `--json`, every qualifying group
 is processed with no prompt.
 
@@ -292,7 +292,7 @@ Response shape depends on how many groups were processed and whether all
 of them succeeded. Exactly one, succeeded (the common case) returns the
 same `{"new_entry", "expires_at", "target_resolved"}` object as the
 explicit-sources form always has. Otherwise you get
-`{"consolidated": [...]}`, one entry per group, each with `minter`,
+`{"consolidated": [...]}`, one entry per group, each with `hub`,
 `sources` (the ledger IDs it tried), and a `status` of:
 
 | `status` | meaning |
