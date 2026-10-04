@@ -56,8 +56,7 @@ import (
 func newDecodeCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "decode <string>",
-		Short: "Inspect any cash token, Circle Hub connection, or NWC URI locally",
-		Long:  `Inspects a cash token, Circle Hub connection, or NWC URI locally. --check adds a network round trip.`,
+		Short: "Inspect any cash token, Circle Hub connection, or NWC URI locally — no network call unless --check is passed",
 		Example: `  cashctl decode lokicash1...
   cashctl decode lokicash1... --check
   cashctl decode circlehub1...`,

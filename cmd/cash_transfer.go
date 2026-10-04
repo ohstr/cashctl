@@ -63,7 +63,7 @@ func resolveTarget(cmd *cobra.Command, s string) (credential.ResolvedTarget, err
 		if platform == "" {
 			platform = "this connection"
 		}
-		line, err := PromptLine(fmt.Sprintf("This connection doesn't specify who to trust as Identity Authority for %s. Enter one (hex pubkey or NIP-05): ", platform))
+		line, err := PromptLine(fmt.Sprintf("This connection doesn't specify who to trust as Identity Authority for %s. Enter one (hex pubkey or name@domain): ", platform))
 		if err != nil {
 			return credential.ResolvedTarget{}, output.RuntimeError(cmd, err)
 		}

@@ -28,11 +28,10 @@ func newCashRedeemCmd() *cobra.Command {
 token straight into any invoice via --invoice.
 
 Several tokens can be redeemed in one command: name them with a repeatable
-(or comma-separated) --token, or pass --all for every held token. Each
-token is paid out into its own invoice, because a slice pays out exactly
-once and an invoice is payable once. Every selected token is attempted and
-reported even if another fails — each payout is separate and irreversible,
-so a failure part-way through must not hide which ones already paid.`,
+(or comma-separated) --token, pass --all for every held token, or --amount
+to pick whichever held token(s) sum to it exactly without naming any. Each
+token is paid out into its own invoice, and every selected one is
+attempted even if another fails.`,
 		Example: `  cashctl redeem
   cashctl redeem savings --token tok-abc123
   cashctl redeem --token tok-abc123,tok-def456

@@ -26,9 +26,8 @@ func newCashStatusCmd() *cobra.Command {
 		Short:   "Check your allocation and co-recipients of a held token",
 		Long: `Shows your share and co-recipients of a held token's mint batch.
 
-With no id and more than one held token, reports every one of them: this is
-pure read access, so — unlike redeem, which pays out irreversibly — there is
-nothing an ambiguous selection here could lose.`,
+With no id and more than one held, reports every one — nothing here can
+be lost by an ambiguous pick.`,
 		Example: `  cashctl cash status`,
 		Args:    output.NoArgs,
 		RunE:    runCashStatus,

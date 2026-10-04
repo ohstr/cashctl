@@ -17,7 +17,7 @@ func newWalletInitCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "init",
 		Short:   "Set up your identity and, optionally, a wallet",
-		Long:    `Creates (or reuses) your Nostr identity, and optionally registers a default wallet.`,
+		Long:    `Creates (or reuses) your identity, and optionally registers a default wallet.`,
 		Example: `  cashctl init`,
 		Args:    output.NoArgs,
 		RunE:    runWalletInit,
