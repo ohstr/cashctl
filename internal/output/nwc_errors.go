@@ -88,12 +88,21 @@ func NWCErrorForCashToken(cmd *cobra.Command, err *relayclient.WalletError) erro
 	return nwcError(cmd, err, cashTokenNWCErrorMessages)
 }
 
+// NWCErrorCode maps a raw NIP-47 error code to cashctl's own coarse
+// ErrorCode, the same table nwcError uses — exported so a caller that needs
+// the classification without nwcError's cmd-bound side effects (silencing
+// cobra's usage dump) can reuse it, instead of re-deriving its own notion of
+// which codes mean "the Hub has permanently cut this connection off."
+func NWCErrorCode(nwcCode string) ErrorCode {
+	if code, ok := nwcErrorCode[nwcCode]; ok {
+		return code
+	}
+	return CodeInternal
+}
+
 func nwcError(cmd *cobra.Command, err *relayclient.WalletError, overrides map[string]string) error {
 	silence(cmd)
-	code := nwcErrorCode[err.Code]
-	if code == "" {
-		code = CodeInternal
-	}
+	code := NWCErrorCode(err.Code)
 	// Sanitized: err.Message is the wallet's own raw text, not cashctl's.
 	rawMessage := Sanitize(err.Message)
 	message := rawMessage
