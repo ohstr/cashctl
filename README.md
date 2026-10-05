@@ -391,7 +391,7 @@ use).
 docker run --rm -v ~/.config/cashctl:/root/.config/cashctl ghcr.io/ohstr/cashctl:latest wallet show
 ```
 
-The `:edge` tag tracks `main`; a versioned tag tracks that release.
+The `:edge` tag tracks `main`; `:rc` tracks the newest release candidate; a versioned tag tracks that exact release.
 
 ## Development
 

@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.6.0-rc.5]
+
+- `ghcr.io/ohstr/cashctl:rc` is a new floating tag tracking the newest release candidate, mirroring `:latest` for stable releases — pushed only when the release being cut is itself a prerelease; a stable release leaves it alone and moves `:latest` exactly as before.
+
 ## [0.6.0-rc.4]
 
 - `wallet balance`'s stranded-balance fallback now fires on any decline the Hub means permanently (`EXPIRED`, `RESTRICTED`, `UNAUTHORIZED`), not just the literal `EXPIRED` code — a wallet declined one of the other two used to have its cached balance silently vanish from `--breakdown` entirely instead of showing up stranded. ([#51](https://github.com/ohstr/cashctl/pull/51))

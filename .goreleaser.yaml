@@ -35,9 +35,12 @@ checksum:
 #
 # Each arch is split into a "-versioned" entry (always pushed, so every
 # release -- including an RC -- gets an installable image under its own
-# tag) and a "-latest" entry (skip_push: auto, so only a stable release
-# ever moves the latest-* tags). A single entry can't do both: skip_push
-# applies to every image_template in that entry, so latest can't be
+# tag), a "-latest" entry (skip_push: auto, so only a stable release ever
+# moves the latest-* tags), and a "-rc" entry (the inverse condition, so
+# only a prerelease ever moves the rc-* tags -- same logic the cashctl-rc
+# brew formula below already uses, just applied to skip_push instead of
+# skip_upload). A single entry can't do more than one of these: skip_push
+# applies to every image_template in that entry, so latest/rc can't be
 # pushed if the version tag doesn't push too.
 dockers:
   - id: cashctl-amd64-versioned
@@ -61,6 +64,17 @@ dockers:
     build_flag_templates:
       - "--platform=linux/amd64"
     skip_push: auto
+  - id: cashctl-amd64-rc
+    ids: [cashctl]
+    goos: linux
+    goarch: amd64
+    use: buildx
+    dockerfile: build/cashctl/Dockerfile.release
+    image_templates:
+      - "ghcr.io/ohstr/cashctl:rc-amd64"
+    build_flag_templates:
+      - "--platform=linux/amd64"
+    skip_push: '{{ if .Prerelease }}false{{ else }}true{{ end }}'
   - id: cashctl-arm64-versioned
     ids: [cashctl]
     goos: linux
@@ -82,10 +96,22 @@ dockers:
     build_flag_templates:
       - "--platform=linux/arm64"
     skip_push: auto
+  - id: cashctl-arm64-rc
+    ids: [cashctl]
+    goos: linux
+    goarch: arm64
+    use: buildx
+    dockerfile: build/cashctl/Dockerfile.release
+    image_templates:
+      - "ghcr.io/ohstr/cashctl:rc-arm64"
+    build_flag_templates:
+      - "--platform=linux/arm64"
+    skip_push: '{{ if .Prerelease }}false{{ else }}true{{ end }}'
 
 # Same split as above, one level up: the versioned manifest always
-# stitches the two versioned per-arch tags; the latest manifest only
-# stitches the two latest-* tags, and only pushes for a stable release.
+# stitches the two versioned per-arch tags; the latest/rc manifests only
+# stitch their own per-arch tags, and only push for a stable/prerelease
+# respectively.
 docker_manifests:
   - name_template: "ghcr.io/ohstr/cashctl:{{ .Version }}"
     image_templates:
@@ -96,6 +122,11 @@ docker_manifests:
       - "ghcr.io/ohstr/cashctl:latest-amd64"
       - "ghcr.io/ohstr/cashctl:latest-arm64"
     skip_push: auto
+  - name_template: "ghcr.io/ohstr/cashctl:rc"
+    image_templates:
+      - "ghcr.io/ohstr/cashctl:rc-amd64"
+      - "ghcr.io/ohstr/cashctl:rc-arm64"
+    skip_push: '{{ if .Prerelease }}false{{ else }}true{{ end }}'
 
 # brews has no free-tier equivalent of the cask pipe's versioned-formula
 # feature, so an RC gets its own formula name instead: skip_upload is auto
