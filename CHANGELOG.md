@@ -2,6 +2,7 @@
 
 ## [0.6.0-rc.4]
 
+- `wallet balance`'s stranded-balance fallback now fires on any decline the Hub means permanently (`EXPIRED`, `RESTRICTED`, `UNAUTHORIZED`), not just the literal `EXPIRED` code — a wallet declined one of the other two used to have its cached balance silently vanish from `--breakdown` entirely instead of showing up stranded. ([#51](https://github.com/ohstr/cashctl/pull/51))
 - Bumped `nmilat` to v0.5.0-rc.5. ([#49](https://github.com/ohstr/cashctl/pull/49))
 
 ## [0.6.0-rc.3]

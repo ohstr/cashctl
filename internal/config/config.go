@@ -41,8 +41,9 @@ type Connection struct {
 	// for an expired wallet at all, since get_balance itself is one of the
 	// money-moving scopes an expired wallet rejects (only get_info/
 	// get_budget survive expiry). `cashctl balance` falls back to this,
-	// flagged as stranded, when a live call fails specifically with
-	// EXPIRED.
+	// flagged as stranded, when a live call fails with a decline the Hub
+	// means permanently (EXPIRED, RESTRICTED, UNAUTHORIZED) — see
+	// strandedBalanceFallback in cmd/wallet_balance.go.
 	LastKnownBalanceMloki *int64 `json:"last_known_balance_mloki,omitempty"`
 	LastKnownBalanceAt    string `json:"last_known_balance_at,omitempty"`
 }

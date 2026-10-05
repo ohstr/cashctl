@@ -210,10 +210,12 @@ func runWalletBalanceFrom(cmd *cobra.Command, from string, jsonMode bool) error 
 	return output.NotFoundError(cmd, from, fmt.Errorf("no wallet or held token named %q", from))
 }
 
-// liveBalanceMloki dials c and calls get_balance. On an EXPIRED decline
-// specifically, falls back to the cached LastKnownBalanceMloki (if any),
+// liveBalanceMloki dials c and calls get_balance. On a CodeAuth decline
+// (EXPIRED, RESTRICTED, UNAUTHORIZED — the Hub has permanently cut this
+// connection off), falls back to the cached LastKnownBalanceMloki (if any),
 // flagged as stranded — see Connection's own doc comment for why that's
-// the only way to show a figure at all for an expired wallet.
+// the only way to show a figure at all for a wallet that can never be
+// queried live again.
 func liveBalanceMloki(c config.Connection) (amount int64, stranded bool, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -227,9 +229,26 @@ func liveBalanceMloki(c config.Connection) (amount int64, stranded bool, err err
 	if err == nil {
 		return result.BalanceMloki, false, nil
 	}
-	var walletErr *relayclient.WalletError
-	if errors.As(err, &walletErr) && walletErr.Code == "EXPIRED" && c.LastKnownBalanceMloki != nil {
-		return *c.LastKnownBalanceMloki, true, nil
+	if amount, ok := strandedBalanceFallback(err, c); ok {
+		return amount, true, nil
 	}
 	return 0, false, err
+}
+
+// strandedBalanceFallback decides whether a get_balance failure should fall
+// back to c's cached LastKnownBalanceMloki rather than being treated as
+// plainly unreachable. Only a CodeAuth decline qualifies: the Hub has
+// permanently and authoritatively cut the connection off, so the cached
+// figure is frozen and accurate forever. Any other failure (network,
+// timeout, a non-auth decline) might resolve to a different live figure if
+// retried, so it stays unreachable with no amount shown — see the
+// `unreachable` doc comment in runWalletBalance for why that distinction
+// matters. Pure and separately tested (wallet_balance_test.go) so the
+// classification doesn't need a live Hub to verify.
+func strandedBalanceFallback(err error, c config.Connection) (amount int64, ok bool) {
+	var walletErr *relayclient.WalletError
+	if errors.As(err, &walletErr) && output.NWCErrorCode(walletErr.Code) == output.CodeAuth && c.LastKnownBalanceMloki != nil {
+		return *c.LastKnownBalanceMloki, true
+	}
+	return 0, false
 }

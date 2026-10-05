@@ -1,15 +1,82 @@
 package cmd
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
+	relayclient "github.com/ohstr/nmilat/relay/client"
 	"github.com/spf13/cobra"
 
 	"github.com/ohstr/cashctl/internal/appdir"
+	"github.com/ohstr/cashctl/internal/config"
 	"github.com/ohstr/cashctl/internal/ledger"
 	"github.com/ohstr/cashctl/internal/output"
 )
+
+// TestStrandedBalanceFallback_CodeAuthDeclinesUseCache guards against the
+// bug found auditing an intermittent live-Hub flake: a get_balance decline
+// used to fall back to the cached LastKnownBalanceMloki only on the exact
+// literal code "EXPIRED", even though RESTRICTED/UNAUTHORIZED mean the same
+// thing (the Hub has permanently cut the connection off — see
+// internal/output's own nwcErrorCode table, which already groups all three
+// under CodeAuth). A Hub free to decline an expired connection with any of
+// the three used to have its two non-EXPIRED spellings silently drop the
+// wallet's cached balance out of `wallet balance --breakdown` entirely.
+func TestStrandedBalanceFallback_CodeAuthDeclinesUseCache(t *testing.T) {
+	cached := int64(8_000)
+	c := config.Connection{Name: "circle:test", LastKnownBalanceMloki: &cached}
+
+	for _, code := range []string{"EXPIRED", "RESTRICTED", "UNAUTHORIZED"} {
+		t.Run(code, func(t *testing.T) {
+			err := &relayclient.WalletError{Method: "get_balance", Code: code, Message: "declined"}
+			amount, ok := strandedBalanceFallback(err, c)
+			if !ok {
+				t.Fatalf("strandedBalanceFallback(%s) ok = false, want true — a CodeAuth decline must fall back to the cached balance", code)
+			}
+			if amount != cached {
+				t.Errorf("strandedBalanceFallback(%s) amount = %d, want cached %d", code, amount, cached)
+			}
+		})
+	}
+}
+
+// TestStrandedBalanceFallback_NonAuthFailuresStayUnreachable guards the
+// other side of the same fix: a failure that isn't a permanent Hub decline
+// must NOT use the cached figure, since the wallet might come back with a
+// different live balance — the whole reason `unreachable` exists as a
+// distinct, amount-less bucket (see runWalletBalance's own doc comment on
+// it). Widening the CodeAuth match must not also start masking these.
+func TestStrandedBalanceFallback_NonAuthFailuresStayUnreachable(t *testing.T) {
+	cached := int64(8_000)
+	c := config.Connection{Name: "circle:test", LastKnownBalanceMloki: &cached}
+
+	cases := []struct {
+		name string
+		err  error
+	}{
+		{"non-auth wallet decline", &relayclient.WalletError{Method: "get_balance", Code: "RATE_LIMITED", Message: "slow down"}},
+		{"plain network error", errors.New("dial tcp: connection refused")},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if amount, ok := strandedBalanceFallback(tc.err, c); ok {
+				t.Errorf("strandedBalanceFallback(%s) = (%d, true), want ok = false", tc.name, amount)
+			}
+		})
+	}
+}
+
+// TestStrandedBalanceFallback_NoCachedBalance guards the pre-existing guard
+// that a CodeAuth decline with nothing cached yet still can't produce a
+// figure out of nowhere.
+func TestStrandedBalanceFallback_NoCachedBalance(t *testing.T) {
+	c := config.Connection{Name: "circle:test"}
+	err := &relayclient.WalletError{Method: "get_balance", Code: "EXPIRED", Message: "expired"}
+	if amount, ok := strandedBalanceFallback(err, c); ok {
+		t.Errorf("strandedBalanceFallback(no cache) = (%d, true), want ok = false", amount)
+	}
+}
 
 // TestSummarizeHeldTokens_ExpiredEntryExcludedFromTotal guards against the
 // bug found auditing `balance`: a held cash token past its own Hub-side
