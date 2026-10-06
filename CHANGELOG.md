@@ -3,7 +3,7 @@
 ## [0.6.0-rc.5]
 
 - `ghcr.io/ohstr/cashctl:rc` is a new floating tag tracking the newest release candidate, mirroring `:latest` for stable releases — pushed only when the release being cut is itself a prerelease; a stable release leaves it alone and moves `:latest` exactly as before.
-- Bumped `nmilat` to v0.5.0-rc.7.
+- Bumped `nmilat` to v0.5.0-rc.7. ([#55](https://github.com/ohstr/cashctl/pull/55))
 
 ## [0.6.0-rc.4]
 
