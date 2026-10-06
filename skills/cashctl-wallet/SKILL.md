@@ -69,10 +69,11 @@ Sums every registered wallet's live `get_balance` result plus every
 unredeemed held cash token's cached amount — the way a real wallet app
 shows "your balance," not a protocol inventory. An unreachable wallet is
 silently omitted from the sum (not fatal to the whole command) **except**
-one declining with the NIP-47 `EXPIRED` code specifically, which falls
-back to the last-known cached figure, marked `"stranded": true` — so an
-expired wallet's balance is never just invisible, but is clearly flagged
-as no longer money-moving.
+one declining with a NIP-47 code the Hub means permanently (`EXPIRED`,
+`RESTRICTED`, `UNAUTHORIZED`), which falls back to the last-known cached
+figure, marked `"stranded": true` — so an expired or revoked wallet's
+balance is never just invisible, but is clearly flagged as no longer
+money-moving.
 
 `cashctl balance` is also available as a top-level shortcut for `wallet
 balance` — identical flags and output.
