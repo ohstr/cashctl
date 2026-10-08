@@ -363,6 +363,14 @@ standalone with just the `cashctl` binary on `PATH`.
 npx skills add ohstr/cashctl --all -y
 ```
 
+The same skills are built into the binary, matching its version:
+
+```sh
+cashctl skills list                  # names and descriptions
+cashctl skills show cashctl-cash     # print one SKILL.md
+cashctl skills install               # copy into ~/.claude/skills (or --dir)
+```
+
 `cashctl --help` prints the complete command tree.
 
 ## Configuration
