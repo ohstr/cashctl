@@ -2,7 +2,7 @@
 
 ## [0.6.0-rc.6]
 
-- Bumped `nmilat` to v0.5.0-rc.11.
+- Bumped `nmilat` to v0.5.0-rc.11. ([#59](https://github.com/ohstr/cashctl/pull/59))
 
 ## [0.6.0-rc.5]
 
