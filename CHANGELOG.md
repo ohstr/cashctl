@@ -2,7 +2,7 @@
 
 ## [0.6.0-rc.6]
 
-- `cashctl skills list|show|install`: the agent skills are now built into the binary, so an agent can read or install the guidance matching the version it's running.
+- `cashctl skills list|show|install`: the agent skills are now built into the binary, so an agent can read or install the guidance matching the version it's running. ([#58](https://github.com/ohstr/cashctl/pull/58))
 
 ## [0.6.0-rc.5]
 
