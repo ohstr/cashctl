@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.6.0-rc.7]
+
+- Bumped `nmilat` to v0.5.0-rc.12.
+
 ## [0.6.0-rc.6]
 
 - `cashctl skills list|show|install`: the agent skills are now built into the binary, so an agent can read or install the guidance matching the version it's running. ([#58](https://github.com/ohstr/cashctl/pull/58))
