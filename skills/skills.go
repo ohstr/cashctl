@@ -12,10 +12,10 @@ import (
 )
 
 // Every file under each skill directory, not just SKILL.md, so reference
-// files a skill links to ship with it. This package's own .go files are
-// embedded too but ignored: only directories holding a SKILL.md count.
+// files a skill links to ship with it. all: keeps names starting with . or _,
+// which embed otherwise drops silently.
 //
-//go:embed *
+//go:embed all:cashctl-*
 var files embed.FS
 
 // Skill is one embedded skill directory and its SKILL.md frontmatter.

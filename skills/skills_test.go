@@ -21,7 +21,7 @@ func TestAll_EmbedsEverySkillDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(all) == 0 || len(all) != len(onDisk) {
-		t.Fatalf("embedded %d skills, %d on disk", len(all), len(onDisk))
+		t.Fatalf("embedded %d skills, %d on disk — is a new skill directory outside the cashctl-* embed pattern?", len(all), len(onDisk))
 	}
 	for _, s := range all {
 		raw, err := os.ReadFile(filepath.Join(s.Name, "SKILL.md"))
@@ -41,7 +41,7 @@ func TestAll_EmbedsEverySkillDirectory(t *testing.T) {
 			return err
 		})
 		if !slices.Equal(s.Files, onDiskFiles) {
-			t.Errorf("%s: embedded files %v, on disk %v — a file name starting with . or _ isn't embedded", s.Name, s.Files, onDiskFiles)
+			t.Errorf("%s: embedded files %v, on disk %v", s.Name, s.Files, onDiskFiles)
 		}
 		if s.Description == "" {
 			t.Errorf("%s: empty description", s.Name)
