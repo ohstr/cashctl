@@ -38,6 +38,7 @@ stderr.
 | `cashctl consolidate [id...] [--to <target>]` | Merge several held tokens into one — positional IDs, or `--sources`, for exact control (IDs discoverable via `wallet show --json`; plain-text `wallet show` never prints them). With neither, auto-groups held tokens by Cash Hub (only same-Hub tokens can merge) and consolidates each group with 2+ tokens — one group proceeds directly, several prompt interactively (or all process under `--json`/`--yes`). Every chosen group is attempted: one failing never cancels or hides the others (see **Partial success**) |
 | `cashctl cash status [--token <id>]` | Your allocation + co-recipients of a held token (network). With no id and more than one held, reports every one — read-only, so the same "nothing to lose" rule as `wallet protect` applies |
 | `cashctl cash receive` / `redeem` / `transfer` / `consolidate` | Same as the top-level forms above — the canonical, fully-namespaced versions |
+| `cashctl skills list` / `show <name>` / `install [--dir <dir>]` | The agent skills below, embedded in the binary so they match its version: list names and descriptions, print one SKILL.md to stdout, or write `<dir>/<name>/SKILL.md` for each (default `~/.claude/skills`, replacing older copies). Unknown name is `not_found` |
 | `cashctl version` | Print the cashctl version |
 
 A `--to`/positional target (`transfer`, `consolidate`) needs no prefix for
