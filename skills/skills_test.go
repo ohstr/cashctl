@@ -1,13 +1,15 @@
 package skills
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
-// Every skill directory on disk must be embedded and parse a name matching
-// its directory — a new skill that fails either would silently go missing
+// Every skill directory on disk, and every file in it, must be embedded, with
+// a name matching its directory — a new skill that fails either would silently go missing
 // from `cashctl skills`.
 func TestAll_EmbedsEverySkillDirectory(t *testing.T) {
 	onDisk, err := filepath.Glob("*/SKILL.md")
@@ -29,6 +31,17 @@ func TestAll_EmbedsEverySkillDirectory(t *testing.T) {
 		}
 		if string(raw) != s.Content {
 			t.Errorf("%s: embedded content differs from disk", s.Name)
+		}
+		var onDiskFiles []string
+		_ = filepath.WalkDir(s.Name, func(p string, d fs.DirEntry, err error) error {
+			if err == nil && !d.IsDir() {
+				rel, _ := filepath.Rel(s.Name, p)
+				onDiskFiles = append(onDiskFiles, filepath.ToSlash(rel))
+			}
+			return err
+		})
+		if !slices.Equal(s.Files, onDiskFiles) {
+			t.Errorf("%s: embedded files %v, on disk %v — a file name starting with . or _ isn't embedded", s.Name, s.Files, onDiskFiles)
 		}
 		if s.Description == "" {
 			t.Errorf("%s: empty description", s.Name)

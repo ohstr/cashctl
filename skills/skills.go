@@ -6,18 +6,30 @@ import (
 	"embed"
 	"fmt"
 	"io/fs"
+	"path"
 	"sort"
 	"strings"
 )
 
-//go:embed */SKILL.md
+// Every file under each skill directory, not just SKILL.md, so reference
+// files a skill links to ship with it. This package's own .go files are
+// embedded too but ignored: only directories holding a SKILL.md count.
+//
+//go:embed *
 var files embed.FS
 
-// Skill is one embedded SKILL.md and its frontmatter fields.
+// Skill is one embedded skill directory and its SKILL.md frontmatter.
 type Skill struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Content     string `json:"-"`
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	Files       []string `json:"files"` // relative to the skill directory, SKILL.md included
+	Content     string   `json:"-"`     // SKILL.md
+	dir         string
+}
+
+// ReadFile returns one of s.Files.
+func (s Skill) ReadFile(rel string) ([]byte, error) {
+	return fs.ReadFile(files, path.Join(s.dir, rel))
 }
 
 // All returns every embedded skill, sorted by name.
@@ -32,10 +44,20 @@ func All() ([]Skill, error) {
 		if err != nil {
 			return nil, err
 		}
-		s := Skill{Content: string(raw)}
+		s := Skill{Content: string(raw), dir: path.Dir(p)}
 		s.Name, s.Description = frontmatter(s.Content)
 		if s.Name == "" {
 			return nil, fmt.Errorf("%s: frontmatter has no name", p)
+		}
+		err = fs.WalkDir(files, s.dir, func(p string, d fs.DirEntry, err error) error {
+			if err != nil || d.IsDir() {
+				return err
+			}
+			s.Files = append(s.Files, strings.TrimPrefix(p, s.dir+"/"))
+			return nil
+		})
+		if err != nil {
+			return nil, err
 		}
 		out = append(out, s)
 	}

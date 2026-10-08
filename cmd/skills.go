@@ -82,7 +82,7 @@ func newSkillsShowCmd() *cobra.Command {
 // installResult is one skill's outcome under `skills install`.
 type installResult struct {
 	Name   string `json:"name"`
-	Path   string `json:"path"`
+	Path   string `json:"path"`   // the skill's directory
 	Status string `json:"status"` // installed, updated, or unchanged
 }
 
@@ -90,8 +90,9 @@ func newSkillsInstallCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "install",
 		Short: "Copy the built-in skills into an agent's skills directory",
-		Long: `Writes <dir>/<name>/SKILL.md for every built-in skill, replacing an older
-copy so it matches this binary. --dir defaults to ~/.claude/skills.`,
+		Long: `Writes every built-in skill's files (SKILL.md and anything it references)
+under <dir>/<name>/, replacing older copies so they match this binary.
+--dir defaults to ~/.claude/skills.`,
 		Example: `  cashctl skills install
   cashctl skills install --dir .agents/skills`,
 		Args: output.NoArgs,
@@ -131,21 +132,39 @@ copy so it matches this binary. --dir defaults to ~/.claude/skills.`,
 	return cmd
 }
 
+// installSkill writes every file of s under dir/<name>/, leaving files that
+// already match alone. Status is per skill: installed when no SKILL.md was
+// there yet, updated when any file changed, unchanged otherwise.
 func installSkill(dir string, s skills.Skill) (installResult, error) {
-	path := filepath.Join(dir, s.Name, "SKILL.md")
-	r := installResult{Name: s.Name, Path: path, Status: "installed"}
-	existing, err := os.ReadFile(path)
-	switch {
-	case err == nil && bytes.Equal(existing, []byte(s.Content)):
-		r.Status = "unchanged"
-		return r, nil
-	case err == nil:
-		r.Status = "updated"
-	case !errors.Is(err, os.ErrNotExist):
+	root := filepath.Join(dir, s.Name)
+	r := installResult{Name: s.Name, Path: root, Status: "unchanged"}
+	if _, err := os.Stat(filepath.Join(root, "SKILL.md")); errors.Is(err, os.ErrNotExist) {
+		r.Status = "installed"
+	} else if err != nil {
 		return r, err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return r, err
+	for _, rel := range s.Files {
+		want, err := s.ReadFile(rel)
+		if err != nil {
+			return r, err
+		}
+		path := filepath.Join(root, filepath.FromSlash(rel))
+		existing, err := os.ReadFile(path)
+		if err == nil && bytes.Equal(existing, want) {
+			continue
+		}
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return r, err
+		}
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return r, err
+		}
+		if err := os.WriteFile(path, want, 0o644); err != nil {
+			return r, err
+		}
+		if r.Status == "unchanged" {
+			r.Status = "updated"
+		}
 	}
-	return r, os.WriteFile(path, []byte(s.Content), 0o644)
+	return r, nil
 }
