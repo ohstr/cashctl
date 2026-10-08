@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.6.0-rc.6]
+
+- `cashctl skills list|show|install`: the agent skills are now built into the binary, so an agent can read or install the guidance matching the version it's running.
+
 ## [0.6.0-rc.5]
 
 - `ghcr.io/ohstr/cashctl:rc` is a new floating tag tracking the newest release candidate, mirroring `:latest` for stable releases — pushed only when the release being cut is itself a prerelease; a stable release leaves it alone and moves `:latest` exactly as before.
