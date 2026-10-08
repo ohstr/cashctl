@@ -22,6 +22,7 @@ func init() {
 		newWalletCmd(),
 		newConnectCmd(),
 		newDecodeCmd(),
+		newSkillsCmd(),
 		newVersionCmd(),
 	)
 }
