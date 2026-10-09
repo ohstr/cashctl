@@ -1,7 +1,7 @@
 # cashctl
 
-`cashctl` is a Go CLI wallet for [NIP-CASH](https://github.com/flokiorg/lokihub/blob/main/docs/nips/NIP-CASH.md)
-cash tokens and [NIP-CW](https://github.com/flokiorg/lokihub/blob/main/docs/nips/NIP-CW.md)
+`cashctl` is a Go CLI wallet for [NIP-CASH](https://github.com/ohstr/nips/blob/main/NIP-CASH.md)
+cash tokens and [NIP-CW](https://github.com/ohstr/nips/blob/main/NIP-CW.md)
 circle wallets.
 Assume the `cashctl` binary is already on `PATH`. State (identity, registered
 wallets, held tokens) lives under `$XDG_CONFIG_HOME/cashctl`, overridable with
