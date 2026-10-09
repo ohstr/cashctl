@@ -2,7 +2,10 @@
 
 ## [0.6.0-rc.8]
 
-- Bumped `nmilat` to v0.5.0-rc.13. ([#61](https://github.com/ohstr/cashctl/pull/61))
+A dependency update.
+
+- Updates `nmilat` to v0.5.0-rc.13; cashctl's behavior is unchanged.
+  ([#61](https://github.com/ohstr/cashctl/pull/61))
 
 ## [0.6.0-rc.7]
 
