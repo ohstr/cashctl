@@ -39,8 +39,8 @@ github.com/ncruces/go-strftime v1.0.0 h1:HMFp8mLCTPp341M/ZnA4qaf7ZlsbTc+miZjCLOF
 github.com/ncruces/go-strftime v1.0.0/go.mod h1:Fwc5htZGVVkseilnfgOVb9mKy6w1naJmn9CehxcKcls=
 github.com/ohstr/ncli v0.6.0 h1:VsIv9CygNeFUE5+WuOLSuJpHYeGd8xpx+GBaDWECX30=
 github.com/ohstr/ncli v0.6.0/go.mod h1:5TLk/2cDTPKPfa8IRq+9Z9madxriommQixRsEQ6qzJ4=
-github.com/ohstr/nmilat v0.5.0-rc.14 h1:HwtkG3IkzkYVGwRn489q3/X56QtHZV2YtR8Gg0vXQug=
-github.com/ohstr/nmilat v0.5.0-rc.14/go.mod h1:xZZnShpMN99a2oJM2prGDnM+79NQ1z1hDf//aGPjYrk=
+github.com/ohstr/nmilat v0.5.0-rc.16 h1:+JrzmM2GxmH8u1nzBJNpf4XtghM1HqM6a/X8XSEvwf0=
+github.com/ohstr/nmilat v0.5.0-rc.16/go.mod h1:xZZnShpMN99a2oJM2prGDnM+79NQ1z1hDf//aGPjYrk=
 github.com/pkg/errors v0.9.1/go.mod h1:bwawxfHBFNV+L2hUp1rHADufV3IMtnDRdf1r5NINEl0=
 github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 h1:Jamvg5psRIccs7FGNTlIRMkT8wgtp5eCXdBlqhYGL6U=
 github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
@@ -57,8 +57,6 @@ github.com/spf13/cobra v1.10.2/go.mod h1:7C1pvHqHw5A4vrJfjNwvOdzYu0Gml16OCs2GRiT
 github.com/spf13/pflag v1.0.9/go.mod h1:McXfInJRrz4CZXVZOBLb0bTZqETkiAhM9Iw0y3An2Bg=
 github.com/spf13/pflag v1.0.10 h1:4EBh2KAYBwaONj6b2Ye1GiHfwjqyROoF4RwYO+vPwFk=
 github.com/spf13/pflag v1.0.10/go.mod h1:McXfInJRrz4CZXVZOBLb0bTZqETkiAhM9Iw0y3An2Bg=
-github.com/stretchr/objx v0.5.2 h1:xuMeJ0Sdp5ZMRXx/aWO6RZxdr3beISkG5/G/aIRr3pY=
-github.com/stretchr/objx v0.5.2/go.mod h1:FRsXN1f5AsAjCGJKqEizvkpNtU+EGNCLh3NxZ/8L+MA=
 github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu7U=
 github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
 go.etcd.io/bbolt v1.5.0 h1:S7GAl7Fxv12yohbwFfIbQCGDWbQbtDGPET4P/bD4lxU=
