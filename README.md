@@ -5,8 +5,8 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/ohstr/cashctl.svg)](https://pkg.go.dev/github.com/ohstr/cashctl)
 [![License: Unlicense](https://img.shields.io/badge/license-Unlicense-blue.svg)](LICENSE)
 
-**A wallet CLI for [Cash](https://github.com/flokiorg/lokihub/blob/main/docs/nips/NIP-CASH.md)
-and [Circle wallets](https://github.com/flokiorg/lokihub/blob/main/docs/nips/NIP-CW.md).**
+**A wallet CLI for [Cash](https://github.com/ohstr/nips/blob/main/NIP-CASH.md)
+and [Circle wallets](https://github.com/ohstr/nips/blob/main/NIP-CW.md).**
 
 ## Features
 
