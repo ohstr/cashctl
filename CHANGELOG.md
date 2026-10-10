@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0-rc.9]
+
+A dependency update built with Go 1.26.9.
+
+- Builds with Go 1.26.9, which fixes nine standard-library vulnerabilities,
+  and updates `nmilat` to v0.5.0-rc.14; cashctl's behavior is unchanged.
+
 ## [0.6.0-rc.8]
 
 - Bumped `nmilat` to v0.5.0-rc.13. ([#61](https://github.com/ohstr/cashctl/pull/61))
