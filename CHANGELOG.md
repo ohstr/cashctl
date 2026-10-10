@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0-rc.10]
+
+A dependency update.
+
+- Updates `nmilat` to v0.5.0-rc.16; cashctl's behavior is unchanged.
+  ([#65](https://github.com/ohstr/cashctl/pull/65))
+
 ## [0.6.0-rc.9]
 
 A dependency update built with Go 1.26.9.
