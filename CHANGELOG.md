@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.0-rc.11]
+
+`cashctl skills install` needs `--dir`, so skills go wherever your agent reads them.
+
+- Makes `--dir` required for `cashctl skills install`, which no longer
+  defaults to `~/.claude/skills`; without it the command exits 2 and writes
+  nothing. ([#67](https://github.com/ohstr/cashctl/pull/67))
+
 ## [0.6.0-rc.10]
 
 A dependency update.

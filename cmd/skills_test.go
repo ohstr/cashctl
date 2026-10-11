@@ -1,12 +1,30 @@
 package cmd
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/ohstr/cashctl/internal/output"
 	"github.com/ohstr/cashctl/skills"
 )
+
+// install has no default dir: without --dir it is a usage error and
+// writes nothing, not even under HOME.
+func TestSkillsInstall_RequiresDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	c := newSkillsInstallCmd()
+	err := c.RunE(c, nil)
+	var ce *output.CLIError
+	if !errors.As(err, &ce) || ce.Code != output.CodeUsage {
+		t.Fatalf("RunE = %v, want a usage error", err)
+	}
+	if entries, _ := os.ReadDir(home); len(entries) != 0 {
+		t.Errorf("install without --dir wrote under HOME: %v", entries)
+	}
+}
 
 // install copies every file of a skill and reports installed, then
 // unchanged, then updated once any copied file drifts — restoring it.
