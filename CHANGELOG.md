@@ -6,7 +6,7 @@
 
 - Makes `--dir` required for `cashctl skills install`, which no longer
   defaults to `~/.claude/skills`; without it the command exits 2 and writes
-  nothing.
+  nothing. ([#67](https://github.com/ohstr/cashctl/pull/67))
 
 ## [0.6.0-rc.10]
 
