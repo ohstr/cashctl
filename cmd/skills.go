@@ -19,7 +19,7 @@ func newSkillsCmd() *cobra.Command {
 		Short: "List, print, or install the agent skills built into this binary",
 		Example: `  cashctl skills list
   cashctl skills show cashctl-cash
-  cashctl skills install --dir ~/.claude/skills`,
+  cashctl skills install --dir ~/.agents/skills`,
 		RunE: groupRunE,
 	}
 	cmd.AddCommand(newSkillsListCmd(), newSkillsShowCmd(), newSkillsInstallCmd())
@@ -92,19 +92,17 @@ func newSkillsInstallCmd() *cobra.Command {
 		Short: "Copy the built-in skills into an agent's skills directory",
 		Long: `Writes every built-in skill's files (SKILL.md and anything it references)
 under <dir>/<name>/, replacing older copies so they match this binary.
---dir defaults to ~/.claude/skills.`,
-		Example: `  cashctl skills install
+--dir is required: point it wherever your agent reads skills from.`,
+		Example: `  cashctl skills install --dir ~/.agents/skills
   cashctl skills install --dir .agents/skills`,
 		Args: output.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			jsonMode, _ := cmd.Flags().GetBool("json")
 			dir, _ := cmd.Flags().GetString("dir")
+			// Checked explicitly (not cobra's MarkFlagRequired) so a missing
+			// --dir is a classified usage error, like join's --hub.
 			if dir == "" {
-				home, err := os.UserHomeDir()
-				if err != nil {
-					return output.RuntimeError(cmd, fmt.Errorf("no home directory to default --dir to: %w", err))
-				}
-				dir = filepath.Join(home, ".claude", "skills")
+				return output.InvocationError(cmd, fmt.Errorf("--dir is required — pass the skills directory your agent reads from"))
 			}
 			all, err := skills.All()
 			if err != nil {
@@ -128,7 +126,7 @@ under <dir>/<name>/, replacing older copies so they match this binary.
 			return nil
 		},
 	}
-	cmd.Flags().String("dir", "", "skills directory to install into (default ~/.claude/skills)")
+	cmd.Flags().String("dir", "", "skills directory to install into (required)")
 	return cmd
 }
 
