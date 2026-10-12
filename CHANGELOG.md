@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.6.0-rc.12]
+
+A dependency update.
+
+- Updates `nmilat` to v0.5.0-rc.17; cashctl's behavior is unchanged.
+
 ## [0.6.0-rc.11]
 
 `cashctl skills install` needs `--dir`, so skills go wherever your agent reads them.
