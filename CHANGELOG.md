@@ -5,6 +5,7 @@
 A dependency update.
 
 - Updates `nmilat` to v0.5.0-rc.17; cashctl's behavior is unchanged.
+  ([#68](https://github.com/ohstr/cashctl/pull/68))
 
 ## [0.6.0-rc.11]
 
