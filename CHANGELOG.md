@@ -33,6 +33,8 @@ Fixes from the NIP-CASH / NIP-CW conformance review, for agents above all.
 - Adds `unfinished_cash_sends` to `wallet show --json`, so an agent can
   recover an interrupted cash send's secret; only text mode showed it before.
   ([#74](https://github.com/ohstr/cashctl/pull/74))
+- Fixes `transfer` with no arguments not mentioning that an amount alone is
+  enough, making a cash note.
 
 ## [0.6.0-rc.12]
 

@@ -962,7 +962,7 @@ func runCashTransfer(cmd *cobra.Command, args []string) error {
 	// positional target still always wins when given.
 	if toValue == "" {
 		if amountFlag == 0 {
-			return output.InvocationError(cmd, fmt.Errorf("a destination is required — pass it directly (cashctl transfer <target>) or via --to"))
+			return output.InvocationError(cmd, fmt.Errorf("say what to send: an amount alone makes a cash note anyone can take (cashctl transfer <amount>), or add a destination (cashctl transfer <amount> <target>, or <target> alone for the whole held token; or --amount/--to)"))
 		}
 		toValue = "cash"
 	}
