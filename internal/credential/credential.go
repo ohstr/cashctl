@@ -40,6 +40,16 @@ func ParseCash(s string) (nipcash.Credential, error) {
 		if rest == "" {
 			return nil, fmt.Errorf("cash: credential is missing a secret")
 		}
+		// NIP-CASH: the combined "<token>#<secret>" string is never itself a
+		// cash_secret, and neither is a token alone.
+		if tok, secret := nipcash.SplitCashSliceString(rest); secret != "" {
+			if _, err := nipcash.Decode(tok); err == nil {
+				return nil, fmt.Errorf("cash: takes only the secret — the part after '#' in <token>#<secret>")
+			}
+		}
+		if _, err := nipcash.Decode(rest); err == nil {
+			return nil, fmt.Errorf("cash: takes the bill's secret, not the token itself")
+		}
 		return nipcash.BySecret(rest), nil
 	case "connection-key":
 		privKey, platform, externalID, attestationFile, err := splitConnectionKey(rest)

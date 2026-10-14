@@ -14,6 +14,7 @@ import (
 
 	"github.com/ohstr/nmilat/nip19"
 	"github.com/ohstr/nmilat/nipIC"
+	"github.com/ohstr/nmilat/nipcash"
 	"github.com/ohstr/nmilat/utils"
 )
 
@@ -523,6 +524,23 @@ func TestParseTarget_Errors(t *testing.T) {
 	for _, in := range tests {
 		if _, err := ParseTarget(in); err == nil {
 			t.Errorf("ParseTarget(%q) = nil error, want an error", in)
+		}
+	}
+}
+
+// NIP-CASH: neither the combined "<token>#<secret>" string nor a token alone is
+// ever a cash_secret, so cash: must refuse both rather than send them as one.
+func TestParseCash_RefusesATokenAsTheSecret(t *testing.T) {
+	token, err := nipcash.Encode(nipcash.Token{
+		HRP: "lokicash", WalletPubkey: strings.Repeat("aa", 32), Secret: strings.Repeat("bb", 32),
+		RelayURLs: []string{"wss://relay.example"},
+	})
+	if err != nil {
+		t.Fatalf("nipcash.Encode: %v", err)
+	}
+	for _, in := range []string{"cash:" + token + "#" + strings.Repeat("cc", 32), "cash:" + token} {
+		if _, err := ParseCash(in); err == nil {
+			t.Errorf("ParseCash(%.30q…) = nil error, want a refusal", in)
 		}
 	}
 }
