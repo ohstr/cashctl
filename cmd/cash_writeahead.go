@@ -154,16 +154,33 @@ func (p parkedCashSecret) release() {
 // neighbouring behaviour nobody had tested.
 func unreconciledDestinationParks(l *ledger.Ledger) []string {
 	var lines []string
-	for _, e := range l.Entries {
-		if e.PendingDestinationCashSecret == "" {
-			continue
-		}
+	for _, p := range unfinishedCashSends(l) {
 		lines = append(lines, fmt.Sprintf(
 			"  %s: an interrupted send from this token may have created a cash bill. "+
 				"Its secret — the only copy, save it now: %s\n"+
 				"     You also need that bill's token to spend it, which only the Hub can still tell you; "+
 				"check `cashctl wallet history` and the Hub's own records before assuming the send failed.",
-			e.ID, e.PendingDestinationCashSecret))
+			p.TokenID, p.CashSecret))
 	}
 	return lines
+}
+
+// unfinishedCashSend is one unreconciled destination secret, as `wallet show
+// --json` reports it: the source row it was parked on, and the secret itself.
+type unfinishedCashSend struct {
+	TokenID    string `json:"token_id"`
+	CashSecret string `json:"cash_secret"`
+}
+
+// unfinishedCashSends is unreconciledDestinationParks' data, for --json: an
+// agent must be able to recover the secret too (NIP-CASH: surface any
+// unreconciled secret to the user).
+func unfinishedCashSends(l *ledger.Ledger) []unfinishedCashSend {
+	var out []unfinishedCashSend
+	for _, e := range l.Entries {
+		if e.PendingDestinationCashSecret != "" {
+			out = append(out, unfinishedCashSend{TokenID: e.ID, CashSecret: e.PendingDestinationCashSecret})
+		}
+	}
+	return out
 }

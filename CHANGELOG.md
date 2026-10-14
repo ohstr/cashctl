@@ -30,6 +30,8 @@ Fixes from the NIP-CASH / NIP-CW conformance review, for agents above all.
 - Fixes `consolidate`, and `transfer`'s auto-consolidate, failing every time
   with more sources than the Hub takes in one call; they now merge in rounds.
   ([#73](https://github.com/ohstr/cashctl/pull/73))
+- Adds `unfinished_cash_sends` to `wallet show --json`, so an agent can
+  recover an interrupted cash send's secret; only text mode showed it before.
 
 ## [0.6.0-rc.12]
 
