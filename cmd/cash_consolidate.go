@@ -10,6 +10,7 @@ import (
 
 	"github.com/ohstr/nmilat/nipcash"
 	nipcashclient "github.com/ohstr/nmilat/nipcash/client"
+	"github.com/ohstr/nmilat/nipcash/transport"
 	"github.com/spf13/cobra"
 
 	"github.com/ohstr/cashctl/internal/credential"
@@ -357,6 +358,9 @@ func consolidateItems(cmd *cobra.Command, l *ledger.Ledger, items []string, toFl
 	var sourceTokens []string
 	var total uint64
 	var localIDs []string
+	// sourceIDs is parallel to sources too: the ledger ID, or "" for a verbose
+	// source, so a split (consolidateInRounds) keeps each chunk's IDs.
+	var sourceIDs []string
 	var earliestExpiresAt *int64
 	var expiredSources, healthySources int
 	// expiredIDs names which source(s) are confirmed already-expired —
@@ -389,6 +393,7 @@ func consolidateItems(cmd *cobra.Command, l *ledger.Ledger, items []string, toFl
 				sourceTokens = append(sourceTokens, e.Token)
 				total += src.Amount
 				localIDs = append(localIDs, e.ID)
+				sourceIDs = append(sourceIDs, e.ID)
 				// Unconditional, not gated on !jsonMode && !yesFlag like the
 				// cosmetic "expires soon" warning below still is: this feeds
 				// the hard mixed-expiry refusal after this loop, which must
@@ -427,6 +432,7 @@ func consolidateItems(cmd *cobra.Command, l *ledger.Ledger, items []string, toFl
 			}
 			sources = append(sources, nipcash.Source{WalletPubkey: tok, Amount: amount, Credential: cred})
 			sourceTokens = append(sourceTokens, parts[0])
+			sourceIDs = append(sourceIDs, "")
 			total += amount
 			// Same probe, same reasoning as the local-entry branch above —
 			// this verbose form had no expiry awareness at all before this,
@@ -521,7 +527,7 @@ func consolidateItems(cmd *cobra.Command, l *ledger.Ledger, items []string, toFl
 	isSelfTarget := toFlag == ""
 	err = WithSpinner(jsonMode, "Consolidating...", func() error {
 		var cErr error
-		newEntry, expiresAt, cErr = doCashConsolidate(cmd, l, sourceTokens, sources, localIDs, target, isSelfTarget)
+		newEntry, expiresAt, cErr = consolidateInRounds(cmd, l, sourceTokens, sources, sourceIDs, target, isSelfTarget, hubConsolidateCapFn(sourceTokens[0]))
 		return cErr
 	})
 	if err != nil {
@@ -969,6 +975,90 @@ func doCashConsolidate(cmd *cobra.Command, l *ledger.Ledger, dialCandidates []st
 	}
 	return nil, nil, lastErr
 }
+
+// consolidateInRounds is doCashConsolidate for any number of sources. A Hub takes
+// at most maxSources per call, and a client MUST split the work (NIP-CASH
+// §Ceilings), so a larger set merges chunk by chunk into intermediate tokens of the
+// caller's own, each saved before the next call, until one last call to target
+// fits. sourceIDs is parallel to sources ("" for a source with no ledger entry).
+func consolidateInRounds(cmd *cobra.Command, l *ledger.Ledger, sourceTokens []string, sources []nipcash.Source, sourceIDs []string, target nipcash.Target, isSelfTarget bool, maxSources int) (*ledger.Entry, *int64, error) {
+	maxSources = max(maxSources, 2)
+	for len(sources) > maxSources {
+		myPub, err := localPubKeyHex(cmd)
+		if err != nil {
+			return nil, nil, output.RuntimeError(cmd, err)
+		}
+		var nextTokens, nextIDs []string
+		var nextSources []nipcash.Source
+		for start := 0; start < len(sources); start += maxSources {
+			end := min(start+maxSources, len(sources))
+			if end-start == 1 {
+				nextTokens, nextSources, nextIDs = append(nextTokens, sourceTokens[start]), append(nextSources, sources[start]), append(nextIDs, sourceIDs[start])
+				continue
+			}
+			e, _, err := doCashConsolidate(cmd, l, sourceTokens[start:end], sources[start:end], nonEmpty(sourceIDs[start:end]), nipcash.Pubkey(myPub), true)
+			if err != nil {
+				return nil, nil, err
+			}
+			// Saved now, not at the end: this token is the only record of the
+			// chunk just merged, and later rounds may still fail.
+			if err := l.Save(); err != nil {
+				return nil, nil, reportUnsavedResult(cmd, err, "Consolidate", entryRecoveryHint(e))
+			}
+			cred, err := resolveCredential(cmd, e)
+			if err != nil {
+				return nil, nil, err
+			}
+			nextTokens = append(nextTokens, e.Token)
+			nextSources = append(nextSources, nipcash.Source{WalletPubkey: e.WalletPubkey, Amount: *e.AmountMillis, Credential: cred})
+			nextIDs = append(nextIDs, e.ID)
+		}
+		sourceTokens, sources, sourceIDs = nextTokens, nextSources, nextIDs
+	}
+	return doCashConsolidate(cmd, l, sourceTokens, sources, nonEmpty(sourceIDs), target, isSelfTarget)
+}
+
+func nonEmpty(ids []string) []string {
+	var out []string
+	for _, id := range ids {
+		if id != "" {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// hubConsolidateCap returns the most sources the Hub behind dialToken accepts in
+// one cash_consolidate: its announced max_consolidate_sources, or the default a
+// Hub announces when the announcement can't be read.
+func hubConsolidateCap(dialToken string) int {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	tok, err := nipcash.Decode(dialToken)
+	if err != nil {
+		return transport.DefaultMaxConsolidateSources
+	}
+	minter, ok := nipcash.VerifyProvenance(tok)
+	if !ok {
+		return transport.DefaultMaxConsolidateSources
+	}
+	client, err := nipcashclient.Connect(ctx, dialToken)
+	if err != nil {
+		return transport.DefaultMaxConsolidateSources
+	}
+	defer client.Close()
+	session, err := client.NewBatchSession(ctx, minter, tok.RelayURLs)
+	if err != nil {
+		return transport.DefaultMaxConsolidateSources
+	}
+	if n := session.Limits().MaxConsolidateSources; n >= 2 {
+		return n
+	}
+	return transport.DefaultMaxConsolidateSources
+}
+
+// hubConsolidateCapFn is hubConsolidateCap, swapped out in tests.
+var hubConsolidateCapFn = hubConsolidateCap
 
 // attemptCashConsolidate places one cash_consolidate call, dialed through
 // dialToken specifically. Returns the raw (unclassified) error so

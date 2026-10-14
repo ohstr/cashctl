@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -13,6 +14,8 @@ import (
 	relayclient "github.com/ohstr/nmilat/relay/client"
 	"github.com/spf13/cobra"
 
+	"github.com/ohstr/cashctl/internal/appdir"
+	"github.com/ohstr/cashctl/internal/identity"
 	"github.com/ohstr/cashctl/internal/ledger"
 	"github.com/ohstr/cashctl/internal/output"
 )
@@ -829,6 +832,64 @@ func TestConsolidateGroups_LeavesOtherFailuresAlone(t *testing.T) {
 		}
 		if ce := output.AsCLIError(o.Err); ce == nil || ce.NWCCode != "NOT_FOUND" {
 			t.Errorf("group %d: the original NWC code must survive, got %+v", i, ce)
+		}
+	}
+}
+
+// NIP-CASH §Ceilings: a client needing more sources than the Hub takes per call
+// MUST split the work. Five sources under a cap of two take four calls, none over
+// the cap, and only the last goes to the real target.
+func TestConsolidateInRounds_SplitsOverTheHubsCap(t *testing.T) {
+	appdir.SetOverride(t.TempDir())
+	t.Cleanup(func() { appdir.SetOverride("") })
+	if _, err := identity.GenerateAndSaveLocal(); err != nil {
+		t.Fatalf("GenerateAndSaveLocal: %v", err)
+	}
+	l, err := ledger.Load()
+	if err != nil {
+		t.Fatalf("ledger.Load: %v", err)
+	}
+	var tokens, ids []string
+	var sources []nipcash.Source
+	for i := range 5 {
+		amt := uint64(1000)
+		e, err := l.Add(ledger.Entry{Token: fmt.Sprintf("tok-%d", i), WalletPubkey: fmt.Sprintf("pub-%d", i), AmountMillis: &amt})
+		if err != nil {
+			t.Fatal(err)
+		}
+		tokens, ids = append(tokens, e.Token), append(ids, e.ID)
+		sources = append(sources, nipcash.Source{WalletPubkey: e.WalletPubkey, Amount: amt})
+	}
+	var calls []int
+	var lastTarget nipcash.Target
+	withFakeAttemptCashConsolidate(t, func(_ string, srcs []nipcash.Source, target nipcash.Target) (*nipcash.CashConsolidateResult, error) {
+		calls = append(calls, len(srcs))
+		lastTarget = target
+		var sum uint64
+		for _, s := range srcs {
+			sum += s.Amount
+		}
+		n := len(calls)
+		return &nipcash.CashConsolidateResult{AmountMillis: sum, NewWalletToken: fmt.Sprintf("merged-%d", n), NewWalletPubkey: fmt.Sprintf("merged-pub-%d", n)}, nil
+	})
+
+	target := testTarget()
+	newEntry, _, err := consolidateInRounds(&cobra.Command{}, l, tokens, sources, ids, target, false, 2)
+	if err != nil {
+		t.Fatalf("consolidateInRounds: %v", err)
+	}
+	if !reflect.DeepEqual(calls, []int{2, 2, 2, 2}) {
+		t.Errorf("source counts per call = %v, want [2 2 2 2]", calls)
+	}
+	if lastTarget != target {
+		t.Errorf("last call went to %v, want the requested target", lastTarget)
+	}
+	if newEntry == nil || *newEntry.AmountMillis != 5000 {
+		t.Fatalf("result = %+v, want all 5000 merged", newEntry)
+	}
+	for _, id := range ids {
+		if e, _ := l.Find(id); e.Status != ledger.StatusConsolidated {
+			t.Errorf("source %s status = %q, want consolidated", id, e.Status)
 		}
 	}
 }

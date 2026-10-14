@@ -27,6 +27,8 @@ Fixes from the NIP-CASH / NIP-CW conformance review, for agents above all.
 - Adds the `exists` error code (exit 9, not retryable) for `join` when you
   already hold a wallet from that circle, which was reported like "not a member".
   ([#72](https://github.com/ohstr/cashctl/pull/72))
+- Fixes `consolidate`, and `transfer`'s auto-consolidate, failing every time
+  with more sources than the Hub takes in one call; they now merge in rounds.
 
 ## [0.6.0-rc.12]
 
