@@ -23,6 +23,8 @@ Fixes from the NIP-CASH / NIP-CW conformance review, for agents above all.
   ([#71](https://github.com/ohstr/cashctl/pull/71))
 - Fixes `join` reporting a Hub that is still starting up (`NOT_READY`) as a
   non-retryable `internal` error; it is now `network`, retryable.
+- Adds the `exists` error code (exit 9, not retryable) for `join` when you
+  already hold a wallet from that circle, which was reported like "not a member".
 
 ## [0.6.0-rc.12]
 

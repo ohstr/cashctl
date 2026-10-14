@@ -6,7 +6,7 @@ import (
 )
 
 // nwcErrorCode maps NIP-47's generic error codes (nip47.Err* in nmilat) to
-// one of cashctl's own 7 ErrorCodes. Deliberately coarse — ncli's own
+// one of cashctl's own ErrorCodes. Deliberately coarse — ncli's own
 // discipline is not to invent new codes casually, so a wallet decline that
 // doesn't obviously fit a more specific bucket falls back to CodeInternal
 // rather than growing the taxonomy. The raw NWC code is never lost even
@@ -23,6 +23,9 @@ var nwcErrorCode = map[string]ErrorCode{
 	// A Hub that cannot serve yet (NIP-CW: "a distinct not-ready error the
 	// caller can retry"): the same back-off-and-retry as an unreachable one.
 	"NOT_READY": CodeNetwork,
+	// NIP-CW join: the identity already holds a wallet under this Hub. Not
+	// retryable, and not RESTRICTED's "not a member" either.
+	"WALLET_EXISTS": CodeExists,
 	// INSUFFICIENT_BALANCE, QUOTA_EXCEEDED, NOT_IMPLEMENTED,
 	// UNSUPPORTED_ENCRYPTION, PAYMENT_FAILED, INTERNAL, OTHER: no bucket
 	// above fits (they're legitimate wallet-side declines, not an input
@@ -50,6 +53,7 @@ var nwcErrorMessages = map[string]string{
 	"EXPIRED":                "This wallet has expired and can no longer send payments.",
 	"BAD_REQUEST":            "That request wasn't valid.",
 	"NOT_READY":              "The Hub isn't ready yet. Wait a moment and try again.",
+	"WALLET_EXISTS":          "You already hold a wallet from this circle.",
 }
 
 // cashTokenNWCErrorMessages overrides nwcErrorMessages' wallet-oriented

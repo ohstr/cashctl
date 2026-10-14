@@ -13,7 +13,7 @@ import (
 // purposes. Mirrors ncli's own cli/common/errors.go taxonomy, so an agent or
 // script that already knows ncli's contract needs to learn little new for
 // cashctl — plus CodeIndeterminate, which ncli has no use for: only a spend
-// can be left in a state nobody can name.
+// can be left in a state nobody can name, and CodeExists.
 type ErrorCode string
 
 const (
@@ -27,6 +27,9 @@ const (
 	// CodeIndeterminate: a spend got no answer, so whether it was applied is
 	// unknown. Not retryable — resending may pay twice; ask `cash status` first.
 	CodeIndeterminate ErrorCode = "indeterminate"
+	// CodeExists: what you are trying to create already exists. Not retryable —
+	// use the one you have.
+	CodeExists ErrorCode = "exists"
 )
 
 // exitCodes maps each ErrorCode to the process exit code ExitCode returns.
@@ -44,6 +47,7 @@ var exitCodes = map[ErrorCode]int{
 	// 8, not a reuse: a script must not mistake "maybe applied" for any
 	// outcome it already handles.
 	CodeIndeterminate: 8,
+	CodeExists:        9,
 }
 
 // retryableCodes marks which codes describe a transient condition worth an

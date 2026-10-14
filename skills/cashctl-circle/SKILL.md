@@ -54,10 +54,11 @@ A Hub's refusal tells you whether to retry — branch on `code`, with
 | Hub still starting up | `NOT_READY` | `network` | yes, after a short wait |
 | asking too often | `RATE_LIMITED` | `conflict` | yes, after a wait |
 | not a member of this circle | `RESTRICTED` | `auth` | no |
-| you already hold a wallet here | `RESTRICTED` | `auth` | no — use the wallet you have |
+| you already hold a wallet here | `WALLET_EXISTS` | `exists` | no — use the wallet you have |
 
-The last two share a code today; tell them apart by the message
-("already has an active circle wallet" means the second).
+A Hub that predates `WALLET_EXISTS` refuses with `RESTRICTED` and an
+"already has an active circle wallet" message; `join` reports that as
+`exists`/`WALLET_EXISTS` too.
 
 There is no `circle leave`/`circle list` — a circle membership is just an
 ordinary registered wallet from this point on (`cashctl wallet show`,

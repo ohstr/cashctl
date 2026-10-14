@@ -39,6 +39,20 @@ func isIdentityEventReplayErr(err error) bool {
 		strings.Contains(walletErr.Message, "identity_event") && strings.Contains(walletErr.Message, "already been used")
 }
 
+// walletExistsFromLegacyRefusal reports a pre-SD-20 Hub's "already has a wallet"
+// refusal, sent as RESTRICTED with a specific message, as the WALLET_EXISTS a
+// current Hub sends, so a caller branches on one nwc_code for it either way.
+func walletExistsFromLegacyRefusal(err error) error {
+	var walletErr *relayclient.WalletError
+	if errors.As(err, &walletErr) && walletErr.Code == "RESTRICTED" &&
+		strings.Contains(walletErr.Message, "already has an active circle wallet") {
+		normalized := *walletErr
+		normalized.Code = "WALLET_EXISTS"
+		return &normalized
+	}
+	return err
+}
+
 func newCircleCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "circle",
@@ -230,7 +244,7 @@ func runCircleJoin(cmd *cobra.Command, args []string) error {
 			return output.ConflictError(cmd, "", errors.New(
 				"the Hub's identity-proof replay guard rejected two attempts within the same second, even after retrying once — wait a few seconds and run `join` again"))
 		}
-		return classifyNWCErr(cmd, err)
+		return classifyNWCErr(cmd, walletExistsFromLegacyRefusal(err))
 	}
 
 	s, err := config.Load()
