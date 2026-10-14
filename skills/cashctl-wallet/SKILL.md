@@ -50,6 +50,11 @@ connection value is expected (`--to`, `-c/--connection`, `wallet use`) — if
 the name isn't found, most of these accept the raw value directly instead
 (lets a script pass an inline URI without a prior `connect add`).
 
+A Hub connection is never a wallet: `connect add`, `-c`, and `--into`
+refuse a `circlehub1...` (join it with `cashctl join`), a `cashhub1...`, or
+a `<token>#<secret>` bill (take it with `cashctl receive`) with
+`invalid_input`.
+
 ## `cashctl wallet show` / `history`
 
 ```sh

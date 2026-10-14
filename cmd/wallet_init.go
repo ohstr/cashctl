@@ -8,7 +8,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/ohstr/cashctl/internal/config"
-	"github.com/ohstr/cashctl/internal/dial"
 	"github.com/ohstr/cashctl/internal/identity"
 	"github.com/ohstr/cashctl/internal/output"
 )
@@ -141,14 +140,15 @@ func offerDefaultWallet(cmd *cobra.Command, jsonMode bool) string {
 	if err != nil || value == "" {
 		return ""
 	}
-	if dial.Sniff(value) == dial.KindCashHub {
-		output.Notef(false, "That's a Hub connection, not a wallet — skipping.")
-		return ""
-	}
 	// Anything that isn't a usable connection is skipped, not saved: a
 	// stray "n"/"no" typed here (the natural answer to a yes/no-sounding
 	// question) used to be registered as the default wallet verbatim.
 	if err := validateConnectionValue(value); err != nil {
+		var wrong *wrongConnectionKindError
+		if errors.As(err, &wrong) {
+			output.Notef(false, "%s — skipping.", wrong.msg)
+			return ""
+		}
 		output.Notef(false, "That doesn't look like a wallet connection — skipping. Add one later with `cashctl connect add <name> <connection>`.")
 		return ""
 	}

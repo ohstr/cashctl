@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/ohstr/cashctl/internal/config"
+	"github.com/ohstr/cashctl/internal/dial"
 	"github.com/ohstr/cashctl/internal/output"
 )
 
@@ -26,6 +28,12 @@ const noWalletConfiguredMsg = `no wallet configured yet.
 // caller's own mistake, so never `network`/retryable (see
 // ResolveConnectionValue). Shared with redeem's --into/-c handling.
 func unusableConnectionError(cmd *cobra.Command, value string) error {
+	// A string recognizably meant for something else is invalid_input naming what
+	// it is, not "no wallet named <a whole Hub string>".
+	var wrong *wrongConnectionKindError
+	if err := validateConnectionValue(value); errors.As(err, &wrong) {
+		return output.InvalidInputError(cmd, value, err)
+	}
 	return output.NotFoundError(cmd, value, fmt.Errorf(
 		"no wallet named %q, and it isn't a connection string either — see `cashctl connect list` for registered names", output.Sanitize(value)))
 }
@@ -137,11 +145,29 @@ func validateConnectionValue(value string) error {
 	if _, err := nip47.ParsePairingURI(value); err == nil {
 		return nil
 	}
-	if _, err := nipcash.Decode(value); err == nil {
-		return nil
+	// Classified before decoding: nipcash.Decode accepts any HRP, so a Hub
+	// string would otherwise register as a wallet that never works.
+	if tok, secret := nipcash.SplitCashSliceString(value); secret != "" && dial.Sniff(tok) == dial.KindCashToken {
+		return &wrongConnectionKindError{"that's a cash bill with its secret (<token>#<secret>), not a wallet — take it with `cashctl receive`"}
+	}
+	switch dial.Sniff(value) {
+	case dial.KindCircleHub:
+		return &wrongConnectionKindError{"that's a Circle Hub connection, not a wallet — join the circle with `cashctl join <hub-connection> <max-amount>`"}
+	case dial.KindCashHub:
+		return &wrongConnectionKindError{"that's a Cash Hub connection (for minting cash), not a wallet — cashctl can't use it"}
+	case dial.KindCashToken:
+		if _, err := nipcash.Decode(value); err == nil {
+			return nil
+		}
 	}
 	return fmt.Errorf("not a valid wallet connection — expected a nostr+walletconnect:// URI (or a cash-token-family connection string)")
 }
+
+// wrongConnectionKindError is validateConnectionValue's refusal of a string
+// that is recognizably something other than a wallet connection.
+type wrongConnectionKindError struct{ msg string }
+
+func (e *wrongConnectionKindError) Error() string { return e.msg }
 
 // DialGeneric connects to any NWC-capable connection string — a plain
 // nostr+walletconnect:// URI, or a cash-token-family bech32 string (which
