@@ -394,6 +394,17 @@ Set `NCLI_VAULT_PASSWORD` to unlock it non-interactively — needed for
 `init` and other vault-backed commands run without a TTY (scripted/agentic
 use).
 
+## Privacy
+
+- **Relays see which Hub you use.** Every bill request goes to its Hub's one
+  published inbox, so a relay can tell that your connection talks to that
+  Hub, though not what you asked. cashctl has no proxy or Tor option yet;
+  to hide your address, run it behind a network layer that does.
+- **Merging tells the Hub the bills share an owner.** `consolidate`,
+  `transfer`'s automatic merge, and `receive`'s protect-and-merge each
+  disclose that, and a Hub may keep that record. Decline the merge, or
+  don't consolidate, for bills you don't want linked.
+
 ## Docker
 
 ```sh

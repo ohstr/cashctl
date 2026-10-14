@@ -234,6 +234,11 @@ func printCashStatusResult(result *nipcash.CashStatusResult) {
 		if r.IdentityValue != "" {
 			identity = fmt.Sprintf("%s:%s", output.Sanitize(r.IdentityType), output.Sanitize(r.IdentityValue))
 		}
+		// The split floor, so a caller learns it before a transfer rather than from a
+		// refusal (NIP-CASH §Cash Status: a recipient MUST be able to learn it here).
+		if r.MinTransferMillis > 0 {
+			status += ", min split " + output.FormatAmount(int64(r.MinTransferMillis))
+		}
 		output.Printf("%-40s %14s   %s\n", identity, output.FormatAmount(int64(r.AmountMillis)), status)
 	}
 	// ExpiresAt is identical on every row (NIP-CASH §Listing Recipients:

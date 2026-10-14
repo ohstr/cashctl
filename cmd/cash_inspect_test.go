@@ -203,3 +203,16 @@ func TestCashStatusScope_MineUnlessAll(t *testing.T) {
 		t.Errorf("--all scope = %q, want %q", got, nipcash.ScopeAll)
 	}
 }
+
+// F-50: the split floor is readable before a transfer, not only from a refusal
+// (NIP-CASH §Cash Status).
+func TestPrintCashStatusResult_ShowsTheSplitFloor(t *testing.T) {
+	printed := withCapturedOutput(func() {
+		printCashStatusResult(&nipcash.CashStatusResult{Recipients: []nipcash.RecipientStatus{
+			{IdentityType: "pubkey", AmountMillis: 50_000, MinTransferMillis: 10_000},
+		}})
+	})
+	if !strings.Contains(printed, "min split") {
+		t.Errorf("cash status text does not show the split floor:\n%s", printed)
+	}
+}

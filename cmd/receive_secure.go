@@ -93,7 +93,7 @@ func protectCashReceipt(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entr
 	// agreeing to something opaque — fixed by naming it plainly, not by
 	// flipping the default.
 	if !Confirm(cmd, true, "This cash is still shared — anyone holding it can spend it.\n"+
-		"Protect it now? (re-keys it; may also merge holdings from the same issuer)") {
+		"Protect it now? (re-keys it; may also merge holdings from the same issuer, which tells the issuer they share an owner)") {
 		return protectedStatus{Status: "declined"}, entry
 	}
 

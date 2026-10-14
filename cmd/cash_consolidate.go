@@ -497,7 +497,7 @@ func consolidateItems(cmd *cobra.Command, l *ledger.Ledger, items []string, toFl
 		target = nipcash.Pubkey(myPub)
 	}
 
-	message := fmt.Sprintf("Consolidate %d tokens (%s) into one%s?",
+	message := fmt.Sprintf("Consolidate %d tokens (%s) into one%s? Their Hub learns they share an owner.",
 		len(sources), output.FormatAmount(int64(total)), ifTargetIsSelf(toFlag))
 	// Mixed expired+healthy already refused above, unconditionally — this
 	// is only the cosmetic "expires soon, not yet" notice, so it keeps its

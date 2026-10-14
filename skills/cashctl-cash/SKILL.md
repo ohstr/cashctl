@@ -206,6 +206,13 @@ halves of a redeem share one session per hub — the fee quote (`cash_status`)
 and the spend (`cash_redeem`) — so neither republishes the set the other is
 hiding.
 
+What batching does not hide: every request goes to the Hub's one published
+inbox, so a relay can tell which Hub a client uses (not what it asked).
+cashctl has no proxy option; route it through one if that matters. And any
+merge — `consolidate`, `transfer`'s auto-consolidate, `receive`'s
+protect-and-merge — tells the Hub the merged bills share an owner, which it
+may keep on record: don't merge bills you don't want linked.
+
 This also means an unsigned bill cannot be spent at all: the mint signature
 is the only thing a token carries that identifies its minting hub, and so the
 only thing a hub's announcement can be verified against. Hubs now sign every
