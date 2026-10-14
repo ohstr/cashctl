@@ -345,7 +345,8 @@ verbose form (a `connection-key:` value has its own embedded commas,
 ambiguous in this shorthand — receive it into your ledger first instead).
 IDs are discoverable via `cashctl wallet show --json`'s `held_tokens`
 array — plain-text `wallet show` deliberately never prints them.
-Needs at least 2 sources per call. More sources than the Hub takes in one
+Needs at least 2 sources per call; naming the same source twice is a
+`usage` error, refused before anything is sent. More sources than the Hub takes in one
 call (its announced `max_consolidate_sources`, 48 by default) are merged
 in rounds: chunks first into tokens of your own, each saved as it lands,
 then those into the target — so a failure partway leaves fewer, larger

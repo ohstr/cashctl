@@ -893,3 +893,18 @@ func TestConsolidateInRounds_SplitsOverTheHubsCap(t *testing.T) {
 		}
 	}
 }
+
+// I-18: a source named twice is refused locally, before the Hub sees it, by its
+// ID or by the token of a verbose item (whose credential stays out of the message).
+func TestResolveConsolidateSources_RefusesARepeatedSource(t *testing.T) {
+	if _, err := resolveConsolidateSources([]string{"tok-a", "tok-b", "tok-a"}, "", nil); err == nil || !strings.Contains(err.Error(), "tok-a") {
+		t.Errorf("repeated positional ID: err = %v, want a refusal naming tok-a", err)
+	}
+	_, err := resolveConsolidateSources(nil, "lokicash1x:5:cash:s3cret,lokicash1x:5:cash:other", nil)
+	if err == nil || strings.Contains(err.Error(), "s3cret") {
+		t.Errorf("repeated verbose source: err = %v, want a refusal that does not echo the credential", err)
+	}
+	if _, err := resolveConsolidateSources([]string{"tok-a", "tok-b"}, "", nil); err != nil {
+		t.Errorf("distinct sources refused: %v", err)
+	}
+}

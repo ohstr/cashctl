@@ -592,16 +592,36 @@ func resolveConsolidateSources(args []string, sourcesFlag string, held []ledger.
 		return nil, fmt.Errorf("got both positional source IDs and --sources — pass only one")
 	}
 	if len(args) > 0 {
-		return args, nil
+		return args, refuseRepeatedSources(args)
 	}
 	if sourcesFlag != "" {
-		return strings.Split(sourcesFlag, ","), nil
+		items := strings.Split(sourcesFlag, ",")
+		return items, refuseRepeatedSources(items)
 	}
 	items := make([]string, 0, len(held))
 	for _, e := range held {
 		items = append(items, e.ID)
 	}
 	return items, nil
+}
+
+// refuseRepeatedSources refuses a source named twice before anything is sent:
+// the Hub would refuse the merge anyway, as a less obvious BAD_REQUEST. A
+// verbose <token>:<amount>:<credential> item is compared by its token alone,
+// and named by it, so the credential never reaches the message.
+func refuseRepeatedSources(items []string) error {
+	seen := make(map[string]struct{}, len(items))
+	for _, item := range items {
+		key, _, _ := strings.Cut(strings.TrimSpace(item), ":")
+		if key == "" {
+			continue
+		}
+		if _, dup := seen[key]; dup {
+			return fmt.Errorf("source %q given more than once", output.Sanitize(key))
+		}
+		seen[key] = struct{}{}
+	}
+	return nil
 }
 
 // mergeableHubGroups returns held's consolidation-eligible entries
