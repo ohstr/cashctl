@@ -133,6 +133,8 @@ func newWalletShowCmd() *cobra.Command {
 					"wallets":         output.NonNil(s.Connections),
 					"default_wallet":  s.Default,
 					"held_tokens":     output.NonNil(l.Held()),
+					// The only copy of each secret: see unreconciledDestinationParks.
+					"unfinished_cash_sends": output.NonNil(unfinishedCashSends(l)),
 				})
 				return nil
 			}

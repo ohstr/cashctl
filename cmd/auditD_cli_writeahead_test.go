@@ -16,6 +16,7 @@ package cmd
 // to find the destination secret in local state.
 
 import (
+	"encoding/json"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -330,4 +331,36 @@ func mustFind(t *testing.T, l *ledger.Ledger, id string) *ledger.Entry {
 		t.Fatalf("l.Find(%q) not found", id)
 	}
 	return e
+}
+
+// F-13: the call site, both modes. `wallet show --json` is the only view an agent
+// has, so the secret must be in it as data, not only in text mode's lines.
+func TestWalletShow_ReportsAnUnfinishedCashSendInBothModes(t *testing.T) {
+	auditDTempLedger(t)
+	l, ids := auditDSeedTwoHeldCash(t)
+	target := nipcash.NewCashTarget()
+	if _, err := parkDestinationCashSecret(l, ids, target); err != nil {
+		t.Fatalf("parkDestinationCashSecret() error = %v", err)
+	}
+	for _, jsonMode := range []bool{true, false} {
+		cmd := newWalletShowCmd()
+		cmd.Flags().Bool("json", jsonMode, "")
+		cmd.SetArgs(nil)
+		printed := withCapturedOutput(func() {
+			if err := cmd.Execute(); err != nil {
+				t.Errorf("wallet show (json=%v): %v", jsonMode, err)
+			}
+		})
+		if !strings.Contains(printed, target.Secret()) {
+			t.Errorf("wallet show (json=%v) does not surface the unfinished send's secret:\n%s", jsonMode, printed)
+		}
+		if jsonMode {
+			var doc struct {
+				Sends []unfinishedCashSend `json:"unfinished_cash_sends"`
+			}
+			if err := json.Unmarshal([]byte(printed), &doc); err != nil || len(doc.Sends) != 1 || doc.Sends[0].CashSecret != target.Secret() || doc.Sends[0].TokenID != ids[0] {
+				t.Errorf("unfinished_cash_sends = %+v (err %v), want the one park on %s", doc.Sends, err, ids[0])
+			}
+		}
+	}
 }

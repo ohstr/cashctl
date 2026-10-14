@@ -58,9 +58,15 @@ a `<token>#<secret>` bill (take it with `cashctl receive`) with
 ## `cashctl wallet show` / `history`
 
 ```sh
-cashctl wallet show --json     # {"npub", "identity_source", "wallets", "default_wallet", "held_tokens"}
+cashctl wallet show --json     # {"npub", "identity_source", "wallets", "default_wallet", "held_tokens", "unfinished_cash_sends"}
 cashctl wallet history --json  # {"history": [{"at","action","detail"}, ...]}
 ```
+
+`unfinished_cash_sends` is normally `[]`. Each entry
+(`{"token_id", "cash_secret"}`) is an interrupted `--to cash` send that may
+have created a bill: `cash_secret` is the only copy of its secret, so keep
+it. The bill's token itself comes only from the Hub; check
+`wallet history` before assuming the send failed.
 
 ## `cashctl wallet balance` — the unified figure
 
