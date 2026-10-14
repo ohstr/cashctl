@@ -35,8 +35,10 @@ Fixes from the NIP-CASH / NIP-CW conformance review, for agents above all.
   ([#74](https://github.com/ohstr/cashctl/pull/74))
 - Changes `cash status` to report only your own allocation; `--all` adds every
   co-recipient, which it used to fetch every time.
+  ([#75](https://github.com/ohstr/cashctl/pull/75))
 - Fixes `transfer` with no arguments not mentioning that an amount alone is
   enough, making a cash note.
+  ([#75](https://github.com/ohstr/cashctl/pull/75))
 
 ## [0.6.0-rc.12]
 
