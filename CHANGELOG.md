@@ -17,8 +17,10 @@ Fixes from the NIP-CASH / NIP-CW conformance review, for agents above all.
 - Fixes `connect add`, `-c`, `--into` and the `init` wallet prompt accepting a
   `circlehub1…`/`cashhub1…` string or a `<token>#<secret>` bill as a wallet;
   each is now refused, naming the command to use instead.
+  ([#71](https://github.com/ohstr/cashctl/pull/71))
 - Fixes `--as cash:` sending a whole token or `<token>#<secret>` string as the
   secret; it now asks for just the secret.
+  ([#71](https://github.com/ohstr/cashctl/pull/71))
 
 ## [0.6.0-rc.12]
 
