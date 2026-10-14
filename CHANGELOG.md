@@ -6,11 +6,14 @@ Fixes from the NIP-CASH / NIP-CW conformance review, for agents above all.
 
 - Removes the `cash list-recipients` alias, following the spec's removal of
   `list_recipients`; use `cash status`.
+  ([#70](https://github.com/ohstr/cashctl/pull/70))
 - Adds the `indeterminate` error code (exit 8, not retryable) for a redeem,
   transfer or consolidate that got no answer, since resending it may pay
   twice; check with `cash status` first.
+  ([#70](https://github.com/ohstr/cashctl/pull/70))
 - Fixes a timed-out bill check claiming the bill was most likely spent, and
   an incomplete batch reply being reported as an omission.
+  ([#70](https://github.com/ohstr/cashctl/pull/70))
 
 ## [0.6.0-rc.12]
 
