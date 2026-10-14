@@ -338,7 +338,11 @@ verbose form (a `connection-key:` value has its own embedded commas,
 ambiguous in this shorthand — receive it into your ledger first instead).
 IDs are discoverable via `cashctl wallet show --json`'s `held_tokens`
 array — plain-text `wallet show` deliberately never prints them.
-Needs at least 2 sources per call. Like `transfer`, an `nconnection1...`
+Needs at least 2 sources per call. More sources than the Hub takes in one
+call (its announced `max_consolidate_sources`, 48 by default) are merged
+in rounds: chunks first into tokens of your own, each saved as it lands,
+then those into the target — so a failure partway leaves fewer, larger
+held tokens, never lost ones. Like `transfer`, an `nconnection1...`
 `--to` target needs `--ia <identity>` (hex pubkey or NIP-05) to resolve
 its Identity Authority — an interactive session prompts for it if
 missing, a `--json`/`--yes` call gets `code: "usage"` naming `--ia`.

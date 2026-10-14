@@ -417,6 +417,30 @@ func transferWithAutoConsolidate(cmd *cobra.Command, l *ledger.Ledger, group []l
 		return err
 	}
 
+	// The interim consolidate takes at most the Hub's cap in sources (NIP-CASH
+	// §Ceilings): merge just enough of them to self first, saved, to fit.
+	if limit := max(hubConsolidateCapFn(group[0].Token), 2); len(sources) > limit {
+		n := len(sources) - limit + 1
+		tokens := make([]string, n)
+		for i := range tokens {
+			tokens[i] = group[i].Token
+		}
+		merged, _, mErr := consolidateInRounds(cmd, l, tokens, sources[:n], sourceIDs[:n], nipcash.Pubkey(myPub), true, limit)
+		if mErr != nil {
+			return mErr
+		}
+		if err := l.Save(); err != nil {
+			return reportUnsavedResult(cmd, err, "Transfer (interim consolidate)", entryRecoveryHint(merged))
+		}
+		cred, cErr := resolveCredential(cmd, merged)
+		if cErr != nil {
+			return cErr
+		}
+		group = append([]ledger.Entry{*merged}, group[n:]...)
+		sources = append([]nipcash.Source{{WalletPubkey: merged.WalletPubkey, Amount: *merged.AmountMillis, Credential: cred}}, sources[n:]...)
+		sourceIDs = append([]string{merged.ID}, sourceIDs[n:]...)
+	}
+
 	interimCred, err := localCashCredential(cmd)
 	if err != nil {
 		return output.RuntimeError(cmd, err)
