@@ -16,8 +16,9 @@ import (
 func newCashStatusCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "status",
-		Short: "Check your allocation and co-recipients of a held token",
-		Long: `Shows your share and co-recipients of a held token's mint batch.
+		Short: "Check your allocation of a held token (--all: and its co-recipients)",
+		Long: `Shows your share of a held token's mint batch; --all also lists its
+co-recipients.
 
 With no id and more than one held, reports every one — nothing here can
 be lost by an ambiguous pick.`,
@@ -26,7 +27,18 @@ be lost by an ambiguous pick.`,
 		RunE:    runCashStatus,
 	}
 	cmd.Flags().String("token", "", "which held token (auto-picked if you only hold one)")
+	cmd.Flags().Bool("all", false, "also list every co-recipient of the batch, not only your own allocation")
 	return cmd
+}
+
+// cashStatusScope is mine unless --all asks for the batch's whole roster: other
+// recipients' identities are not something to pull into a caller's context
+// (often an agent's) by default.
+func cashStatusScope(cmd *cobra.Command) string {
+	if all, _ := cmd.Flags().GetBool("all"); all {
+		return nipcash.ScopeAll
+	}
+	return nipcash.ScopeMine
 }
 
 func runCashStatus(cmd *cobra.Command, _ []string) error {
@@ -84,9 +96,7 @@ func fetchCashStatus(cmd *cobra.Command, jsonMode bool, entry *ledger.Entry) (*n
 		if credErr != nil {
 			return credErr
 		}
-		// ScopeAll: `cash status` exists to show the co-recipients, which is
-		// the one place asking for the shared roster is the point.
-		r, cErr := client.CashStatus(ctx, cred, nipcash.ScopeAll)
+		r, cErr := client.CashStatus(ctx, cred, cashStatusScope(cmd))
 		if cErr != nil {
 			return cErr
 		}

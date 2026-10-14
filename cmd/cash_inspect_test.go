@@ -191,3 +191,15 @@ func TestCashStatusHeader(t *testing.T) {
 		t.Errorf("cashStatusHeader(1, 2) = %q, want %q", got, "Token 1 of 2:")
 	}
 }
+
+// I-8: other recipients' identities are opt-in, never pulled by default.
+func TestCashStatusScope_MineUnlessAll(t *testing.T) {
+	cmd := newCashStatusCmd()
+	if got := cashStatusScope(cmd); got != nipcash.ScopeMine {
+		t.Errorf("default scope = %q, want %q", got, nipcash.ScopeMine)
+	}
+	_ = cmd.Flags().Set("all", "true")
+	if got := cashStatusScope(cmd); got != nipcash.ScopeAll {
+		t.Errorf("--all scope = %q, want %q", got, nipcash.ScopeAll)
+	}
+}
