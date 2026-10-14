@@ -41,8 +41,10 @@ Fixes from the NIP-CASH / NIP-CW conformance review, for agents above all.
   ([#75](https://github.com/ohstr/cashctl/pull/75))
 - Adds the split floor to `cash status`'s text output, and says in every merge
   prompt that merging tells the Hub the bills share an owner.
+  ([#79](https://github.com/ohstr/cashctl/pull/79))
 - Fixes `consolidate` sending a source named twice to the Hub; it is now a
   `usage` error, refused before anything is sent.
+  ([#79](https://github.com/ohstr/cashctl/pull/79))
 
 ## [0.6.0-rc.12]
 
