@@ -42,50 +42,62 @@ code/JSON shape against `AGENTS.md`'s own table.
 1. Log into Claude Code on this host at least once (`claude` needs to have
    worked here before — `bin/run.sh` copies `~/.claude/.credentials.json`
    into the container, never bind-mounts your real one).
-2. `r1-cash-lifecycle` and `r2-circle-join` need a real lokihub admin API
-   to mint their fixtures — the **same** `../config.local.yaml` the Go
-   integration suite uses (see `../README.md`). `r0-bootstrap` and
-   `r3-error-contract` don't need it at all.
+2. Every round except r0 needs a real lokihub admin API to mint its
+   fixtures — the **same** `../config.local.yaml` the Go integration suite
+   uses (see `../README.md`).
 3. `docker` + `docker compose`, and a Go toolchain on this host (used to
-   decode an npub and mint a cash-mode token — see `decode-npub/` and
-   `mint-fixture/`; neither ships with, or is imported by, cashctl itself).
+   build cashctl, decode an npub, and mint fixtures through `mint/`, the
+   campaign's quota-enforcing fixture service, swept at teardown; none of
+   these ship with, or are imported by, cashctl itself).
 
 ```sh
 bin/run.sh                              # every round
 bin/run.sh r0-bootstrap r3-error-contract   # just these
 ```
 
+## What cashctl the agent gets
+
+`EVAL_CASHCTL=local` (the default) builds this working tree and installs it in
+the container behind the logging shim (`campaign/cashctl-shim`), so a run tests
+the code you are about to ship and the report can say which commands the agents
+reached. `EVAL_CASHCTL=release` leaves cashctl out entirely: r0 installs the
+latest release the way `PROMPT.md` says, and there is no coverage table.
+
 ## Rounds
 
-- **r0-bootstrap** — install cashctl from scratch (following
-  `PROMPT.md`/`README.md`), confirm `cashctl init --json`, pull in the
-  matching skill.
-- **r1-cash-lifecycle** — receive a real, pre-minted cash-mode token,
-  verify it, redeem it into a real invoice. Verified by checking the
-  minted cash_wallet child's server-side `claimed` state directly, not by
-  trusting `cashctl redeem`'s own reported success.
-- **r2-circle-join** — join a real, ephemeral circle_hub (the agent's own
-  freshly generated identity gets authorized mid-round, once it exists).
-  Verified by checking a circle_wallet child actually exists under that
-  hub afterward.
-- **r3-error-contract** — deliberately misuse the CLI seven different ways
-  (unknown command, missing required flag, bad input, nothing to act on,
-  ...) and check the exit code/JSON shape against `AGENTS.md`'s table.
-  Needs no fixtures — verified by the harness re-running the exact same
-  seven commands itself.
+Each round states a goal, not a command list: it tests whether an agent can
+find its way with `--help`, AGENTS.md and the skills, not whether it can
+copy-paste. Each verifier re-derives the outcome itself, mostly from the
+operator's view of the minting hub's slices (`status`: unclaimed, redeemed,
+split, reclaimed, ...), never from the agent's report.
 
-This is a smaller, more curated set than exhaustively walking every
-command (transfer/consolidate/the full inspect trio are already covered
-by `../`'s Go integration suite) — these four rounds are chosen to cover
-the highest-value, most-likely-to-go-wrong paths: first contact, the two
-real money-moving flows, and the contract an agent leans on to recover
-from its own mistakes.
+| Round | Goal | Verified by |
+|---|---|---|
+| r0-bootstrap | cashctl runs, an identity exists, the skills are installed | binary runs; npub; the three skill dirs on disk |
+| r1-cash-note | get a cash note's money into a wallet | no slice left `unclaimed`, at least one `redeemed` |
+| r2-circle-join | join a circle with a 500 cap, then try again | one circle wallet; the Hub reports a 500-loki budget; a second join fails as `exists` (exit 9) |
+| r3-error-contract | nine misuses, checked against AGENTS.md's table | the harness re-runs each probe: exit code, `code`, `retryable`, empty stdout |
+| r4-split-send | send 30 of a 90 note to someone, keep the rest as a note | a 30 slice for P's pubkey, a 60 cash slice, and the reported note is takeable |
+| r5-tidy-and-secure | take four notes, secure them, hold as few tokens as possible | one live slice per hub, none answering to a handed-out secret |
+| r6-pay-and-cash-out | pay a 60 invoice, cash out exactly 40 | 60 and 24 + 16 `redeemed`, 30 still `unclaimed` |
+| r7-wallet-ops | invoice on a wallet, pay it from the circle wallet, switch default | a settled 21-loki payment on `a`; `a` is the default |
+| r8-partial-redeem | cash out two bills when the operator reclaims one mid-round | one `redeemed`, one `reclaimed`; no blind resend; `cash status` before concluding |
+
+Each round's prompt names the spec clauses it exercises on its first line; the
+report lists them.
+
+What a single-node lokihub cannot show: every redeem is same-node and so
+fee-free, which means a nonzero redeem fee and the zero-payout refusal are not
+exercised here. The unit and integration suites cover them.
 
 ## Interpreting a report
 
 `report/<run-id>/report.md` has one row per round: what the agent
 self-reported, whether the harness's independent check actually verified
-it, and a separate process-quality judgment. A round can self-report
+it, a separate process-quality judgment, and the spec clauses it exercised.
+Below that, a UX critique (the agents' `ux_friction` notes and the judge's
+critique of cashctl itself) and, for a local run, coverage: the commands each
+round reached and what no round exercised. A round can self-report
 "pass" and still fail verification (the agent was wrong, or lied) — treat
 `verified` as the real answer. `report/history.jsonl` accumulates one line
 per run so results are diffable across releases.
