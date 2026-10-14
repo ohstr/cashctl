@@ -2,7 +2,7 @@
 
 // cash_expiration_matrix_test.go sweeps expiration handling across every
 // money-moving/inspection command this audit angle covers — cash_transfer,
-// cash_consolidate, decode --check, and cash list-recipients — none of
+// cash_consolidate, decode --check, and cash status — none of
 // which previously showed any awareness of a token's Hub-side expiry the
 // way cash_redeem's own preview already did (cash_redeem.go's
 // resolveAmountAndPreview/previewSuffix, exercised by
@@ -657,7 +657,7 @@ func TestDecodeCheck_ExpiredCashToken_ReportsAccurateDeadlineMessage(t *testing.
 	}
 }
 
-// TestCashListRecipients_ShowsExpiry confirms `cash list-recipients`'s
+// TestCashListRecipients_ShowsExpiry confirms `cash status`'s
 // text-mode output surfaces the wallet's own expires_at (already present
 // on every RecipientStatus row, just previously never printed) — the same
 // live fact decode --check and cash_redeem's own preview both show.
@@ -683,14 +683,14 @@ func TestCashListRecipients_ShowsExpiry(t *testing.T) {
 		t.Fatalf("receive: exit %d\nstderr: %s", res.ExitCode, res.Stderr)
 	}
 
-	// Text mode (runInteractive omits --json); list-recipients never
+	// Text mode (runInteractive omits --json); cash status never
 	// prompts, so an empty stdin is a no-op.
-	res := f.runInteractive("", "cash", "list-recipients")
+	res := f.runInteractive("", "cash", "status")
 	if res.ExitCode != 0 {
-		t.Fatalf("cash list-recipients: exit %d\nstdout: %s\nstderr: %s", res.ExitCode, res.Stdout, res.Stderr)
+		t.Fatalf("cash status: exit %d\nstdout: %s\nstderr: %s", res.ExitCode, res.Stdout, res.Stderr)
 	}
 	if !strings.Contains(res.Stdout, "expires:") {
-		t.Errorf("cash list-recipients: expected an \"expires:\" line, got stdout: %q", res.Stdout)
+		t.Errorf("cash status: expected an \"expires:\" line, got stdout: %q", res.Stdout)
 	}
 }
 

@@ -316,7 +316,7 @@ func TestDecodeCheck_CashToken(t *testing.T) {
 }
 
 // TestCashInspect_DecodeAndListRecipients mints a cash token, then
-// exercises cashctl's local-only decode and network-backed list-recipients
+// exercises cashctl's local-only decode and network-backed cash status
 // commands against it — the two read-only "inspect a token" entry points
 // (cashctl-plan.md's Cash command tree) that TestCashLifecycle_* doesn't
 // otherwise cover.
@@ -405,10 +405,10 @@ func TestCashInspect_DecodeAndListRecipients(t *testing.T) {
 	}
 	tokenID := entryIDFor(token)
 
-	listResp := f.mustJSON("cash", "list-recipients", "--token", tokenID)
+	listResp := f.mustJSON("cash", "status", "--token", tokenID)
 	recipients, _ := listResp["recipients"].([]any)
 	if len(recipients) == 0 {
-		t.Fatalf("list-recipients: no recipients returned: %v", listResp)
+		t.Fatalf("cash status: no recipients returned: %v", listResp)
 	}
 
 	// Redeeming now needs no --as override: --secret at receive time

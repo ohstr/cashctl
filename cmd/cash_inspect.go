@@ -15,15 +15,8 @@ import (
 
 func newCashStatusCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use: "status",
-		// The old name stays as an alias. The METHOD alias `list_recipients` was
-		// removed from the wire (nothing had been minted against it), but a CLI name
-		// is a different surface: it appears in scripts, in skills/cashctl-cash and
-		// in AGENTS.md, and breaking it buys nothing. The command is renamed because
-		// `cash_status` is now the only method it calls, so the old name described
-		// something that no longer exists.
-		Aliases: []string{"list-recipients"},
-		Short:   "Check your allocation and co-recipients of a held token",
+		Use:   "status",
+		Short: "Check your allocation and co-recipients of a held token",
 		Long: `Shows your share and co-recipients of a held token's mint batch.
 
 With no id and more than one held, reports every one — nothing here can

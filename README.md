@@ -15,7 +15,7 @@ and [Circle wallets](https://github.com/ohstr/nips/blob/main/NIP-CW.md).**
 - [`cashctl receive`](#cashctl-receive) — "Cash-in" a token: verify and add it to your wallet
 - [`cashctl redeem`](#cashctl-redeem) — Redeem a held cash token into a Lightning wallet
 - [`cashctl consolidate`](#cashctl-consolidate) — Merge several held cash tokens into one
-- [`cashctl cash list-recipients`](#cashctl-cash-list-recipients) — Check your allocation and co-recipients of a held token (network)
+- [`cashctl cash status`](#cashctl-cash-status) — Check your allocation and co-recipients of a held token (network)
 - [`cashctl join`](#cashctl-join) — Join a circle to get a personal Lightning wallet
 - [`cashctl init`](#cashctl-init) — Set up your identity and, optionally, a wallet
 - [`cashctl wallet show/history/use`](#cashctl-wallet-show) — Show your identity, registered wallets, and local action history
@@ -209,13 +209,13 @@ fresh, anonymous cash note instead (needs Hub support). An
 `nconnection1...` `--to` target needs `--ia <identity>` (hex or NIP-05) to
 resolve its Identity Authority, same as `transfer`.
 
-## `cashctl cash list-recipients`
+## `cashctl cash status`
 
 Check your allocation and co-recipients of a held token — the same call
 `cashctl receive` makes internally to check a token before saving it.
 
 ```sh
-cashctl cash list-recipients               # your allocation + co-recipients of a held token
+cashctl cash status                        # your allocation + co-recipients of a held token
 ```
 
 ## `cashctl join`

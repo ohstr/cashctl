@@ -55,11 +55,11 @@ func classifyNWCErr(cmd *cobra.Command, err error) error {
 }
 
 // classifyCashTokenNWCErr is classifyNWCErr's counterpart for a call that
-// checks or spends a cash token's own claim (CheckClaim, CashRedeem,
-// CashTransfer, ListRecipients — anything dialing entry.Token itself)
-// rather than a registered wallet connection — see
+// READS a cash token's own claim (CheckClaim, cash_status — anything dialing
+// entry.Token itself) rather than a registered wallet connection — see
 // output.NWCErrorForCashToken's own doc comment for why EXPIRED needs
-// different text there.
+// different text there. A spend goes through classifyCashSpendErr instead:
+// silence after a read is safe to retry, silence after a spend is not.
 func classifyCashTokenNWCErr(cmd *cobra.Command, err error) error {
 	var walletErr *relayclient.WalletError
 	if errors.As(err, &walletErr) {
@@ -69,23 +69,63 @@ func classifyCashTokenNWCErr(cmd *cobra.Command, err error) error {
 		return output.NetworkError(cmd, err)
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
-		// A Hub deletes a bill once nothing is left on it, and answers
-		// nothing at all about one it no longer has -- that silence is
-		// deliberate, so a spent bill cannot be told apart from a pubkey the
-		// Hub never served. The bare "network error" this used to produce
-		// pointed the user at their connection when the likeliest cause is
-		// that the bill is gone.
-		//
-		// Still classified as a network failure, not not_found: no answer is
-		// genuinely ambiguous. An unreachable Hub looks identical from here,
-		// and reporting "spent" on a Hub that is merely down would tell
-		// someone their money is gone when it is not.
+		// No answer in time says nothing about the bill: a Hub that is down
+		// looks exactly like one that stopped answering about a spent bill, so
+		// this must not lean either way (NIP-CASH §Cash Status: no answer is
+		// indeterminate and MUST NOT be reported as spent). Retryable, because
+		// every caller of this function only reads.
 		return output.NetworkError(cmd, fmt.Errorf(
-			"the Hub did not answer for this bill: it has most likely been spent or has expired, "+
-				"since a Hub stops answering about a bill once nothing is left on it. "+
-				"If you believe it is still good, the Hub may simply be unreachable -- try again: %w", err))
+			"the Hub did not answer in time, which says nothing about this bill's state: "+
+				"the Hub may be unreachable, or it may no longer hold the bill. "+
+				"Asking again is safe: %w", err))
 	}
 	return output.NetworkError(cmd, err)
+}
+
+// notSentError marks a spend failure known to have happened before the
+// request could reach the Hub (the dial itself failed), which is the one
+// failure classifyCashSpendErr may call retryable.
+type notSentError struct{ err error }
+
+func (e *notSentError) Error() string { return e.err.Error() }
+func (e *notSentError) Unwrap() error { return e.err }
+
+// classifyCashSpendErr classifies the error of a redeem, transfer or
+// consolidate. A Hub's decline is an answer and classified as usual; a
+// failure to dial is network and safe to retry. Anything else came after the
+// request may have gone out — a timeout, an omission, an incomplete or
+// unreadable reply — and cannot be told apart from a spend that was applied
+// and whose reply was lost, so it is indeterminate, never retryable
+// (NIP-CASH: a client MUST NOT resend an omitted spend blind). verb names
+// the operation; ids are the ledger entries to check with `cash status`.
+func classifyCashSpendErr(cmd *cobra.Command, err error, verb string, ids ...string) error {
+	var walletErr *relayclient.WalletError
+	if errors.As(err, &walletErr) {
+		return output.NWCErrorForCashToken(cmd, walletErr)
+	}
+	var notSent *notSentError
+	if errors.As(err, &notSent) {
+		return output.NetworkError(cmd, err)
+	}
+	input := ""
+	if len(ids) == 1 {
+		input = ids[0]
+	}
+	return output.IndeterminateError(cmd, input, fmt.Errorf(
+		"the Hub gave no answer to this %s, so whether it was applied is unknown. "+
+			"Do not resend it: check first with %s: %w", verb, cashStatusHint(ids), err))
+}
+
+// cashStatusHint names the command that settles an indeterminate spend.
+func cashStatusHint(ids []string) string {
+	if len(ids) == 0 {
+		return "`cashctl cash status`"
+	}
+	hints := make([]string, len(ids))
+	for i, id := range ids {
+		hints[i] = fmt.Sprintf("`cashctl cash status --token %s`", id)
+	}
+	return strings.Join(hints, ", ")
 }
 
 // isAmbiguousDeliveryErr reports whether err is the shape of a specific,
@@ -129,5 +169,5 @@ func warnAmbiguousDelivery(err error, sourceIDs []string) error {
 	if len(sourceIDs) > 0 {
 		which = strings.Join(sourceIDs, ", ")
 	}
-	return fmt.Errorf("%w — the Hub may have already merged %s even though this reply couldn't be read; check each with `cashctl cash list-recipients --token <id>` or `cashctl decode --check <token>` before assuming it's still spendable, and don't just retry", err, which)
+	return fmt.Errorf("%w — the Hub may have already merged %s even though this reply couldn't be read; check each with `cashctl cash status --token <id>` before assuming it's still spendable, and don't just retry", err, which)
 }

@@ -959,7 +959,7 @@ func doCashConsolidate(cmd *cobra.Command, l *ledger.Ledger, dialCandidates []st
 				reportErr = warnAmbiguousDelivery(callErr, localIDs)
 			}
 		}
-		lastErr = classifyCashTokenNWCErr(cmd, reportErr)
+		lastErr = classifyCashSpendErr(cmd, reportErr, "consolidate", localIDs...)
 		if !isExpiredWalletErr(callErr) || i == len(dialCandidates)-1 {
 			return nil, nil, lastErr
 		}
@@ -981,7 +981,7 @@ func attemptCashConsolidate(dialToken string, sources []nipcash.Source, target n
 	defer cancel()
 	client, err := nipcashclient.Connect(ctx, dialToken)
 	if err != nil {
-		return nil, err
+		return nil, &notSentError{err}
 	}
 	defer client.Close()
 	// The call itself is authorized by the first source's own credential: the caller

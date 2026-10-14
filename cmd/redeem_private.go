@@ -200,10 +200,11 @@ func quoteHubGroup(
 			sendErr = errors.New("hub returned no answer")
 		}
 		for _, it := range items {
-			errs[it.ID] = output.NetworkError(cmd, sendErr)
+			errs[it.ID] = classifyCashTokenNWCErr(cmd, sendErr)
 		}
 		return quotes, errs
 	}
+	incomplete := incompleteReply(sendErr)
 
 	myPubHex, _ := localPubKeyHex(cmd)
 	byID := map[string]*ledger.Entry{}
@@ -233,11 +234,16 @@ func quoteHubGroup(
 			errs[r.ID] = output.NWCErrorForCashToken(cmd, &relayclient.WalletError{
 				Method: "cash_status", Code: r.Error.Code, Message: r.Error.Message,
 			})
+		case incomplete != nil:
+			// In a chunk that never arrived, not omitted: "ask again", not final.
+			errs[r.ID] = output.NetworkError(cmd, fmt.Errorf(
+				"the Hub's reply arrived incomplete and this token's quote was not in it; asking again is safe: %w", incomplete))
 		default:
 			// Omitted. Harmless here in a way it is NOT for a spend: nothing was
-			// executed, so this is simply "no quote".
-			errs[r.ID] = output.NotFoundError(cmd, r.ID,
-				fmt.Errorf("the hub returned no answer for this token — check `cashctl wallet show`, or that it's still valid"))
+			// executed, so asking again is safe. Not not_found: an omission is
+			// information-free, so it cannot support "this bill is gone".
+			explained, _ := explainNoAnswer(&nipcashclient.NotServedError{Method: "cash_status"})
+			errs[r.ID] = output.NetworkError(cmd, explained)
 		}
 	}
 	return quotes, errs
@@ -306,10 +312,11 @@ func redeemHubGroup(
 		if sendErr == nil {
 			sendErr = errors.New("hub returned no outcomes")
 		}
+		// The request may have gone out: indeterminate, never a blind retry.
 		for _, it := range items {
 			idx := outcomeIndex(outcomes, it.ID)
 			if idx >= 0 {
-				outcomes[idx].Err = output.NetworkError(cmd, sendErr)
+				outcomes[idx].Err = classifyCashSpendErr(cmd, sendErr, "redeem", it.ID)
 			}
 		}
 		return
@@ -324,7 +331,19 @@ func redeemHubGroup(
 		})
 		return out
 	})
-	applyRedeemResults(cmd, l, g.Plans, results, outcomes, destName)
+	applyRedeemResults(cmd, l, g.Plans, results, outcomes, destName, incompleteReply(sendErr))
+}
+
+// incompleteReply returns sendErr when it says some chunks of the Hub's reply never
+// arrived, nil otherwise. The *Many calls return it ALONGSIDE the outcomes that did
+// arrive, and those outcomes are genuine; the items it leaves unanswered are unknown
+// rather than omitted, and must be reported as such (NIP-CASH §Chunked Replies: a
+// client MUST surface both facts).
+func incompleteReply(sendErr error) error {
+	if errors.Is(sendErr, nipcashclient.ErrIncompleteReply) {
+		return sendErr
+	}
+	return nil
 }
 
 // dialHubGroup opens one connection for a whole hub group.
@@ -527,6 +546,7 @@ func applyRedeemResults(
 	results []nipcashclient.RedeemOutcome,
 	outcomes []redeemOutcome,
 	destName string,
+	incomplete error,
 ) {
 	byID := make(map[string]int, len(outcomes))
 	for i, o := range outcomes {
@@ -552,6 +572,12 @@ func applyRedeemResults(
 				Code:    r.Error.Code,
 				Message: r.Error.Message,
 			})
+		case incomplete != nil:
+			// Its answer was in a chunk that never arrived. Reported as that rather
+			// than as an omission, though the action is the same: it may have paid.
+			outcomes[idx].Err = classifyCashSpendErr(cmd, fmt.Errorf(
+				"the Hub's reply arrived incomplete and this token's answer was not in it: %w", incomplete),
+				"redeem", r.ID)
 		default:
 			// Not served: the hub said nothing. Deliberately information-free — it is
 			// the same answer for a bill the hub does not hold, a proof that did not
@@ -560,8 +586,7 @@ func applyRedeemResults(
 			// reported as something to RESOLVE BY ASKING, never as a silent success
 			// and never as safe to resend: an omission is indistinguishable from a
 			// redemption whose reply was lost.
-			outcomes[idx].Err = output.ConflictError(cmd, r.ID, fmt.Errorf(
-				"the hub returned no answer for this token — it may or may not have been redeemed; check with `cashctl cash list-recipients --token %s` before retrying", r.ID))
+			outcomes[idx].Err = classifyCashSpendErr(cmd, &nipcashclient.NotServedError{Method: "cash_redeem"}, "redeem", r.ID)
 		}
 	}
 }

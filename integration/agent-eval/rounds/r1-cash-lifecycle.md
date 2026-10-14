@@ -19,7 +19,7 @@ You've been handed two fixtures, mounted read-only:
 3. Now actually receive it into your wallet (this always cross-checks
    against the Hub before saving anything):
    `cashctl receive "$(cat /fixtures/r1-cash-token.txt)"`.
-4. Check its co-recipients: `cashctl cash list-recipients`.
+4. Check its co-recipients: `cashctl cash status`.
 5. Register the wallet fixture as a named connection called `payout`:
    `cashctl connect add payout "$(cat /fixtures/r1-wallet-uri.txt)"`.
 6. Redeem the token you received in step 3 into `payout`:

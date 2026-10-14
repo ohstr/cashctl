@@ -21,7 +21,7 @@ func TestConnectionFlag_RejectedWhereItCannotApply(t *testing.T) {
 		{"-c", "savings", "transfer", "1", fakeHex32(t)},
 		{"-c", "savings", "consolidate"},
 		{"-c", "savings", "decode", "lokicash1notatoken"},
-		{"-c", "savings", "cash", "list-recipients"},
+		{"-c", "savings", "cash", "status"},
 	} {
 		res := f.run(args...)
 		if res.ExitCode != 2 {

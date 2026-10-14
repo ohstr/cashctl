@@ -31,6 +31,7 @@ func TestExitCode_EachClassifierMapsToItsOwnCode(t *testing.T) {
 		{"conflict", ConflictError(cmd, "x", errors.New("bad")), 5},
 		{"network", NetworkError(cmd, errors.New("bad")), 6},
 		{"auth", AuthError(cmd, errors.New("bad")), 7},
+		{"indeterminate", IndeterminateError(cmd, "x", errors.New("bad")), 8},
 		{"internal/runtime", RuntimeError(cmd, errors.New("bad")), 1},
 		{"unclassified plain error", errors.New("bad"), 1},
 		{"nil", nil, 0},
@@ -85,6 +86,7 @@ func TestRetryableCodes(t *testing.T) {
 		{CodeNotFound, false},
 		{CodeAuth, false},
 		{CodeInternal, false},
+		{CodeIndeterminate, false},
 	}
 	for _, tt := range tests {
 		if got := retryableCodes[tt.code]; got != tt.want {

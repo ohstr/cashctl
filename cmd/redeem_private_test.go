@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -183,7 +184,7 @@ func TestApplyRedeemResults_PaidBillIsRecordedAndReported(t *testing.T) {
 
 	applyRedeemResults(&cobra.Command{}, l, plans, []nipcashclient.RedeemOutcome{
 		batchOutcome("tok-a", nipcashclient.OutcomeResult, &nipcash.CashRedeemResult{Preimage: "beef01"}, nil),
-	}, outcomes, "savings")
+	}, outcomes, "savings", nil)
 
 	if outcomes[0].Result == nil || outcomes[0].Result.Preimage != "beef01" {
 		t.Fatalf("outcome = %+v, want the payment's preimage", outcomes[0])
@@ -204,7 +205,7 @@ func TestApplyRedeemResults_HubRefusalKeepsItsClassification(t *testing.T) {
 
 	applyRedeemResults(&cobra.Command{}, l, plans, []nipcashclient.RedeemOutcome{
 		batchOutcome("tok-a", nipcashclient.OutcomeError, nil, &transport.ResultError{Code: "EXPIRED", Message: "this bill's deadline has passed"}),
-	}, outcomes, "savings")
+	}, outcomes, "savings", nil)
 
 	if outcomes[0].Err == nil {
 		t.Fatal("a refused bill produced no error")
@@ -235,7 +236,7 @@ func TestApplyRedeemResults_OmissionIsNeitherSuccessNorSilence(t *testing.T) {
 
 	applyRedeemResults(&cobra.Command{}, l, plans, []nipcashclient.RedeemOutcome{
 		batchOutcome("tok-a", nipcashclient.OutcomeNotServed, nil, nil),
-	}, outcomes, "savings")
+	}, outcomes, "savings", nil)
 
 	if outcomes[0].Result != nil {
 		t.Fatal("an omitted bill was reported as paid — the hub said nothing at all")
@@ -243,7 +244,10 @@ func TestApplyRedeemResults_OmissionIsNeitherSuccessNorSilence(t *testing.T) {
 	if outcomes[0].Err == nil {
 		t.Fatal("an omitted bill was reported as nothing happening; it may or may not have been redeemed")
 	}
-	if !strings.Contains(outcomes[0].Err.Error(), "list-recipients") {
+	if ce := output.AsCLIError(outcomes[0].Err); ce.Code != output.CodeIndeterminate || output.ExitCode(ce) != 8 {
+		t.Errorf("code = %q, want indeterminate (exit 8, not retryable): resending an omitted spend may pay twice", ce.Code)
+	}
+	if !strings.Contains(outcomes[0].Err.Error(), "cash status --token tok-a") {
 		t.Errorf("the error does not name the check to run before retrying: %v", outcomes[0].Err)
 	}
 	// The ledger must NOT be marked spent: we genuinely do not know.
@@ -263,7 +267,7 @@ func TestApplyRedeemResults_UnknownIDIsIgnored(t *testing.T) {
 
 	applyRedeemResults(&cobra.Command{}, l, plans, []nipcashclient.RedeemOutcome{
 		batchOutcome("tok-never-sent", nipcashclient.OutcomeResult, &nipcash.CashRedeemResult{Preimage: "x"}, nil),
-	}, outcomes, "savings")
+	}, outcomes, "savings", nil)
 
 	if outcomes[0].Result != nil || outcomes[0].Err != nil {
 		t.Errorf("a result for an unsent bill landed on tok-a: %+v", outcomes[0])
@@ -284,5 +288,28 @@ func TestApplyRedeemResults_UnknownIDIsIgnored(t *testing.T) {
 func TestCashRedeemCmd_HasNoTransportFlag(t *testing.T) {
 	if f := newCashRedeemCmd().Flags().Lookup("transport"); f != nil {
 		t.Errorf("redeem registers --transport (default %q), but nothing reads it: redeems batch over the private transport only, with no flag and no fallback", f.DefValue)
+	}
+}
+
+// An answer lost in a missing chunk is unknown, not omitted: both facts must surface,
+// and a decided outcome in the same reply must still be recorded (NIP-CASH §Chunked Replies).
+func TestApplyRedeemResults_IncompleteReplyIsNotAnOmission(t *testing.T) {
+	plans := []redeemPlan{planFor("tok-a", "hub-1", "t"), planFor("tok-b", "hub-1", "t")}
+	outcomes := []redeemOutcome{{EntryID: "tok-a"}, {EntryID: "tok-b"}}
+	l := &ledger.Ledger{Entries: []ledger.Entry{{ID: "tok-a", Status: ledger.StatusHeld}, {ID: "tok-b", Status: ledger.StatusHeld}}}
+
+	applyRedeemResults(&cobra.Command{}, l, plans, []nipcashclient.RedeemOutcome{
+		batchOutcome("tok-a", nipcashclient.OutcomeResult, &nipcash.CashRedeemResult{Preimage: "beef01"}, nil),
+		batchOutcome("tok-b", nipcashclient.OutcomeNotServed, nil, nil),
+	}, outcomes, "savings", incompleteReply(fmt.Errorf("%w: envelope 0: got 1 of 2 chunks", nipcashclient.ErrIncompleteReply)))
+
+	if outcomes[0].Result == nil {
+		t.Fatal("a decided outcome was dropped because the reply was incomplete")
+	}
+	if outcomes[1].Err == nil || !strings.Contains(outcomes[1].Err.Error(), "incomplete") {
+		t.Fatalf("the missing item does not say the reply was incomplete: %v", outcomes[1].Err)
+	}
+	if ce := output.AsCLIError(outcomes[1].Err); ce.Code != output.CodeIndeterminate {
+		t.Errorf("code = %q, want indeterminate", ce.Code)
 	}
 }

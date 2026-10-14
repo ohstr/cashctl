@@ -46,7 +46,7 @@ type Entry struct {
 	Token        string `json:"token"`
 	WalletPubkey string `json:"wallet_pubkey"`
 	// Secret is the token's own type-2 TLV field: the NWC connection
-	// secret. It lets cashctl dial the wallet (list-recipients, decode,
+	// secret. It lets cashctl dial the wallet (cash status, decode,
 	// ...) but is NEVER sufficient to redeem/transfer a cash-mode slice —
 	// see CashSecret's own doc comment (NIP-CASH.md's Redemption
 	// Metadata section covers this distinction in full). json:"-": this

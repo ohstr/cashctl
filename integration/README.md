@@ -47,7 +47,7 @@ or with a real user's own cashctl/ncli state:
   receive → redeem round trip, proven live.
 - `TestCashInspect_DecodeAndListRecipients` — mints a cash-mode token, then
   exercises `cashctl decode` (local-only) and `cashctl cash
-  list-recipients` (network) against it.
+  status` (network) against it.
 - `TestCircleJoin_CreateWalletAndGetInfo` — provisions an allowlist-policy
   circle_hub, authorizes cashctl's local identity under it, joins via `cashctl
   join --hub <circlehub1...>` (the real bech32 Circle Hub connection format,
