@@ -105,7 +105,11 @@ func runCashReceive(cmd *cobra.Command, args []string) error {
 				if checkErr == nil {
 					output.Printf("check: matches (%s)\n", output.FormatAmount(int64(checkResult.AmountMillis)))
 				} else {
-					output.Printf("check: %s\n", checkErr)
+					explained, _ := explainCashSecretRefusal(checkErr)
+					if errors.Is(checkErr, nipcash.ErrClaimNotFound) {
+						explained = errNeedsCashSecret
+					}
+					output.Printf("check: %s\n", explained)
 				}
 			}
 		}
@@ -376,6 +380,9 @@ func checkClaimWithCashHub(cmd *cobra.Command, input, embeddedSecret string, tok
 		}
 		myPubHex, _ := localPubKeyHex(cmd) // best-effort; empty means no pubkey match attempted
 		r, err := client.CheckClaim(ctx, cred, tok, myPubHex)
+		if errors.Is(err, nipcash.ErrSpent) {
+			return err
+		}
 		if errors.Is(err, nipcash.ErrClaimNotFound) {
 			noMatch = true
 			return fmt.Errorf("the Cash Hub has no matching recipient for this token — refusing to receive it")
@@ -391,6 +398,9 @@ func checkClaimWithCashHub(cmd *cobra.Command, input, embeddedSecret string, tok
 	}
 	if noMatch {
 		return nil, output.InvalidInputError(cmd, input, err)
+	}
+	if errors.Is(err, nipcash.ErrSpent) {
+		return nil, output.SpentError(cmd, input, errBillSpent)
 	}
 	// classifyCashTokenNWCErr, not a blanket NetworkError: a Hub that
 	// ANSWERS with a decline (an expired token's EXPIRED above all) is not

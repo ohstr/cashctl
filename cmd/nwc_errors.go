@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/ohstr/nmilat/nipcash"
 	nipcashclient "github.com/ohstr/nmilat/nipcash/client"
 	relayclient "github.com/ohstr/nmilat/relay/client"
 	"github.com/spf13/cobra"
@@ -61,6 +62,9 @@ func classifyNWCErr(cmd *cobra.Command, err error) error {
 // different text there. A spend goes through classifyCashSpendErr instead:
 // silence after a read is safe to retry, silence after a spend is not.
 func classifyCashTokenNWCErr(cmd *cobra.Command, err error) error {
+	if explained, ok := explainCashSecretRefusal(err); ok {
+		return output.InvalidInputError(cmd, "", explained)
+	}
 	var walletErr *relayclient.WalletError
 	if errors.As(err, &walletErr) {
 		return output.NWCErrorForCashToken(cmd, walletErr)
@@ -170,4 +174,33 @@ func warnAmbiguousDelivery(err error, sourceIDs []string) error {
 		which = strings.Join(sourceIDs, ", ")
 	}
 	return fmt.Errorf("%w — the Hub may have already merged %s even though this reply couldn't be read; check each with `cashctl cash status --token <id>` before assuming it's still spendable, and don't just retry", err, which)
+}
+
+// explainCashSecretRefusal rewrites a Hub's refusal to answer about a cash-mode
+// bill without its cash secret, or with the wrong one (NIP-CASH §Bearer Items),
+// into what to do about it. Both arrive as BAD_REQUEST, told apart only by the
+// Hub's message.
+func explainCashSecretRefusal(err error) (error, bool) {
+	var walletErr *relayclient.WalletError
+	if !errors.As(err, &walletErr) || walletErr.Code != "BAD_REQUEST" {
+		return err, false
+	}
+	switch {
+	case strings.Contains(walletErr.Message, "neither a slice proof nor a cash secret"):
+		return fmt.Errorf("%w: %w", errNeedsCashSecret, err), true
+	case strings.Contains(walletErr.Message, "matches this cash secret"):
+		return fmt.Errorf("the cash secret does not match this bill: check the part after '#' in `<token>#<secret>`: %w", err), true
+	}
+	return err, false
+}
+
+// errNeedsCashSecret is the answer to checking a cash-mode bill without its secret.
+var errNeedsCashSecret = errors.New("this is a cash-mode bill, and its Hub answers about it only with its cash secret: " +
+	"use the full `<token>#<secret>` string")
+
+// isBareCashModeBill reports a cash-mode bill being checked without its secret. Any
+// miss on it is the missing secret: the Hub answers about a cash-mode slice only
+// to that secret, so a check signed by the local identity cannot match it.
+func isBareCashModeBill(tok nipcash.Token, embeddedSecret string) bool {
+	return embeddedSecret == "" && tok.IdentityRequired != nil && !*tok.IdentityRequired
 }

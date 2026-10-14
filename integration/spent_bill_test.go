@@ -3,6 +3,8 @@
 package integration
 
 import (
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -73,5 +75,99 @@ func requireBillSpentAway(t *testing.T, admin *adminClient, hubAppID uint, token
 				what, tok.WalletPubkey)
 		}
 		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+// TestSpentBill_TombstoneMarksTheEntrySpent (F-43): a holder whose bill was spent
+// elsewhere learns it from the Hub's tombstone, not from silence. Two copies of
+// one wallet hold the same bill; one redeems it, and the other's `cash status`
+// must report it spent and drop it from what it holds.
+func TestSpentBill_TombstoneMarksTheEntrySpent(t *testing.T) {
+	admin := adminOrSkip(t)
+	hub := setUpCashHub(t, admin)
+
+	a := newFixture(t)
+	initResp := a.mustJSON("wallet", "init")
+	pubHex, err := npubToHex(initResp["npub"].(string))
+	if err != nil {
+		t.Fatalf("decode npub: %v", err)
+	}
+	const amountMillis = uint64(300_000)
+	token := mintPubkeyTokenFromHub(t, hub, pubHex, amountMillis)
+	if res := a.run("receive", token); res.ExitCode != 0 {
+		t.Fatalf("receive: exit %d\nstderr: %s", res.ExitCode, res.Stderr)
+	}
+
+	// b is a second copy of the same wallet, taken while the bill is still held.
+	b := newFixture(t)
+	if err := os.Remove(b.configDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.CopyFS(b.configDir, os.DirFS(a.configDir)); err != nil {
+		t.Fatalf("copy wallet: %v", err)
+	}
+
+	invoice := makeHubInvoice(t, hub, amountMillis)
+	if res := a.run("redeem", "--invoice", invoice, "--yes"); res.ExitCode != 0 {
+		t.Fatalf("redeem: exit %d\nstderr: %s", res.ExitCode, res.Stderr)
+	}
+	requireBillSpentAway(t, admin, hub.ID, token, "after redeem")
+
+	// The tombstone is a definite answer, so b's read succeeds and says so.
+	var status map[string]any
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		res := b.run("cash", "status")
+		if res.ExitCode == 0 {
+			status = mustDecodeJSON(t, "cash status", res.Stdout)
+			if status["error"] == "spent" {
+				break
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("cash status never reported the redeemed bill spent: exit %d\nstdout: %s\nstderr: %s", res.ExitCode, res.Stdout, res.Stderr)
+		}
+		time.Sleep(time.Second)
+	}
+
+	show := b.mustJSON("wallet", "show")
+	if held, _ := show["held_tokens"].([]any); len(held) != 0 {
+		t.Errorf("wallet show still holds the spent bill: %v", held)
+	}
+	res := b.run("redeem", "--all")
+	if res.ExitCode == 0 {
+		t.Errorf("redeem --all succeeded on a wallet whose only bill is spent: %s", res.Stdout)
+	}
+
+	// A third party holding the token string gets the same answer, as code spent.
+	c := newFixture(t)
+	c.mustJSON("wallet", "init")
+	res = c.run("receive", token)
+	if res.ExitCode != 10 || !strings.Contains(res.Stderr, `"spent"`) {
+		t.Errorf("receive of a spent bill: exit %d, want 10 (spent)\nstderr: %s", res.ExitCode, res.Stderr)
+	}
+}
+
+// TestDecodeCheck_BareCashModeBillNamesTheMissingSecret (I-22): a Hub answers about
+// a cash-mode bill only with its cash secret, so checking the bare token must say
+// to pass `<token>#<secret>` rather than report a generic failure.
+func TestDecodeCheck_BareCashModeBillNamesTheMissingSecret(t *testing.T) {
+	admin := adminOrSkip(t)
+	hub := setUpCashHub(t, admin)
+	f := newFixture(t)
+	f.mustJSON("wallet", "init")
+
+	gift := mintCashGift(t, hub, 50_000)
+	bare, _ := nipcash.SplitCashSliceString(gift)
+	resp := f.mustJSON("decode", bare, "--check")
+	check, _ := resp["check"].(map[string]any)
+	if check == nil {
+		t.Fatalf("decode --check: no check field: %v", resp)
+	}
+	if ok, _ := check["ok"].(bool); ok {
+		t.Fatalf("decode --check of a bare cash-mode bill matched without its secret: %v", check)
+	}
+	if msg, _ := check["error"].(string); !strings.Contains(msg, "<token>#<secret>") {
+		t.Errorf("decode --check error does not name the missing secret: %q", msg)
 	}
 }

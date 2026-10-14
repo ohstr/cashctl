@@ -408,6 +408,20 @@ cashctl cash status --json                   # with no id and several held, repo
 Only your own allocation by default: other recipients' identities stay out
 of your context unless you need them and ask with `--all`.
 
+**A spent bill.** When the Hub answers that a bill is spent (a tombstone,
+kept for a while after the bill is gone), `cash status` reports it — in a
+`statuses` row as `"status": "spent"` — and cashctl marks the entry spent,
+so `wallet balance` and `redeem --all` stop offering it. Any command that
+hits a tombstone (`receive`, `redeem`, `transfer`) fails with `code:
+"spent"` (exit 10, not retryable); `decode --check` reports
+`"spent": true`. Silence is never read as spent: no answer is
+`indeterminate` (above).
+
+**A cash-mode bill without its secret.** The Hub answers about a cash-mode
+bill only to its cash secret, so checking a bare token (`receive`'s
+read-only report, `decode --check`) says to pass the full
+`<token>#<secret>` string.
+
 With no id and more than one held token, reports every one of them in a
 `{"statuses": [...]}` array instead of refusing — this is pure read
 access, so it's even less contentious than `wallet protect`'s own version

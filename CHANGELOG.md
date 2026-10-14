@@ -39,6 +39,11 @@ Fixes from the NIP-CASH / NIP-CW conformance review, for agents above all.
 - Fixes `transfer` with no arguments not mentioning that an amount alone is
   enough, making a cash note.
   ([#75](https://github.com/ohstr/cashctl/pull/75))
+- Adds the `spent` error code (exit 10, not retryable) for a bill its Hub
+  reports spent; the entry is marked spent and leaves `wallet balance` and
+  `redeem --all`, where it used to look live.
+- Fixes checking a cash-mode bill without its secret reporting "no matching
+  recipient"; it now asks for the full `<token>#<secret>` string.
 - Updates `nmilat` to v0.5.0-rc.22, which tells a spent bill apart from one
   that does not name you.
 
