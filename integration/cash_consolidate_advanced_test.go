@@ -360,3 +360,30 @@ func TestCashTransfer_FragmentedThenManualSplitAcrossHubs(t *testing.T) {
 		t.Errorf("C: total received across both manual transfers = %d, want %d", totalC, owed)
 	}
 }
+
+// TestCashConsolidate_SameSourceTwiceIsRefusedLocally (I-18): `consolidate <id> <id>`
+// is a usage error before anything reaches the Hub, and nothing moves.
+func TestCashConsolidate_SameSourceTwiceIsRefusedLocally(t *testing.T) {
+	admin := adminOrSkip(t)
+	hub := setUpCashHub(t, admin)
+	f := newFixture(t)
+	pub, err := npubToHex(f.mustJSON("wallet", "init")["npub"].(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.mustJSON("receive", mintPubkeyTokenFromHub(t, hub, pub, 200_000))
+	f.mustJSON("receive", mintPubkeyTokenFromHub(t, hub, pub, 100_000))
+	held, _ := f.mustJSON("wallet", "show")["held_tokens"].([]any)
+	if len(held) != 2 {
+		t.Fatalf("setup: held %d tokens, want 2", len(held))
+	}
+	id := entryID(t, held[0])
+
+	res := f.run("consolidate", id, id)
+	if res.ExitCode != 2 || !jsonErrorContains(t, res.Stderr, "usage", "more than once") {
+		t.Errorf("consolidate <id> <id>: exit %d, want 2 (usage)\nstderr: %s", res.ExitCode, res.Stderr)
+	}
+	if after, _ := f.mustJSON("wallet", "show")["held_tokens"].([]any); len(after) != 2 {
+		t.Errorf("held %d tokens after the refusal, want both still held", len(after))
+	}
+}

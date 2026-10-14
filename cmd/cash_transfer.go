@@ -342,7 +342,7 @@ func transferWithAutoConsolidate(cmd *cobra.Command, l *ledger.Ledger, group []l
 	yesFlag, _ := cmd.Flags().GetBool("yes")
 
 	sum := ledger.SumAmounts(group)
-	message := fmt.Sprintf("Consolidate %d tokens (%s) then send %s %s?",
+	message := fmt.Sprintf("Consolidate %d tokens (%s), telling their Hub they share an owner, then send %s %s?",
 		len(group), output.FormatAmount(int64(sum)), output.FormatAmount(int64(sendAmount)), targetClause(toValue, target.Kind))
 	// Unconditional, not gated on !jsonMode && !yesFlag: this decides a
 	// hard refusal below, which must fire under --json/--yes too — exactly

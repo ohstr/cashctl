@@ -789,3 +789,16 @@ func TestRefuseInvoiceForManyBills(t *testing.T) {
 		t.Errorf("40 bills with no --invoice = %v, want accepted", err)
 	}
 }
+
+// F-61 / CASH-the-cash-token-41: redeem --amount never sums bills that merely
+// agree on having no Hub fingerprint; bills of one known Hub still sum.
+func TestExactSameHubSum_NeverGroupsFingerprintlessBills(t *testing.T) {
+	a, b := &ledger.Entry{ID: "a"}, &ledger.Entry{ID: "b"}
+	if got := exactSameHubSum([]quotedEntry{{entry: a, net: 300}, {entry: b, net: 200}}, 500); got != nil {
+		t.Errorf("two fingerprint-less bills were summed: %v", got)
+	}
+	got := exactSameHubSum([]quotedEntry{{entry: a, net: 300, hub: "h1"}, {entry: b, net: 200, hub: "h1"}}, 500)
+	if len(got) != 2 {
+		t.Errorf("two bills of one Hub were not summed: %v", got)
+	}
+}

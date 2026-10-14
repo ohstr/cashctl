@@ -1426,11 +1426,6 @@ func selectHeldTokensForRedeemAmount(cmd *cobra.Command, l *ledger.Ledger, targe
 		return nil, output.NotFoundError(cmd, "", fmt.Errorf("you have no held cash tokens — receive one first with `cashctl receive <token>`"))
 	}
 
-	type quotedEntry struct {
-		entry *ledger.Entry
-		net   uint64
-		hub   string
-	}
 	quotes := make([]quotedEntry, 0, len(held))
 	var totalNet uint64
 	for _, h := range held {
@@ -1457,6 +1452,36 @@ func selectHeldTokensForRedeemAmount(cmd *cobra.Command, l *ledger.Ledger, targe
 		quotes = append(quotes, quotedEntry{entry: e, net: q.NetRedeemableMillis, hub: ledger.HubGroupKey(*e)})
 	}
 
+	if out := exactSameHubSum(quotes, target); out != nil {
+		return out, nil
+	}
+
+	// Classified here, not left as the raw ledger error types transfer's own
+	// SelectForAmount returns to ITS caller for classification — this
+	// function has no other caller, so there is no benefit to deferring it,
+	// and an unclassified error reaching EmitError would fall back to a
+	// generic internal (exit 1) rather than the specific, actionable code
+	// transfer's own identical cases already get.
+	if totalNet < target {
+		return nil, output.InvalidInputError(cmd, "", fmt.Errorf("not enough funds: you hold %s net redeemable, need %s",
+			output.FormatAmount(int64(totalNet)), output.FormatAmount(int64(target))))
+	}
+	return nil, output.UsageError(cmd, fmt.Errorf("%w: you hold %s total, but no single Hub's tokens sum to exactly the %s you're redeeming",
+		ledger.ErrFundsFragmented, output.FormatAmount(int64(totalNet)), output.FormatAmount(int64(target))))
+}
+
+// quotedEntry is one held bill with its live net-redeemable quote and its Hub
+// fingerprint ("" when it has none).
+type quotedEntry struct {
+	entry *ledger.Entry
+	net   uint64
+	hub   string
+}
+
+// exactSameHubSum returns quoted entries from one Hub whose net amounts sum to
+// exactly target, or nil. Bills with no Hub fingerprint never group: agreeing
+// only on "unknown Hub" is not a shared Hub (NIP-CASH §The Hub Group Fingerprint).
+func exactSameHubSum(quotes []quotedEntry, target uint64) []*ledger.Entry {
 	byHub := make(map[string][]quotedEntry)
 	for _, q := range quotes {
 		if q.hub == "" {
@@ -1474,22 +1499,10 @@ func selectHeldTokensForRedeemAmount(cmd *cobra.Command, l *ledger.Ledger, targe
 			for i, idx := range idxs {
 				out[i] = group[idx].entry
 			}
-			return out, nil
+			return out
 		}
 	}
-
-	// Classified here, not left as the raw ledger error types transfer's own
-	// SelectForAmount returns to ITS caller for classification — this
-	// function has no other caller, so there is no benefit to deferring it,
-	// and an unclassified error reaching EmitError would fall back to a
-	// generic internal (exit 1) rather than the specific, actionable code
-	// transfer's own identical cases already get.
-	if totalNet < target {
-		return nil, output.InvalidInputError(cmd, "", fmt.Errorf("not enough funds: you hold %s net redeemable, need %s",
-			output.FormatAmount(int64(totalNet)), output.FormatAmount(int64(target))))
-	}
-	return nil, output.UsageError(cmd, fmt.Errorf("%w: you hold %s total, but no single Hub's tokens sum to exactly the %s you're redeeming",
-		ledger.ErrFundsFragmented, output.FormatAmount(int64(totalNet)), output.FormatAmount(int64(target))))
+	return nil
 }
 
 // quoteHeldCandidate dials entry's own token standalone and returns its live
