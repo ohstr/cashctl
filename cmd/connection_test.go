@@ -1,13 +1,16 @@
 package cmd
 
 import (
+	"io"
 	"strings"
 	"testing"
 
 	"github.com/ohstr/nmilat/nipcash"
+	"github.com/spf13/cobra"
 
 	"github.com/ohstr/cashctl/internal/appdir"
 	"github.com/ohstr/cashctl/internal/config"
+	"github.com/ohstr/cashctl/internal/output"
 )
 
 func TestValidateConnectionValue(t *testing.T) {
@@ -32,6 +35,37 @@ func TestValidateConnectionValue(t *testing.T) {
 	for _, bad := range []string{"", "n", "no", "garbage", "nostr+walletconnect://", "https://example.com", "npub1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq"} {
 		if err := validateConnectionValue(bad); err == nil {
 			t.Errorf("validateConnectionValue(%q) = nil, want rejected", bad)
+		}
+	}
+}
+
+// A Hub connection or a "<token>#<secret>" bill decodes under nipcash.Decode's
+// any-HRP rule, but is never a wallet: each is refused, naming what it is.
+func TestValidateConnectionValue_RefusesWhatIsNotAWallet(t *testing.T) {
+	walletPubkey, secret := strings.Repeat("aa", 32), strings.Repeat("bb", 32)
+	cashHub, err := nipcash.EncodeCashHubConnection(nipcash.CashHubConnection{
+		WalletPubkey: walletPubkey, Secret: secret, RelayURLs: []string{"wss://relay.example"},
+	})
+	if err != nil {
+		t.Fatalf("EncodeCashHubConnection: %v", err)
+	}
+	cashToken, err := nipcash.Encode(nipcash.Token{
+		HRP: "lokicash", WalletPubkey: walletPubkey, Secret: secret, RelayURLs: []string{"wss://relay.example"},
+	})
+	if err != nil {
+		t.Fatalf("nipcash.Encode: %v", err)
+	}
+	for _, tt := range []struct{ value, want string }{
+		{validCircleHub(t), "cashctl join"},
+		{cashHub, "Cash Hub"},
+		{cashToken + "#" + strings.Repeat("cc", 32), "cashctl receive"},
+	} {
+		err := validateConnectionValue(tt.value)
+		if err == nil || !strings.Contains(err.Error(), tt.want) {
+			t.Errorf("validateConnectionValue(%.20q…) = %v, want a refusal naming %q", tt.value, err, tt.want)
+		}
+		if code := output.AsCLIError(unusableConnectionError(&cobra.Command{}, tt.value)).Code; code != output.CodeInvalidInput {
+			t.Errorf("-c/--into %.20q…: code = %q, want invalid_input", tt.value, code)
 		}
 	}
 }
@@ -61,5 +95,23 @@ func TestNoWalletMessage_DistinguishesNoWalletsFromNoDefault(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("message %q is missing %q", got, want)
 		}
+	}
+}
+
+// decode reads "<token>#<secret>" as the token plus an embedded secret: the
+// combined string itself never decodes (NIP-CASH §Presenting a Cash-Mode Slice).
+func TestDecode_SplitsTheCombinedCashString(t *testing.T) {
+	token, err := nipcash.Encode(nipcash.Token{
+		HRP: "lokicash", WalletPubkey: strings.Repeat("aa", 32), Secret: strings.Repeat("bb", 32),
+		RelayURLs: []string{"wss://relay.example"},
+	})
+	if err != nil {
+		t.Fatalf("nipcash.Encode: %v", err)
+	}
+	cmd := newDecodeCmd()
+	cmd.SetArgs([]string{token + "#" + strings.Repeat("cc", 32)})
+	cmd.SetOut(io.Discard)
+	if err := cmd.Execute(); err != nil {
+		t.Errorf("decode <token>#<secret> = %v, want the token decoded", err)
 	}
 }
