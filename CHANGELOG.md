@@ -39,6 +39,8 @@ Fixes from the NIP-CASH / NIP-CW conformance review, for agents above all.
 - Fixes `transfer` with no arguments not mentioning that an amount alone is
   enough, making a cash note.
   ([#75](https://github.com/ohstr/cashctl/pull/75))
+- Updates `nmilat` to v0.5.0-rc.22, which tells a spent bill apart from one
+  that does not name you.
 
 ## [0.6.0-rc.12]
 
