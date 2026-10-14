@@ -100,6 +100,8 @@ Fixes from the NIP-CASH / NIP-CW conformance review, for agents above all.
 - Fixes `--json` output escaping `<`, `>` and `&` as `\u003c`, `\u003e` and
   `\u0026`.
   ([#85](https://github.com/ohstr/cashctl/pull/85))
+- Adds the cap the Hub granted and the in-circle fee to `join`'s output; the
+  cap can be lower than the one asked for.
 
 ## [0.6.0-rc.12]
 

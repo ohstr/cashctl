@@ -240,3 +240,22 @@ func TestWalletExistsFromLegacyRefusal(t *testing.T) {
 		t.Error("the Hub's own error was mutated")
 	}
 }
+
+// SF-6: join reports the cap the Hub resolved, saying when it differs from the
+// one asked for, and the in-circle fee (NIP-CW §Response).
+func TestJoinCapSummary_ShowsTheResolvedCapAndFee(t *testing.T) {
+	resolved := uint64(400_000)
+	got := joinCapSummary(500_000, &nipcw.CreateCircleWalletResponse{MaxAmountMillis: &resolved, FeesPpm: 1000}, "never")
+	for _, want := range []string{output.FormatAmount(400_000), "you asked for " + output.FormatAmount(500_000), "1000 ppm"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("summary %q lacks %q", got, want)
+		}
+	}
+	same := joinCapSummary(500_000, &nipcw.CreateCircleWalletResponse{MaxAmountMillis: ptrTo(uint64(500_000))}, "never")
+	if strings.Contains(same, "asked for") || strings.Contains(same, "ppm") {
+		t.Errorf("summary %q mentions a difference or fee that is not there", same)
+	}
+	if unknown := joinCapSummary(500_000, &nipcw.CreateCircleWalletResponse{}, "never"); !strings.Contains(unknown, output.FormatAmount(500_000)) {
+		t.Errorf("with no resolved cap the requested one should show: %q", unknown)
+	}
+}

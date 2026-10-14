@@ -44,10 +44,10 @@ func isIdentityEventReplayErr(err error) bool {
 // current Hub sends, so a caller branches on one nwc_code for it either way.
 func walletExistsFromLegacyRefusal(err error) error {
 	var walletErr *relayclient.WalletError
-	if errors.As(err, &walletErr) && walletErr.Code == "RESTRICTED" &&
+	if errors.As(err, &walletErr) && walletErr.Code == nip47.ErrRestricted &&
 		strings.Contains(walletErr.Message, "already has an active circle wallet") {
 		normalized := *walletErr
-		normalized.Code = "WALLET_EXISTS"
+		normalized.Code = nipcw.ErrWalletExists
 		return &normalized
 	}
 	return err
@@ -288,10 +288,13 @@ func runCircleJoin(cmd *cobra.Command, args []string) error {
 		output.PrintJSON(map[string]any{
 			"wallet": name, "default": setDefault,
 			"response": map[string]any{
-				"wallet_pubkey":  resp.WalletPubkey,
-				"expires_at":     expiresAt,
-				"fees_ppm":       resp.FeesPpm,
-				"budget_renewal": resp.BudgetRenewal,
+				"wallet_pubkey": resp.WalletPubkey,
+				"expires_at":    expiresAt,
+				// The cap as the Hub resolved it, which may differ from the one asked
+				// for (NIP-CW §Response); null when the Hub did not say.
+				"max_amount_millis": resp.MaxAmountMillis,
+				"fees_ppm":          resp.FeesPpm,
+				"budget_renewal":    resp.BudgetRenewal,
 			},
 		})
 		return nil
@@ -306,7 +309,7 @@ func runCircleJoin(cmd *cobra.Command, args []string) error {
 	if renewal == "" {
 		renewal = "never"
 	}
-	output.Printf("%s New wallet: %s (max %s/%s)\n", greeting, name, output.FormatAmount(int64(maxAmount)), output.Sanitize(renewal))
+	output.Printf("%s New wallet: %s (%s)\n", greeting, name, joinCapSummary(maxAmount, resp, renewal))
 	if setDefault {
 		output.Printf("Default wallet set to %s.\n", name)
 	} else if !wasEmpty {
@@ -338,4 +341,22 @@ func resolveHubConnection(cmd *cobra.Command, hub string) (pairingURI, label str
 	default:
 		return "", "", output.InvalidInputError(cmd, hub, fmt.Errorf("not a valid Circle Hub connection"))
 	}
+}
+
+// joinCapSummary describes the wallet's limits as the Hub resolved them: its cap
+// (saying so when it differs from the one asked for), renewal, and in-circle fee.
+func joinCapSummary(requested uint64, resp *nipcw.CreateCircleWalletResponse, renewal string) string {
+	capMillis := requested
+	note := ""
+	if resp.MaxAmountMillis != nil {
+		capMillis = *resp.MaxAmountMillis
+		if capMillis != requested {
+			note = fmt.Sprintf(", you asked for %s", output.FormatAmount(int64(requested)))
+		}
+	}
+	summary := fmt.Sprintf("max %s/%s%s", output.FormatAmount(int64(capMillis)), output.Sanitize(renewal), note)
+	if resp.FeesPpm > 0 {
+		summary += fmt.Sprintf("; in-circle fee %d ppm", resp.FeesPpm)
+	}
+	return summary
 }
