@@ -42,8 +42,9 @@ Fixes from the NIP-CASH / NIP-CW conformance review, for agents above all.
 - Adds the `spent` error code (exit 10, not retryable) for a bill its Hub
   reports spent; the entry is marked spent and leaves `wallet balance` and
   `redeem --all`, where it used to look live.
-- Fixes checking a cash-mode bill without its secret reporting "no matching
-  recipient"; it now asks for the full `<token>#<secret>` string.
+- Fixes checking a cash-mode bill without its secret, or receiving one with a
+  wrong or truncated secret, reporting "no matching recipient"; each now says
+  what is wrong with the secret.
 - Updates `nmilat` to v0.5.0-rc.22, which tells a spent bill apart from one
   that does not name you.
 

@@ -385,6 +385,11 @@ func checkClaimWithCashHub(cmd *cobra.Command, input, embeddedSecret string, tok
 		}
 		if errors.Is(err, nipcash.ErrClaimNotFound) {
 			noMatch = true
+			if embeddedSecret != "" {
+				// The Hub answers a cash-mode bill only to its own secret, so a miss
+				// with one given means that secret is wrong (often truncated).
+				return fmt.Errorf("the cash secret after '#' does not match this bill (is it complete?) — refusing to receive it")
+			}
 			return fmt.Errorf("the Cash Hub has no matching recipient for this token — refusing to receive it")
 		}
 		if err != nil {
