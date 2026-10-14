@@ -981,3 +981,17 @@ func TestExpiresAtFromCheck_SuccessPassesTheRealDeadlineThrough(t *testing.T) {
 		t.Errorf("no deadline on the result: got %v, want nil", *got)
 	}
 }
+
+// I-2: with nothing given, the error names both valid forms — an amount alone is
+// a complete request (a cash note), not only a destination.
+func TestRunCashTransfer_NoArgsNamesBothForms(t *testing.T) {
+	err := runCashTransfer(newTestTransferCmd(), nil)
+	if err == nil {
+		t.Fatal("transfer with no arguments succeeded")
+	}
+	for _, want := range []string{"transfer <amount>", "<target>"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not mention %q", err, want)
+		}
+	}
+}

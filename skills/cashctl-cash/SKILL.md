@@ -1,6 +1,6 @@
 ---
 name: cashctl-cash
-description: Receive a NIP-CASH token into your local wallet (`cashctl receive`), redeem a held token into a Lightning wallet or raw invoice (`cashctl redeem`), send a held token to someone else (`cashctl transfer`), merge several held tokens into one (`cashctl consolidate`), and check its Hub-side recipients (`cashctl cash status`). For local-only inspection of a token string itself (no network call, including mint-signature verification), see `cashctl decode` in `skills/cashctl-wallet/SKILL.md`. Use whenever an agent is handed a lokicash1... (or other cash-token-family) string, needs to cash it out to Lightning, needs to forward it to another identity, or needs to combine multiple small tokens.
+description: Receive a NIP-CASH token into your local wallet (`cashctl receive`), redeem a held token into a Lightning wallet or raw invoice (`cashctl redeem`), send a held token to someone else (`cashctl transfer`), merge several held tokens into one (`cashctl consolidate`), and check its Hub-side allocation (`cashctl cash status`). For local-only inspection of a token string itself (no network call, including mint-signature verification), see `cashctl decode` in `skills/cashctl-wallet/SKILL.md`. Use whenever an agent is handed a lokicash1... (or other cash-token-family) string, needs to cash it out to Lightning, needs to forward it to another identity, or needs to combine multiple small tokens.
 license: Unlicense
 ---
 
@@ -400,9 +400,13 @@ requires a Hub that accepts a cash-mode `cash_consolidate` target.
 ## `cashctl cash status`
 
 ```sh
-cashctl cash status --token tok-a1b2 --json  # network call — your allocation + co-recipients
+cashctl cash status --token tok-a1b2 --json  # network call — your allocation only
+cashctl cash status --token tok-a1b2 --all --json  # plus every co-recipient's identity and amount
 cashctl cash status --json                   # with no id and several held, reports every one
 ```
+
+Only your own allocation by default: other recipients' identities stay out
+of your context unless you need them and ask with `--all`.
 
 With no id and more than one held token, reports every one of them in a
 `{"statuses": [...]}` array instead of refusing — this is pure read
