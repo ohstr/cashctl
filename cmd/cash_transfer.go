@@ -543,7 +543,7 @@ func transferWithAutoConsolidate(cmd *cobra.Command, l *ledger.Ledger, group []l
 			// cashctl's own in-memory record of it dies with this process.
 			return reportUnsavedResult(cmd, addErr, "Transfer (interim consolidate)", entryRecoveryHint(newEntry))
 		}
-		return classifyCashTokenNWCErr(cmd, ffsErr)
+		return classifyCashSpendErr(cmd, ffsErr, "transfer", newEntry.ID)
 	}
 
 	if isCrossHubSourcesDecline(ffsErr) {
@@ -562,7 +562,7 @@ func transferWithAutoConsolidate(cmd *cobra.Command, l *ledger.Ledger, group []l
 			output.FormatAmount(int64(ledger.SumAmounts(l.Held()))),
 			output.FormatAmount(int64(sendAmount))))
 	}
-	return classifyCashTokenNWCErr(cmd, ffsErr)
+	return classifyCashSpendErr(cmd, ffsErr, "transfer", sourceIDs...)
 }
 
 // isCrossHubSourcesDecline reports whether err is a Hub refusing a consolidate
@@ -634,7 +634,7 @@ func attemptTransferFromSources(dialToken string, params nipcashclient.TransferF
 	defer cancel()
 	client, err := nipcashclient.Connect(ctx, dialToken)
 	if err != nil {
-		return nil, err
+		return nil, &notSentError{err}
 	}
 	defer client.Close()
 	return client.TransferFromSources(ctx, params)
@@ -1107,7 +1107,7 @@ func runCashTransfer(cmd *cobra.Command, args []string) error {
 		return nil
 	})
 	if err != nil {
-		return classifyCashTokenNWCErr(cmd, err)
+		return classifyCashSpendErr(cmd, err, "transfer", entry.ID)
 	}
 
 	_ = l.SetStatus(entry.ID, ledger.StatusTransferred)

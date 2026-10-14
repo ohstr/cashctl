@@ -86,7 +86,12 @@ the ledger first: `cashctl redeem --token tok-a1b2 --as cash:<secret> --json`.
 **`retryable`/`recovery` in practice.** Every error from `redeem`,
 `transfer`, and `consolidate` carries `retryable` (branch on it instead of
 the message: `true` means back off and retry, `false` means fix the input
-first) — this is the same top-level `{"error", "code", "retryable", ...}`
+first) — except `code: "indeterminate"` (exit 8, `retryable: false`): the
+request may have gone out and the Hub's answer never arrived, so it may
+already have been applied. Resending it may pay twice; run `cashctl cash
+status --token <id>` (the error names the id) and act on what it reports.
+A failure to reach the Hub at all is still `network`, since nothing was
+sent. This is the same top-level `{"error", "code", "retryable", ...}`
 shape AGENTS.md's error table describes for every command, not something
 special to this skill's own three. `recovery` is the one field exempt from
 secret redaction and never truncated, and it appears only when a Hub-side
@@ -208,12 +213,15 @@ mint with their Lightning identity, and a mint that cannot be signed fails
 outright rather than producing a bill nobody can redeem.
 
 A batched token whose hub returns **no answer** is reported as `failed`
-with code `conflict`, and that case needs care: an omission is deliberately
+with code `indeterminate`, and that case needs care: an omission is deliberately
 information-free (it is the same answer for a token the hub does not hold,
 a proof that did not verify, and a method it will not serve — telling them
 apart would make batching an oracle for which tokens a hub holds), so it is
 indistinguishable from a redemption whose reply was lost. Never retry it
-blind; check with `cashctl cash status --token <id>` first.
+blind; check with `cashctl cash status --token <id>` first. A token whose
+answer was in a reply chunk that never arrived says the reply was
+incomplete instead, with the same code and the same check — the other
+tokens' answers in that reply still count.
 
 If you hold more than one token and none of
 `--token`/`--all`/`--json`/`--yes` is given, `redeem` (and

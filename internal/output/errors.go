@@ -10,9 +10,10 @@ import (
 )
 
 // ErrorCode classifies a CLIError for exit-code and --json "code" field
-// purposes. Mirrors ncli's own cli/common/errors.go taxonomy exactly, so
-// an agent or script that already knows ncli's contract needs to learn
-// nothing new for cashctl.
+// purposes. Mirrors ncli's own cli/common/errors.go taxonomy, so an agent or
+// script that already knows ncli's contract needs to learn little new for
+// cashctl — plus CodeIndeterminate, which ncli has no use for: only a spend
+// can be left in a state nobody can name.
 type ErrorCode string
 
 const (
@@ -23,6 +24,9 @@ const (
 	CodeNetwork      ErrorCode = "network"       // couldn't reach a relay/wallet — retryable
 	CodeAuth         ErrorCode = "auth"          // not authorized, or no longer (expired/restricted)
 	CodeInternal     ErrorCode = "internal"      // fallback: a wallet-side or cashctl-side failure
+	// CodeIndeterminate: a spend got no answer, so whether it was applied is
+	// unknown. Not retryable — resending may pay twice; ask `cash status` first.
+	CodeIndeterminate ErrorCode = "indeterminate"
 )
 
 // exitCodes maps each ErrorCode to the process exit code ExitCode returns.
@@ -37,6 +41,9 @@ var exitCodes = map[ErrorCode]int{
 	CodeConflict:     5,
 	CodeNetwork:      6,
 	CodeAuth:         7,
+	// 8, not a reuse: a script must not mistake "maybe applied" for any
+	// outcome it already handles.
+	CodeIndeterminate: 8,
 }
 
 // retryableCodes marks which codes describe a transient condition worth an
@@ -207,6 +214,14 @@ func NetworkError(cmd *cobra.Command, err error) error {
 func AuthError(cmd *cobra.Command, err error) error {
 	silence(cmd)
 	return wrapCLIError(CodeAuth, "", err)
+}
+
+// IndeterminateError classifies err as CodeIndeterminate (not retryable): a
+// redeem/transfer/consolidate whose request may have been applied, because
+// the Hub's answer never arrived.
+func IndeterminateError(cmd *cobra.Command, input string, err error) error {
+	silence(cmd)
+	return wrapCLIError(CodeIndeterminate, RedactSecretInput(input), err)
 }
 
 // RuntimeError classifies err as CodeInternal — the fallback bucket for a
