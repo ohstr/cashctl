@@ -48,8 +48,8 @@ var (
 	tlvSecret = tlv{2, n(0xbb, 32)}
 )
 
-// runDecode runs `cashctl decode <value>` and returns its error and output.
-func runDecode(t *testing.T, value string) (error, string) {
+// runDecode runs `cashctl decode <value>` and returns its output and error.
+func runDecode(t *testing.T, value string) (string, error) {
 	t.Helper()
 	var err error
 	printed := withCapturedOutput(func() {
@@ -58,11 +58,11 @@ func runDecode(t *testing.T, value string) (error, string) {
 		cmd.SetOut(io.Discard)
 		err = cmd.Execute()
 	})
-	return err, printed
+	return printed, err
 }
 
 func TestDecode_RejectsMalformedCashTokenTLVs(t *testing.T) {
-	if err, _ := runDecode(t, rawBech32(t, "lokicash", []tlv{tlvPub, tlvRelay, tlvSecret})); err != nil {
+	if _, err := runDecode(t, rawBech32(t, "lokicash", []tlv{tlvPub, tlvRelay, tlvSecret})); err != nil {
 		t.Fatalf("the well-formed control token was rejected, so every case below would pass vacuously: %v", err)
 	}
 	cases := map[string][]tlv{
@@ -78,13 +78,13 @@ func TestDecode_RejectsMalformedCashTokenTLVs(t *testing.T) {
 		"empty relay hint":               {tlvPub, {1, nil}, tlvSecret},
 	}
 	for name, tlvs := range cases {
-		if err, _ := runDecode(t, rawBech32(t, "lokicash", tlvs)); err == nil {
+		if _, err := runDecode(t, rawBech32(t, "lokicash", tlvs)); err == nil {
 			t.Errorf("%s: decoded, want rejected", name)
 		}
 	}
 	// A length byte promising more than is left: truncated, not read out of bounds.
 	truncated := rawBech32(t, "lokicash", []tlv{tlvPub, tlvRelay, tlvSecret}, 3, 10, 0)
-	if err, _ := runDecode(t, truncated); err == nil {
+	if _, err := runDecode(t, truncated); err == nil {
 		t.Error("truncated TLV: decoded, want rejected")
 	}
 }
@@ -100,7 +100,7 @@ func TestDecode_BadProvenanceIsNoProvenanceNotAFailure(t *testing.T) {
 		"repeated pair":            {tlvPub, tlvRelay, tlvSecret, sig, amount, sig, amount},
 	}
 	for name, tlvs := range cases {
-		err, printed := runDecode(t, rawBech32(t, "lokicash", tlvs))
+		printed, err := runDecode(t, rawBech32(t, "lokicash", tlvs))
 		if err != nil {
 			t.Errorf("%s: decode failed (%v), want it decoded with no valid provenance", name, err)
 			continue
@@ -112,7 +112,7 @@ func TestDecode_BadProvenanceIsNoProvenanceNotAFailure(t *testing.T) {
 }
 
 func TestDecode_RejectsMalformedCircleHubTLVs(t *testing.T) {
-	if err, _ := runDecode(t, rawBech32(t, "circlehub", []tlv{tlvPub, tlvRelay, tlvSecret})); err != nil {
+	if _, err := runDecode(t, rawBech32(t, "circlehub", []tlv{tlvPub, tlvRelay, tlvSecret})); err != nil {
 		t.Fatalf("the well-formed control string was rejected: %v", err)
 	}
 	cases := map[string][]tlv{
@@ -122,7 +122,7 @@ func TestDecode_RejectsMalformedCircleHubTLVs(t *testing.T) {
 		"repeated pubkey":       {tlvPub, tlvPub, tlvRelay, tlvSecret},
 	}
 	for name, tlvs := range cases {
-		if err, _ := runDecode(t, rawBech32(t, "circlehub", tlvs)); err == nil {
+		if _, err := runDecode(t, rawBech32(t, "circlehub", tlvs)); err == nil {
 			t.Errorf("%s: decoded, want rejected", name)
 		}
 	}
