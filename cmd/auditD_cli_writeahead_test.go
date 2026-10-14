@@ -295,6 +295,11 @@ func TestAuditD_CLI_UnreconciledParkIsReportedToTheUser(t *testing.T) {
 	if !strings.Contains(lines[0], ids[0]) {
 		t.Fatalf("the report does not name the entry it is about: %q", lines[0])
 	}
+	// NIP-CASH: the secret is necessary but not sufficient, and MUST NOT be
+	// presented as a complete recovery path.
+	if !strings.Contains(lines[0], "You also need that bill's token") {
+		t.Fatalf("the report presents the secret as a complete recovery path: %q", lines[0])
+	}
 }
 
 // TestAuditD_CLI_ParkSurvivesALedgerReloadRoundTrip pins the persistence layer
@@ -361,6 +366,49 @@ func TestWalletShow_ReportsAnUnfinishedCashSendInBothModes(t *testing.T) {
 			if err := json.Unmarshal([]byte(printed), &doc); err != nil || len(doc.Sends) != 1 || doc.Sends[0].CashSecret != target.Secret() || doc.Sends[0].TokenID != ids[0] {
 				t.Errorf("unfinished_cash_sends = %+v (err %v), want the one park on %s", doc.Sends, err, ids[0])
 			}
+		}
+	}
+}
+
+// TestReKeySites_PersistTheNewSecretBeforeTheirWireCall (F-6): the two re-key
+// sites behind auto-protect and `wallet protect` generate a cash secret and must
+// write it to disk before the call that can commit it (NIP-CASH §Security
+// Considerations for Cash-Mode Slices). Both dial nipcashclient.Connect
+// themselves, so like the transfer sites above this pins the source order:
+// the pending-secret assignment, then a Save, then the wire call.
+func TestReKeySites_PersistTheNewSecretBeforeTheirWireCall(t *testing.T) {
+	src, err := os.ReadFile("receive_secure.go")
+	if err != nil {
+		t.Fatalf("reading receive_secure.go: %v", err)
+	}
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "receive_secure.go", src, 0)
+	if err != nil {
+		t.Fatalf("parsing receive_secure.go: %v", err)
+	}
+	for _, tc := range []struct{ fn, wireCall string }{
+		{"protectCashReceipt", "client.RekeyCashSlice("},
+		{"protectRekeyOnly", "client.CashTransfer("},
+	} {
+		var body string
+		for _, decl := range file.Decls {
+			if fd, ok := decl.(*ast.FuncDecl); ok && fd.Name.Name == tc.fn && fd.Body != nil {
+				body = string(src[fset.Position(fd.Body.Pos()).Offset:fset.Position(fd.Body.End()).Offset])
+			}
+		}
+		if body == "" {
+			t.Fatalf("%s not found in receive_secure.go: fix the test rather than assuming the site is safe", tc.fn)
+		}
+		park := strings.Index(body, "entry.PendingCashSecret = bt.Secret()")
+		wire := strings.Index(body, tc.wireCall)
+		if park < 0 || wire < 0 {
+			t.Errorf("%s: pending-secret write at %d, %s at %d — one of them moved; re-derive the ordering", tc.fn, park, tc.wireCall, wire)
+			continue
+		}
+		save := strings.Index(body[park:], "l.Save()")
+		if save < 0 || park+save > wire {
+			t.Errorf("%s does not save the new secret before %s: a kill while the call is in flight "+
+				"loses the only copy of a secret for funds that may already have moved", tc.fn, tc.wireCall)
 		}
 	}
 }
