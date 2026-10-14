@@ -387,10 +387,6 @@ requires a Hub that accepts a cash-mode `cash_consolidate` target.
 
 ## `cashctl cash status`
 
-Renamed from `cash list-recipients`, which still works as an alias — the command
-calls `cash_status` and nothing else, so the old name described a method that no
-longer exists.
-
 ```sh
 cashctl cash status --token tok-a1b2 --json  # network call — your allocation + co-recipients
 cashctl cash status --json                   # with no id and several held, reports every one

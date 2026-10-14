@@ -136,7 +136,7 @@ func TestPlainClient_DefaultScopeShowsOnlyOwnSlice(t *testing.T) {
 	// The other half of the same guarantee: scope=all is how a recipient opts IN
 	// to seeing their co-recipients, and it must still work. Scoping that cannot
 	// be widened on request is not scoping, it is a removed feature — and
-	// `cashctl cash list-recipients` asks for exactly this.
+	// `cashctl cash status` asks for exactly this.
 	all, err := c.CashStatus(ctx, nipcash.BySigning(privA), nipcash.ScopeAll)
 	if err != nil {
 		t.Fatalf("scope=all from an authorized recipient: %v", err)

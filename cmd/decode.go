@@ -402,7 +402,7 @@ func printCashCheck(r cashCheckResult) {
 }
 
 // formatExpiry renders a Hub-side expires_at timestamp for display —
-// shared by decode --check's cash-token report and `cash list-recipients`
+// shared by decode --check's cash-token report and `cash status`
 // (cash_inspect.go), the two read-only inspection commands that surface
 // this live fact.
 func formatExpiry(expiresAt int64) string {

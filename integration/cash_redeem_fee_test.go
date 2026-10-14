@@ -259,13 +259,13 @@ func TestCashRedeemFee_SameNodeAutoInvoice_NowRejectedWithFeeConfigured(t *testi
 // an out-of-range (>100%) ppm value even reachable given lokihub's own
 // server-side validation.
 
-// recipientRow returns the list-recipients row matching amountMillis (the
+// recipientRow returns the cash status row matching amountMillis (the
 // single recipient every test below mints) — the live source of truth for
 // a slice's own redeem_fee_millis/net_redeemable_millis quote, independent
 // of anything cashctl's own redeem path computes.
 func recipientRow(t *testing.T, f *fixture, amountMillis uint64) map[string]any {
 	t.Helper()
-	resp := f.mustJSON("cash", "list-recipients")
+	resp := f.mustJSON("cash", "status")
 	recipients, _ := resp["recipients"].([]any)
 	for _, r := range recipients {
 		row, _ := r.(map[string]any)
@@ -273,7 +273,7 @@ func recipientRow(t *testing.T, f *fixture, amountMillis uint64) map[string]any 
 			return row
 		}
 	}
-	t.Fatalf("list-recipients: no row with amount_millis=%d: %v", amountMillis, resp)
+	t.Fatalf("cash status: no row with amount_millis=%d: %v", amountMillis, resp)
 	return nil
 }
 

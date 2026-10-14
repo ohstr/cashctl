@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0-rc.13]
+
+Fixes from the NIP-CASH / NIP-CW conformance review, for agents above all.
+
+- Removes the `cash list-recipients` alias, following the spec's removal of
+  `list_recipients`; use `cash status`.
+
 ## [0.6.0-rc.12]
 
 A dependency update.
