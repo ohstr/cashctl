@@ -338,11 +338,14 @@ type cashCheckResult struct {
 	AmountMillis *uint64 `json:"amount_millis,omitempty"`
 	ExpiresAt    *int64  `json:"expires_at,omitempty"`
 	Error        string  `json:"error,omitempty"`
+	// Spent is true only when the Hub answered with a tombstone, never on silence.
+	Spent bool `json:"spent,omitempty"`
 }
 
 func checkCashTokenAgainstHub(cmd *cobra.Command, jsonMode bool, value, embeddedCashSecret string, tok nipcash.Token) cashCheckResult {
 	var amount uint64
 	var expiresAt *int64
+	var spent bool
 	err := WithSpinner(jsonMode, "Checking...", func() error {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
@@ -359,11 +362,21 @@ func checkCashTokenAgainstHub(cmd *cobra.Command, jsonMode bool, value, embedded
 		}
 		myPubHex, _ := localPubKeyHex(cmd)
 		result, err := client.CheckClaim(ctx, cred, tok, myPubHex)
+		if errors.Is(err, nipcash.ErrSpent) {
+			spent = true
+			return errBillSpent
+		}
 		if errors.Is(err, nipcash.ErrClaimNotFound) {
+			if isBareCashModeBill(tok, embeddedCashSecret) {
+				return errNeedsCashSecret
+			}
 			return fmt.Errorf("no matching recipient found on the Hub")
 		}
 		if err != nil {
 			if explained, ok := explainNoAnswer(err); ok {
+				return explained
+			}
+			if explained, ok := explainCashSecretRefusal(err); ok {
 				return explained
 			}
 			return err
@@ -385,7 +398,7 @@ func checkCashTokenAgainstHub(cmd *cobra.Command, jsonMode bool, value, embedded
 		// reason of any kind comes back. explainNoAnswer above is what that case
 		// gets; it deliberately does not claim expiry, since the Hub did not say
 		// so.
-		return cashCheckResult{OK: false, Error: output.Sanitize(err.Error())}
+		return cashCheckResult{OK: false, Spent: spent, Error: output.Sanitize(err.Error())}
 	}
 	return cashCheckResult{OK: true, AmountMillis: &amount, ExpiresAt: expiresAt}
 }

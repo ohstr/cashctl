@@ -898,8 +898,7 @@ func heldTokenByID(cmd *cobra.Command, l *ledger.Ledger, id string) (*ledger.Ent
 		return nil, output.NotFoundError(cmd, id, fmt.Errorf("no held token %q", id))
 	}
 	if spent := spentStatusDescription(e.Status); spent != "" {
-		return nil, output.NotFoundError(cmd, id,
-			fmt.Errorf("token %q was already %s, so it no longer exists on the Hub", id, spent))
+		return nil, alreadySpentError(cmd, id, e.Status)
 	}
 	return e, nil
 }
@@ -937,8 +936,7 @@ func resolveHeldToken(cmd *cobra.Command, l *ledger.Ledger) (*ledger.Entry, erro
 		//
 		// The no-flag path below picks from l.Held() and so cannot hit this.
 		if spent := spentStatusDescription(e.Status); spent != "" {
-			return nil, output.NotFoundError(cmd, id,
-				fmt.Errorf("token %q was already %s, so it no longer exists on the Hub", id, spent))
+			return nil, alreadySpentError(cmd, id, e.Status)
 		}
 		return e, nil
 	}
@@ -976,6 +974,8 @@ func spentStatusDescription(status string) string {
 		return "transferred away"
 	case ledger.StatusConsolidated:
 		return "consolidated into another token"
+	case ledger.StatusSpent:
+		return "reported spent by its Hub"
 	default:
 		return ""
 	}
@@ -1157,6 +1157,9 @@ func resolveAmount(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entry, so
 	}
 	myPubHex, _ := localPubKeyHex(cmd)
 	result, err := sourceClient.CheckClaim(ctx, cred, tok, myPubHex)
+	if errors.Is(err, nipcash.ErrSpent) {
+		return 0, recordSpent(cmd, l, entry)
+	}
 	if errors.Is(err, nipcash.ErrClaimNotFound) {
 		return 0, output.NotFoundError(cmd, entry.ID, fmt.Errorf("couldn't determine this token's amount — check `cashctl wallet show`, or that it's still valid"))
 	}
@@ -1234,6 +1237,9 @@ func resolveRedeemQuote(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entr
 	}
 	myPubHex, _ := localPubKeyHex(cmd)
 	result, err := sourceClient.CheckClaim(ctx, cred, tok, myPubHex)
+	if errors.Is(err, nipcash.ErrSpent) {
+		return redeemQuote{}, recordSpent(cmd, l, entry)
+	}
 	if errors.Is(err, nipcash.ErrClaimNotFound) {
 		return redeemQuote{}, output.NotFoundError(cmd, entry.ID, fmt.Errorf("couldn't determine this token's amount — check `cashctl wallet show`, or that it's still valid"))
 	}

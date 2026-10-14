@@ -59,6 +59,9 @@ func runCashStatus(cmd *cobra.Command, _ []string) error {
 	outcomes := make([]cashStatusOutcome, len(entries))
 	for i, entry := range entries {
 		result, fetchErr := fetchCashStatus(cmd, jsonMode, entry)
+		if result != nil && result.IsSpent() {
+			markSpent(l, entry)
+		}
 		outcomes[i] = cashStatusOutcome{ID: entry.ID, Result: result, Err: fetchErr}
 	}
 
@@ -166,7 +169,7 @@ func printCashStatusOutcomes(jsonMode bool, outcomes []cashStatusOutcome) {
 				continue
 			}
 			o.Result.Recipients = output.NonNil(o.Result.Recipients)
-			rows[i] = map[string]any{"id": o.ID, "status": "ok", "result": o.Result}
+			rows[i] = map[string]any{"id": o.ID, "status": cashStatusRowStatus(o.Result), "result": o.Result}
 		}
 		output.PrintJSON(map[string]any{"statuses": rows})
 		return
@@ -266,8 +269,7 @@ func resolveHeldTokensOrAll(cmd *cobra.Command, l *ledger.Ledger) ([]*ledger.Ent
 			return nil, output.NotFoundError(cmd, id, fmt.Errorf("no held token %q", id))
 		}
 		if spent := spentStatusDescription(e.Status); spent != "" {
-			return nil, output.NotFoundError(cmd, id,
-				fmt.Errorf("token %q was already %s, so it no longer exists on the Hub", id, spent))
+			return nil, alreadySpentError(cmd, id, e.Status)
 		}
 		return []*ledger.Entry{e}, nil
 	}
@@ -303,4 +305,13 @@ func joinStrings(ss []string) string {
 		out += output.Sanitize(s)
 	}
 	return out
+}
+
+// cashStatusRowStatus is a --json row's status: "spent" for a tombstone, so a
+// spent bill never reads as "ok" with the fact buried in its result.
+func cashStatusRowStatus(r *nipcash.CashStatusResult) string {
+	if r.IsSpent() {
+		return "spent"
+	}
+	return "ok"
 }

@@ -121,7 +121,7 @@ cashctl decode lokicash1... --json      # {"type":"cash_token","hrp","wallet_pub
 cashctl decode lokicash1...#deadbeef --json  # cash-mode combined presentation — adds "embedded_cash_secret_present":true
 cashctl decode circlehub1... --json     # {"type":"circlehub","hrp","wallet_pubkey","relays","label"}
 cashctl decode nostr+walletconnect://... --json  # {"type":"nwc_uri","wallet_pubkey","relays"}
-cashctl decode lokicash1... --check --json    # adds "check":{"ok","amount_millis"?,"expires_at"?,"error"?} — a network call
+cashctl decode lokicash1... --check --json    # adds "check":{"ok","amount_millis"?,"expires_at"?,"spent"?,"error"?} — a network call
 cashctl decode circlehub1... --check --json   # adds "check":{"ok","note"?,"error"?} — is joining even possible here
 ```
 

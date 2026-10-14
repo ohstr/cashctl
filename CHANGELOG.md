@@ -39,6 +39,17 @@ Fixes from the NIP-CASH / NIP-CW conformance review, for agents above all.
 - Fixes `transfer` with no arguments not mentioning that an amount alone is
   enough, making a cash note.
   ([#75](https://github.com/ohstr/cashctl/pull/75))
+- Adds the `spent` error code (exit 10, not retryable) for a bill its Hub
+  reports spent; the entry is marked spent and leaves `wallet balance` and
+  `redeem --all`, where it used to look live.
+  ([#78](https://github.com/ohstr/cashctl/pull/78))
+- Fixes checking a cash-mode bill without its secret, or receiving one with a
+  wrong or truncated secret, reporting "no matching recipient"; each now says
+  what is wrong with the secret.
+  ([#78](https://github.com/ohstr/cashctl/pull/78))
+- Updates `nmilat` to v0.5.0-rc.22, which tells a spent bill apart from one
+  that does not name you.
+  ([#78](https://github.com/ohstr/cashctl/pull/78))
 - Adds the split floor to `cash status`'s text output, and says in every merge
   prompt that merging tells the Hub the bills share an owner.
   ([#79](https://github.com/ohstr/cashctl/pull/79))

@@ -96,6 +96,7 @@ plain `Error: ...` line by default, or `{"error", "code", "retryable",
 | `auth` | 7 | no | not authorized, or no longer (a wallet declined as restricted/unauthorized/expired) |
 | `indeterminate` | 8 | no | a `redeem`/`transfer`/`consolidate` got no answer (timeout, omission, incomplete reply), so whether it was applied is unknown — never resend it blind; check with `cash status --token <id>` first |
 | `exists` | 9 | no | what you're trying to create already exists (`join`: you already hold a wallet from that circle) — don't retry, use the one you have |
+| `spent` | 10 | no | the bill's Hub confirmed it is spent (a tombstone): its value has already moved. The local entry is marked spent and leaves `wallet balance`/`redeem --all`; never inferred from silence |
 | `internal` | 1 | no | anything else — a wallet-side decline that isn't one of the above, or a cashctl-side failure |
 
 `input`, when present, is the single specific value that caused the

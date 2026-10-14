@@ -382,8 +382,7 @@ func consolidateItems(cmd *cobra.Command, l *ledger.Ledger, items []string, toFl
 				// guards. The auto-detect path picks from l.Held() and so
 				// cannot reach this.
 				if spent := spentStatusDescription(e.Status); spent != "" {
-					return output.NotFoundError(cmd, e.ID,
-						fmt.Errorf("token %q was already %s, so it no longer exists on the Hub", e.ID, spent))
+					return alreadySpentError(cmd, e.ID, e.Status)
 				}
 				src, err := sourceFromEntry(cmd, l, e)
 				if err != nil {

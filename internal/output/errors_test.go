@@ -33,6 +33,7 @@ func TestExitCode_EachClassifierMapsToItsOwnCode(t *testing.T) {
 		{"auth", AuthError(cmd, errors.New("bad")), 7},
 		{"indeterminate", IndeterminateError(cmd, "x", errors.New("bad")), 8},
 		{"exists", NWCError(cmd, &relayclient.WalletError{Code: "WALLET_EXISTS", Message: "x"}), 9},
+		{"spent", SpentError(cmd, "x", errors.New("bad")), 10},
 		{"internal/runtime", RuntimeError(cmd, errors.New("bad")), 1},
 		{"unclassified plain error", errors.New("bad"), 1},
 		{"nil", nil, 0},
@@ -89,6 +90,7 @@ func TestRetryableCodes(t *testing.T) {
 		{CodeInternal, false},
 		{CodeIndeterminate, false},
 		{CodeExists, false},
+		{CodeSpent, false},
 	}
 	for _, tt := range tests {
 		if got := retryableCodes[tt.code]; got != tt.want {
