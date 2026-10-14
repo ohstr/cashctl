@@ -21,6 +21,12 @@ Fixes from the NIP-CASH / NIP-CW conformance review, for agents above all.
 - Fixes `--as cash:` sending a whole token or `<token>#<secret>` string as the
   secret; it now asks for just the secret.
   ([#71](https://github.com/ohstr/cashctl/pull/71))
+- Fixes `join` reporting a Hub that is still starting up (`NOT_READY`) as a
+  non-retryable `internal` error; it is now `network`, retryable.
+  ([#72](https://github.com/ohstr/cashctl/pull/72))
+- Adds the `exists` error code (exit 9, not retryable) for `join` when you
+  already hold a wallet from that circle, which was reported like "not a member".
+  ([#72](https://github.com/ohstr/cashctl/pull/72))
 
 ## [0.6.0-rc.12]
 

@@ -11,6 +11,8 @@ import (
 	relayclient "github.com/ohstr/nmilat/relay/client"
 
 	"github.com/ohstr/nmilat/nipcw"
+
+	"github.com/ohstr/cashctl/internal/output"
 )
 
 // validCircleHub returns a real, checksum-valid circlehub1... string (the
@@ -220,5 +222,21 @@ func TestRunCircleJoin_ZeroCapIsNotTreatedAsMissing(t *testing.T) {
 				t.Errorf("error = %q, want it to contain %q", err.Error(), tc.wantSub)
 			}
 		})
+	}
+}
+
+// A pre-SD-20 Hub's RESTRICTED "already has a wallet" refusal reads as
+// WALLET_EXISTS; a plain not-a-member refusal stays RESTRICTED.
+func TestWalletExistsFromLegacyRefusal(t *testing.T) {
+	legacy := &relayclient.WalletError{Code: "RESTRICTED", Message: "identity already has an active circle wallet under this hub"}
+	notMember := &relayclient.WalletError{Code: "RESTRICTED", Message: "requester is not authorized by the circle policy"}
+	if got := output.AsCLIError(classifyNWCErr(&cobra.Command{}, walletExistsFromLegacyRefusal(legacy))); got.NWCCode != "WALLET_EXISTS" || got.Code != output.CodeExists {
+		t.Errorf("legacy refusal: code = %q, nwc_code = %q, want exists / WALLET_EXISTS", got.Code, got.NWCCode)
+	}
+	if got := output.AsCLIError(classifyNWCErr(&cobra.Command{}, walletExistsFromLegacyRefusal(notMember))); got.NWCCode != "RESTRICTED" {
+		t.Errorf("not-a-member refusal: nwc_code = %q, want RESTRICTED", got.NWCCode)
+	}
+	if legacy.Code != "RESTRICTED" {
+		t.Error("the Hub's own error was mutated")
 	}
 }
