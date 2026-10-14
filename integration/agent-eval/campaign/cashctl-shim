@@ -28,6 +28,10 @@ def load_surface():
 def classify(argv, surface):
     """Walk argv against the known command tree. Returns (path, flags, eq_forms)."""
     paths = {c["path"] for c in surface["commands"]}
+    # Aliases are spellings of their own: record them as written.
+    for c in surface["commands"]:
+        parent = c["path"].rsplit(" ", 1)[0] if " " in c["path"] else ""
+        paths |= {(parent + " " + a).strip() for a in c.get("aliases") or []}
     prefixes = {" ".join(p.split(" ")[: i + 1]) for p in paths for i in range(len(p.split(" ")))}
     takes_value, short_to_long = {}, {}
     all_flags = list(surface["global_flags"])

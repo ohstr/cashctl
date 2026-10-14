@@ -28,15 +28,17 @@ from collections import defaultdict
 EXTRA_TWINS = [("connect use", "wallet use")]
 
 # Any spelling in the group appearing here means it has interactive prompts.
+# `wallet protect` does not prompt (it re-keys without asking); `pay` does.
 PROMPT_PATHS = {
     "init", "receive", "decode", "redeem", "transfer", "consolidate", "join", "connect add",
+    "pay", "wallet pay",
 }
 PROMPT_ANSWERS = ["y", "n", "enter", "eof"]
 
 # Commands that honor -c/--connection (they dial a stored/raw wallet).
 CONNECTION_PATHS = {
     "wallet get-info", "wallet budget", "wallet list-tx", "wallet sign-message",
-    "wallet invoice", "wallet pay",
+    "wallet invoice", "wallet pay", "balance", "wallet balance", "redeem", "cash redeem",
 }
 GLOBALS = ["json", "yes", "connection", "config-dir"]
 
@@ -69,6 +71,14 @@ def build_groups(surface):
     for p, c in cmds.items():
         if c.get("twin"):
             union(p, c["twin"])
+    # An alias is one more spelling of its command, required like a twin.
+    for p, c in list(cmds.items()):
+        parent_path = p.rsplit(" ", 1)[0] if " " in p else ""
+        for a in c.get("aliases") or []:
+            ap = (parent_path + " " + a).strip()
+            cmds[ap] = dict(c, path=ap, aliases=[], twin=None)
+            parent[ap] = ap
+            union(ap, p)
     for a, b in EXTRA_TWINS:
         union(a, b)
     groups = defaultdict(list)
@@ -112,8 +122,8 @@ def main():
 
     for paths in sorted(groups, key=lambda g: g[0]):
         gid = " = ".join(paths)
-        runnable = [p for p in paths if cmds[p]["runnable"]]
-        if not runnable:  # a bare group command (cash, wallet, ...)
+        runnable = [p for p in paths if cmds[p]["runnable"] and not cmds[p].get("group")]
+        if not runnable:  # a group command (cash, wallet, ...): it only prints usage
             p = paths[0]
             need(gid, "ran_bare", any(not r["flags"] or r["flags"] == ["help"] for r in by_path[p]) and bool(by_path[p]))
             continue
