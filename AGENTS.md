@@ -92,7 +92,7 @@ plain `Error: ...` line by default, or `{"error", "code", "retryable",
 | `invalid_input` | 3 | no | a supplied value failed validation/parsing (bad token, connection string, credential syntax, amount, ...) |
 | `not_found` | 4 | no | the referenced thing doesn't exist (held token, registered wallet, vault entry, ...) — includes "no wallet configured yet" |
 | `conflict` | 5 | yes | collides with existing state (a token already held, a wallet's rate limit) |
-| `network` | 6 | yes | couldn't reach a relay/wallet |
+| `network` | 6 | yes | couldn't reach a relay/wallet, or a Hub isn't ready yet (`NOT_READY`) |
 | `auth` | 7 | no | not authorized, or no longer (a wallet declined as restricted/unauthorized/expired) |
 | `indeterminate` | 8 | no | a `redeem`/`transfer`/`consolidate` got no answer (timeout, omission, incomplete reply), so whether it was applied is unknown — never resend it blind; check with `cash status --token <id>` first |
 | `internal` | 1 | no | anything else — a wallet-side decline that isn't one of the above, or a cashctl-side failure |

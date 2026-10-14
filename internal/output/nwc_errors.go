@@ -20,6 +20,9 @@ var nwcErrorCode = map[string]ErrorCode{
 	"UNAUTHORIZED": CodeAuth,
 	"EXPIRED":      CodeAuth,
 	"RATE_LIMITED": CodeConflict,
+	// A Hub that cannot serve yet (NIP-CW: "a distinct not-ready error the
+	// caller can retry"): the same back-off-and-retry as an unreachable one.
+	"NOT_READY": CodeNetwork,
 	// INSUFFICIENT_BALANCE, QUOTA_EXCEEDED, NOT_IMPLEMENTED,
 	// UNSUPPORTED_ENCRYPTION, PAYMENT_FAILED, INTERNAL, OTHER: no bucket
 	// above fits (they're legitimate wallet-side declines, not an input
@@ -46,6 +49,7 @@ var nwcErrorMessages = map[string]string{
 	"NOT_FOUND":              "Couldn't find that.",
 	"EXPIRED":                "This wallet has expired and can no longer send payments.",
 	"BAD_REQUEST":            "That request wasn't valid.",
+	"NOT_READY":              "The Hub isn't ready yet. Wait a moment and try again.",
 }
 
 // cashTokenNWCErrorMessages overrides nwcErrorMessages' wallet-oriented
