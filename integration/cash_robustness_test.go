@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ohstr/nmilat/nip47"
 	"github.com/ohstr/nmilat/nipcash"
 )
 
@@ -83,22 +82,12 @@ func TestDecode_DoubledHashInGiftStringSplitsOnFirstHash(t *testing.T) {
 	}
 }
 
-// TestCashReceive_TruncatedCashSecretSucceedsButIsUnspendable captures
-// a protocol-documented gotcha, not a cashctl bug: CheckClaim only
-// proves *some* unclaimed cash-mode recipient exists, never that this
-// specific secret is valid. A truncated secret still makes `receive`
-// report success and save a held entry — but it's unspendable. This test
-// proves both halves: receive "succeeds," and a real spend then fails.
-func TestCashReceive_TruncatedCashSecretSucceedsButIsUnspendable(t *testing.T) {
-	cfg, err := LoadConfig("")
-	if err != nil {
-		t.Skipf("skipping: could not load integration config (%v) — see integration/README.md", err)
-	}
-	admin, ok := newAdminClient(cfg)
-	if !ok {
-		t.Skip("skipping: admin_api not configured — see integration/README.md")
-	}
-
+// TestCashReceive_TruncatedCashSecretIsRefused: a Hub answers about a cash-mode
+// bill only to its own secret (NIP-CASH §Bearer Items; lokihub #119), so a
+// truncated secret is refused at receive, saying the secret does not match, and
+// nothing is saved. It used to be received and only fail at spend time.
+func TestCashReceive_TruncatedCashSecretIsRefused(t *testing.T) {
+	admin := adminOrSkip(t)
 	hub := setUpCashHub(t, admin)
 	const amountMillis = uint64(25_000)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -111,56 +100,16 @@ func TestCashReceive_TruncatedCashSecretSucceedsButIsUnspendable(t *testing.T) {
 		t.Fatalf("mint_cash (cash): %v", err)
 	}
 	realSecret := mintResult.Recipients[0].CashSecret
-	if len(realSecret) < 32 {
-		t.Fatalf("real cash secret unexpectedly short (%d chars), can't truncate meaningfully: %q", len(realSecret), realSecret)
-	}
 	truncatedSecret := realSecret[:len(realSecret)/2]
 
 	f := newFixture(t)
 	f.mustJSON("wallet", "init")
-
-	receiveResp := f.mustJSON("receive", mintResult.CashToken+"#"+truncatedSecret)
-	entry, _ := receiveResp["entry"].(map[string]any)
-	if entry == nil {
-		t.Fatalf("receive (truncated cash secret): expected a saved entry (CheckClaim only verifies the allocation exists, not the secret) — got: %v", receiveResp)
+	res := f.run("receive", mintResult.CashToken+"#"+truncatedSecret)
+	if res.ExitCode != 3 || !jsonErrorContains(t, res.Stderr, "invalid_input", "does not match") {
+		t.Errorf("receive (truncated cash secret): exit %d, want 3 naming the mismatched secret\nstderr: %s", res.ExitCode, res.Stderr)
 	}
-	if amt, _ := entry["amount_millis"].(float64); uint64(amt) != amountMillis {
-		t.Errorf("receive (truncated cash secret): entry.amount_millis = %v, want %d", entry["amount_millis"], amountMillis)
-	}
-	if n := heldCount(t, f); n != 1 {
-		t.Fatalf("expected 1 held token after receive, got %d", n)
-	}
-
-	// The rekey attempt itself must fail, and cashctl must recognize (via
-	// NOT_FOUND) that this looks like a wrong secret — see
-	// receive_secure.go's isWrongSecretDecline.
-	secured, _ := receiveResp["secured"].(map[string]any)
-	if status, _ := secured["status"].(string); status != "failed" {
-		t.Errorf("receive (truncated cash secret): secured.status = %q, want \"failed\" (the rekey attempt must also fail with the wrong secret): %v", status, secured)
-	}
-	if likely, _ := secured["likely_wrong_secret"].(bool); !likely {
-		t.Errorf("receive (truncated cash secret): secured.likely_wrong_secret = %v, want true — cashctl should recognize a NOT_FOUND decline here as a wrong-secret signal, not a generic failure: %v", secured["likely_wrong_secret"], secured)
-	}
-
-	// The decisive check: this "held" money must not actually be
-	// spendable, since the stored secret is wrong.
-	verifyCtx, verifyCancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer verifyCancel()
-	hubNWC := dialNWC(t, verifyCtx, hub.PairingUri)
-	invoice, err := hubNWC.MakeInvoice(verifyCtx, nip47.MakeInvoiceParams{Amount: int64(amountMillis)})
-	if err != nil {
-		t.Fatalf("make_invoice: %v", err)
-	}
-	redeemRes := f.run("redeem", "--invoice", invoice.Invoice, "--yes")
-	if redeemRes.ExitCode == 0 {
-		t.Fatalf("redeeming with a truncated cash secret unexpectedly succeeded — either the secret wasn't actually truncated, or the Hub doesn't validate it at spend time: %s", redeemRes.Stdout)
-	}
-	t.Logf("redeem with truncated secret failed as expected: %s", redeemRes.Stderr)
-
-	// The unspendable entry must still be visible in wallet show — the
-	// user needs to be able to SEE something's wrong, not have it vanish.
-	if n := heldCount(t, f); n != 1 {
-		t.Errorf("expected the (unspendable) held token to remain visible after a failed redeem attempt, got %d held", n)
+	if n := heldCount(t, f); n != 0 {
+		t.Errorf("a bill with a wrong secret was saved: %d held", n)
 	}
 }
 

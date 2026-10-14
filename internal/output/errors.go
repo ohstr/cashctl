@@ -13,7 +13,7 @@ import (
 // purposes. Mirrors ncli's own cli/common/errors.go taxonomy, so an agent or
 // script that already knows ncli's contract needs to learn little new for
 // cashctl — plus CodeIndeterminate, which ncli has no use for: only a spend
-// can be left in a state nobody can name, and CodeExists.
+// can be left in a state nobody can name, and CodeExists and CodeSpent.
 type ErrorCode string
 
 const (
@@ -30,6 +30,9 @@ const (
 	// CodeExists: what you are trying to create already exists. Not retryable —
 	// use the one you have.
 	CodeExists ErrorCode = "exists"
+	// CodeSpent: the Hub confirmed the bill is spent (a tombstone). Not
+	// retryable — its value has already moved.
+	CodeSpent ErrorCode = "spent"
 )
 
 // exitCodes maps each ErrorCode to the process exit code ExitCode returns.
@@ -48,6 +51,7 @@ var exitCodes = map[ErrorCode]int{
 	// outcome it already handles.
 	CodeIndeterminate: 8,
 	CodeExists:        9,
+	CodeSpent:         10,
 }
 
 // retryableCodes marks which codes describe a transient condition worth an
@@ -226,6 +230,13 @@ func AuthError(cmd *cobra.Command, err error) error {
 func IndeterminateError(cmd *cobra.Command, input string, err error) error {
 	silence(cmd)
 	return wrapCLIError(CodeIndeterminate, RedactSecretInput(input), err)
+}
+
+// SpentError classifies err as CodeSpent (not retryable): the bill's Hub
+// answered with a tombstone, so it is gone.
+func SpentError(cmd *cobra.Command, input string, err error) error {
+	silence(cmd)
+	return wrapCLIError(CodeSpent, RedactSecretInput(input), err)
 }
 
 // RuntimeError classifies err as CodeInternal — the fallback bucket for a

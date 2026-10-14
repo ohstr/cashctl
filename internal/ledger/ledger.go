@@ -26,6 +26,10 @@ const (
 	StatusRedeemed     = "redeemed"
 	StatusTransferred  = "transferred"
 	StatusConsolidated = "consolidated"
+	// StatusSpent: the bill's Hub answered with a tombstone (NIP-CASH
+	// §Answering About a Destroyed Bill). Set only on that answer, never on
+	// silence, which proves nothing.
+	StatusSpent = "spent"
 )
 
 // CashProtection values — see Entry.CashProtection's own doc comment.

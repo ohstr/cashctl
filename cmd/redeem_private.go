@@ -217,6 +217,8 @@ func quoteHubGroup(
 			continue
 		}
 		switch {
+		case r.Succeeded() && r.Result != nil && r.Result.IsSpent():
+			errs[r.ID] = recordSpent(cmd, l, entry)
 		case r.Succeeded() && r.Result != nil:
 			recipient, ok := nipcash.MatchClaimAuto(r.Result.Recipients, myPubHex)
 			if !ok {
