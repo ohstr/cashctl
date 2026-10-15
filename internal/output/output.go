@@ -132,7 +132,7 @@ func NonNil[T any](s []T) []T {
 // the operation's actual result, never narration or errors (see
 // EmitError, which always writes to stderr instead).
 func PrintJSON(v any) {
-	raw, err := json.Marshal(v)
+	raw, err := marshalPlain(v)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "cashctl: failed to encode JSON output: %s\n", err)
 		return
@@ -181,7 +181,20 @@ func sanitizeJSONBytes(raw []byte) ([]byte, error) {
 	if err := dec.Decode(&tree); err != nil {
 		return nil, err
 	}
-	return json.Marshal(sanitizeJSONValue(tree))
+	return marshalPlain(sanitizeJSONValue(tree))
+}
+
+// marshalPlain is json.Marshal without HTML escaping: this JSON is read by
+// scripts and agents, never embedded in a page, and "\u003ctoken\u003e" in
+// an error or result is just harder to read than "<token>".
+func marshalPlain(v any) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(buf.Bytes(), []byte("\n")), nil
 }
 
 // sanitizeJSONValue walks a decoded JSON tree sanitizing every string, map KEYS
@@ -260,6 +273,7 @@ func EmitError(cmd *cobra.Command, err error) {
 			payload["recovery"] = Sanitize(ce.Recovery)
 		}
 		enc := json.NewEncoder(os.Stderr)
+		enc.SetEscapeHTML(false)
 		enc.SetIndent("", "  ")
 		_ = enc.Encode(payload)
 		return
