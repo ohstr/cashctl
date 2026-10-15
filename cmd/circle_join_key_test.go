@@ -115,6 +115,9 @@ func TestJoin_KeepsTheKeyOnlyWhenTheOutcomeIsUnknown(t *testing.T) {
 		{"refused", true, &relayclient.WalletError{Code: "WALLET_EXISTS", Message: "already holds one"}, false, output.CodeExists},
 		{"dial failed", false, errors.New("dial: refused"), false, output.CodeNetwork},
 		{"no answer", true, context.DeadlineExceeded, true, output.CodeNetwork},
+		// A Hub from before member-generated keys answers with no relays: the
+		// wallet likely exists, and a retry would only meet it.
+		{"unusable reply", true, errors.New("nipcw: wallet details carry no usable relay, so the wallet is unreachable"), true, output.CodeInternal},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := &fakeJoin{t: t, dialed: tc.dialed, err: tc.err}

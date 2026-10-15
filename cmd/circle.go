@@ -262,6 +262,10 @@ func runCircleJoin(cmd *cobra.Command, args []string) error {
 		if dialErr {
 			return output.NetworkError(cmd, err)
 		}
+		if isUnusableJoinReply(err) {
+			// The Hub did answer, so asking again only meets the wallet it made.
+			return output.RuntimeError(cmd, fmt.Errorf("the Hub's reply has no usable wallet details; it may run a NIP-CW version from before member-generated connection keys: %w", err))
+		}
 		if isIdentityEventReplayErr(err) {
 			// Still colliding even after the retry (another process
 			// landed on the same fresh second, most likely) — conflict,
@@ -364,6 +368,13 @@ func joinCircle(ctx context.Context, hubURI string, params nipcw.CreateCircleWal
 
 // joinCircleFn is joinCircle, swapped out in tests.
 var joinCircleFn = joinCircle
+
+// isUnusableJoinReply reports a reply the Hub did send whose wallet details
+// cashctl cannot build a connection from (no wallet_pubkey or relays).
+func isUnusableJoinReply(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "nipcw: wallet details carry no") || strings.Contains(msg, "nipcw: parse wallet details")
+}
 
 // joinWasRefused reports an explicit answer from the Hub, after which no
 // wallet exists for this request: a decline, or the SDK refusing to send it.

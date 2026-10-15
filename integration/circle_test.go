@@ -145,6 +145,20 @@ func TestCircleJoin_CreateWalletAndGetInfo(t *testing.T) {
 	if infoResp["alias"] == nil && infoResp["methods"] == nil {
 		t.Errorf("wallet get-info: response doesn't look like a get_info result: %v", infoResp)
 	}
+
+	// NIP-CW member-generated key: the Hub was sent only the key's pubkey and
+	// answered with the wallet's address, from which cashctl built the
+	// connection get-info just used. Nothing is left pending.
+	resp, _ := joinResp["response"].(map[string]any)
+	if pub, _ := resp["connection_pubkey"].(string); len(pub) != 64 {
+		t.Errorf("join: connection_pubkey = %v, want the 64-hex key cashctl generated", resp["connection_pubkey"])
+	}
+	if relays, _ := resp["relays"].([]any); len(relays) == 0 {
+		t.Errorf("join: no relays in the Hub's reply: %v", resp)
+	}
+	if pending, _ := f.mustJSON("wallet", "show")["pending_joins"].([]any); len(pending) != 0 {
+		t.Errorf("wallet show: pending_joins after a successful join = %v, want none", pending)
+	}
 }
 
 // TestCircleJoin_ViaRawNWCURI joins the same kind of circle_hub as above,

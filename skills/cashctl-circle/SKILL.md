@@ -50,6 +50,9 @@ copy. If the Hub never answers, whether the wallet was created is unknown;
 the key stays listed under `pending_joins` in `wallet show`. If a later
 `join` then says `exists`, that wallet is the one with that
 `connection_pubkey`: ask the circle's host to delete it, then join again.
+A Hub from before member-generated keys answers with no relays; `join`
+then fails as `internal` (not retryable: the wallet was likely made), and
+the key is kept the same way.
 
 A `--hub` value that's actually a **Cash Hub** connection (`cashhub1...`)
 gets a specific corrective error (`code: "invalid_input"`) — cashctl can't
