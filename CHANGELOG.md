@@ -71,6 +71,10 @@ Fixes from the NIP-CASH / NIP-CW conformance review, for agents above all.
 - Fixes `join`'s retry after two joins in the same second reading like the
   cause of the failure that followed; it now says why it asks again.
 - Fixes the `wallet protect --help` description of `--token`.
+- Adds `--version`, and the module version or commit to `version` for a
+  build without release flags, which printed only `dev`.
+- Adds the likely flag and the `--help` to read to an unknown flag or
+  command error, which `--json` mode showed with no next step.
 
 ## [0.6.0-rc.12]
 
