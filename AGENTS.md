@@ -24,7 +24,7 @@ stderr.
 | `cashctl join <hub-connection> <max-amount>` | Join a circle via its Circle Hub connection (`circlehub1...` or a raw NWC URI) and a requested spend cap in loki — both positional, either order, or `--hub`/`--max-amount`. A cap is required; NIP-CW has no "0 means unlimited" convention |
 | `cashctl circle join <hub-connection> <max-amount>` | Same as `join` — the canonical, fully-namespaced form |
 | `cashctl wallet show` | Your identity, registered wallets, and held cash tokens |
-| `cashctl wallet history` | Local action log (receive/redeem/transfer/consolidate) |
+| `cashctl wallet history [--show-secrets]` | Local action log (receive/redeem/transfer/consolidate), then every cash note and gift you handed out — kept permanently, each `unclaimed`/`claimed`/`expired` (a cash note, re-checked with its Hub on every read) or `sent` (a gift: its sender can't see the claim), so a lost handoff can be resent. An unclaimed note's secret is hidden unless `--show-secrets` |
 | `cashctl wallet use <name>` / `cashctl connect use <name>` | Switch your default wallet |
 | `cashctl wallet balance [--breakdown\|-v] [--from <name>]` | Unified balance: every wallet's live balance + every held token's value |
 | `cashctl wallet protect [id] [--token <id>]` | Re-key a still-shared cash-mode holding so the original code can no longer spend it — `receive` does this automatically; use this if that was declined or failed. With no id and more than one eligible, re-keys every one of them — unlike `redeem`, nothing here leaves your control, so an ambiguous selection has nothing to lose |
@@ -119,7 +119,11 @@ human-readable text that can name more than one (a `transfer` reports the
 recipient's bill and your own remainder), so match the handoffs inside it
 rather than expecting one bare value. It is the one field deliberately
 exempt from secret redaction, and it is never truncated; in text mode it is
-printed on its own unprefixed line so it can be copied as-is. A usage
+printed on its own unprefixed line so it can be copied as-is. `wallet history --show-secrets` is secret-bearing by design for the same
+reason as `recovery`: it is the one place a handed-out but unclaimed cash
+note can be read again, so treat its output like the note itself. Without
+the flag, an unclaimed note's secret is replaced by `<hidden: --show-secrets>`
+and `secret_hidden` is `true`. A usage
 mistake in `--json` mode skips the human-readable help dump (which would
 otherwise land on stdout) in favor of the structured error alone.
 

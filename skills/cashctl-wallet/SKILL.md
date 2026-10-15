@@ -58,9 +58,18 @@ a `<token>#<secret>` bill (take it with `cashctl receive`) with
 ## `cashctl wallet show` / `history`
 
 ```sh
-cashctl wallet show --json     # {"npub", "identity_source", "wallets", "default_wallet", "held_tokens", "unfinished_cash_sends"}
-cashctl wallet history --json  # {"history": [{"at","action","detail"}, ...]}
+cashctl wallet show --json     # {"npub", "identity_source", "wallets", "default_wallet", "held_tokens", "unfinished_cash_sends", "unclaimed_handoffs"}
+cashctl wallet history --json  # {"history": [{"at","action","detail"}, ...], "handoffs": [{"id","at","kind","handoff","secret_hidden","amount_millis","target","status","checked_at"}, ...]}
+cashctl wallet history --show-secrets --json  # the same, unclaimed cash notes in full (secret-bearing)
 ```
+
+`handoffs` is everything you ever handed out, never deleted: a cash note
+(`kind: cash_note`) is `unclaimed` until its secret stops spending it
+(`claimed`) or it lapses (`expired`), re-checked with its Hub each time
+you read history; a gift to someone's identity (`kind: gift`) stays `sent`.
+To resend a lost note, read it with `--show-secrets`. `wallet show --json`
+lists the not-yet-claimed ones as `unclaimed_handoffs` (secrets hidden,
+last known status, no network call).
 
 `unfinished_cash_sends` is normally `[]`. Each entry
 (`{"token_id", "cash_secret"}`) is an interrupted `--to cash` send that may

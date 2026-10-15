@@ -767,6 +767,9 @@ func printAndSaveTransferResult(cmd *cobra.Command, l *ledger.Ledger, transferRe
 		bt := target.Target.(*nipcash.CashTarget)
 		cashToSend = fmt.Sprintf("%s#%s", recipientToken, bt.Secret())
 	}
+	// Kept permanently, in the same save as the rest of this transfer (I-27):
+	// printed once, a handoff lost before delivery was unrecoverable.
+	recordHandoff(l, cashToSend, recipientToken, sentAmount, handoffTarget(toValue, target))
 
 	if err := l.Save(); err != nil {
 		handoff := cashToSend
@@ -829,7 +832,7 @@ func printAndSaveTransferResult(cmd *cobra.Command, l *ledger.Ledger, transferRe
 	// corrupting it.
 	switch {
 	case isCash && cashToSend != "":
-		output.Printf("Transferred %s as cash. Save this now, it won't be shown again:\ncashctl receive %s\n",
+		output.Printf("Transferred %s as cash. Give this to the recipient (kept in `cashctl wallet history` until claimed):\ncashctl receive %s\n",
 			output.FormatAmount(int64(sentAmount)), cashToSend)
 	case isCash:
 		output.Printf("Transferred %s as cash.\n", output.FormatAmount(int64(sentAmount)))

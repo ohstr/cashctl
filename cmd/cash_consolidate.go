@@ -532,6 +532,20 @@ func consolidateItems(cmd *cobra.Command, l *ledger.Ledger, items []string, toFl
 	if err != nil {
 		return nil, err
 	}
+	// Merged into someone else's identity: the resulting token is a gift, kept
+	// permanently like any other handoff (I-27). A cash-mode target is the
+	// holder's own new note, saved as a held entry instead.
+	if _, isCash := target.(*nipcash.CashTarget); !isSelfTarget && !isCash && newEntry != nil {
+		amount := uint64(0)
+		if newEntry.AmountMillis != nil {
+			amount = *newEntry.AmountMillis
+		}
+		to := targetResolved
+		if to == "" {
+			to = toFlag
+		}
+		recordHandoff(l, "", newEntry.Token, amount, to)
+	}
 	// doCashConsolidate has already mutated l in memory (sources marked
 	// consolidated, newEntry added) but never saves it itself — a failure
 	// here means the Hub-side merge is real and this is the only place
