@@ -86,6 +86,13 @@ run_round() {
   local status=$?
   cp "report/${round}.self-report.json" "${RUN_DIR}/${round}.self-report.json" 2>/dev/null ||
     echo "WARNING: [${round}] agent did not write a self-report" >&2
+  # An account limit or API failure ends every later call the same way: stop
+  # rather than score rounds no agent could attempt.
+  if grep -q '"terminal_reason":"api_error"\|hit your session limit\|usage limit' "${RUN_DIR}/${round}.transcript.jsonl" 2>/dev/null; then
+    echo "ERROR: [${round}] claude stopped on an API error or usage limit — aborting the run; nothing is recorded in report/history.jsonl." >&2
+    grep -o 'hit your session limit[^"]*' "${RUN_DIR}/${round}.transcript.jsonl" | head -1 >&2
+    exit 3
+  fi
   return ${status}
 }
 
