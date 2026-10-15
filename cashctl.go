@@ -71,7 +71,7 @@ func withHelpHint(cmd *cobra.Command, err error) error {
 			hint = fmt.Sprintf("; did you mean --%s?", guess)
 		}
 	}
-	return fmt.Errorf("%s%s\nSee `%s --help`.", strings.TrimRight(msg, "\n"), hint, cmd.CommandPath())
+	return fmt.Errorf("%s%s\nsee `%s --help`", strings.TrimRight(msg, "\n"), hint, cmd.CommandPath())
 }
 
 // closestFlag is the flag of cmd within two edits of name, or one name
