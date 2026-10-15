@@ -14,6 +14,7 @@ import (
 	"github.com/ohstr/nmilat/utils"
 	"github.com/spf13/cobra"
 
+	"github.com/ohstr/cashctl/internal/credential"
 	"github.com/ohstr/cashctl/internal/ledger"
 	"github.com/ohstr/cashctl/internal/output"
 )
@@ -136,7 +137,7 @@ func toCashNotes(l *ledger.Ledger, ids []string) int {
 	converted := 0
 	for _, id := range ids {
 		e, ok := l.Find(id)
-		if !ok || e.ThrowawayKey == "" {
+		if !ok || e.ThrowawayKey == "" || e.Status != ledger.StatusHeld {
 			continue
 		}
 		target := nipcash.NewCashTarget()
@@ -266,4 +267,92 @@ func printPendingMerge(l *ledger.Ledger) {
 		when = ", the first expiring " + time.Unix(*earliest, 0).UTC().Format("2006-01-02 15:04 UTC")
 	}
 	output.Printf("\nMid-merge: %d note(s) moved for a merge that has not finished%s — `cashctl consolidate` finishes it.\n", n, when)
+}
+
+// sendFromEntryFn places one cash_transfer from a held bill — swapped out in tests.
+var sendFromEntryFn = sendFromEntry
+
+func sendFromEntry(entry *ledger.Entry, params nipcash.CashTransferParams) (*nipcash.CashTransferResult, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	client, err := nipcashclient.Connect(ctx, entry.Token)
+	if err != nil {
+		return nil, &notSentError{err}
+	}
+	defer client.Close()
+	return client.CashTransfer(ctx, params)
+}
+
+// mergeThenSend sends sendAmount to target out of sources whose cash notes are
+// already on the throwaway key priv (I-26), never through an unsaved interim bill.
+// An exact sum is one cash_consolidate straight to the recipient. Otherwise the
+// merge goes to the key and is SAVED before the send, so a crash or lost reply
+// between the two leaves a recoverable bill: a refused send turns it back into a
+// cash note, an unanswered one leaves it listed as a merge left midway (settled
+// by the next command).
+func mergeThenSend(cmd *cobra.Command, l *ledger.Ledger, tokens []string, sources []nipcash.Source, sourceIDs []string,
+	sum, sendAmount uint64, priv, pub, toValue string, target credential.ResolvedTarget) error {
+	jsonMode, _ := cmd.Flags().GetBool("json")
+	limit := max(hubConsolidateCapFn(tokens[0]), 2)
+
+	if sum == sendAmount {
+		var merged *ledger.Entry
+		err := WithSpinner(jsonMode, "Transferring...", func() error {
+			var cErr error
+			merged, _, cErr = consolidateInRounds(cmd, l, tokens, sources, sourceIDs, target.Target, false, limit, priv)
+			return cErr
+		})
+		if err != nil {
+			return err
+		}
+		// The bill is the recipient's: a cash-note result is handed out, not held.
+		if _, isCash := target.Target.(*nipcash.CashTarget); isCash {
+			_ = l.SetStatus(merged.ID, ledger.StatusTransferred)
+		}
+		res := &nipcash.CashTransferResult{AmountMillis: sendAmount, NewWalletToken: merged.Token, NewWalletPubkey: merged.WalletPubkey}
+		return printAndSaveTransferResult(cmd, l, res, sendAmount, toValue, target, sourceIDs, ledger.Entry{}, merged.Token)
+	}
+
+	var merged *ledger.Entry
+	err := WithSpinner(jsonMode, "Merging...", func() error {
+		var cErr error
+		merged, _, cErr = consolidateInRounds(cmd, l, tokens, sources, sourceIDs, nipcash.Pubkey(pub), true, limit, priv)
+		return cErr
+	})
+	if err != nil {
+		return err
+	}
+	merged.ThrowawayKey = priv
+	mergedID := merged.ID
+	if err := l.Save(); err != nil {
+		return reportUnsavedResult(cmd, err, "Transfer (merge)",
+			fmt.Sprintf("%s — spent by the private key %s", entryRecoveryHint(merged), priv))
+	}
+
+	parked, err := parkDestinationCashSecret(l, []string{mergedID}, target.Target)
+	if err != nil {
+		return output.RuntimeError(cmd, err)
+	}
+	merged, _ = l.Find(mergedID)
+	var result *nipcash.CashTransferResult
+	var sendErr error
+	_ = WithSpinner(jsonMode, "Transferring...", func() error {
+		result, sendErr = sendFromEntryFn(merged, nipcash.CashTransferParams{
+			Credential: nipcash.BySigning(priv), To: target.Target,
+			CurrentAmount: *merged.AmountMillis, SplitAmount: &sendAmount,
+		})
+		return nil
+	})
+	if sendErr != nil {
+		classified := classifyCashSpendErr(cmd, sendErr, "transfer", mergedID)
+		if output.AsCLIError(classified).Code != output.CodeIndeterminate {
+			// Refused, or never sent: the merged bill is still whole and ours.
+			toCashNotes(l, []string{mergedID})
+		}
+		return classified
+	}
+	_ = l.SetStatus(mergedID, ledger.StatusTransferred)
+	parked.release()
+	return printAndSaveTransferResult(cmd, l, result, sendAmount, toValue, target, []string{mergedID},
+		ledger.Entry{IdentityRequired: ptrTo(true), MinterPubkey: merged.MinterPubkey, ThrowawayKey: priv}, merged.Token)
 }

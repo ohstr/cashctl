@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/ohstr/cashctl/internal/appdir"
+	"github.com/ohstr/cashctl/internal/credential"
 	"github.com/ohstr/cashctl/internal/ledger"
 )
 
@@ -186,5 +187,136 @@ func TestSettlePendingMoves_TurnsLeftoversIntoCashNotes(t *testing.T) {
 	}
 	if n, _ := pendingMerge(fresh); n != 1 {
 		t.Errorf("pendingMerge = %d, want only the unsettled move", n)
+	}
+}
+
+// movedLedger is a ledger holding two notes already moved onto priv's key, the
+// sources for them, and fakes for every Hub call mergeThenSend makes.
+func movedLedger(t *testing.T) (l *ledger.Ledger, priv, pub string, tokens, ids []string, sources []nipcash.Source) {
+	t.Helper()
+	l = mergeLedger(t)
+	priv, pub, _ = newThrowawayKey()
+	for i := range l.Entries[:2] {
+		e := &l.Entries[i]
+		e.ThrowawayKey, e.CashSecret, e.IdentityRequired = priv, "", ptrTo(true)
+		tokens, ids = append(tokens, e.Token), append(ids, e.ID)
+		sources = append(sources, nipcash.Source{WalletPubkey: e.WalletPubkey, Amount: *e.AmountMillis, Credential: nipcash.BySigning(priv)})
+	}
+	if err := l.Save(); err != nil {
+		t.Fatal(err)
+	}
+	origCap, origCons := hubConsolidateCapFn, attemptCashConsolidateFn
+	hubConsolidateCapFn = func(string) int { return 48 }
+	attemptCashConsolidateFn = func(_ string, _ []nipcash.Source, _ nipcash.Target) (*nipcash.CashConsolidateResult, error) {
+		return &nipcash.CashConsolidateResult{AmountMillis: 3000, NewWalletToken: "tok-merged", NewWalletPubkey: "pm"}, nil
+	}
+	t.Cleanup(func() { hubConsolidateCapFn, attemptCashConsolidateFn = origCap, origCons })
+	return l, priv, pub, tokens, ids, sources
+}
+
+func mergedEntry(t *testing.T) *ledger.Entry {
+	t.Helper()
+	fresh, err := ledger.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range fresh.Entries {
+		if fresh.Entries[i].Token == "tok-merged" {
+			return &fresh.Entries[i]
+		}
+	}
+	return nil
+}
+
+// I-26 overshoot: the merged bill is saved, with its key, BEFORE the send leg, so
+// a refused or unanswered send leaves a recoverable bill: refused turns it into a
+// cash note at once; unanswered lists it as a merge left midway, and the next
+// command settles it into a cash note.
+func TestMergeThenSend_TheMergedBillSurvivesAFailedSend(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		sendErr error
+	}{
+		{"refused", &relayclient.WalletError{Code: "RESTRICTED", Message: "no"}},
+		{"unanswered", context.DeadlineExceeded},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			l, priv, pub, tokens, ids, sources := movedLedger(t)
+			withMoveFn(t, func(*ledger.Entry, nipcash.Credential, nipcash.Target) (*nipcash.CashTransferResult, error) {
+				return &nipcash.CashTransferResult{}, nil
+			})
+			origSend := sendFromEntryFn
+			sendFromEntryFn = func(e *ledger.Entry, _ nipcash.CashTransferParams) (*nipcash.CashTransferResult, error) {
+				if m := mergedEntry(t); m == nil || m.ThrowawayKey != priv {
+					t.Errorf("the send leg ran before the merged bill was saved with its key: %+v", m)
+				}
+				return nil, tc.sendErr
+			}
+			t.Cleanup(func() { sendFromEntryFn = origSend })
+
+			_, rHex, _ := newThrowawayKey()
+			target := credential.ResolvedTarget{Target: nipcash.Pubkey(rHex)}
+			var err error
+			withCapturedOutput(func() {
+				err = mergeThenSend(testCmdWithFlags(true, true), l, tokens, sources, ids, 3000, 1000, priv, pub, "r", target)
+			})
+			if err == nil {
+				t.Fatal("a failed send reported success")
+			}
+			m := mergedEntry(t)
+			if m == nil || m.Status != ledger.StatusHeld {
+				t.Fatalf("the merged bill is not saved and held: %+v", m)
+			}
+			fresh, _ := ledger.Load()
+			if tc.name == "refused" {
+				if !isCashNote(m) {
+					t.Errorf("a refused send left the merged bill on the key: %+v", m)
+				}
+				return
+			}
+			if n, _ := pendingMerge(fresh); n != 1 || m.ThrowawayKey != priv {
+				t.Errorf("an unanswered send's bill is not listed as a merge left midway (%d): %+v", n, m)
+			}
+			settlePendingMoves(fresh)
+			if m := mergedEntry(t); !isCashNote(m) {
+				t.Errorf("the next command did not settle it into a cash note: %+v", m)
+			}
+		})
+	}
+}
+
+// I-26 exact sum: one cash_consolidate straight to the recipient, no send leg,
+// and the handoff kept (I-27).
+func TestMergeThenSend_ExactSumConsolidatesStraightToTheRecipient(t *testing.T) {
+	l, priv, pub, tokens, ids, sources := movedLedger(t)
+	_, rHex, _ := newThrowawayKey()
+	recipient := nipcash.Pubkey(rHex)
+	var gotTarget nipcash.Target
+	attemptCashConsolidateFn = func(_ string, _ []nipcash.Source, target nipcash.Target) (*nipcash.CashConsolidateResult, error) {
+		gotTarget = target
+		return &nipcash.CashConsolidateResult{AmountMillis: 3000, NewWalletToken: "tok-merged", NewWalletPubkey: "pm"}, nil
+	}
+	origSend := sendFromEntryFn
+	sendFromEntryFn = func(*ledger.Entry, nipcash.CashTransferParams) (*nipcash.CashTransferResult, error) {
+		t.Error("an exact sum placed a send leg")
+		return nil, nil
+	}
+	t.Cleanup(func() { sendFromEntryFn = origSend })
+	var err error
+	withCapturedOutput(func() {
+		err = mergeThenSend(testCmdWithFlags(true, true), l, tokens, sources, ids, 3000, 3000, priv, pub, "r", credential.ResolvedTarget{Target: recipient})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotTarget != recipient {
+		t.Errorf("consolidated to %v, want the recipient", gotTarget)
+	}
+	fresh, _ := ledger.Load()
+	if len(fresh.Handoffs) != 1 || fresh.Handoffs[0].Kind != ledger.HandoffGift || fresh.Handoffs[0].Handoff != "tok-merged" {
+		t.Errorf("handoff not kept: %+v", fresh.Handoffs)
+	}
+	if len(fresh.Held()) != 1 { // only the untouched pubkey bill
+		t.Errorf("held %d, want the merged notes gone", len(fresh.Held()))
 	}
 }

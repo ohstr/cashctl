@@ -460,6 +460,20 @@ func transferWithAutoConsolidate(cmd *cobra.Command, l *ledger.Ledger, group []l
 		return err
 	}
 
+	// With a throwaway key, the merge and the send are separate, saved steps
+	// (mergeThenSend), never the composite below with its unsaved interim bill.
+	if throwawayPriv != "" {
+		tokens := make([]string, len(group))
+		for i := range group {
+			tokens[i] = group[i].Token
+		}
+		err := mergeThenSend(cmd, l, tokens, sources, sourceIDs, sum, sendAmount, throwawayPriv, interimPub, toValue, target)
+		if err != nil && len(movedIDs) > 0 && output.AsCLIError(err).Code != output.CodeIndeterminate {
+			undoMoves(cmd, l, movedIDs) // only bills still held: never ones a landed merge consumed
+		}
+		return err
+	}
+
 	// The interim consolidate takes at most the Hub's cap in sources (NIP-CASH
 	// §Ceilings): merge just enough of them to self first, saved, to fit.
 	if limit := max(hubConsolidateCapFn(group[0].Token), 2); len(sources) > limit {
@@ -468,7 +482,7 @@ func transferWithAutoConsolidate(cmd *cobra.Command, l *ledger.Ledger, group []l
 		for i := range tokens {
 			tokens[i] = group[i].Token
 		}
-		merged, _, mErr := consolidateInRounds(cmd, l, tokens, sources[:n], sourceIDs[:n], nipcash.Pubkey(interimPub), true, limit, throwawayPriv)
+		merged, _, mErr := consolidateInRounds(cmd, l, tokens, sources[:n], sourceIDs[:n], nipcash.Pubkey(myPub), true, limit, "")
 		if mErr != nil {
 			return mErr
 		}
@@ -484,10 +498,8 @@ func transferWithAutoConsolidate(cmd *cobra.Command, l *ledger.Ledger, group []l
 		sourceIDs = append([]string{merged.ID}, sourceIDs[n:]...)
 	}
 
-	var interimCred nipcash.Credential
-	if throwawayPriv != "" {
-		interimCred = nipcash.BySigning(throwawayPriv)
-	} else if interimCred, err = localCashCredential(cmd); err != nil {
+	interimCred, err := localCashCredential(cmd)
+	if err != nil {
 		return output.RuntimeError(cmd, err)
 	}
 
@@ -495,7 +507,7 @@ func transferWithAutoConsolidate(cmd *cobra.Command, l *ledger.Ledger, group []l
 		Sources:           sources,
 		Amount:            sendAmount,
 		To:                target.Target,
-		InterimIdentity:   nipcash.Pubkey(interimPub),
+		InterimIdentity:   nipcash.Pubkey(myPub),
 		InterimCredential: interimCred,
 	}
 
@@ -577,7 +589,7 @@ func transferWithAutoConsolidate(cmd *cobra.Command, l *ledger.Ledger, group []l
 		// reassignment of the interim wallet always arrives with
 		// NewWalletToken already populated (see this function's own
 		// comment above on TransferFromSources' own patching).
-		return printAndSaveTransferResult(cmd, l, result.Transfer, sendAmount, toValue, target, sourceIDs, ledger.Entry{IdentityRequired: ptrTo(true), MinterPubkey: sharedMinter(group), ThrowawayKey: throwawayPriv}, "")
+		return printAndSaveTransferResult(cmd, l, result.Transfer, sendAmount, toValue, target, sourceIDs, ledger.Entry{IdentityRequired: ptrTo(true), MinterPubkey: sharedMinter(group)}, "")
 	}
 
 	var partial *nipcashclient.PartialProgressError
@@ -601,7 +613,6 @@ func transferWithAutoConsolidate(cmd *cobra.Command, l *ledger.Ledger, group []l
 			AmountMillis: &partial.Consolidated.AmountMillis,
 			Verified:     true,
 			MinterPubkey: sharedMinter(group),
-			ThrowawayKey: throwawayPriv,
 		})
 		if addErr == nil {
 			addErr = l.Save()
@@ -613,17 +624,7 @@ func transferWithAutoConsolidate(cmd *cobra.Command, l *ledger.Ledger, group []l
 			// cashctl's own in-memory record of it dies with this process.
 			return reportUnsavedResult(cmd, addErr, "Transfer (interim consolidate)", entryRecoveryHint(newEntry))
 		}
-		if newEntry.ThrowawayKey != "" {
-			toCashNotes(l, []string{newEntry.ID})
-		}
 		return classifyCashSpendErr(cmd, ffsErr, "transfer", newEntry.ID)
-	}
-
-	// Refused (or never sent): nothing merged, so the notes moved onto the
-	// throwaway key go back to being cash notes. No answer: they stay on the key,
-	// spendable.
-	if len(movedIDs) > 0 && output.AsCLIError(classifyCashSpendErr(cmd, ffsErr, "transfer", sourceIDs...)).Code != output.CodeIndeterminate {
-		undoMoves(cmd, l, movedIDs)
 	}
 
 	if isCrossHubSourcesDecline(ffsErr) {
