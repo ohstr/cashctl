@@ -69,6 +69,13 @@ func TestRedeemAmount_ExactSameHubSum(t *testing.T) {
 	if res.ExitCode != 0 {
 		t.Fatalf("redeem --amount 5 against two bills (2000+3000 millis): exit=%d\nstdout=%s\nstderr=%s", res.ExitCode, res.Stdout, res.Stderr)
 	}
+	rows, _ := mustDecodeJSON(t, "redeem", res.Stdout)["redeemed"].([]any)
+	for _, r := range rows {
+		row, _ := r.(map[string]any)
+		if hash, _ := row["payment_hash"].(string); len(hash) != 64 {
+			t.Errorf("redeemed row %v: want a 64-hex payment_hash", row)
+		}
+	}
 
 	show := f.mustJSON("wallet", "show")
 	held, _ := show["held_tokens"].([]any)
@@ -127,6 +134,19 @@ func TestRedeemAmount_CrossHubFragmentation(t *testing.T) {
 	held, _ := show["held_tokens"].([]any)
 	if len(held) != 2 {
 		t.Errorf("a refused fragmented selection must leave every bill untouched, got %d held: %v", len(held), show)
+	}
+	// wallet show names each bill's Cash Hub, so a holder can see why they won't merge.
+	hubs := map[string]bool{}
+	for _, h := range held {
+		e, _ := h.(map[string]any)
+		hub, _ := e["cash_hub"].(string)
+		if hub == "" {
+			t.Errorf("held token without cash_hub: %v", e)
+		}
+		hubs[hub] = true
+	}
+	if len(held) == 2 && len(hubs) != 2 {
+		t.Errorf("bills from two Hubs share a cash_hub: %v", held)
 	}
 }
 

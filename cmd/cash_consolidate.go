@@ -599,6 +599,11 @@ func consolidateItems(cmd *cobra.Command, l *ledger.Ledger, items []string, toFl
 		return nil, reportUnsavedResult(cmd, err, "Consolidate", entryRecoveryHint(newEntry))
 	}
 
+	// A cash target's secret is saved with the new entry; target_resolved
+	// would only repeat it.
+	if _, isCash := target.(*nipcash.CashTarget); isCash {
+		targetResolved = ""
+	}
 	return &consolidateResult{NewEntry: newEntry, ExpiresAt: expiresAt, TargetResolved: targetResolved}, nil
 }
 

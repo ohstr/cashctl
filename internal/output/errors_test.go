@@ -685,3 +685,20 @@ func captureStderr(t *testing.T, fn func()) []byte {
 	}
 	return out
 }
+
+// --json output is read by scripts and agents, so "<token>#<secret>" stays as
+// typed rather than becoming "<token>#<secret>".
+func TestJSONOutput_NoHTMLEscaping(t *testing.T) {
+	stdout := captureStdout(t, func() { PrintJSON(map[string]any{"hint": "<token>#<secret> & more"}) })
+	if !strings.Contains(string(stdout), `"<token>#<secret> & more"`) {
+		t.Errorf("PrintJSON escaped HTML: %s", stdout)
+	}
+	cmd := newTestCmd()
+	_ = cmd.Flags().Set("json", "true")
+	stderr := captureStderr(t, func() {
+		EmitError(cmd, UsageError(cmd, errors.New("use the full `<token>#<secret>` string")))
+	})
+	if !strings.Contains(string(stderr), "`<token>#<secret>`") {
+		t.Errorf("EmitError escaped HTML: %s", stderr)
+	}
+}

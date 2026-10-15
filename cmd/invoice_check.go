@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"encoding/hex"
 	"fmt"
 	"math"
 	"strconv"
@@ -113,4 +114,34 @@ func bolt11AmountMloki(invoice string) (*int64, error) {
 	}
 	result := int64(value * scale)
 	return &result, nil
+}
+
+// bolt11PaymentHash returns the hex payment hash (tagged field p) of a
+// BOLT 11 invoice.
+func bolt11PaymentHash(invoice string) (string, error) {
+	_, data, err := bech32.DecodeNoLimit(strings.TrimSpace(invoice))
+	if err != nil {
+		return "", fmt.Errorf("not a valid Lightning invoice")
+	}
+	// 7 words of timestamp, then tagged fields, then a 104-word signature.
+	const timestampWords, signatureWords = 7, 104
+	if len(data) < timestampWords+signatureWords {
+		return "", fmt.Errorf("invoice is too short")
+	}
+	fields := data[timestampWords : len(data)-signatureWords]
+	for len(fields) >= 3 {
+		tag, n := fields[0], int(fields[1])<<5|int(fields[2])
+		if len(fields) < 3+n {
+			break
+		}
+		if tag == 1 && n == 52 { // p: 256 bits in 52 words
+			hash, err := bech32.ConvertBits(fields[3:3+n], 5, 8, false)
+			if err != nil || len(hash) != 32 {
+				return "", fmt.Errorf("invoice payment hash is malformed")
+			}
+			return hex.EncodeToString(hash), nil
+		}
+		fields = fields[3+n:]
+	}
+	return "", fmt.Errorf("invoice has no payment hash")
 }

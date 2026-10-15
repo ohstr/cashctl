@@ -131,7 +131,7 @@ func runWalletUse(cmd *cobra.Command, args []string) error {
 		return output.RuntimeError(cmd, err)
 	}
 	if err := s.SetDefault(args[0]); err != nil {
-		return output.NotFoundError(cmd, args[0], err)
+		return output.NotFoundError(cmd, args[0], fmt.Errorf("%w; see `cashctl connect list`", err))
 	}
 	if err := s.Save(); err != nil {
 		return output.RuntimeError(cmd, err)
@@ -156,7 +156,7 @@ func newConnectRmCmd() *cobra.Command {
 				return output.RuntimeError(cmd, err)
 			}
 			if !s.Remove(args[0]) {
-				return output.NotFoundError(cmd, args[0], fmt.Errorf("no connection named %q", args[0]))
+				return output.NotFoundError(cmd, args[0], fmt.Errorf("no connection named %q; see `cashctl connect list`", args[0]))
 			}
 			if err := s.Save(); err != nil {
 				return output.RuntimeError(cmd, err)

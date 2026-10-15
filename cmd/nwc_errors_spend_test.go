@@ -40,6 +40,8 @@ func TestClassifyCashSpendErr(t *testing.T) {
 		{"incomplete reply", nipcashclient.ErrIncompleteReply, output.CodeIndeterminate},
 		{"dial failed", &notSentError{errors.New("dial: refused")}, output.CodeNetwork},
 		{"hub decline", &relayclient.WalletError{Code: "EXPIRED", Message: "gone"}, output.CodeAuth},
+		{"refused before send", fmt.Errorf("consolidate: %w", nipcash.ErrCashSource), output.CodeInvalidInput},
+		{"no private transport", nipcashclient.ErrNoAnnouncement, output.CodeNetwork},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

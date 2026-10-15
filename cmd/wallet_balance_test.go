@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -200,5 +201,25 @@ func TestRunWalletBalanceFrom_HeldTokenStillReportsAmount(t *testing.T) {
 	})
 	if !strings.Contains(printed, "7 loki") {
 		t.Errorf("output = %q, want the held token's own amount (7000 mloki = 7 loki)", printed)
+	}
+}
+
+func TestHeldTokensJSON_AddsCashHub(t *testing.T) {
+	e := groupableEntry("tok-a", "hub-a", 1000)
+	got := heldTokensJSON([]ledger.Entry{e})
+	if len(got) != 1 || got[0].CashHub == "" || got[0].CashHub != ledger.HubGroupKey(e) {
+		t.Fatalf("heldTokensJSON = %+v, want cash_hub %q", got, ledger.HubGroupKey(e))
+	}
+	raw, err := json.Marshal(got[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"id":"tok-a"`, `"cash_hub":"` + got[0].CashHub + `"`} {
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("held token JSON %s lacks %s", raw, want)
+		}
+	}
+	if heldTokensJSON(nil) == nil {
+		t.Error("heldTokensJSON(nil) = nil, want [] in --json")
 	}
 }

@@ -16,7 +16,7 @@ import (
 func newSkillsCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "skills",
-		Short: "List, print, or install the agent skills built into this binary",
+		Short: "List, show, or install the agent skills built into this binary",
 		Example: `  cashctl skills list
   cashctl skills show cashctl-cash
   cashctl skills install --dir ~/.agents/skills`,

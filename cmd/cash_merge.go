@@ -113,10 +113,11 @@ func promoteThrowaway(e *ledger.Entry) {
 }
 
 // isDefiniteRefusal reports a Hub's explicit answer that it did not apply a
-// request — the one failure after which nothing moved.
+// request, or the SDK's refusal to send it — the failures after which nothing
+// moved.
 func isDefiniteRefusal(err error) bool {
 	var walletErr *relayclient.WalletError
-	return errors.As(err, &walletErr)
+	return errors.As(err, &walletErr) || isRejectedBeforeSend(err)
 }
 
 // undoMoves moves the notes of a refused merge back to fresh cash notes.

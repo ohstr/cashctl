@@ -167,12 +167,12 @@ would leave the caller unable to tell which tokens already paid. Under
 
 | `status` | meaning |
 |---|---|
-| `ok` | paid out; entry also carries `fee_mloki` and `preimage` |
+| `ok` | paid out; entry also carries `fee_mloki`, `preimage`, and the `invoice` paid into with its `payment_hash` |
 | `failed` | entry also carries `error`, `code`, and `nwc_code` when the wallet returned one |
 | `not_attempted` | the run was declined before this token was reached — no wire call was made, so there is nothing to retry or reconcile |
 
 A single-token run keeps the original top-level
-`{"redeemed_token", "fee_mloki", "preimage", "to_wallet"|"to_invoice"}`
+`{"redeemed_token", "fee_mloki", "preimage", "invoice", "payment_hash", "to_wallet"|"to_invoice"}`
 shape, and a single token that *failed* still prints nothing on stdout —
 its error on stderr says everything. As with `consolidate`, **a partially
 successful run prints its full result on stdout AND exits nonzero**, so a
@@ -333,7 +333,9 @@ isn't held locally — only `pubkey:`/`cash:` credentials work in that
 verbose form (a `connection-key:` value has its own embedded commas,
 ambiguous in this shorthand — receive it into your ledger first instead).
 IDs are discoverable via `cashctl wallet show --json`'s `held_tokens`
-array — plain-text `wallet show` deliberately never prints them.
+array — plain-text `wallet show` deliberately never prints them. Each held
+token's `cash_hub` names the Cash Hub that issued it (`hub …` in text):
+only tokens with the same `cash_hub` can merge.
 Cash notes merge like any other bill, with no identity needed: each is
 first moved onto a key made for that merge alone (`cash_consolidate` takes
 no cash-mode source), and your merged result is a fresh cash note. If the

@@ -4,11 +4,13 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 
 	"github.com/ohstr/cashctl/cmd"
 	"github.com/ohstr/cashctl/internal/output"
@@ -48,7 +50,67 @@ func classifyRootErr(cmd *cobra.Command, err error) error {
 	if cmd != nil && jsonRequested(os.Args[1:]) {
 		_ = cmd.Flags().Set("json", "true")
 	}
-	return output.InvocationError(cmd, err)
+	return output.InvocationError(cmd, withHelpHint(cmd, err))
+}
+
+// withHelpHint ends an unknown flag or command error with the flag it most
+// likely meant and the --help to read, which --json mode otherwise never
+// shows.
+func withHelpHint(cmd *cobra.Command, err error) error {
+	if cmd == nil {
+		return err
+	}
+	msg := err.Error()
+	name, isFlag := strings.CutPrefix(msg, "unknown flag: --")
+	if !isFlag && !strings.HasPrefix(msg, "unknown command ") && !strings.HasPrefix(msg, "unknown shorthand flag: ") {
+		return err
+	}
+	hint := ""
+	if isFlag {
+		if guess := closestFlag(cmd, name); guess != "" {
+			hint = fmt.Sprintf("; did you mean --%s?", guess)
+		}
+	}
+	return fmt.Errorf("%s%s\nsee `%s --help`", strings.TrimRight(msg, "\n"), hint, cmd.CommandPath())
+}
+
+// closestFlag is the flag of cmd within two edits of name, or one name
+// starts with the other; "" when none is.
+func closestFlag(cmd *cobra.Command, name string) string {
+	best, bestDist := "", 3
+	cmd.Flags().VisitAll(func(f *pflag.Flag) {
+		if f.Hidden {
+			return
+		}
+		d := editDistance(name, f.Name)
+		if d > 2 && (strings.HasPrefix(f.Name, name) || strings.HasPrefix(name, f.Name)) {
+			d = 2
+		}
+		if d < bestDist {
+			best, bestDist = f.Name, d
+		}
+	})
+	return best
+}
+
+func editDistance(a, b string) int {
+	prev := make([]int, len(b)+1)
+	for j := range prev {
+		prev[j] = j
+	}
+	for i := 1; i <= len(a); i++ {
+		cur := make([]int, len(b)+1)
+		cur[0] = i
+		for j := 1; j <= len(b); j++ {
+			cost := 1
+			if a[i-1] == b[j-1] {
+				cost = 0
+			}
+			cur[j] = min(prev[j]+1, cur[j-1]+1, prev[j-1]+cost)
+		}
+		prev = cur
+	}
+	return prev[len(b)]
 }
 
 // jsonRequested reports whether args turn --json on, the way cobra itself

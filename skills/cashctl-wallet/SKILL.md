@@ -1,6 +1,6 @@
 ---
 name: cashctl-wallet
-description: Set up a cashctl identity and default wallet (`cashctl init`), manage registered NWC connections (`cashctl connect add/list/use/rm`, `cashctl wallet use`), inspect identity/wallets/history (`cashctl wallet show/history`), check a unified balance across every wallet and held cash token (`cashctl wallet balance`, also available as the top-level shortcut `cashctl balance`), make ordinary NIP-47 calls against the current wallet (`cashctl wallet get-info/budget/invoice/pay/list-tx/sign-message`), and locally decode any cash token, Circle Hub connection, or NWC URI (`cashctl decode`). Use when setting up cashctl for the first time, registering a plain Lightning wallet connection, switching the default wallet, checking balance/budget, paying/creating a Lightning invoice, or inspecting a pasted token/connection string before acting on it.
+description: Set up a cashctl identity and default wallet (`cashctl init`), manage registered NWC connections (`cashctl connect add/list/use/rm`, `cashctl wallet use`), inspect identity/wallets/history (`cashctl wallet show/history`), check a unified balance across every wallet and held cash token (`cashctl wallet balance`, also available as the top-level shortcut `cashctl balance`), make ordinary NIP-47 calls against the current wallet (`cashctl wallet get-info/budget/invoice/pay/list-tx/sign-message`), and locally decode any cash token, Circle Hub connection, NWC URI or npub (`cashctl decode`). Use when setting up cashctl for the first time, registering a plain Lightning wallet connection, switching the default wallet, checking balance/budget, paying/creating a Lightning invoice, or inspecting a pasted token/connection string before acting on it.
 license: Unlicense
 ---
 
@@ -58,7 +58,7 @@ a `<token>#<secret>` bill (take it with `cashctl receive`) with
 ## `cashctl wallet show` / `history`
 
 ```sh
-cashctl wallet show --json     # {"npub", "identity_source", "wallets", "default_wallet", "held_tokens", "unfinished_cash_sends", "unclaimed_handoffs"}
+cashctl wallet show --json     # {"npub", "identity_source", "wallets", "default_wallet", "held_tokens", "unfinished_cash_sends", "unclaimed_handoffs"}; each held token carries its "cash_hub"
 cashctl wallet history --json  # {"history": [{"at","action","detail"}, ...], "handoffs": [{"id","at","kind","handoff","secret_hidden","amount_millis","target","status","checked_at"}, ...]}
 cashctl wallet history --show-secrets --json  # the same, unclaimed cash notes in full (secret-bearing)
 ```
@@ -130,6 +130,7 @@ cashctl decode lokicash1... --json      # {"type":"cash_token","hrp","wallet_pub
 cashctl decode lokicash1...#deadbeef --json  # cash-mode combined presentation — adds "embedded_cash_secret_present":true
 cashctl decode circlehub1... --json     # {"type":"circlehub","hrp","wallet_pubkey","relays","label"}
 cashctl decode nostr+walletconnect://... --json  # {"type":"nwc_uri","wallet_pubkey","relays"}
+cashctl decode npub1... --json          # {"type":"npub","pubkey"} — the hex form
 cashctl decode lokicash1... --check --json    # adds "check":{"ok","amount_millis"?,"expires_at"?,"spent"?,"error"?} — a network call
 cashctl decode circlehub1... --check --json   # adds "check":{"ok","note"?,"error"?} — is joining even possible here
 ```
@@ -143,7 +144,7 @@ optional mint-provenance pair only appears (`mint_signature`,
 `attested_amount_millis`) when the token actually carries one. A **Cash
 Hub** connection (`cashhub1...`) gets a specific corrective error instead
 of a decode — cashctl has no mint capability and there's no local decoder
-for that format. **The pairing secret is never included in the output,
+for that format. An `npub1...` decodes to its hex `pubkey`. **The pairing secret is never included in the output,
 for any of the three shapes** — this is inspection only, never a way to
 extract a working spending/dialing credential. A cash-mode cash token
 MAY arrive as `<token>#<cash_secret>` (NIP-CASH's combined

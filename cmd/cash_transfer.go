@@ -871,6 +871,9 @@ func printAndSaveTransferResult(cmd *cobra.Command, l *ledger.Ledger, transferRe
 		}
 		if cashToSend != "" {
 			out["cash_to_send"] = cashToSend
+			// The secret is in cash_to_send already; a second copy is only one
+			// more place for a log to keep it.
+			out["target_resolved"] = ""
 		}
 		// recipient_token: the exact string a pubkey/npub/connection-key
 		// recipient needs to `receive` this — distinct from cash_to_send

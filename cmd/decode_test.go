@@ -172,7 +172,7 @@ func TestShouldCheckCashToken_ExplicitFlagSkipsTheIdentityGuardEntirely(t *testi
 }
 
 // TestDecode_NostrEntityMisPaste_FriendlyError guards against the bug
-// found auditing decode: an npub/nsec/nconnection paste used to fall
+// found auditing decode: an nsec/nconnection paste used to fall
 // through to nipcash.Decode (which accepts any HRP — see its own doc
 // comment) and fail with a cryptic "nipcash: truncated TLV entry at
 // offset N" that named neither what was pasted nor why it was wrong.
@@ -181,10 +181,6 @@ func TestShouldCheckCashToken_ExplicitFlagSkipsTheIdentityGuardEntirely(t *testi
 // field before this fix; this pins the message text itself never embeds
 // it either).
 func TestDecode_NostrEntityMisPaste_FriendlyError(t *testing.T) {
-	npub, err := nip19.EncodePublicKey(strings.Repeat("aa", 32))
-	if err != nil {
-		t.Fatalf("nip19.EncodePublicKey: %v", err)
-	}
 	nsec, err := nip19.EncodePrivateKey(strings.Repeat("bb", 32))
 	if err != nil {
 		t.Fatalf("nip19.EncodePrivateKey: %v", err)
@@ -200,7 +196,6 @@ func TestDecode_NostrEntityMisPaste_FriendlyError(t *testing.T) {
 		value   string
 		wantSub string
 	}{
-		{"npub", npub, "public key"},
 		{"nsec", nsec, "PRIVATE KEY"},
 		{"nconnection", nconn, "nconnection"},
 	}
@@ -221,6 +216,34 @@ func TestDecode_NostrEntityMisPaste_FriendlyError(t *testing.T) {
 				t.Errorf("decode(nsec) error = %q, echoes the raw private key", err)
 			}
 		})
+	}
+}
+
+func TestDecode_NpubShowsHex(t *testing.T) {
+	hex := strings.Repeat("aa", 32)
+	npub, err := nip19.EncodePublicKey(hex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := newDecodeCmd()
+	cmd.Flags().Bool("json", true, "")
+	stdout, _ := captureStreams(t, func() {
+		if err := cmd.RunE(cmd, []string{npub}); err != nil {
+			t.Errorf("decode(npub) = %v, want its hex", err)
+		}
+	})
+	if !strings.Contains(stdout, `"pubkey": "`+hex+`"`) || !strings.Contains(stdout, `"type": "npub"`) {
+		t.Errorf("decode(npub) stdout = %s, want type npub and pubkey %s", stdout, hex)
+	}
+}
+
+func TestDecode_UnknownListsAcceptedForms(t *testing.T) {
+	cmd := newDecodeCmd()
+	err := cmd.RunE(cmd, []string{"xyz"})
+	for _, want := range []string{"lokicash1", "circlehub1", "nostr+walletconnect://", "npub1"} {
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("decode(xyz) error = %v, want it to name %s", err, want)
+		}
 	}
 }
 

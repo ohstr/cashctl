@@ -11,7 +11,7 @@ and [Circle wallets](https://github.com/ohstr/nips/blob/main/NIP-CW.md).**
 ## Features
 
 - [`cashctl transfer`](#cashctl-transfer) — Send a held cash token
-- [`cashctl decode`](#cashctl-decode) — Inspect any cash token, Circle Hub connection, or NWC URI locally, no network call
+- [`cashctl decode`](#cashctl-decode) — Inspect any cash token, Circle Hub connection, NWC URI or npub locally, no network call
 - [`cashctl receive`](#cashctl-receive) — "Cash-in" a token: verify and add it to your wallet
 - [`cashctl redeem`](#cashctl-redeem) — Redeem a held cash token into a Lightning wallet
 - [`cashctl consolidate`](#cashctl-consolidate) — Merge several held cash tokens into one
@@ -120,6 +120,7 @@ URI locally — no network call, and no wallet needed.
 ```sh
 cashctl decode lokicash1...       # local-only, includes mint-signature verification if present
 cashctl decode lokicash1... --check  # also cross-checks against the Hub
+cashctl decode npub1...           # the hex public key
 ```
 
 Without `--check`, an interactive session asks whether to run it (default

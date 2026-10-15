@@ -65,6 +65,41 @@ Fixes from the NIP-CASH / NIP-CW conformance review, for agents above all.
   now merge them through a key made for that merge, with no identity needed,
   and `receive` only re-keys, never merges.
   ([#83](https://github.com/ohstr/cashctl/pull/83))
+- Fixes a spend the SDK refused before sending it (such as a cash note given
+  straight to a merge) being reported as `indeterminate`; it is now
+  `invalid_input`, since nothing moved.
+  ([#85](https://github.com/ohstr/cashctl/pull/85))
+- Fixes `join`'s retry after two joins in the same second reading like the
+  cause of the failure that followed; it now says why it asks again.
+  ([#85](https://github.com/ohstr/cashctl/pull/85))
+- Fixes the `wallet protect --help` description of `--token`.
+  ([#85](https://github.com/ohstr/cashctl/pull/85))
+- Adds `--version`, and the module version or commit to `version` for a
+  build without release flags, which printed only `dev`.
+  ([#85](https://github.com/ohstr/cashctl/pull/85))
+- Adds the likely flag and the `--help` to read to an unknown flag or
+  command error, which `--json` mode showed with no next step.
+  ([#85](https://github.com/ohstr/cashctl/pull/85))
+- Adds `decode npub1…`, showing the hex public key, which was refused; an
+  unrecognised `decode` input now lists the forms it takes.
+  ([#85](https://github.com/ohstr/cashctl/pull/85))
+- Adds a pointer to `connect list` when `connect use`/`wallet use` or
+  `connect rm` names no registered connection, and names `show` in the
+  `skills` help.
+  ([#85](https://github.com/ohstr/cashctl/pull/85))
+- Adds the invoice paid into and its `payment_hash` to `redeem --json`, to
+  match the payment on the destination side.
+  ([#85](https://github.com/ohstr/cashctl/pull/85))
+- Fixes `transfer --to cash` and `consolidate --to cash` repeating the new
+  note's secret in `target_resolved`; it is in `cash_to_send` (or saved with
+  the note) and `target_resolved` is now empty.
+  ([#85](https://github.com/ohstr/cashctl/pull/85))
+- Adds each held token's Cash Hub to `wallet show` (`cash_hub` in
+  `--json`), so you can tell which tokens can merge.
+  ([#85](https://github.com/ohstr/cashctl/pull/85))
+- Fixes `--json` output escaping `<`, `>` and `&` as `\u003c`, `\u003e` and
+  `\u0026`.
+  ([#85](https://github.com/ohstr/cashctl/pull/85))
 
 ## [0.6.0-rc.12]
 

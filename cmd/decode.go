@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ohstr/nmilat/nip19"
 	"github.com/ohstr/nmilat/nip47"
 	"github.com/ohstr/nmilat/nipcash"
 	nipcashclient "github.com/ohstr/nmilat/nipcash/client"
@@ -56,10 +57,11 @@ import (
 func newDecodeCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "decode <string>",
-		Short: "Inspect any cash token, Circle Hub connection, or NWC URI locally — no network call unless --check is passed",
+		Short: "Inspect any cash token, Circle Hub connection, NWC URI or npub locally — no network call unless --check is passed",
 		Example: `  cashctl decode lokicash1...
   cashctl decode lokicash1... --check
-  cashctl decode circlehub1...`,
+  cashctl decode circlehub1...
+  cashctl decode npub1...`,
 		Args: output.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := rejectConnectionFlag(cmd); err != nil {
@@ -90,10 +92,15 @@ func newDecodeCmd() *cobra.Command {
 				return output.InvalidInputError(cmd, value, fmt.Errorf(
 					"that's a Cash Hub connection (for minting cash) — cashctl has no mint capability and can't decode this format"))
 			case dial.KindNostrEntity:
+				if dial.NostrEntityHRP(value) == "npub" {
+					return decodeNpub(cmd, value, jsonMode)
+				}
 				return output.InvalidInputError(cmd, value, errors.New(nostrEntityMessage(dial.NostrEntityHRP(value))))
 			default:
 				return output.InvalidInputError(cmd, value, fmt.Errorf(
-					"not a recognized cash token, Circle Hub connection, or NWC URI"))
+					"not a recognized cash token, Circle Hub connection, or NWC URI; "+
+						"decode takes a cash token (lokicash1..., or <token>#<secret>), "+
+						"a circlehub1... connection, a nostr+walletconnect:// URI, or an npub1... key"))
 			}
 		},
 	}
@@ -202,6 +209,22 @@ func decodeCircleHub(cmd *cobra.Command, value string, jsonMode, check bool) err
 	if jsonMode {
 		output.PrintJSON(out)
 	}
+	return nil
+}
+
+// decodeNpub shows an npub's hex public key, the form `--to` and the Hub's
+// own output use.
+func decodeNpub(cmd *cobra.Command, value string, jsonMode bool) error {
+	pub, err := nip19.DecodePublicKey(value)
+	if err != nil {
+		return output.InvalidInputError(cmd, value, err)
+	}
+	if jsonMode {
+		output.PrintJSON(map[string]any{"type": "npub", "pubkey": pub})
+		return nil
+	}
+	output.Println("type: npub")
+	output.Printf("pubkey: %s\n", pub)
 	return nil
 }
 
