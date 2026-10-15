@@ -65,6 +65,7 @@ Fixes from the NIP-CASH / NIP-CW conformance review, for agents above all.
 - Fixes cash notes never merging: `consolidate` and `transfer`'s auto-combine
   now merge them through a key made for that merge, with no identity needed,
   and `receive` only re-keys, never merges.
+  ([#83](https://github.com/ohstr/cashctl/pull/83))
 
 ## [0.6.0-rc.12]
 
