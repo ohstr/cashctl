@@ -120,9 +120,14 @@ def main():
     except OSError:
         interactive = False
 
+    # --json/--yes never prompt, so cashctl never reads stdin: hand it over
+    # untouched. Pumping it would swallow input meant for the caller's next
+    # command, e.g. the rest of a `while read ...; do cashctl ...; done < file`.
+    passthrough = "json" in flags or "yes" in flags
+
     seen = {"data": b"", "eof": False}
     start = time.time()
-    if interactive:
+    if interactive or passthrough:
         proc = subprocess.Popen([REAL] + argv)
     else:
         proc = subprocess.Popen([REAL] + argv, stdin=subprocess.PIPE)
@@ -140,7 +145,7 @@ def main():
         "eq_forms": eq_forms,
         "mode": "json" if "json" in flags else "text",
         "yes": "yes" in flags,
-        "stdin": categorize_stdin(None if interactive else seen["data"], seen["eof"]),
+        "stdin": "tty" if interactive else ("passthrough" if passthrough else categorize_stdin(seen["data"], seen["eof"])),
         "exit": rc,
         "ms": int((time.time() - start) * 1000),
         "no_color": "NO_COLOR" in os.environ,
