@@ -1,10 +1,8 @@
 #!/usr/bin/env bash
-# Ground truth for R5, from the operator's view of both hubs: every note was
-# taken (the live slices still hold 90 loki on A and 20 on B) and no live
-# slice still answers to a secret from the handed-out notes, so nobody who saw
-# those strings can spend the money. Not checked: merging to one token per hub,
-# which cashctl cannot do for cash-mode holdings today (protect re-keys to a
-# fresh cash secret, and cash_consolidate takes only pubkey-mode sources).
+# Ground truth for R5, from the operator's view of both hubs: each hub is down
+# to one live slice holding everything (90 loki on A, 20 on B) — cash notes
+# merge since I-26 — and no live slice still answers to a secret from the
+# handed-out notes, so nobody who saw those strings can spend the money.
 ROUND="r5-tidy-and-secure"
 source "$(dirname "$0")/_head.sh" "$1"
 need_admin
@@ -23,10 +21,10 @@ check_hub() {
   local label="$1" hub="$2" want="$3" slices live
   slices="$(hub_slices "${hub}")"
   live="$(jq -c '[.[] | select(.status=="unclaimed")]' <<<"${slices}")"
-  if [ "$(jq '[.[].amount_mloki] | add // 0' <<<"${live}")" = "${want}" ]; then
-    add_check "hub_${label}_all_taken" true "live slices hold ${want} mloki in $(jq length <<<"${live}") token(s)"
+  if [ "$(jq 'length' <<<"${live}")" = 1 ] && [ "$(jq '.[0].amount_mloki' <<<"${live}")" = "${want}" ]; then
+    add_check "hub_${label}_one_token" true "one live slice of ${want} mloki"
   else
-    add_check "hub_${label}_all_taken" false "want ${want} mloki live: ${live}"
+    add_check "hub_${label}_one_token" false "want one live ${want}-mloki slice: ${live}"
   fi
   local exposed
   exposed="$(jq --argjson c "${commitments}" '[.[] | select(.identity_type=="cash" and ((.identity_value|ascii_downcase) as $v | $c | index($v)))] | length' <<<"${live}")"

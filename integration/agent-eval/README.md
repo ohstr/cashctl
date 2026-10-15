@@ -83,7 +83,7 @@ split, reclaimed, ...), never from the agent's report.
 | r2-circle-join | join a circle with a 500 cap, then try again | one circle wallet; the Hub reports a 500-loki budget; a second join fails as `exists` (exit 9) |
 | r3-error-contract | nine misuses, checked against AGENTS.md's table | the harness re-runs each probe: exit code, `code`, `retryable`, empty stdout |
 | r4-split-send | send 30 of a 90 note to someone, keep the rest as a note | a 30 slice for P's pubkey, a 60 cash slice, and the reported note is takeable |
-| r5-tidy-and-secure | take four notes, secure them, hold as few tokens as possible | every note taken, no live slice answering to a handed-out secret (merging cash-mode notes is not possible today, so the token count is reported, not scored) |
+| r5-tidy-and-secure | take four notes, secure them, hold as few tokens as possible | one live slice per hub holding everything, none answering to a handed-out secret |
 | r6-pay-and-cash-out | pay a 60 invoice, cash out exactly 40 | 60 and 24 + 16 `redeemed`, 30 still `unclaimed` |
 | r7-wallet-ops | invoice on a wallet, pay it from the circle wallet, switch default | a settled 21-loki payment on `a`; `a` is the default |
 | r8-partial-redeem | cash out two bills when the operator reclaims one mid-round | one `redeemed`, one `reclaimed`; no blind resend; `cash status` before concluding |
