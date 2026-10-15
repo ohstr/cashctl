@@ -85,6 +85,8 @@ Fixes from the NIP-CASH / NIP-CW conformance review, for agents above all.
 - Fixes `transfer --to cash` and `consolidate --to cash` repeating the new
   note's secret in `target_resolved`; it is in `cash_to_send` (or saved with
   the note) and `target_resolved` is now empty.
+- Adds each held token's Cash Hub to `wallet show` (`cash_hub` in
+  `--json`), so you can tell which tokens can merge.
 - Fixes `--json` output escaping `<`, `>` and `&` as `\u003c`, `\u003e` and
   `\u0026`.
 

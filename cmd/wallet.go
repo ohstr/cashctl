@@ -132,7 +132,7 @@ func newWalletShowCmd() *cobra.Command {
 					"identity_source": source,
 					"wallets":         output.NonNil(s.Connections),
 					"default_wallet":  s.Default,
-					"held_tokens":     output.NonNil(l.Held()),
+					"held_tokens":     heldTokensJSON(l.Held()),
 					// The only copy of each secret: see unreconciledDestinationParks.
 					"unfinished_cash_sends": output.NonNil(unfinishedCashSends(l)),
 					// Handed out and not known to be claimed, secrets hidden: `wallet
@@ -177,6 +177,9 @@ func newWalletShowCmd() *cobra.Command {
 					status = "unverified"
 				}
 				status += ", " + cashModeLabel(e)
+				if hub := ledger.HubGroupKey(e); hub != "" {
+					status += ", hub " + shortHub(hub)
+				}
 				output.Printf("  %d) %s   received %s   %s\n", i+1, amount, formatReceivedDate(e.ReceivedAt), status)
 			}
 			// Last, and only when there is something to say: an interrupted
@@ -360,4 +363,19 @@ func newWalletBalanceCmd() *cobra.Command {
 	cmd.Flags().BoolP("breakdown", "v", false, "show the itemized per-wallet/per-token detail")
 	cmd.Flags().String("from", "", "show the balance of only this wallet or held token")
 	return cmd
+}
+
+// heldToken is a held entry plus cash_hub, the fingerprint of the Cash Hub
+// that issued it: only tokens with the same cash_hub can merge.
+type heldToken struct {
+	ledger.Entry
+	CashHub string `json:"cash_hub"`
+}
+
+func heldTokensJSON(held []ledger.Entry) []heldToken {
+	out := make([]heldToken, len(held))
+	for i, e := range held {
+		out[i] = heldToken{Entry: e, CashHub: ledger.HubGroupKey(e)}
+	}
+	return out
 }
