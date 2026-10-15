@@ -874,7 +874,7 @@ func TestConsolidateInRounds_SplitsOverTheHubsCap(t *testing.T) {
 	})
 
 	target := testTarget()
-	newEntry, _, err := consolidateInRounds(&cobra.Command{}, l, tokens, sources, ids, target, false, 2)
+	newEntry, _, err := consolidateInRounds(&cobra.Command{}, l, tokens, sources, ids, target, false, 2, "")
 	if err != nil {
 		t.Fatalf("consolidateInRounds: %v", err)
 	}

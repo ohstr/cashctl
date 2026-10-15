@@ -104,6 +104,7 @@ func runWalletBalance(cmd *cobra.Command, args []string) error {
 			"stranded_mloki":     stranded,
 			"expired_held_mloki": expiredHeld,
 			"unreachable":        output.NonNil(unreachable),
+			"pending_merge":      pendingMergeJSON(l),
 			"breakdown":          output.NonNil(lines),
 		})
 		return nil
@@ -123,6 +124,7 @@ func runWalletBalance(cmd *cobra.Command, args []string) error {
 	if len(unreachable) > 0 {
 		output.Printf("(couldn't reach %s — not counted, may still hold funds)\n", strings.Join(unreachable, ", "))
 	}
+	printPendingMerge(l)
 	if breakdown {
 		for _, line := range lines {
 			marker := ""

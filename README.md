@@ -400,10 +400,10 @@ use).
   published inbox, so a relay can tell that your connection talks to that
   Hub, though not what you asked. cashctl has no proxy or Tor option yet;
   to hide your address, run it behind a network layer that does.
-- **Merging tells the Hub the bills share an owner.** `consolidate`,
-  `transfer`'s automatic merge, and `receive`'s protect-and-merge each
-  disclose that, and a Hub may keep that record. Decline the merge, or
-  don't consolidate, for bills you don't want linked.
+- **Merging tells the Hub the bills share an owner.** `consolidate` and
+  `transfer`'s automatic merge each disclose that, and a Hub may keep that
+  record; `receive` never merges. Don't consolidate bills you don't want
+  linked.
 
 ## Docker
 

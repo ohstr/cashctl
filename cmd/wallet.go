@@ -138,6 +138,7 @@ func newWalletShowCmd() *cobra.Command {
 					// Handed out and not known to be claimed, secrets hidden: `wallet
 					// history --show-secrets` shows them in full to resend.
 					"unclaimed_handoffs": unclaimedHandoffs(l),
+					"pending_merge":      pendingMergeJSON(l),
 				})
 				return nil
 			}
@@ -183,6 +184,7 @@ func newWalletShowCmd() *cobra.Command {
 			// the call but never reconciled. This is the one place that
 			// secret is ever readable again, so it is worth pushing past the
 			// routine summary above — see unreconciledDestinationParks.
+			printPendingMerge(l)
 			if pending := unclaimedHandoffs(l); len(pending) > 0 {
 				output.Printf("\nHanded out, not yet claimed: %d — `cashctl wallet history --show-secrets` to resend\n", len(pending))
 			}

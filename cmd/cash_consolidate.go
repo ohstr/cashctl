@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/ohstr/nmilat/nipcash"
 	nipcashclient "github.com/ohstr/nmilat/nipcash/client"
 	"github.com/ohstr/nmilat/nipcash/transport"
+	"github.com/ohstr/nmilat/utils"
 	"github.com/spf13/cobra"
 
 	"github.com/ohstr/cashctl/internal/credential"
@@ -179,6 +181,8 @@ func runCashConsolidate(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return output.RuntimeError(cmd, err)
 	}
+	// A merge interrupted before its move was confirmed is settled first (I-26).
+	settlePendingMoves(l)
 
 	if len(args) > 0 || sourcesFlag != "" {
 		items, err := resolveConsolidateSources(args, sourcesFlag, l.Held())
@@ -370,6 +374,9 @@ func consolidateItems(cmd *cobra.Command, l *ledger.Ledger, items []string, toFl
 	// same as the other error paths in this loop (output.RedactSecretInput
 	// at the verbose branch's own cred-parse failure, right below).
 	var expiredIDs []string
+	// hasCashNote: some source is a cash note, which the merge must first move
+	// onto a throwaway key (I-26).
+	hasCashNote := false
 	err := WithSpinner(jsonMode, "Checking sources...", func() error {
 		for _, item := range items {
 			item = strings.TrimSpace(item)
@@ -387,6 +394,9 @@ func consolidateItems(cmd *cobra.Command, l *ledger.Ledger, items []string, toFl
 				src, err := sourceFromEntry(cmd, l, e)
 				if err != nil {
 					return err
+				}
+				if isCashNote(e) {
+					hasCashNote = true
 				}
 				sources = append(sources, src)
 				sourceTokens = append(sourceTokens, e.Token)
@@ -489,11 +499,15 @@ func consolidateItems(cmd *cobra.Command, l *ledger.Ledger, items []string, toFl
 			output.Notef(jsonMode, "  resolves to: %s", targetResolved)
 		}
 	} else {
+		// The holder's merged token is a fresh cash note when any source is one
+		// (a merge of cash notes stays cash, and needs no identity — I-26) or
+		// when there is no identity to address it to.
 		myPub, err := localPubKeyHex(cmd)
-		if err != nil {
-			return nil, output.RuntimeError(cmd, err)
+		if hasCashNote || err != nil {
+			target = nipcash.NewCashTarget()
+		} else {
+			target = nipcash.Pubkey(myPub)
 		}
-		target = nipcash.Pubkey(myPub)
 	}
 
 	message := fmt.Sprintf("Consolidate %d tokens (%s) into one%s? Their Hub learns they share an owner.",
@@ -524,12 +538,42 @@ func consolidateItems(cmd *cobra.Command, l *ledger.Ledger, items []string, toFl
 	// --to <my own pubkey> isn't specially detected here either, matching
 	// that existing simplification rather than introducing a new one.
 	isSelfTarget := toFlag == ""
+	// cash_consolidate takes no cash-mode source: move the cash notes onto one
+	// throwaway key first, and sign them with it (I-26, cash_merge.go).
+	var throwawayPriv string
+	var movedIDs []string
+	if hasCashNote {
+		priv, pub, keyErr := newThrowawayKey()
+		if keyErr != nil {
+			return nil, output.RuntimeError(cmd, keyErr)
+		}
+		throwawayPriv = priv
+		err = WithSpinner(jsonMode, "Moving cash notes for the merge...", func() error {
+			var mErr error
+			movedIDs, mErr = moveCashNotesToKey(cmd, l, localIDs, priv, pub)
+			return mErr
+		})
+		if err != nil {
+			return nil, err
+		}
+		for i, id := range sourceIDs {
+			if slices.Contains(movedIDs, id) {
+				sources[i].Credential = nipcash.BySigning(priv)
+			}
+		}
+	}
 	err = WithSpinner(jsonMode, "Consolidating...", func() error {
 		var cErr error
-		newEntry, expiresAt, cErr = consolidateInRounds(cmd, l, sourceTokens, sources, sourceIDs, target, isSelfTarget, hubConsolidateCapFn(sourceTokens[0]))
+		newEntry, expiresAt, cErr = consolidateInRounds(cmd, l, sourceTokens, sources, sourceIDs, target, isSelfTarget, hubConsolidateCapFn(sourceTokens[0]), throwawayPriv)
 		return cErr
 	})
 	if err != nil {
+		// Refused (or never sent): nothing merged, so the moved notes go back to
+		// being cash notes. No answer: they stay on the key, spendable, and the
+		// next consolidate finishes the merge.
+		if len(movedIDs) > 0 && output.AsCLIError(err).Code != output.CodeIndeterminate {
+			undoMoves(cmd, l, movedIDs)
+		}
 		return nil, err
 	}
 	// Merged into someone else's identity: the resulting token is a gift, kept
@@ -1014,10 +1058,20 @@ func doCashConsolidate(cmd *cobra.Command, l *ledger.Ledger, dialCandidates []st
 // §Ceilings), so a larger set merges chunk by chunk into intermediate tokens of the
 // caller's own, each saved before the next call, until one last call to target
 // fits. sourceIDs is parallel to sources ("" for a source with no ledger entry).
-func consolidateInRounds(cmd *cobra.Command, l *ledger.Ledger, sourceTokens []string, sources []nipcash.Source, sourceIDs []string, target nipcash.Target, isSelfTarget bool, maxSources int) (*ledger.Entry, *int64, error) {
+//
+// interimKey, when set, is the private key intermediate tokens go to instead of
+// the local identity (a merge of cash notes, which needs no identity); each such
+// token then records it as its ThrowawayKey.
+func consolidateInRounds(cmd *cobra.Command, l *ledger.Ledger, sourceTokens []string, sources []nipcash.Source, sourceIDs []string, target nipcash.Target, isSelfTarget bool, maxSources int, interimKey string) (*ledger.Entry, *int64, error) {
 	maxSources = max(maxSources, 2)
 	for len(sources) > maxSources {
-		myPub, err := localPubKeyHex(cmd)
+		var myPub string
+		var err error
+		if interimKey != "" {
+			myPub, err = utils.GetPublicKey(interimKey)
+		} else {
+			myPub, err = localPubKeyHex(cmd)
+		}
 		if err != nil {
 			return nil, nil, output.RuntimeError(cmd, err)
 		}
@@ -1033,6 +1087,7 @@ func consolidateInRounds(cmd *cobra.Command, l *ledger.Ledger, sourceTokens []st
 			if err != nil {
 				return nil, nil, err
 			}
+			e.ThrowawayKey = interimKey
 			// Saved now, not at the end: this token is the only record of the
 			// chunk just merged, and later rounds may still fail.
 			if err := l.Save(); err != nil {
