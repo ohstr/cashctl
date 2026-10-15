@@ -37,7 +37,8 @@ for round in "${ROUNDS[@]}"; do
   fi
 
   CONDENSED="$(condense_transcript "${TRANSCRIPT}" | head -c 60000)"
-  VERIFY="$(cat "${RUN_DIR}/${round}.verify.json" 2>/dev/null || echo '{}')"
+  # Each check's detail truncated: a verifier can quote a whole Hub listing.
+  VERIFY="$(jq -c '.checks |= map(.detail |= .[0:400])' "${RUN_DIR}/${round}.verify.json" 2>/dev/null || echo '{}')"
   TASK="$(cat "rounds/${round}.md" 2>/dev/null || echo '(round file missing)')"
 
   JUDGE_PROMPT="You are reviewing a transcript of a DIFFERENT agent's attempt at the
@@ -76,8 +77,19 @@ Respond with ONLY a JSON object, no other text:
 {\"process_quality\": \"good\" | \"concerning\" | \"poor\", \"notes\": \"1-3 sentences\", \"flags\": [\"short tag\", ...], \"ux_critique\": [\"cashctl <command>: what got in the way, and what would have helped\", ...]}"
 
   echo "==> judging ${round}"
-  RAW="$(docker compose exec -T agent claude -p "${JUDGE_PROMPT}" --output-format json 2>/dev/null || echo '{}')"
-  VERDICT="$(jq -r '.result // "{}"' <<<"${RAW}" 2>/dev/null)"
+  # On stdin, not argv: a long transcript made the prompt exceed Linux's 128 KB
+  # limit on a single argument, so the call never ran.
+  RAW="$(printf '%s' "${JUDGE_PROMPT}" | docker compose exec -T agent claude -p --output-format json 2>"${RUN_DIR}/${round}.judge.stderr.log" || echo '{}')"
+  echo "${RAW}" > "${RUN_DIR}/${round}.judge.raw.json"
+  # The verdict, even if the reply wraps it in a code fence or a sentence.
+  VERDICT="$(jq -r '.result // ""' <<<"${RAW}" 2>/dev/null | python3 -c '
+import json, re, sys
+t = sys.stdin.read()
+m = re.search(r"\{.*\}", t, re.S)
+try:
+    print(json.dumps(json.loads(m.group(0))) if m else "{}")
+except ValueError:
+    print("{}")')"
   if ! jq -e '.process_quality' >/dev/null 2>&1 <<<"${VERDICT}"; then
     VERDICT='{"process_quality":"unknown","notes":"judge call failed or returned non-JSON","flags":["judge_error"],"ux_critique":[]}'
   fi

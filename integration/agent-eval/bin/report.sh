@@ -101,6 +101,9 @@ fi
   ' <<<"${ROWS}"
 } > "${RUN_DIR}/report.md"
 
+# REPORT_NO_HISTORY=1 regenerates a run's report (e.g. after re-judging)
+# without recording the run a second time.
+[ "${REPORT_NO_HISTORY:-}" = 1 ] && { echo "report regenerated: ${RUN_DIR}/report.md"; exit 0; }
 mkdir -p report
 TOTAL="$(jq 'length' <<<"${ROWS}")"
 VERIFIED_COUNT="$(jq '[.[] | select(.verified)] | length' <<<"${ROWS}")"

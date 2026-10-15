@@ -141,6 +141,8 @@ for round in "${ROUNDS[@]}"; do
     r8-partial-redeem) prepare_r8 && run_r8 || echo "WARNING: [${round}] did not run cleanly" >&2 ;;
     *) run_round "${round}" || echo "WARNING: [${round}] claude invocation exited non-zero" >&2 ;;
   esac
+  # The call log before the verifier, not after the loop: r8's verifier reads it.
+  [ "${EVAL_CASHCTL}" = local ] && docker compose cp "agent:${SHIM_LOG}" "${RUN_DIR}/cashctl-calls.jsonl" >/dev/null 2>&1
   bin/verify/"${round}.sh" "${RUN_DIR}" || echo "WARNING: [${round}] verifier reported problems" >&2
 done
 
