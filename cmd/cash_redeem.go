@@ -297,8 +297,11 @@ type redeemPlan struct {
 type redeemOutcome struct {
 	EntryID      string
 	AmountMillis *uint64
-	Result       *nipcash.CashRedeemResult
-	Err          error
+	// Invoice is the bolt11 this bill was paid into, so a caller can match
+	// the payment on the destination side.
+	Invoice string
+	Result  *nipcash.CashRedeemResult
+	Err     error
 }
 
 // prepareRedeems dials, quotes and builds an invoice for each selected bill.
@@ -528,6 +531,9 @@ func executeRedeems(
 	destName string,
 	jsonMode bool,
 ) {
+	for _, p := range plans {
+		outcomes[p.Index].Invoice = p.Invoice
+	}
 	groups, ungrouped := groupPlansByHub(plans)
 	for _, g := range groups {
 		redeemHubGroup(ctx, cmd, l, g, outcomes, destName, jsonMode)
@@ -601,11 +607,13 @@ func printRedeemOutcomes(jsonMode bool, outcomes []redeemOutcome, destName, expl
 	if jsonMode {
 		if len(outcomes) == 1 && paid == 1 {
 			o := outcomes[0]
-			output.PrintJSON(map[string]any{
+			out := map[string]any{
 				"redeemed_token": o.EntryID,
 				"fee_mloki":      o.Result.FeesPaid, "preimage": o.Result.Preimage,
 				destKey: destVal,
-			})
+			}
+			addPaymentRef(out, o.Invoice)
+			output.PrintJSON(out)
 			return
 		}
 		rows := make([]map[string]any, len(outcomes))
@@ -619,6 +627,7 @@ func printRedeemOutcomes(jsonMode bool, outcomes []redeemOutcome, destName, expl
 				row["status"] = "ok"
 				row["fee_mloki"] = o.Result.FeesPaid
 				row["preimage"] = o.Result.Preimage
+				addPaymentRef(row, o.Invoice)
 			case o.Err != nil:
 				ce := output.AsCLIError(o.Err)
 				row["status"] = "failed"
@@ -699,6 +708,18 @@ func firstRedeemError(outcomes []redeemOutcome) error {
 		}
 	}
 	return nil
+}
+
+// addPaymentRef adds the invoice a bill was paid into and its payment hash,
+// what the destination wallet's own records show.
+func addPaymentRef(out map[string]any, invoice string) {
+	if invoice == "" {
+		return
+	}
+	out["invoice"] = invoice
+	if hash, err := bolt11PaymentHash(invoice); err == nil {
+		out["payment_hash"] = hash
+	}
 }
 
 // redeemRecoveryHint lists the preimages of payments that really happened, for

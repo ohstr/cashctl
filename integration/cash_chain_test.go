@@ -58,8 +58,15 @@ func TestChain_CashOnlyWallet_NoIdentity_SplitsRespentThenRedeemed(t *testing.T)
 	if res.ExitCode != 0 {
 		t.Fatalf("redeem remainder: exit %d\nstdout: %s\nstderr: %s", res.ExitCode, res.Stdout, res.Stderr)
 	}
-	if pre, _ := mustDecodeJSON(t, "redeem", res.Stdout)["preimage"].(string); pre == "" {
+	redeemed := mustDecodeJSON(t, "redeem", res.Stdout)
+	if pre, _ := redeemed["preimage"].(string); pre == "" {
 		t.Errorf("redeem remainder: no preimage in %s", res.Stdout)
+	}
+	if got, _ := redeemed["invoice"].(string); got != inv {
+		t.Errorf("redeem remainder: invoice = %q, want the one paid into", got)
+	}
+	if hash, _ := redeemed["payment_hash"].(string); len(hash) != 64 {
+		t.Errorf("redeem remainder: payment_hash = %q, want 64 hex chars", hash)
 	}
 
 	// History needs no identity either, and must record every step.

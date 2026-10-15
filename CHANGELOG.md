@@ -80,6 +80,8 @@ Fixes from the NIP-CASH / NIP-CW conformance review, for agents above all.
 - Adds a pointer to `connect list` when `connect use`/`wallet use` or
   `connect rm` names no registered connection, and names `show` in the
   `skills` help.
+- Adds the invoice paid into and its `payment_hash` to `redeem --json`, to
+  match the payment on the destination side.
 - Fixes `--json` output escaping `<`, `>` and `&` as `\u003c`, `\u003e` and
   `\u0026`.
 

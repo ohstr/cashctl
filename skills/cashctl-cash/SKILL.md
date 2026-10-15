@@ -167,12 +167,12 @@ would leave the caller unable to tell which tokens already paid. Under
 
 | `status` | meaning |
 |---|---|
-| `ok` | paid out; entry also carries `fee_mloki` and `preimage` |
+| `ok` | paid out; entry also carries `fee_mloki`, `preimage`, and the `invoice` paid into with its `payment_hash` |
 | `failed` | entry also carries `error`, `code`, and `nwc_code` when the wallet returned one |
 | `not_attempted` | the run was declined before this token was reached — no wire call was made, so there is nothing to retry or reconcile |
 
 A single-token run keeps the original top-level
-`{"redeemed_token", "fee_mloki", "preimage", "to_wallet"|"to_invoice"}`
+`{"redeemed_token", "fee_mloki", "preimage", "invoice", "payment_hash", "to_wallet"|"to_invoice"}`
 shape, and a single token that *failed* still prints nothing on stdout —
 its error on stderr says everything. As with `consolidate`, **a partially
 successful run prints its full result on stdout AND exits nonzero**, so a

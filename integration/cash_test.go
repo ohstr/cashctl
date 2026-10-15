@@ -4,6 +4,7 @@ package integration
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -874,6 +875,12 @@ func TestRedeem_IntoRegisteredWallet(t *testing.T) {
 	redeemResp := f.mustJSON("redeem", "--into", "payout", "--yes")
 	if preimage, _ := redeemResp["preimage"].(string); preimage == "" {
 		t.Errorf("redeem --into payout: empty preimage: %v", redeemResp)
+	}
+	if inv, _ := redeemResp["invoice"].(string); !strings.HasPrefix(inv, "ln") {
+		t.Errorf("redeem --into payout: invoice = %q, want the bolt11 paid into", inv)
+	}
+	if hash, _ := redeemResp["payment_hash"].(string); len(hash) != 64 {
+		t.Errorf("redeem --into payout: payment_hash = %q, want 64 hex chars", hash)
 	}
 }
 
