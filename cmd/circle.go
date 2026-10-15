@@ -152,8 +152,13 @@ func runCircleJoin(cmd *cobra.Command, args []string) error {
 	// Checked explicitly (not cobra's own MarkFlagRequired) so a missing
 	// hub is a classified UsageError — see cash_consolidate.go's own
 	// comment on --sources for why.
+	// Both arguments named whenever the max amount is missing too: a hint
+	// naming only the hub led straight to the next refusal (I-29).
 	if hub == "" {
-		return output.InvocationError(cmd, fmt.Errorf("a Circle Hub connection is required — pass it directly (cashctl join <hub-connection>) or via --hub"))
+		if positionalMaxAmount == "" && strings.TrimSpace(maxAmountFlag) == "" {
+			return output.InvocationError(cmd, fmt.Errorf("a Circle Hub connection and a max amount are required — pass both (cashctl join <hub-connection> <max-amount>) or use --hub and --max-amount"))
+		}
+		return output.InvocationError(cmd, fmt.Errorf("a Circle Hub connection is required — pass it directly (cashctl join <hub-connection> <max-amount>) or via --hub"))
 	}
 	maxAmount, err := resolvePositionalOrFlagAmount(cmd, positionalMaxAmount, "max-amount", maxAmountFlag)
 	if err != nil {
@@ -175,7 +180,7 @@ func runCircleJoin(cmd *cobra.Command, args []string) error {
 		if positionalMaxAmount != "" || maxAmountFlag != "" {
 			return output.InvalidInputError(cmd, "0", fmt.Errorf("0 isn't a spend cap — there's no \"0 means unlimited\" convention here, so pass the most this wallet may spend"))
 		}
-		return output.InvocationError(cmd, fmt.Errorf("a max amount is required — pass it directly (cashctl join <hub-connection> <amount>) or via --max-amount"))
+		return output.InvocationError(cmd, fmt.Errorf("a max amount is required — pass it directly (cashctl join <hub-connection> <max-amount>) or via --max-amount"))
 	}
 
 	pairingURI, label, err := resolveHubConnection(cmd, hub)

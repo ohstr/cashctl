@@ -225,6 +225,35 @@ func TestRunCircleJoin_ZeroCapIsNotTreatedAsMissing(t *testing.T) {
 	}
 }
 
+// I-29: a bare `join` names both required arguments, so following the hint
+// does not fail again on the missing max amount.
+func TestRunCircleJoin_MissingHubHintNamesEveryMissingArgument(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		args   []string
+		want   []string
+		absent string
+	}{
+		{"bare join", nil, []string{"<hub-connection> <max-amount>", "--hub", "--max-amount"}, ""},
+		{"amount only", []string{"100"}, []string{"<hub-connection>", "--hub"}, "--max-amount"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := runCircleJoin(newTestJoinCmd(), tc.args)
+			if output.AsCLIError(err).Code != output.CodeUsage {
+				t.Fatalf("err = %v, want a usage error", err)
+			}
+			for _, w := range tc.want {
+				if !strings.Contains(err.Error(), w) {
+					t.Errorf("hint %q does not name %q", err, w)
+				}
+			}
+			if tc.absent != "" && strings.Contains(err.Error(), tc.absent) {
+				t.Errorf("hint %q asks for %q, which was given", err, tc.absent)
+			}
+		})
+	}
+}
+
 // A pre-SD-20 Hub's RESTRICTED "already has a wallet" refusal reads as
 // WALLET_EXISTS; a plain not-a-member refusal stays RESTRICTED.
 func TestWalletExistsFromLegacyRefusal(t *testing.T) {

@@ -110,6 +110,8 @@ Fixes from the NIP-CASH / NIP-CW conformance review, for agents above all.
 - Changes `cash status`, `redeem` and `consolidate` on a token you already
   redeemed or merged away to fail as `spent` (exit 10), as the Hub's tombstone
   says, instead of `not_found`; a token you transferred away stays `not_found`.
+- Fixes a bare `join` naming only the hub connection; it now names the max
+  amount too.
 
 ## [0.6.0-rc.12]
 
