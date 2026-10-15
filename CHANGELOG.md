@@ -82,6 +82,9 @@ Fixes from the NIP-CASH / NIP-CW conformance review, for agents above all.
   `skills` help.
 - Adds the invoice paid into and its `payment_hash` to `redeem --json`, to
   match the payment on the destination side.
+- Fixes `transfer --to cash` and `consolidate --to cash` repeating the new
+  note's secret in `target_resolved`; it is in `cash_to_send` (or saved with
+  the note) and `target_resolved` is now empty.
 - Fixes `--json` output escaping `<`, `>` and `&` as `\u003c`, `\u003e` and
   `\u0026`.
 

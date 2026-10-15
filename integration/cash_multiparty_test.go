@@ -95,11 +95,7 @@ func TestMultiParty_CashRegiftChain_AtoBtoC(t *testing.T) {
 	}
 
 	aTransfer := a.mustJSON("transfer", "cash", "--yes")
-	aResolved, _ := aTransfer["target_resolved"].(string)
-	if aResolved == "" {
-		t.Fatalf("A transfer cash: target_resolved empty, secret never surfaced: %v", aTransfer)
-	}
-	giftToB := recipientTokenFromTransfer(aTransfer, original) + "#" + extractHexSecret(t, aResolved)
+	giftToB := cashToSend(t, aTransfer)
 	if heldCount(t, a) != 0 {
 		t.Errorf("A should hold nothing after a full (non-split) transfer, got %d", heldCount(t, a))
 	}
@@ -117,19 +113,14 @@ func TestMultiParty_CashRegiftChain_AtoBtoC(t *testing.T) {
 	if status, _ := bSecured["status"].(string); status != "rekeyed" {
 		t.Errorf("B's auto-secure status = %q, want \"rekeyed\" (B held nothing else to merge with): %v", status, bSecured)
 	}
-	bOwnToken, _ := bEntry["token"].(string)
 
 	const regiftAmount = uint64(20_000)
 	bTransfer := b.mustJSON("transfer", "cash", lokiArg(int64(regiftAmount)), "--yes")
-	bResolved, _ := bTransfer["target_resolved"].(string)
-	if bResolved == "" {
-		t.Fatalf("B transfer (regift split) cash: target_resolved empty: %v", bTransfer)
-	}
 	remaining, _ := bTransfer["remaining_amount_millis"].(float64)
 	if uint64(remaining) != originalAmount-regiftAmount {
 		t.Errorf("B transfer (regift split): remaining_amount_millis = %v, want %d", bTransfer["remaining_amount_millis"], originalAmount-regiftAmount)
 	}
-	giftToC := recipientTokenFromTransfer(bTransfer, bOwnToken) + "#" + extractHexSecret(t, bResolved)
+	giftToC := cashToSend(t, bTransfer)
 
 	// --- C: receives B's re-gift (auto-secured), redeems it for real ---
 	c := newFixture(t)

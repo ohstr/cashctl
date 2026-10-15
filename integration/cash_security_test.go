@@ -368,14 +368,9 @@ func TestCashTransfer_ToCashTarget_SecretMustBeRecoverable(t *testing.T) {
 	}
 
 	transferResp := f.mustJSON("transfer", "cash", "--yes")
-	resolved, _ := transferResp["target_resolved"].(string)
-	if resolved == "" {
-		t.Fatalf("transfer to cash: target_resolved is empty — the generated cash secret was never surfaced anywhere, making the transferred funds permanently unspendable: %v", transferResp)
-	}
-
 	// Extract the secret and prove it's the real credential: redeem with
 	// it, for real, against the same (now-reassigned) connection.
-	secret := extractHexSecret(t, resolved)
+	_, secret, _ := strings.Cut(cashToSend(t, transferResp), "#")
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	verifyClient, err := nipcashclient.Connect(ctx, token)
@@ -402,6 +397,21 @@ func TestCashTransfer_ToCashTarget_SecretMustBeRecoverable(t *testing.T) {
 // extractHexSecret pulls the first 64-hex-char substring out of s — used
 // to recover a cash secret from a human-readable "resolves to:"-style
 // message without hard-coding its exact wording.
+// cashToSend is a cash transfer's <token>#<secret> handoff, failing t if
+// the secret was never surfaced (the funds would be unspendable) or is
+// repeated in target_resolved.
+func cashToSend(t *testing.T, resp map[string]any) string {
+	t.Helper()
+	note, _ := resp["cash_to_send"].(string)
+	if _, secret, ok := strings.Cut(note, "#"); !ok || len(secret) != 64 {
+		t.Fatalf("cash transfer: cash_to_send = %q, want <token>#<64-hex secret>: %v", note, resp)
+	}
+	if resolved, _ := resp["target_resolved"].(string); resolved != "" {
+		t.Errorf("cash transfer: target_resolved = %q, want empty: the secret is in cash_to_send", resolved)
+	}
+	return note
+}
+
 func extractHexSecret(t *testing.T, s string) string {
 	t.Helper()
 	fields := strings.FieldsFunc(s, func(r rune) bool {

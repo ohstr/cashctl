@@ -211,8 +211,7 @@ func TestChain_CashToPubkeyToCash_RoundTrip(t *testing.T) {
 	a.mustJSON("receive", orig)
 
 	gifted := a.mustJSON("transfer", "cash", "--yes") // whole token, pubkey -> cash
-	secret := extractHexSecret(t, gifted["target_resolved"].(string))
-	gift := recipientTokenFromTransfer(gifted, orig) + "#" + secret
+	gift := cashToSend(t, gifted)
 
 	bRecv := b.mustJSON("receive", gift) // auto-protect re-keys it
 	if st, _ := bRecv["secured"].(map[string]any); st["status"] != "rekeyed" {

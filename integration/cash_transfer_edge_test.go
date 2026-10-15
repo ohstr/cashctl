@@ -117,6 +117,12 @@ func TestConsolidate_FailureDoesNotLeaveConsumedSourcesHeld(t *testing.T) {
 	}
 
 	res := f.run("consolidate", "--sources", srcs[0].id+","+srcs[1].id, "--to", "cash", "--yes")
+	if res.ExitCode == 0 {
+		// The new note's secret is saved with it; target_resolved must not repeat it.
+		if out := mustDecodeJSON(t, "consolidate", res.Stdout); out["target_resolved"] != "" {
+			t.Errorf("consolidate --to cash: target_resolved = %v, want empty", out["target_resolved"])
+		}
+	}
 	// Whichever way the Hub answers, the ledger's view of each source has to
 	// match the Hub's. Skipping on success (what this test used to do) meant
 	// it asserted nothing at all on a healthy hub — the partial-failure path
