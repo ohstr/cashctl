@@ -370,8 +370,8 @@ func TestWalletShow_ReportsAnUnfinishedCashSendInBothModes(t *testing.T) {
 	}
 }
 
-// TestReKeySites_PersistTheNewSecretBeforeTheirWireCall (F-6): the two re-key
-// sites behind auto-protect and `wallet protect` generate a cash secret and must
+// TestReKeySites_PersistTheNewSecretBeforeTheirWireCall (F-6): the re-key site
+// behind auto-protect and `wallet protect` generates a cash secret and must
 // write it to disk before the call that can commit it (NIP-CASH §Security
 // Considerations for Cash-Mode Slices). Both dial nipcashclient.Connect
 // themselves, so like the transfer sites above this pins the source order:
@@ -386,8 +386,11 @@ func TestReKeySites_PersistTheNewSecretBeforeTheirWireCall(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parsing receive_secure.go: %v", err)
 	}
+	// protectCashReceipt only re-keys now (I-26), through protectRekeyOnly.
+	if !strings.Contains(string(src), "return protectRekeyOnly(cmd, l, entry, jsonMode)") {
+		t.Error("protectCashReceipt no longer delegates to protectRekeyOnly: re-derive which sites re-key")
+	}
 	for _, tc := range []struct{ fn, wireCall string }{
-		{"protectCashReceipt", "client.RekeyCashSlice("},
 		{"protectRekeyOnly", "client.CashTransfer("},
 	} {
 		var body string

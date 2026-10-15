@@ -131,6 +131,14 @@ type Entry struct {
 	// Same leak sensitivity as CashSecret itself.
 	PendingDestinationCashSecret string `json:"-"`
 
+	// ThrowawayKey is the private key that now spends this bill, once a merge
+	// moved it off its cash secret onto a key made for that merge alone
+	// (cash_consolidate accepts no cash-mode source). Deleted with the entry
+	// when the bill is spent, never before. PendingThrowawayKey is the same key
+	// written ahead of the move, promoted once the move is confirmed (I-26).
+	ThrowawayKey        string `json:"-"`
+	PendingThrowawayKey string `json:"-"`
+
 	// Connection-key mode reference — set only when the user has told
 	// cashctl this token is connection-key-bound (not derivable from the
 	// token itself; IdentityRequired only says a proof is needed, not
@@ -324,20 +332,21 @@ func load() (*Ledger, error) {
 		identity_required, amount_millis, received_at, verified, status, cash_secret,
 		connection_key_platform, connection_key_external_id, attestation_event_id, ia_pubkey,
 		pending_cash_secret, expires_at, cash_protection, pending_destination_cash_secret,
-		COALESCE(version, 0)
+		throwaway_key, pending_throwaway_key, COALESCE(version, 0)
 		FROM entries ORDER BY rowid`)
 	if err != nil {
 		return nil, fmt.Errorf("cashctl.db: reading entries: %w", err)
 	}
 	for rows.Next() {
 		var e Entry
-		var relayURLs, pendingCashSecret, cashProtection, pendingDestCashSecret sql.NullString
+		var relayURLs, pendingCashSecret, cashProtection, pendingDestCashSecret, throwawayKey, pendingThrowawayKey sql.NullString
 		var identityRequired, amountMillis, expiresAt sql.NullInt64
 		var version int64
 		if err := rows.Scan(&e.ID, &e.Token, &e.WalletPubkey, &e.MinterPubkey, &e.Secret, &relayURLs,
 			&identityRequired, &amountMillis, &e.ReceivedAt, &e.Verified, &e.Status, &e.CashSecret,
 			&e.ConnectionKeyPlatform, &e.ConnectionKeyExternalID, &e.AttestationEventID, &e.IAPubkey,
-			&pendingCashSecret, &expiresAt, &cashProtection, &pendingDestCashSecret, &version); err != nil {
+			&pendingCashSecret, &expiresAt, &cashProtection, &pendingDestCashSecret,
+			&throwawayKey, &pendingThrowawayKey, &version); err != nil {
 			_ = rows.Close()
 			return nil, fmt.Errorf("cashctl.db: reading entries: %w", err)
 		}
@@ -350,6 +359,8 @@ func load() (*Ledger, error) {
 		e.PendingCashSecret = pendingCashSecret.String
 		e.CashProtection = cashProtection.String
 		e.PendingDestinationCashSecret = pendingDestCashSecret.String
+		e.ThrowawayKey = throwawayKey.String
+		e.PendingThrowawayKey = pendingThrowawayKey.String
 		if relayURLs.Valid && relayURLs.String != "" {
 			if err := json.Unmarshal([]byte(relayURLs.String), &e.RelayURLs); err != nil {
 				_ = rows.Close()
@@ -525,8 +536,9 @@ func (l *Ledger) save() error {
 		res, err := tx.Exec(`INSERT INTO entries (id, token, wallet_pubkey, minter_pubkey, secret, relay_urls,
 			identity_required, amount_millis, received_at, verified, status, cash_secret,
 			connection_key_platform, connection_key_external_id, attestation_event_id, ia_pubkey,
-			pending_cash_secret, expires_at, cash_protection, pending_destination_cash_secret, version)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+			pending_cash_secret, expires_at, cash_protection, pending_destination_cash_secret,
+			throwaway_key, pending_throwaway_key, version)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
 			ON CONFLICT(id) DO UPDATE SET
 				token = excluded.token, wallet_pubkey = excluded.wallet_pubkey,
 				minter_pubkey = excluded.minter_pubkey, secret = excluded.secret,
@@ -541,13 +553,15 @@ func (l *Ledger) save() error {
 				expires_at = excluded.expires_at,
 				cash_protection = excluded.cash_protection,
 				pending_destination_cash_secret = excluded.pending_destination_cash_secret,
+				throwaway_key = excluded.throwaway_key,
+				pending_throwaway_key = excluded.pending_throwaway_key,
 				version = COALESCE(entries.version, 0) + 1
 			WHERE COALESCE(entries.version, 0) = ?`,
 			e.ID, e.Token, e.WalletPubkey, e.MinterPubkey, e.Secret, relayURLs,
 			identityRequired, amountMillis, e.ReceivedAt, e.Verified, e.Status, e.CashSecret,
 			e.ConnectionKeyPlatform, e.ConnectionKeyExternalID, e.AttestationEventID, e.IAPubkey,
 			e.PendingCashSecret, expiresAt, e.CashProtection, e.PendingDestinationCashSecret,
-			expectedVersion)
+			e.ThrowawayKey, e.PendingThrowawayKey, expectedVersion)
 		if err != nil {
 			// entries.id collisions are handled by ON CONFLICT above — the
 			// only other constraint this table has is token's own UNIQUE,

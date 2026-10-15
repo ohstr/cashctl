@@ -214,13 +214,10 @@ func TestWalletProtect_NothingToProtectIsNotFound(t *testing.T) {
 	}
 }
 
-// TestCashReceive_AutoSecuresCashReceipt_MergesWithExistingHolding is
-// scenario (b) from the same plan: receiving a cash gift while already
-// holding another mint-signed token from the same minter merges them into
-// one fresh cash note — both original sources must independently show
-// fully claimed on the Hub (not just trusted from cashctl's own local
-// bookkeeping), and the merged amount must actually redeem.
-func TestCashReceive_AutoSecuresCashReceipt_MergesWithExistingHolding(t *testing.T) {
+// TestCashReceive_AutoSecuresCashReceipt_NeverMergesWithExistingHolding:
+// receiving a cash gift while already holding another token from the same
+// Hub re-keys the gift and leaves both holdings apart — receive never merges.
+func TestCashReceive_AutoSecuresCashReceipt_NeverMergesWithExistingHolding(t *testing.T) {
 	cfg, err := LoadConfig("")
 	if err != nil {
 		t.Skipf("skipping: could not load integration config (%v) — see integration/README.md", err)
@@ -283,34 +280,13 @@ func TestCashReceive_AutoSecuresCashReceipt_MergesWithExistingHolding(t *testing
 	if secured == nil {
 		t.Fatalf("receive: no \"secured\" report in response: %v", receiveResp)
 	}
-	if secured["status"] != "consolidated" {
-		t.Fatalf(`receive: secured.status = %v, want "consolidated" (an existing same-minter holding should trigger a merge); secured.error = %v`, secured["status"], secured["error"])
+	// Protecting only re-keys: merging tells the Hub the bills share an owner,
+	// which the holder decides with `consolidate` (I-26).
+	if secured["status"] != "rekeyed" {
+		t.Fatalf(`receive: secured.status = %v, want "rekeyed" — receive must never merge; secured.error = %v`, secured["status"], secured["error"])
 	}
-	consolidatedWith, _ := secured["consolidated_with"].([]any)
-	if len(consolidatedWith) != 1 {
-		t.Fatalf("secured.consolidated_with = %v, want exactly 1 entry", secured["consolidated_with"])
-	}
-
-	entry, _ := receiveResp["entry"].(map[string]any)
-	gotAmount, _ := entry["amount_millis"].(float64)
-	if uint64(gotAmount) != existingAmount+cashAmount {
-		t.Errorf("final entry amount_millis = %v, want %d", entry["amount_millis"], existingAmount+cashAmount)
-	}
-
-	// Independently verify server-side: both original sources were merged
-	// away, so neither bill exists any more.
-	for _, tok := range []string{existingToken, cashResult.CashToken} {
-		requireBillSpentAway(t, admin, hub.ID, tok, "merged source")
-	}
-
-	hubClient := dialNWC(t, ctx, hub.PairingUri)
-	invoiceTx, err := hubClient.MakeInvoice(ctx, nip47.MakeInvoiceParams{Amount: int64(existingAmount + cashAmount)})
-	if err != nil {
-		t.Fatalf("make_invoice: %v", err)
-	}
-	redeemResp := f.mustJSON("redeem", "--invoice", invoiceTx.Invoice, "--yes")
-	if preimage, _ := redeemResp["preimage"].(string); preimage == "" {
-		t.Errorf("redeem (merged holding): empty preimage: %v", redeemResp)
+	if n := heldCount(t, f); n != 2 {
+		t.Errorf("held %d token(s), want the existing holding and the new note kept apart", n)
 	}
 }
 

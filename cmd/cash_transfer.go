@@ -333,9 +333,24 @@ func transferWithAutoConsolidate(cmd *cobra.Command, l *ledger.Ledger, group []l
 	// Resolved before confirming, not after: a missing/misconfigured local
 	// identity should fail fast, the same way runCashConsolidate's own
 	// target resolution happens before its confirm prompt.
-	myPub, err := localPubKeyHex(cmd)
-	if err != nil {
-		return output.RuntimeError(cmd, err)
+	//
+	// The sources merge under the local identity — or, when a source is a cash
+	// note or there is no identity, under a throwaway key made for this merge
+	// alone, which then spends any remainder (I-26, cash_merge.go).
+	hasCashNote := false
+	for i := range group {
+		if isCashNote(&group[i]) {
+			hasCashNote = true
+		}
+	}
+	myPub, idErr := localPubKeyHex(cmd)
+	interimPub, throwawayPriv := myPub, ""
+	if hasCashNote || idErr != nil {
+		priv, pub, kErr := newThrowawayKey()
+		if kErr != nil {
+			return output.RuntimeError(cmd, kErr)
+		}
+		throwawayPriv, interimPub = priv, pub
 	}
 
 	jsonMode, _ := cmd.Flags().GetBool("json")
@@ -357,7 +372,12 @@ func transferWithAutoConsolidate(cmd *cobra.Command, l *ledger.Ledger, group []l
 	var expiredIDs []string
 	_ = WithSpinner(jsonMode, "Checking expiry...", func() error {
 		for i := range group {
-			ea := fetchExpiresAt(cmd, group[i].Token)
+			// Asked with each source's own credential: a cash note answers only
+			// to its secret.
+			var ea *int64
+			if cred, cErr := resolveCredential(cmd, &group[i]); cErr == nil {
+				ea = fetchExpiresAtWithCredential(cmd, group[i].Token, cred)
+			}
 			earliest = earliestExpiry(earliest, ea)
 			if ea == nil {
 				continue
@@ -400,9 +420,32 @@ func transferWithAutoConsolidate(cmd *cobra.Command, l *ledger.Ledger, group []l
 		return nil
 	}
 
+	// cash_consolidate takes no cash-mode source: move the cash notes onto the
+	// throwaway key first; their entries then sign with it.
+	var movedIDs []string
+	if hasCashNote {
+		ids := make([]string, len(group))
+		for i := range group {
+			ids[i] = group[i].ID
+		}
+		err := WithSpinner(jsonMode, "Moving cash notes for the merge...", func() error {
+			var mErr error
+			movedIDs, mErr = moveCashNotesToKey(cmd, l, ids, throwawayPriv, interimPub)
+			return mErr
+		})
+		if err != nil {
+			return err
+		}
+		for i := range group {
+			if e, ok := l.Find(group[i].ID); ok {
+				group[i] = *e
+			}
+		}
+	}
+
 	var sources []nipcash.Source
 	sourceIDs := make([]string, len(group))
-	err = WithSpinner(jsonMode, "Preparing sources...", func() error {
+	err := WithSpinner(jsonMode, "Preparing sources...", func() error {
 		for i := range group {
 			src, sErr := sourceFromEntry(cmd, l, &group[i])
 			if sErr != nil {
@@ -425,7 +468,7 @@ func transferWithAutoConsolidate(cmd *cobra.Command, l *ledger.Ledger, group []l
 		for i := range tokens {
 			tokens[i] = group[i].Token
 		}
-		merged, _, mErr := consolidateInRounds(cmd, l, tokens, sources[:n], sourceIDs[:n], nipcash.Pubkey(myPub), true, limit)
+		merged, _, mErr := consolidateInRounds(cmd, l, tokens, sources[:n], sourceIDs[:n], nipcash.Pubkey(interimPub), true, limit, throwawayPriv)
 		if mErr != nil {
 			return mErr
 		}
@@ -441,8 +484,10 @@ func transferWithAutoConsolidate(cmd *cobra.Command, l *ledger.Ledger, group []l
 		sourceIDs = append([]string{merged.ID}, sourceIDs[n:]...)
 	}
 
-	interimCred, err := localCashCredential(cmd)
-	if err != nil {
+	var interimCred nipcash.Credential
+	if throwawayPriv != "" {
+		interimCred = nipcash.BySigning(throwawayPriv)
+	} else if interimCred, err = localCashCredential(cmd); err != nil {
 		return output.RuntimeError(cmd, err)
 	}
 
@@ -450,7 +495,7 @@ func transferWithAutoConsolidate(cmd *cobra.Command, l *ledger.Ledger, group []l
 		Sources:           sources,
 		Amount:            sendAmount,
 		To:                target.Target,
-		InterimIdentity:   nipcash.Pubkey(myPub),
+		InterimIdentity:   nipcash.Pubkey(interimPub),
 		InterimCredential: interimCred,
 	}
 
@@ -532,7 +577,7 @@ func transferWithAutoConsolidate(cmd *cobra.Command, l *ledger.Ledger, group []l
 		// reassignment of the interim wallet always arrives with
 		// NewWalletToken already populated (see this function's own
 		// comment above on TransferFromSources' own patching).
-		return printAndSaveTransferResult(cmd, l, result.Transfer, sendAmount, toValue, target, sourceIDs, ledger.Entry{IdentityRequired: ptrTo(true), MinterPubkey: sharedMinter(group)}, "")
+		return printAndSaveTransferResult(cmd, l, result.Transfer, sendAmount, toValue, target, sourceIDs, ledger.Entry{IdentityRequired: ptrTo(true), MinterPubkey: sharedMinter(group), ThrowawayKey: throwawayPriv}, "")
 	}
 
 	var partial *nipcashclient.PartialProgressError
@@ -556,6 +601,7 @@ func transferWithAutoConsolidate(cmd *cobra.Command, l *ledger.Ledger, group []l
 			AmountMillis: &partial.Consolidated.AmountMillis,
 			Verified:     true,
 			MinterPubkey: sharedMinter(group),
+			ThrowawayKey: throwawayPriv,
 		})
 		if addErr == nil {
 			addErr = l.Save()
@@ -568,6 +614,13 @@ func transferWithAutoConsolidate(cmd *cobra.Command, l *ledger.Ledger, group []l
 			return reportUnsavedResult(cmd, addErr, "Transfer (interim consolidate)", entryRecoveryHint(newEntry))
 		}
 		return classifyCashSpendErr(cmd, ffsErr, "transfer", newEntry.ID)
+	}
+
+	// Refused (or never sent): nothing merged, so the notes moved onto the
+	// throwaway key go back to being cash notes. No answer: they stay on the key,
+	// spendable.
+	if len(movedIDs) > 0 && output.AsCLIError(classifyCashSpendErr(cmd, ffsErr, "transfer", sourceIDs...)).Code != output.CodeIndeterminate {
+		undoMoves(cmd, l, movedIDs)
 	}
 
 	if isCrossHubSourcesDecline(ffsErr) {
@@ -982,6 +1035,8 @@ func runCashTransfer(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return output.RuntimeError(cmd, err)
 	}
+	// A merge interrupted before its move was confirmed is settled first (I-26).
+	settlePendingMoves(l)
 
 	tokenFlag, _ := cmd.Flags().GetString("token")
 	var entry *ledger.Entry
