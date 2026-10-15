@@ -3,8 +3,11 @@
 package integration
 
 import (
+	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/ohstr/nmilat/nipcash"
 )
 
 // Edge cases in `transfer` found by the campaign's E3 executor and
@@ -174,5 +177,47 @@ func TestTransfer_AmountOnlyEqualToWholeToken_StillReturnsGift(t *testing.T) {
 	}
 	if n := heldCount(t, f); n != 0 {
 		t.Errorf("held tokens after the transfer = %d, want 0", n)
+	}
+}
+
+// TestTransfer_CashNoteIsKeptUntilClaimed (I-27): a cash note handed out by
+// transfer stays in wallet history — secret hidden while unclaimed, shown with
+// --show-secrets — and once someone takes it, the next read says claimed.
+func TestTransfer_CashNoteIsKeptUntilClaimed(t *testing.T) {
+	admin := adminOrSkip(t)
+	hub := setUpCashHub(t, admin)
+	f := newFixture(t)
+	pub, err := npubToHex(f.mustJSON("wallet", "init")["npub"].(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.mustJSON("receive", mintPubkeyTokenFromHub(t, hub, pub, 50_000))
+	note, _ := f.mustJSON("transfer", "20", "cash", "--yes")["cash_to_send"].(string)
+	if note == "" {
+		t.Fatal("transfer to cash returned no note")
+	}
+	_, secret := nipcash.SplitCashSliceString(note)
+
+	handoffs := func(args ...string) []any {
+		h, _ := f.mustJSON(append([]string{"wallet", "history"}, args...)...)["handoffs"].([]any)
+		return h
+	}
+	h := handoffs()
+	if len(h) != 1 || h[0].(map[string]any)["status"] != "unclaimed" {
+		t.Fatalf("want one unclaimed handoff, got %v", h)
+	}
+	if strings.Contains(fmt.Sprint(h), secret) {
+		t.Errorf("the unclaimed note's secret is shown without --show-secrets")
+	}
+	if got := handoffs("--show-secrets")[0].(map[string]any)["handoff"]; got != note {
+		t.Errorf("--show-secrets handoff = %v, want the full note", got)
+	}
+
+	other := newFixture(t)
+	if res := other.run("receive", note); res.ExitCode != 0 {
+		t.Fatalf("someone else could not take the note: %s", res.Stderr)
+	}
+	if st := handoffs()[0].(map[string]any)["status"]; st != "claimed" {
+		t.Errorf("after it was taken, status = %v, want claimed", st)
 	}
 }

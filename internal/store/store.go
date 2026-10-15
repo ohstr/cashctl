@@ -68,6 +68,19 @@ CREATE TABLE IF NOT EXISTS history (
 	action TEXT NOT NULL,
 	detail TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS handoffs (
+	id            INTEGER PRIMARY KEY AUTOINCREMENT,
+	at            TEXT NOT NULL,
+	kind          TEXT NOT NULL,
+	handoff       TEXT NOT NULL,
+	amount_millis INTEGER NOT NULL,
+	target        TEXT NOT NULL,
+	wallet_pubkey TEXT NOT NULL,
+	expires_at    INTEGER,
+	status        TEXT NOT NULL,
+	checked_at    TEXT
+);
 `
 
 // Path returns cashctl.db's location under appdir.Dir(), without opening

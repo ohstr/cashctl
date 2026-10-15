@@ -203,6 +203,36 @@ type HistoryEntry struct {
 	Detail string `json:"detail"`
 }
 
+// Handoff kinds and statuses.
+const (
+	// HandoffCashNote is a "<token>#<secret>" string anyone holding it can take.
+	HandoffCashNote = "cash_note"
+	// HandoffGift is a token addressed to someone else's identity.
+	HandoffGift = "gift"
+
+	HandoffUnclaimed = "unclaimed" // a cash note whose secret still spends it
+	HandoffClaimed   = "claimed"   // taken: the secret no longer matches, or the bill is spent
+	HandoffExpired   = "expired"   // its deadline passed; the value returned to the Hub
+	HandoffSent      = "sent"      // a gift: delivered, but the sender cannot see a claim
+)
+
+// Handoff is one thing cashctl handed out — a cash note or a gift token — kept
+// permanently so it can be reviewed and resent (`wallet history`): a handoff
+// printed once and lost before delivery is otherwise unrecoverable.
+type Handoff struct {
+	ID   int64  `json:"id"`
+	At   string `json:"at"`
+	Kind string `json:"kind"`
+	// Handoff is the full string to give: secret-bearing for a cash note.
+	Handoff      string `json:"handoff"`
+	AmountMillis uint64 `json:"amount_millis"`
+	Target       string `json:"target"`
+	WalletPubkey string `json:"wallet_pubkey"`
+	ExpiresAt    *int64 `json:"expires_at,omitempty"`
+	Status       string `json:"status"`
+	CheckedAt    string `json:"checked_at,omitempty"`
+}
+
 // Ledger is the in-memory shape of cashctl.db's entries/history tables —
 // loaded whole (Load) into plain slices so every other method on this type
 // (Find, Add, SetStatus, ...) is pure in-memory logic, unaware storage is
@@ -212,8 +242,9 @@ type HistoryEntry struct {
 // lock, and there's no OS-level reason two `cashctl` invocations can't
 // target the same one) would silently clobber each other's writes.
 type Ledger struct {
-	Entries []Entry
-	History []HistoryEntry
+	Entries  []Entry
+	History  []HistoryEntry
+	Handoffs []Handoff
 
 	// loaded is what Load actually read, keyed by ID — Save diffs against
 	// it to only touch rows THIS process actually changed (see Save's own
@@ -236,6 +267,23 @@ type Ledger struct {
 	// added" is the only safe way to avoid re-touching (or duplicating)
 	// rows a concurrent process already committed.
 	historyLoaded int
+	// handoffsLoaded is each handoff row as Load read it, keyed by id: Save
+	// inserts rows with ID 0 and updates only rows whose status changed.
+	handoffsLoaded map[int64]Handoff
+}
+
+// AddHandoff records a handoff (status unclaimed for a cash note, sent for a
+// gift), stamped now. Persisted by the next Save.
+func (l *Ledger) AddHandoff(h Handoff) {
+	h.ID = 0
+	h.At = nowRFC3339()
+	if h.Status == "" {
+		h.Status = HandoffUnclaimed
+		if h.Kind == HandoffGift {
+			h.Status = HandoffSent
+		}
+	}
+	l.Handoffs = append(l.Handoffs, h)
 }
 
 // Load reads every entry and history line from cashctl.db, returning an
@@ -348,6 +396,32 @@ func load() (*Ledger, error) {
 	for _, e := range l.Entries {
 		l.loaded[e.ID] = e
 	}
+	hRows, err := db.Query(`SELECT id, at, kind, handoff, amount_millis, target, wallet_pubkey, expires_at, status, checked_at FROM handoffs ORDER BY id`)
+	if err != nil {
+		return nil, fmt.Errorf("cashctl.db: reading handoffs: %w", err)
+	}
+	defer func() { _ = hRows.Close() }()
+	l.handoffsLoaded = map[int64]Handoff{}
+	for hRows.Next() {
+		var h Handoff
+		var amount int64
+		var expires sql.NullInt64
+		var checked sql.NullString
+		if err := hRows.Scan(&h.ID, &h.At, &h.Kind, &h.Handoff, &amount, &h.Target, &h.WalletPubkey, &expires, &h.Status, &checked); err != nil {
+			return nil, fmt.Errorf("cashctl.db: reading handoffs: %w", err)
+		}
+		h.AmountMillis = uint64(amount) //nolint:gosec // written from a uint64 by Save
+		if expires.Valid {
+			h.ExpiresAt = &expires.Int64
+		}
+		h.CheckedAt = checked.String
+		l.Handoffs = append(l.Handoffs, h)
+		l.handoffsLoaded[h.ID] = h
+	}
+	if err := hRows.Err(); err != nil {
+		return nil, fmt.Errorf("cashctl.db: reading handoffs: %w", err)
+	}
+
 	l.loadedVersions = versions
 	l.historyLoaded = len(l.History)
 	return l, nil
@@ -518,6 +592,36 @@ func (l *Ledger) save() error {
 		}
 	}
 
+	// Handoffs: new rows inserted, known rows only ever get a status update —
+	// a handoff itself is never rewritten or deleted.
+	newIDs := map[int]int64{}
+	for i, h := range l.Handoffs {
+		var expires sql.NullInt64
+		if h.ExpiresAt != nil {
+			expires = sql.NullInt64{Int64: *h.ExpiresAt, Valid: true}
+		}
+		if h.ID == 0 {
+			res, err := tx.Exec(`INSERT INTO handoffs (at, kind, handoff, amount_millis, target, wallet_pubkey, expires_at, status, checked_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				h.At, h.Kind, h.Handoff, int64(h.AmountMillis), h.Target, h.WalletPubkey, expires, h.Status, h.CheckedAt) //nolint:gosec // amounts fit
+			if err != nil {
+				return fmt.Errorf("cashctl.db: saving handoff: %w", err)
+			}
+			id, err := res.LastInsertId()
+			if err != nil {
+				return fmt.Errorf("cashctl.db: saving handoff: %w", err)
+			}
+			newIDs[i] = id
+			continue
+		}
+		if prior, ok := l.handoffsLoaded[h.ID]; ok && prior.Status == h.Status && prior.CheckedAt == h.CheckedAt {
+			continue
+		}
+		if _, err := tx.Exec(`UPDATE handoffs SET status = ?, checked_at = ? WHERE id = ?`, h.Status, h.CheckedAt, h.ID); err != nil {
+			return fmt.Errorf("cashctl.db: updating handoff %d: %w", h.ID, err)
+		}
+	}
+
 	if err := tx.Commit(); err != nil {
 		return err
 	}
@@ -527,6 +631,13 @@ func (l *Ledger) save() error {
 	// the D-CLI-1 write-ahead path saves twice on one *Ledger, so the versions
 	// have to move with the rows or that second save conflicts with its own
 	// first one.
+	for i, id := range newIDs {
+		l.Handoffs[i].ID = id
+	}
+	l.handoffsLoaded = make(map[int64]Handoff, len(l.Handoffs))
+	for _, h := range l.Handoffs {
+		l.handoffsLoaded[h.ID] = h
+	}
 	l.loaded = make(map[string]Entry, len(l.Entries))
 	for _, e := range l.Entries {
 		l.loaded[e.ID] = e

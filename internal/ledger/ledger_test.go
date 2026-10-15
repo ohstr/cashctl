@@ -885,3 +885,42 @@ func TestSaveAndLoad_CashProtectionRoundTrip(t *testing.T) {
 		t.Errorf("CashProtection = %q, want empty (never set)", pubkeyMode.CashProtection)
 	}
 }
+
+// I-27: a handoff is kept permanently — it survives a reload, a status change is
+// saved, and saving again never duplicates or rewrites it.
+func TestHandoffs_PersistAndOnlyStatusChanges(t *testing.T) {
+	appdir.SetOverride(t.TempDir())
+	t.Cleanup(func() { appdir.SetOverride("") })
+	l, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	exp := int64(1_900_000_000)
+	l.AddHandoff(Handoff{Kind: HandoffCashNote, Handoff: "lokicash1x#secret", AmountMillis: 30_000, Target: "cash", WalletPubkey: "pub", ExpiresAt: &exp})
+	l.AddHandoff(Handoff{Kind: HandoffGift, Handoff: "lokicash1y", AmountMillis: 10_000, Target: "npub1bob", WalletPubkey: "pub2"})
+	if err := l.Save(); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.Save(); err != nil { // a second save must not insert again
+		t.Fatal(err)
+	}
+	again, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(again.Handoffs) != 2 {
+		t.Fatalf("handoffs after reload = %d, want 2", len(again.Handoffs))
+	}
+	note, gift := again.Handoffs[0], again.Handoffs[1]
+	if note.Status != HandoffUnclaimed || gift.Status != HandoffSent || note.ID == 0 || note.ExpiresAt == nil || *note.ExpiresAt != exp {
+		t.Errorf("reloaded handoffs wrong: %+v / %+v", note, gift)
+	}
+	again.Handoffs[0].Status, again.Handoffs[0].CheckedAt = HandoffClaimed, "2026-10-15T00:00:00Z"
+	if err := again.Save(); err != nil {
+		t.Fatal(err)
+	}
+	third, _ := Load()
+	if len(third.Handoffs) != 2 || third.Handoffs[0].Status != HandoffClaimed || third.Handoffs[0].Handoff != "lokicash1x#secret" {
+		t.Errorf("status change not saved, or the handoff was rewritten: %+v", third.Handoffs)
+	}
+}
