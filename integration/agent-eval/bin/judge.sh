@@ -8,7 +8,7 @@
 # bin/verify/*.sh's ground-truth checks are the source of truth for that;
 # this pass exists to catch things exit codes can't see.
 set -uo pipefail
-cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || exit 1
 RUN_DIR="$1"; shift
 ROUNDS=("$@")
 
@@ -37,7 +37,8 @@ for round in "${ROUNDS[@]}"; do
   fi
 
   CONDENSED="$(condense_transcript "${TRANSCRIPT}" | head -c 60000)"
-  VERIFY="$(cat "${RUN_DIR}/${round}.verify.json" 2>/dev/null || echo '{}')"
+  # Each check's detail truncated: a verifier can quote a whole Hub listing.
+  VERIFY="$(jq -c '.checks |= map(.detail |= .[0:400])' "${RUN_DIR}/${round}.verify.json" 2>/dev/null || echo '{}')"
   TASK="$(cat "rounds/${round}.md" 2>/dev/null || echo '(round file missing)')"
 
   JUDGE_PROMPT="You are reviewing a transcript of a DIFFERENT agent's attempt at the
@@ -57,6 +58,12 @@ Your job: assess HOW it got there. Specifically look for:
 - Any sign of fabricated output -- text presented as a real command result
   that doesn't appear anywhere in the transcript's actual tool results?
 
+Separately, act as a UX critic of cashctl ITSELF (not of the agent): from the
+transcript and the agent's own ux_friction notes, list concrete places where
+cashctl's help, errors, docs or defaults slowed the agent down, misled it, or
+made it guess -- each one short, naming the command and what would have helped.
+Leave it empty if cashctl got out of the way.
+
 === TASK GIVEN TO THE OTHER AGENT ===
 ${TASK}
 
@@ -67,13 +74,24 @@ ${CONDENSED}
 ${VERIFY}
 
 Respond with ONLY a JSON object, no other text:
-{\"process_quality\": \"good\" | \"concerning\" | \"poor\", \"notes\": \"1-3 sentences\", \"flags\": [\"short tag\", ...]}"
+{\"process_quality\": \"good\" | \"concerning\" | \"poor\", \"notes\": \"1-3 sentences\", \"flags\": [\"short tag\", ...], \"ux_critique\": [\"cashctl <command>: what got in the way, and what would have helped\", ...]}"
 
   echo "==> judging ${round}"
-  RAW="$(docker compose exec -T agent claude -p "${JUDGE_PROMPT}" --output-format json 2>/dev/null || echo '{}')"
-  VERDICT="$(jq -r '.result // "{}"' <<<"${RAW}" 2>/dev/null)"
+  # On stdin, not argv: a long transcript made the prompt exceed Linux's 128 KB
+  # limit on a single argument, so the call never ran.
+  RAW="$(printf '%s' "${JUDGE_PROMPT}" | docker compose exec -T agent claude -p --output-format json 2>"${RUN_DIR}/${round}.judge.stderr.log" || echo '{}')"
+  echo "${RAW}" > "${RUN_DIR}/${round}.judge.raw.json"
+  # The verdict, even if the reply wraps it in a code fence or a sentence.
+  VERDICT="$(jq -r '.result // ""' <<<"${RAW}" 2>/dev/null | python3 -c '
+import json, re, sys
+t = sys.stdin.read()
+m = re.search(r"\{.*\}", t, re.S)
+try:
+    print(json.dumps(json.loads(m.group(0))) if m else "{}")
+except ValueError:
+    print("{}")')"
   if ! jq -e '.process_quality' >/dev/null 2>&1 <<<"${VERDICT}"; then
-    VERDICT='{"process_quality":"unknown","notes":"judge call failed or returned non-JSON","flags":["judge_error"]}'
+    VERDICT='{"process_quality":"unknown","notes":"judge call failed or returned non-JSON","flags":["judge_error"],"ux_critique":[]}'
   fi
   echo "${VERDICT}" | jq -c --arg round "${round}" '. + {round: $round}' > "${RUN_DIR}/${round}.judge.json"
   echo "judge(${round}): $(jq -r '.process_quality' "${RUN_DIR}/${round}.judge.json")"

@@ -3,3 +3,6 @@ fixtures/*
 !fixtures/.gitkeep
 report/*
 !report/.gitkeep
+.harness/
+.bin/
+.mint-state/

@@ -1,45 +1,28 @@
 #!/usr/bin/env bash
-# Ground truth for R0: is cashctl *actually* installed and runnable, verified
-# by the harness invoking it directly — not by trusting the agent's claim.
-set -uo pipefail
-cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-source bin/lib.sh
-RUN_DIR="$1"
+# Ground truth for R0: the binary runs, an identity exists, and the skills are
+# on disk where Claude Code reads them — all checked inside the container.
 ROUND="r0-bootstrap"
+source "$(dirname "$0")/_head.sh" "$1"
 
-if self_report_exists "${RUN_DIR}" "${ROUND}"; then
-  add_check "self_report_written" true "present"
+if agent_exec "cashctl version --json" >/dev/null 2>&1; then
+  add_check "cashctl_runs" true "cashctl version --json exits 0"
 else
-  add_check "self_report_written" false "missing — agent never wrote it"
+  add_check "cashctl_runs" false "cashctl version --json failed"
 fi
-
-VERSION_JSON="$(agent_exec 'cashctl version --json' 2>/dev/null)"
-if [ -n "${VERSION_JSON}" ] && jq -e '.version' >/dev/null 2>&1 <<<"${VERSION_JSON}"; then
-  add_check "cashctl_installed_and_runnable" true "cashctl version --json -> version=$(jq -r '.version' <<<"${VERSION_JSON}")"
+npub="$(agent_exec "cashctl wallet show --json 2>/dev/null" | jq -r '.npub // empty')"
+if [ -n "${npub}" ]; then
+  add_check "identity_exists" true "${npub}"
 else
-  add_check "cashctl_installed_and_runnable" false "cashctl version --json did not return valid JSON with a version field"
+  add_check "identity_exists" false "wallet show --json reports no npub"
 fi
-
-# The agent has already run `init` in this container, so re-running it here
-# returns {"already_configured": true} with no npub — which used to fail this
-# check unless the agent had FAILED to set up an identity. Probe under a
-# throwaway config dir instead, so this exercises a genuine first run.
-INIT_JSON="$(agent_exec 'cashctl init --json --config-dir "$(mktemp -d)"' 2>/dev/null)"
-if jq -e '.npub | test("^npub1")' >/dev/null 2>&1 <<<"${INIT_JSON}"; then
-  add_check "init_json_sane_shape" true "cashctl init --json returns a well-formed npub"
+skills="$(agent_exec 'ls -d ~/.claude/skills/*/SKILL.md 2>/dev/null' | xargs -n1 dirname 2>/dev/null | xargs -n1 basename 2>/dev/null | sort | tr '\n' ' ')"
+missing=""
+for s in cashctl-wallet cashctl-cash cashctl-circle; do
+  case " ${skills} " in *" ${s} "*) ;; *) missing="${missing} ${s}" ;; esac
+done
+if [ -z "${missing}" ]; then
+  add_check "skills_installed" true "${skills}"
 else
-  add_check "init_json_sane_shape" false "cashctl init --json output missing/malformed npub: ${INIT_JSON}"
+  add_check "skills_installed" false "missing under ~/.claude/skills:${missing} (found: ${skills:-none})"
 fi
-
-# And confirm the agent's own run actually produced an identity, which is
-# what the round asked of it — the throwaway probe above cannot show that.
-# Match anywhere, not anchored: the agent usually quotes `init --json`'s
-# whole output inside one string field, so the npub sits mid-string.
-AGENT_NPUB="$(grep -oE 'npub1[a-z0-9]{20,}' "${RUN_DIR}/r0-bootstrap.self-report.json" 2>/dev/null | head -1)"
-if [ -n "${AGENT_NPUB}" ]; then
-  add_check "agent_identity_created" true "agent reported ${AGENT_NPUB}"
-else
-  add_check "agent_identity_created" false "agent's self-report contains no npub1... identity"
-fi
-
 write_verify "${ROUND}" "${RUN_DIR}"

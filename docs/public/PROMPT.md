@@ -73,7 +73,14 @@ https://raw.githubusercontent.com/ohstr/cashctl/main/AGENTS.md
 ## 4. Pull in task-specific skills
 
 For example-driven guidance beyond `--help`, install the skills instead of
-re-deriving them:
+re-deriving them. They ship inside the binary, so this copy always matches
+the version you installed; pass the directory your agent reads skills from:
+
+```sh
+cashctl skills install --dir ~/.claude/skills
+```
+
+Or, with Node available, fetch them from the repository instead:
 
 ```sh
 npx skills add ohstr/cashctl --all -y

@@ -26,10 +26,16 @@ type flagInfo struct {
 }
 
 type cmdInfo struct {
-	Path     string     `json:"path"`
-	Runnable bool       `json:"runnable"`
-	Short    string     `json:"short"`
-	Flags    []flagInfo `json:"flags"`
+	Path     string `json:"path"`
+	Runnable bool   `json:"runnable"`
+	// Group is true for a command with subcommands (cash, wallet, ...): it runs
+	// only to print usage, so a gate holds it to "ran bare", not to exit_ok.
+	Group   bool     `json:"group"`
+	Aliases []string `json:"aliases,omitempty"`
+	// Args is the positional part of the command's usage line, e.g. "<name> <connection>".
+	Args  string     `json:"args,omitempty"`
+	Short string     `json:"short"`
+	Flags []flagInfo `json:"flags"`
 	// Twin is the other spelling of the same command (a top-level
 	// docker-style shortcut vs its canonical `group sub` form), "" if none.
 	Twin string `json:"twin,omitempty"`
@@ -56,6 +62,9 @@ func main() {
 			s.Commands = append(s.Commands, cmdInfo{
 				Path:     strings.Join(p, " "),
 				Runnable: ch.Runnable(),
+				Group:    hasVisibleSubcommands(ch),
+				Aliases:  ch.Aliases,
+				Args:     strings.TrimSpace(strings.TrimPrefix(ch.Use, ch.Name())),
 				Short:    ch.Short,
 				Flags:    flagsOf(ch.LocalNonPersistentFlags()),
 			})
@@ -67,7 +76,7 @@ func main() {
 	// Twin detection: same Short text and same leaf name, exactly two paths.
 	byKey := map[string][]int{}
 	for i, c := range s.Commands {
-		if !c.Runnable || c.Short == "" {
+		if !c.Runnable || c.Group || c.Short == "" {
 			continue
 		}
 		leaf := c.Path[strings.LastIndex(c.Path, " ")+1:]
@@ -87,6 +96,15 @@ func main() {
 		os.Exit(1)
 	}
 	fmt.Println(string(out))
+}
+
+func hasVisibleSubcommands(c *cobra.Command) bool {
+	for _, ch := range c.Commands() {
+		if !ch.Hidden {
+			return true
+		}
+	}
+	return false
 }
 
 func flagsOf(fs *pflag.FlagSet) []flagInfo {
