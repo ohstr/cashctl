@@ -12,5 +12,8 @@
   ],
   "issues": [
     "anything surprising, undocumented, or that required guessing beyond what AGENTS.md/the skills/--help actually told you"
+  ],
+  "ux_friction": [
+    "optional: anything about cashctl itself that slowed you down or misled you — an unclear error, a missing hint, a doc that disagreed with the tool, a step you had to guess. Not problems with this environment."
   ]
 }

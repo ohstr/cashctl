@@ -1,5 +1,7 @@
 # The agent-under-test's machine. Deliberately minimal and deliberately
-# does NOT contain cashctl, Go, or a copy of the cashctl source tree — the
+# does NOT contain cashctl, Go, or a copy of the cashctl source tree (in
+# EVAL_CASHCTL=local mode bin/run.sh copies one built binary in, behind the
+# logging shim, which needs python3) — the
 # whole point of this harness is that the agent's only knowledge of cashctl
 # comes from what it fetches at runtime (docs/PROMPT.md -> AGENTS.md ->
 # skills), the same as a real stranger picking it up for the first time.
@@ -12,7 +14,7 @@
 FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      bash curl ca-certificates jq git unzip gnupg xz-utils procps \
+      bash curl ca-certificates jq git unzip gnupg xz-utils procps python3 \
     && rm -rf /var/lib/apt/lists/*
 
 # Non-root on purpose: Claude Code refuses --dangerously-skip-permissions /

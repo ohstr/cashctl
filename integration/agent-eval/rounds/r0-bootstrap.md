@@ -1,20 +1,14 @@
-# Round R0 — Bootstrap
+<!-- clauses: (setup — no spec clause) -->
+# Round R0 — Set up
 
-You need a tool called `cashctl`. You've been pointed at a URL to start from.
+You need `cashctl` working on this machine. Start from
+`https://ohstr.github.io/cashctl/PROMPT.md` — it explains how to install it if
+it isn't already, and where the real reference (AGENTS.md) lives.
 
-1. Fetch `https://ohstr.github.io/cashctl/PROMPT.md` and follow it step by
-   step, in order.
-2. That file will have you confirm the install with `cashctl version --json`
-   and `cashctl init --json` — actually run them and look at the output,
-   don't just assume the install worked because a command exited.
-3. It will point you at a "real reference" file (AGENTS.md) — fetch that
-   too.
-4. It will tell you how to pull in task-specific skills for whatever you
-   do next — do that as well, using whichever of the two methods it
-   offers fits this environment.
+Goal: `cashctl` runs, you have an identity, and cashctl's agent skills are
+installed where Claude Code reads skills (`~/.claude/skills`), so a later task
+can use them.
 
-Write your self-report to `/report/r0-bootstrap.self-report.json`
-(schema: `/rounds/_report-schema.json`). Include:
-- which install method you ended up using and why
-- the exact `cashctl version --json` and `cashctl init --json` output
-- whether the skills step actually produced anything on disk, and where
+Write your self-report to `/report/r0-bootstrap.self-report.json` (schema:
+`/rounds/_report-schema.json`). Include the version you ended up with, your
+npub, how you installed the skills, and which skill directories now exist.

@@ -1,44 +1,25 @@
 #!/usr/bin/env bash
-# Ground truth for R2: did `cashctl join` actually create a circle_wallet
-# child under the ephemeral circle_hub — checked directly against
-# lokihub's admin API, not by trusting the agent's self-report.
-set -uo pipefail
-cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-source bin/lib.sh
-RUN_DIR="$1"
+# Ground truth for R2: exactly one circle wallet exists under the hub, the Hub
+# reports its budget as 500 loki, and a second join is refused as `exists`
+# (exit 9) — the harness re-runs that join itself.
 ROUND="r2-circle-join"
-
-if self_report_exists "${RUN_DIR}" "${ROUND}"; then
-  add_check "self_report_written" true "present"
+source "$(dirname "$0")/_head.sh" "$1"
+need_admin
+hub="$(harness_file "${ROUND}" hub-app-id.txt)"
+token="$(harness_file "${ROUND}" hub-token.txt)"
+kids="$(admin_api GET "/api/apps/${hub}/circle/children?limit=0" 2>/dev/null | jq '.children // [] | length')"
+[ "${kids}" = 1 ] && add_check "one_circle_wallet" true "1 child under hub ${hub}" ||
+  add_check "one_circle_wallet" false "${kids:-?} children under hub ${hub}, want exactly 1"
+name="$(agent_exec "cashctl connect list --json" | jq -r '[.connections[]?.name | select(startswith("circle"))][0] // empty')"
+budget="$(agent_exec "cashctl -c '${name}' wallet budget --json 2>/dev/null" | jq -r '.total_budget // empty')"
+case "${budget}" in
+  500000) add_check "cap_is_500" true "${name}: budget ${budget}" ;;
+  *) add_check "cap_is_500" false "${name:-<no circle wallet>}: budget '${budget}', want 500 loki" ;;
+esac
+second="$(agent_exec "cashctl join '${token}' 500 --json 2>&1; echo exit=\$?")"
+if grep -q 'exit=9' <<<"${second}" && grep -q '"code": *"exists"' <<<"${second}"; then
+  add_check "second_join_refused_as_exists" true "exit 9, code exists"
 else
-  add_check "self_report_written" false "missing — agent never wrote it"
+  add_check "second_join_refused_as_exists" false "want exit 9 code exists: ${second}"
 fi
-
-if ! load_admin_config; then
-  add_check "admin_api_configured" false "../config.local.yaml missing/incomplete — cannot verify ground truth"
-  write_verify "${ROUND}" "${RUN_DIR}"
-  exit 0
-fi
-
-if [ ! -s fixtures/r2-hub-app-id.txt ]; then
-  add_check "fixture_provisioned" false "fixtures/r2-hub-app-id.txt missing — prepare_r2 never ran or failed"
-  write_verify "${ROUND}" "${RUN_DIR}"
-  exit 0
-fi
-HUB_APP_ID="$(cat fixtures/r2-hub-app-id.txt)"
-
-if [ ! -s "report/r2-npub.txt" ]; then
-  add_check "agent_wrote_npub" false "report/r2-npub.txt missing — agent never completed step 1, so allowlisting/join couldn't have happened"
-  write_verify "${ROUND}" "${RUN_DIR}"
-  exit 0
-fi
-add_check "agent_wrote_npub" true "$(cat report/r2-npub.txt)"
-
-CHILDREN="$(admin_api GET "/api/apps/${HUB_APP_ID}/circle/children?limit=0" 2>/dev/null || echo '{}')"
-if jq -e '.children | length > 0' >/dev/null 2>&1 <<<"${CHILDREN}"; then
-  add_check "circle_wallet_child_exists" true "create_circle_wallet actually landed server-side: $(jq -c '.children' <<<"${CHILDREN}")"
-else
-  add_check "circle_wallet_child_exists" false "no circle_wallet child found under hub app_id=${HUB_APP_ID}: ${CHILDREN}"
-fi
-
 write_verify "${ROUND}" "${RUN_DIR}"

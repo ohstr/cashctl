@@ -44,8 +44,10 @@ self_report_exists() {
 }
 
 # agent_exec <command...> — runs inside the agent container, cashctl already on PATH
+# Tagged CASHCTL_AGENT=harness so the logging shim's coverage counts only the
+# agent's own calls.
 agent_exec() {
-  docker compose exec -T agent bash -lc "export PATH=\"\$HOME/.local/bin:\$PATH\"; $*"
+  docker compose exec -T -e CASHCTL_AGENT=harness agent bash -lc "export PATH=\"\$HOME/.local/bin:\$PATH\"; $*"
 }
 
 # --- lokihub admin API (fixture provisioning + independent ground truth) ---
@@ -59,7 +61,8 @@ ADMIN_TOKEN=""
 # ../config.local.yaml. Returns non-zero (callers should skip, not fail)
 # if the file is missing or incomplete.
 load_admin_config() {
-  local cfg="$(dirname "${BASH_SOURCE[0]}")/../../config.local.yaml"
+  local cfg
+  cfg="$(dirname "${BASH_SOURCE[0]}")/../../config.local.yaml"
   [ -f "${cfg}" ] || return 1
   ADMIN_BASE_URL="$(grep -m1 'base_url:' "${cfg}" | sed -E 's/.*base_url:\s*"?([^"[:space:]]*)"?.*/\1/')"
   ADMIN_TOKEN="$(grep -m1 'token:' "${cfg}" | sed -E 's/.*token:\s*"?([^"[:space:]]*)"?.*/\1/')"
@@ -83,4 +86,33 @@ admin_api() {
 # this module's own go.mod/dependencies.
 decode_npub_hex() {
   (cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && GOWORK=off go run ./integration/agent-eval/decode-npub "$1")
+}
+
+# --- fixtures and ground truth for the goal-phrased rounds -----------------
+
+# harness_dir <round> — harness-only state for a round (fixture ids, expected
+# values). Never mounted into the agent container, unlike fixtures/ and report/.
+harness_dir() {
+  local d
+  d="$(dirname "${BASH_SOURCE[0]}")/../.harness/$1"
+  mkdir -p "${d}"
+  echo "${d}"
+}
+
+# hub_slices <hub_app_id> — every recipient slice under a cash hub, live or
+# archived, with the spec's state names in .status (unclaimed, redeemed, split,
+# expired, reclaimed, written-off). The operator's view: independent of anything
+# the agent or cashctl reports.
+hub_slices() {
+  admin_api GET "/api/apps/$1/cash-wallets?limit=0" 2>/dev/null | jq -c '.claims // []'
+}
+
+# agent_npub — the agent's identity, creating one if no round has yet.
+agent_npub() {
+  local npub
+  npub="$(agent_exec "cashctl wallet show --json 2>/dev/null" | jq -r '.npub // empty')"
+  if [ -z "${npub}" ]; then
+    npub="$(agent_exec "cashctl init --json 2>/dev/null" | jq -r '.npub // empty')"
+  fi
+  echo "${npub}"
 }
