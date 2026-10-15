@@ -227,7 +227,7 @@ func runCircleJoin(cmd *cobra.Command, args []string) error {
 		// guarantees crossing at least one whole-second boundary from any
 		// starting sub-second offset, matching the proof's own
 		// whole-second granularity.
-		output.Notef(jsonMode, "Retrying — the Hub saw a duplicate identity proof from within the same second...")
+		output.Notef(jsonMode, "Another join from this identity reached the Hub within the same second, so it could not tell them apart; asking again in a second for this join's own answer...")
 		time.Sleep(1100 * time.Millisecond)
 		dialErr = false
 		err = attemptJoin()

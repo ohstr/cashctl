@@ -65,6 +65,12 @@ Fixes from the NIP-CASH / NIP-CW conformance review, for agents above all.
   now merge them through a key made for that merge, with no identity needed,
   and `receive` only re-keys, never merges.
   ([#83](https://github.com/ohstr/cashctl/pull/83))
+- Fixes a spend the SDK refused before sending it (such as a cash note given
+  straight to a merge) being reported as `indeterminate`; it is now
+  `invalid_input`, since nothing moved.
+- Fixes `join`'s retry after two joins in the same second reading like the
+  cause of the failure that followed; it now says why it asks again.
+- Fixes the `wallet protect --help` description of `--token`.
 
 ## [0.6.0-rc.12]
 

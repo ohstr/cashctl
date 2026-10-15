@@ -56,6 +56,10 @@ A Hub's refusal tells you whether to retry — branch on `code`, with
 | not a member of this circle | `RESTRICTED` | `auth` | no |
 | you already hold a wallet here | `WALLET_EXISTS` | `exists` | no — use the wallet you have |
 
+Two joins from one identity within the same second look like a replayed
+proof to the Hub; `join` then waits a second and asks again once, so the
+answer you get is the real one (often `exists`, if the first join landed).
+
 A Hub that predates `WALLET_EXISTS` refuses with `RESTRICTED` and an
 "already has an active circle wallet" message; `join` reports that as
 `exists`/`WALLET_EXISTS` too.

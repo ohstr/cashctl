@@ -33,7 +33,7 @@ func newWalletProtectCmd() *cobra.Command {
 		Args: output.MaximumNArgs(1),
 		RunE: runWalletProtect,
 	}
-	cmd.Flags().String("token", "", "which held token to protect (see `cashctl wallet show --json`)")
+	cmd.Flags().String("token", "", "which held token to protect (IDs from: cashctl wallet show --json)")
 	return cmd
 }
 

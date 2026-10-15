@@ -108,16 +108,41 @@ func classifyCashSpendErr(cmd *cobra.Command, err error, verb string, ids ...str
 		return output.NWCErrorForCashToken(cmd, walletErr)
 	}
 	var notSent *notSentError
-	if errors.As(err, &notSent) {
+	if errors.As(err, &notSent) || errors.Is(err, nipcashclient.ErrNoAnnouncement) {
 		return output.NetworkError(cmd, err)
 	}
 	input := ""
 	if len(ids) == 1 {
 		input = ids[0]
 	}
+	if isRejectedBeforeSend(err) {
+		return output.InvalidInputError(cmd, input, fmt.Errorf("this %s was refused before it was sent, so nothing moved: %w", verb, err))
+	}
 	return output.IndeterminateError(cmd, input, fmt.Errorf(
 		"the Hub gave no answer to this %s, so whether it was applied is unknown. "+
 			"Do not resend it: check first with %s: %w", verb, cashStatusHint(ids), err))
+}
+
+// rejectedBeforeSend are the SDK's own checks on a request it then never
+// sends: an answer as definite as a Hub's decline.
+var rejectedBeforeSend = []error{
+	nipcash.ErrMixedCashAllocation,
+	nipcash.ErrTooFewSources,
+	nipcash.ErrCashSource,
+	nipcash.ErrConsolidateTargetInvalid,
+	nipcash.ErrWrongCredentialForTarget,
+	nipcashclient.ErrItemTooLarge,
+	nipcashclient.ErrInterimIdentityNotPubkey,
+	nipcashclient.ErrNewTargetNotCash,
+}
+
+func isRejectedBeforeSend(err error) bool {
+	for _, target := range rejectedBeforeSend {
+		if errors.Is(err, target) {
+			return true
+		}
+	}
+	return false
 }
 
 // cashStatusHint names the command that settles an indeterminate spend.
