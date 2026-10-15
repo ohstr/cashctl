@@ -422,6 +422,12 @@ hits a tombstone (`receive`, `redeem`, `transfer`) fails with `code:
 `"spent": true`. Silence is never read as spent: no answer is
 `indeterminate` (above).
 
+**A bill you spent yourself.** Naming a token you already redeemed or
+merged away (`cash status --token`, `redeem --token`, `consolidate`) is
+`spent` too, answered from your own records with no network call: the Hub
+confirmed that spend. A token you transferred away is `not_found` (exit 4):
+the bill still exists, under its new holder.
+
 **A cash-mode bill without its secret.** The Hub answers about a cash-mode
 bill only to its cash secret, so checking a bare token (`receive`'s
 read-only report, `decode --check`) says to pass the full

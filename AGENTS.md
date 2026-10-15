@@ -90,13 +90,13 @@ plain `Error: ...` line by default, or `{"error", "code", "retryable",
 |---|---|---|---|
 | `usage` | 2 | no | bad/missing/conflicting flags or args, or a group command invoked without a subcommand |
 | `invalid_input` | 3 | no | a supplied value failed validation/parsing (bad token, connection string, credential syntax, amount, ...) |
-| `not_found` | 4 | no | the referenced thing doesn't exist (held token, registered wallet, vault entry, ...) — includes "no wallet configured yet" |
+| `not_found` | 4 | no | the referenced thing doesn't exist (held token, registered wallet, vault entry, ...) — includes "no wallet configured yet", and a token you transferred away (no longer yours) |
 | `conflict` | 5 | yes | collides with existing state (a token already held, a wallet's rate limit) |
 | `network` | 6 | yes | couldn't reach a relay/wallet, or a Hub isn't ready yet (`NOT_READY`) |
 | `auth` | 7 | no | not authorized, or no longer (a wallet declined as restricted/unauthorized/expired) |
 | `indeterminate` | 8 | no | a `redeem`/`transfer`/`consolidate` got no answer (timeout, omission, incomplete reply), so whether it was applied is unknown — never resend it blind; check with `cash status --token <id>` first |
 | `exists` | 9 | no | what you're trying to create already exists (`join`: you already hold a wallet from that circle) — don't retry, use the one you have |
-| `spent` | 10 | no | the bill's Hub confirmed it is spent (a tombstone): its value has already moved. The local entry is marked spent and leaves `wallet balance`/`redeem --all`; never inferred from silence |
+| `spent` | 10 | no | the bill's Hub confirmed it is spent (a tombstone): its value has already moved. The local entry is marked spent and leaves `wallet balance`/`redeem --all`; never inferred from silence. Also what naming a token you redeemed or merged away yourself returns (`cash status --token`, `redeem`, `consolidate`), with no network call |
 | `internal` | 1 | no | anything else — a wallet-side decline that isn't one of the above, or a cashctl-side failure |
 
 `input`, when present, is the single specific value that caused the

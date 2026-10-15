@@ -40,13 +40,34 @@ func TestRecordSpent_MarksAHeldEntryAndDropsItFromHeld(t *testing.T) {
 	}
 }
 
-func TestAlreadySpentError_SpentOnlyForAHubTombstone(t *testing.T) {
+// I-29: `cash status` (and redeem/consolidate) on a bill you redeemed or merged
+// away answers spent, as the Hub's tombstone would; one you transferred away
+// still exists under its new holder, so it is not_found.
+func TestAlreadySpentError_SpentForEveryBillWhoseValueMovedOnTheHub(t *testing.T) {
 	cmd := &cobra.Command{}
-	if c := output.AsCLIError(alreadySpentError(cmd, "tok", ledger.StatusSpent)).Code; c != output.CodeSpent {
-		t.Errorf("spent entry: code = %q, want spent", c)
+	for status, want := range map[string]output.ErrorCode{
+		ledger.StatusSpent:        output.CodeSpent,
+		ledger.StatusRedeemed:     output.CodeSpent,
+		ledger.StatusConsolidated: output.CodeSpent,
+		ledger.StatusTransferred:  output.CodeNotFound,
+	} {
+		if c := output.AsCLIError(alreadySpentError(cmd, "tok", status)).Code; c != want {
+			t.Errorf("%s entry: code = %q, want %q", status, c, want)
+		}
 	}
-	if c := output.AsCLIError(alreadySpentError(cmd, "tok", ledger.StatusRedeemed)).Code; c != output.CodeNotFound {
-		t.Errorf("redeemed entry: code = %q, want not_found", c)
+}
+
+// I-29, end to end through cash status's own resolver: `cash status --token`
+// on a bill you just redeemed is spent (exit 10), with no network call.
+func TestCashStatus_ATokenYouRedeemedIsSpent(t *testing.T) {
+	l := heldLedger(2)
+	l.Entries[1].Status = ledger.StatusRedeemed
+	cmd := testCmdWithFlags(true, false)
+	cmd.Flags().String("token", l.Entries[1].ID, "")
+	_, err := resolveHeldTokensOrAll(cmd, l)
+	ce := output.AsCLIError(err)
+	if ce.Code != output.CodeSpent || output.ExitCode(err) != 10 {
+		t.Fatalf("code = %q (exit %d), want spent (exit 10): %v", ce.Code, output.ExitCode(err), err)
 	}
 }
 

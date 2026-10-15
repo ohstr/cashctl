@@ -434,8 +434,8 @@ func TestResolveHeldToken_SpentTokenIsRefusedWithoutDialling(t *testing.T) {
 			if err == nil {
 				t.Fatalf("resolveHeldToken() on a %s token returned entry %v, want an error", status, entry)
 			}
-			if !strings.Contains(err.Error(), "no longer exists on the Hub") {
-				t.Fatalf("error = %q, want it to say the bill is gone", err)
+			if !strings.Contains(err.Error(), "was already") {
+				t.Fatalf("error = %q, want it to say the bill was already spent or sent", err)
 			}
 		})
 	}

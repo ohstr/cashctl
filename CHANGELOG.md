@@ -107,6 +107,9 @@ Fixes from the NIP-CASH / NIP-CW conformance review, for agents above all.
   never sent, and the connection string is built from the Hub's reply. A join
   the Hub never answers stays under `pending_joins` in `wallet show`. Shows
   the wallet's expiry with its other terms.
+- Changes `cash status`, `redeem` and `consolidate` on a token you already
+  redeemed or merged away to fail as `spent` (exit 10), as the Hub's tombstone
+  says, instead of `not_found`; a token you transferred away stays `not_found`.
 
 ## [0.6.0-rc.12]
 
