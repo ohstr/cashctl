@@ -60,6 +60,7 @@ Fixes from the NIP-CASH / NIP-CW conformance review, for agents above all.
 - Adds every cash note and gift you hand out to `wallet history`, kept
   permanently with its claimed/unclaimed/expired status, so a lost one can be
   resent; an unclaimed note's secret shows only with `--show-secrets`.
+  ([#82](https://github.com/ohstr/cashctl/pull/82))
 
 ## [0.6.0-rc.12]
 
