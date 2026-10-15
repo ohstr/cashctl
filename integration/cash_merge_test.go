@@ -89,6 +89,22 @@ func TestMerge_OvershootSplitsAndTheRemainderIsSpendable(t *testing.T) {
 	if len(held) != 1 || mloki(held[0].(map[string]any), "amount_millis") != 10_000 {
 		t.Fatalf("want the 10-loki remainder held, got %v", held)
 	}
+	// The change is a cash note again, not left on the merge's key.
+	if req, _ := held[0].(map[string]any)["identity_required"].(bool); req {
+		t.Errorf("the change is not a cash note: %v", held[0])
+	}
+	if pm := f.mustJSON("wallet", "show")["pending_merge"]; pm != nil {
+		t.Errorf("the change is reported as a merge left midway: %v", pm)
+	}
+	var change int
+	for _, s := range liveSlices(t, admin, hub) {
+		if s.IdentityType == "cash" && s.AmountMloki == 10_000 {
+			change++
+		}
+	}
+	if change != 1 {
+		t.Errorf("want the 10-loki change as a live cash slice, got %+v", liveSlices(t, admin, hub))
+	}
 	id := entryID(t, held[0])
 	if res := f.run("redeem", "--token", id, "--invoice", makeHubInvoice(t, hub, 10_000)); res.ExitCode != 0 {
 		t.Errorf("the remainder could not be spent: exit %d\n%s", res.ExitCode, res.Stderr)

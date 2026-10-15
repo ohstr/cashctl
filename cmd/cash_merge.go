@@ -118,10 +118,22 @@ func isDefiniteRefusal(err error) bool {
 	return errors.As(err, &walletErr)
 }
 
-// undoMoves moves notes back from their throwaway key to fresh cash notes, each
-// secret written ahead of its move (PendingCashSecret). A note that cannot be moved
-// back stays an ordinary held bill its key spends; this is best-effort.
+// undoMoves moves the notes of a refused merge back to fresh cash notes.
 func undoMoves(cmd *cobra.Command, l *ledger.Ledger, ids []string) {
+	if toCashNotes(l, ids) > 0 {
+		jsonMode, _ := cmd.Flags().GetBool("json")
+		output.Notef(jsonMode, "The merge was refused, so the notes it had moved are cash notes again.")
+	}
+}
+
+// toCashNotes moves bills off their throwaway key onto fresh cash notes, each
+// secret written ahead of its move (PendingCashSecret), so whatever a merge leaves
+// behind — notes it moved before a refusal, a split's change, an interim bill — is
+// an ordinary cash note again. Best-effort: a bill that cannot be moved stays an
+// ordinary held bill its key spends, reported as a merge left midway. Returns how
+// many it converted.
+func toCashNotes(l *ledger.Ledger, ids []string) int {
+	converted := 0
 	for _, id := range ids {
 		e, ok := l.Find(id)
 		if !ok || e.ThrowawayKey == "" {
@@ -145,11 +157,21 @@ func undoMoves(cmd *cobra.Command, l *ledger.Ledger, ids []string) {
 		e.IdentityRequired = ptrTo(false)
 		e.CashProtection = ledger.CashProtected
 		_ = l.Save()
+		converted++
 	}
-	if len(ids) > 0 {
-		jsonMode, _ := cmd.Flags().GetBool("json")
-		output.Notef(jsonMode, "The merge was refused, so the notes it had moved are cash notes again.")
+	return converted
+}
+
+// leftoverKeyBills is every held bill still on a throwaway key with no move
+// pending: something a merge left behind, to be turned back into a cash note.
+func leftoverKeyBills(l *ledger.Ledger) []string {
+	var ids []string
+	for _, e := range l.Entries {
+		if e.Status == ledger.StatusHeld && e.ThrowawayKey != "" && e.PendingThrowawayKey == "" {
+			ids = append(ids, e.ID)
+		}
 	}
+	return ids
 }
 
 // probeCredentialFn asks a bill's Hub whether cred still spends it — swapped out
@@ -181,7 +203,8 @@ func probeCredential(e *ledger.Entry, cred nipcash.Credential, asPubkeyHex strin
 // settlePendingMoves finishes the record of any move whose answer never came: if
 // the throwaway key now spends the note, the move happened; if its cash secret
 // still does, it did not. Otherwise it is left pending for a later run. Never
-// resends the move.
+// resends the move. Then turns whatever a merge left on a throwaway key back into
+// cash notes: no merge is in progress when a command starts.
 func settlePendingMoves(l *ledger.Ledger) {
 	changed := false
 	for i := range l.Entries {
@@ -206,6 +229,7 @@ func settlePendingMoves(l *ledger.Ledger) {
 	if changed {
 		_ = l.Save()
 	}
+	toCashNotes(l, leftoverKeyBills(l))
 }
 
 // pendingMerge summarizes held notes moved for a merge that has not finished:

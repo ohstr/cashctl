@@ -613,6 +613,9 @@ func transferWithAutoConsolidate(cmd *cobra.Command, l *ledger.Ledger, group []l
 			// cashctl's own in-memory record of it dies with this process.
 			return reportUnsavedResult(cmd, addErr, "Transfer (interim consolidate)", entryRecoveryHint(newEntry))
 		}
+		if newEntry.ThrowawayKey != "" {
+			toCashNotes(l, []string{newEntry.ID})
+		}
 		return classifyCashSpendErr(cmd, ffsErr, "transfer", newEntry.ID)
 	}
 
@@ -841,6 +844,11 @@ func printAndSaveTransferResult(cmd *cobra.Command, l *ledger.Ledger, transferRe
 			recovery = "Save these: " + strings.Join(parts, "; ")
 		}
 		return reportUnsavedResult(cmd, err, "Transfer", recovery)
+	}
+	// Change left on a merge's throwaway key becomes a cash note like any other
+	// (I-26); if that cannot finish now, the next command retries it.
+	if remainderEntry != nil && remainderEntry.ThrowawayKey != "" {
+		toCashNotes(l, []string{remainderEntry.ID})
 	}
 
 	if jsonMode {

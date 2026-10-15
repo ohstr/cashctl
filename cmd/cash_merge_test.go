@@ -131,16 +131,60 @@ func TestMovesWithNoAnswer_AreSettledNotResent(t *testing.T) {
 	probeCredentialFn = func(e *ledger.Entry, cred nipcash.Credential, _ string) (bool, error) {
 		return cred == nipcash.BySigning(priv), nil // the move did happen
 	}
-	withMoveFn(t, func(*ledger.Entry, nipcash.Credential, nipcash.Target) (*nipcash.CashTransferResult, error) {
-		t.Error("settling resent a move")
-		return nil, nil
+	// Settling may move the note on (back to a fresh cash note, as a leftover), but
+	// never resends the original move, which the note's old secret authorized.
+	withMoveFn(t, func(_ *ledger.Entry, cred nipcash.Credential, _ nipcash.Target) (*nipcash.CashTransferResult, error) {
+		if cred == nipcash.BySecret("sa") {
+			t.Error("settling resent the original move")
+		}
+		if cred != nipcash.BySigning(priv) {
+			t.Errorf("the leftover was spent with %v, want the promoted key", cred)
+		}
+		return &nipcash.CashTransferResult{}, nil
 	})
 	settlePendingMoves(fresh)
 	again, _ := ledger.Load()
-	if again.Entries[0].ThrowawayKey != priv || again.Entries[0].PendingThrowawayKey != "" {
-		t.Errorf("a confirmed move was not promoted: %+v", again.Entries[0])
+	a := again.Entries[0]
+	if a.PendingThrowawayKey != "" || a.ThrowawayKey != "" || !isCashNote(&a) || a.CashSecret == "sa" {
+		t.Errorf("the confirmed move was not promoted and turned into a fresh cash note: %+v", a)
 	}
-	if n, _ := pendingMerge(again); n != 1 {
-		t.Errorf("pendingMerge = %d, want the one moved note", n)
+	if n, _ := pendingMerge(again); n != 0 {
+		t.Errorf("pendingMerge = %d, want 0 once nothing is left on a key", n)
+	}
+}
+
+// Whatever a merge leaves on a throwaway key — a split's change, an interim bill —
+// is turned back into a fresh cash note the next time a command starts, and is
+// then no longer reported as a merge left midway.
+func TestSettlePendingMoves_TurnsLeftoversIntoCashNotes(t *testing.T) {
+	l := mergeLedger(t)
+	priv, _, _ := newThrowawayKey()
+	l.Entries[0].IdentityRequired, l.Entries[0].CashSecret, l.Entries[0].ThrowawayKey = ptrTo(true), "", priv
+	l.Entries[1].PendingThrowawayKey = priv // a move still unsettled: not a leftover
+	if err := l.Save(); err != nil {
+		t.Fatal(err)
+	}
+	orig := probeCredentialFn
+	t.Cleanup(func() { probeCredentialFn = orig })
+	probeCredentialFn = func(*ledger.Entry, nipcash.Credential, string) (bool, error) { return false, context.DeadlineExceeded }
+	var spentWith []nipcash.Credential
+	withMoveFn(t, func(_ *ledger.Entry, cred nipcash.Credential, target nipcash.Target) (*nipcash.CashTransferResult, error) {
+		if _, ok := target.(*nipcash.CashTarget); !ok {
+			t.Errorf("a leftover was moved to %T, want a fresh cash note", target)
+		}
+		spentWith = append(spentWith, cred)
+		return &nipcash.CashTransferResult{}, nil
+	})
+	settlePendingMoves(l)
+	fresh, _ := ledger.Load()
+	a := fresh.Entries[0]
+	if len(spentWith) != 1 || spentWith[0] != nipcash.BySigning(priv) {
+		t.Errorf("moves = %v, want exactly the leftover, spent with its key", spentWith)
+	}
+	if !isCashNote(&a) || a.ThrowawayKey != "" {
+		t.Errorf("the leftover is not a cash note again: %+v", a)
+	}
+	if n, _ := pendingMerge(fresh); n != 1 {
+		t.Errorf("pendingMerge = %d, want only the unsettled move", n)
 	}
 }
