@@ -131,6 +131,14 @@ type Entry struct {
 	// Same leak sensitivity as CashSecret itself.
 	PendingDestinationCashSecret string `json:"-"`
 
+	// ThrowawayKey is the private key that now spends this bill, once a merge
+	// moved it off its cash secret onto a key made for that merge alone
+	// (cash_consolidate accepts no cash-mode source). Deleted with the entry
+	// when the bill is spent, never before. PendingThrowawayKey is the same key
+	// written ahead of the move, promoted once the move is confirmed (I-26).
+	ThrowawayKey        string `json:"-"`
+	PendingThrowawayKey string `json:"-"`
+
 	// Connection-key mode reference — set only when the user has told
 	// cashctl this token is connection-key-bound (not derivable from the
 	// token itself; IdentityRequired only says a proof is needed, not
@@ -203,6 +211,36 @@ type HistoryEntry struct {
 	Detail string `json:"detail"`
 }
 
+// Handoff kinds and statuses.
+const (
+	// HandoffCashNote is a "<token>#<secret>" string anyone holding it can take.
+	HandoffCashNote = "cash_note"
+	// HandoffGift is a token addressed to someone else's identity.
+	HandoffGift = "gift"
+
+	HandoffUnclaimed = "unclaimed" // a cash note whose secret still spends it
+	HandoffClaimed   = "claimed"   // taken: the secret no longer matches, or the bill is spent
+	HandoffExpired   = "expired"   // its deadline passed; the value returned to the Hub
+	HandoffSent      = "sent"      // a gift: delivered, but the sender cannot see a claim
+)
+
+// Handoff is one thing cashctl handed out — a cash note or a gift token — kept
+// permanently so it can be reviewed and resent (`wallet history`): a handoff
+// printed once and lost before delivery is otherwise unrecoverable.
+type Handoff struct {
+	ID   int64  `json:"id"`
+	At   string `json:"at"`
+	Kind string `json:"kind"`
+	// Handoff is the full string to give: secret-bearing for a cash note.
+	Handoff      string `json:"handoff"`
+	AmountMillis uint64 `json:"amount_millis"`
+	Target       string `json:"target"`
+	WalletPubkey string `json:"wallet_pubkey"`
+	ExpiresAt    *int64 `json:"expires_at,omitempty"`
+	Status       string `json:"status"`
+	CheckedAt    string `json:"checked_at,omitempty"`
+}
+
 // Ledger is the in-memory shape of cashctl.db's entries/history tables —
 // loaded whole (Load) into plain slices so every other method on this type
 // (Find, Add, SetStatus, ...) is pure in-memory logic, unaware storage is
@@ -212,8 +250,9 @@ type HistoryEntry struct {
 // lock, and there's no OS-level reason two `cashctl` invocations can't
 // target the same one) would silently clobber each other's writes.
 type Ledger struct {
-	Entries []Entry
-	History []HistoryEntry
+	Entries  []Entry
+	History  []HistoryEntry
+	Handoffs []Handoff
 
 	// loaded is what Load actually read, keyed by ID — Save diffs against
 	// it to only touch rows THIS process actually changed (see Save's own
@@ -236,6 +275,23 @@ type Ledger struct {
 	// added" is the only safe way to avoid re-touching (or duplicating)
 	// rows a concurrent process already committed.
 	historyLoaded int
+	// handoffsLoaded is each handoff row as Load read it, keyed by id: Save
+	// inserts rows with ID 0 and updates only rows whose status changed.
+	handoffsLoaded map[int64]Handoff
+}
+
+// AddHandoff records a handoff (status unclaimed for a cash note, sent for a
+// gift), stamped now. Persisted by the next Save.
+func (l *Ledger) AddHandoff(h Handoff) {
+	h.ID = 0
+	h.At = nowRFC3339()
+	if h.Status == "" {
+		h.Status = HandoffUnclaimed
+		if h.Kind == HandoffGift {
+			h.Status = HandoffSent
+		}
+	}
+	l.Handoffs = append(l.Handoffs, h)
 }
 
 // Load reads every entry and history line from cashctl.db, returning an
@@ -276,20 +332,21 @@ func load() (*Ledger, error) {
 		identity_required, amount_millis, received_at, verified, status, cash_secret,
 		connection_key_platform, connection_key_external_id, attestation_event_id, ia_pubkey,
 		pending_cash_secret, expires_at, cash_protection, pending_destination_cash_secret,
-		COALESCE(version, 0)
+		throwaway_key, pending_throwaway_key, COALESCE(version, 0)
 		FROM entries ORDER BY rowid`)
 	if err != nil {
 		return nil, fmt.Errorf("cashctl.db: reading entries: %w", err)
 	}
 	for rows.Next() {
 		var e Entry
-		var relayURLs, pendingCashSecret, cashProtection, pendingDestCashSecret sql.NullString
+		var relayURLs, pendingCashSecret, cashProtection, pendingDestCashSecret, throwawayKey, pendingThrowawayKey sql.NullString
 		var identityRequired, amountMillis, expiresAt sql.NullInt64
 		var version int64
 		if err := rows.Scan(&e.ID, &e.Token, &e.WalletPubkey, &e.MinterPubkey, &e.Secret, &relayURLs,
 			&identityRequired, &amountMillis, &e.ReceivedAt, &e.Verified, &e.Status, &e.CashSecret,
 			&e.ConnectionKeyPlatform, &e.ConnectionKeyExternalID, &e.AttestationEventID, &e.IAPubkey,
-			&pendingCashSecret, &expiresAt, &cashProtection, &pendingDestCashSecret, &version); err != nil {
+			&pendingCashSecret, &expiresAt, &cashProtection, &pendingDestCashSecret,
+			&throwawayKey, &pendingThrowawayKey, &version); err != nil {
 			_ = rows.Close()
 			return nil, fmt.Errorf("cashctl.db: reading entries: %w", err)
 		}
@@ -302,6 +359,8 @@ func load() (*Ledger, error) {
 		e.PendingCashSecret = pendingCashSecret.String
 		e.CashProtection = cashProtection.String
 		e.PendingDestinationCashSecret = pendingDestCashSecret.String
+		e.ThrowawayKey = throwawayKey.String
+		e.PendingThrowawayKey = pendingThrowawayKey.String
 		if relayURLs.Valid && relayURLs.String != "" {
 			if err := json.Unmarshal([]byte(relayURLs.String), &e.RelayURLs); err != nil {
 				_ = rows.Close()
@@ -348,6 +407,32 @@ func load() (*Ledger, error) {
 	for _, e := range l.Entries {
 		l.loaded[e.ID] = e
 	}
+	hRows, err := db.Query(`SELECT id, at, kind, handoff, amount_millis, target, wallet_pubkey, expires_at, status, checked_at FROM handoffs ORDER BY id`)
+	if err != nil {
+		return nil, fmt.Errorf("cashctl.db: reading handoffs: %w", err)
+	}
+	defer func() { _ = hRows.Close() }()
+	l.handoffsLoaded = map[int64]Handoff{}
+	for hRows.Next() {
+		var h Handoff
+		var amount int64
+		var expires sql.NullInt64
+		var checked sql.NullString
+		if err := hRows.Scan(&h.ID, &h.At, &h.Kind, &h.Handoff, &amount, &h.Target, &h.WalletPubkey, &expires, &h.Status, &checked); err != nil {
+			return nil, fmt.Errorf("cashctl.db: reading handoffs: %w", err)
+		}
+		h.AmountMillis = uint64(amount) //nolint:gosec // written from a uint64 by Save
+		if expires.Valid {
+			h.ExpiresAt = &expires.Int64
+		}
+		h.CheckedAt = checked.String
+		l.Handoffs = append(l.Handoffs, h)
+		l.handoffsLoaded[h.ID] = h
+	}
+	if err := hRows.Err(); err != nil {
+		return nil, fmt.Errorf("cashctl.db: reading handoffs: %w", err)
+	}
+
 	l.loadedVersions = versions
 	l.historyLoaded = len(l.History)
 	return l, nil
@@ -451,8 +536,9 @@ func (l *Ledger) save() error {
 		res, err := tx.Exec(`INSERT INTO entries (id, token, wallet_pubkey, minter_pubkey, secret, relay_urls,
 			identity_required, amount_millis, received_at, verified, status, cash_secret,
 			connection_key_platform, connection_key_external_id, attestation_event_id, ia_pubkey,
-			pending_cash_secret, expires_at, cash_protection, pending_destination_cash_secret, version)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+			pending_cash_secret, expires_at, cash_protection, pending_destination_cash_secret,
+			throwaway_key, pending_throwaway_key, version)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
 			ON CONFLICT(id) DO UPDATE SET
 				token = excluded.token, wallet_pubkey = excluded.wallet_pubkey,
 				minter_pubkey = excluded.minter_pubkey, secret = excluded.secret,
@@ -467,13 +553,15 @@ func (l *Ledger) save() error {
 				expires_at = excluded.expires_at,
 				cash_protection = excluded.cash_protection,
 				pending_destination_cash_secret = excluded.pending_destination_cash_secret,
+				throwaway_key = excluded.throwaway_key,
+				pending_throwaway_key = excluded.pending_throwaway_key,
 				version = COALESCE(entries.version, 0) + 1
 			WHERE COALESCE(entries.version, 0) = ?`,
 			e.ID, e.Token, e.WalletPubkey, e.MinterPubkey, e.Secret, relayURLs,
 			identityRequired, amountMillis, e.ReceivedAt, e.Verified, e.Status, e.CashSecret,
 			e.ConnectionKeyPlatform, e.ConnectionKeyExternalID, e.AttestationEventID, e.IAPubkey,
 			e.PendingCashSecret, expiresAt, e.CashProtection, e.PendingDestinationCashSecret,
-			expectedVersion)
+			e.ThrowawayKey, e.PendingThrowawayKey, expectedVersion)
 		if err != nil {
 			// entries.id collisions are handled by ON CONFLICT above — the
 			// only other constraint this table has is token's own UNIQUE,
@@ -518,6 +606,36 @@ func (l *Ledger) save() error {
 		}
 	}
 
+	// Handoffs: new rows inserted, known rows only ever get a status update —
+	// a handoff itself is never rewritten or deleted.
+	newIDs := map[int]int64{}
+	for i, h := range l.Handoffs {
+		var expires sql.NullInt64
+		if h.ExpiresAt != nil {
+			expires = sql.NullInt64{Int64: *h.ExpiresAt, Valid: true}
+		}
+		if h.ID == 0 {
+			res, err := tx.Exec(`INSERT INTO handoffs (at, kind, handoff, amount_millis, target, wallet_pubkey, expires_at, status, checked_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				h.At, h.Kind, h.Handoff, int64(h.AmountMillis), h.Target, h.WalletPubkey, expires, h.Status, h.CheckedAt) //nolint:gosec // amounts fit
+			if err != nil {
+				return fmt.Errorf("cashctl.db: saving handoff: %w", err)
+			}
+			id, err := res.LastInsertId()
+			if err != nil {
+				return fmt.Errorf("cashctl.db: saving handoff: %w", err)
+			}
+			newIDs[i] = id
+			continue
+		}
+		if prior, ok := l.handoffsLoaded[h.ID]; ok && prior.Status == h.Status && prior.CheckedAt == h.CheckedAt {
+			continue
+		}
+		if _, err := tx.Exec(`UPDATE handoffs SET status = ?, checked_at = ? WHERE id = ?`, h.Status, h.CheckedAt, h.ID); err != nil {
+			return fmt.Errorf("cashctl.db: updating handoff %d: %w", h.ID, err)
+		}
+	}
+
 	if err := tx.Commit(); err != nil {
 		return err
 	}
@@ -527,6 +645,13 @@ func (l *Ledger) save() error {
 	// the D-CLI-1 write-ahead path saves twice on one *Ledger, so the versions
 	// have to move with the rows or that second save conflicts with its own
 	// first one.
+	for i, id := range newIDs {
+		l.Handoffs[i].ID = id
+	}
+	l.handoffsLoaded = make(map[int64]Handoff, len(l.Handoffs))
+	for _, h := range l.Handoffs {
+		l.handoffsLoaded[h.ID] = h
+	}
 	l.loaded = make(map[string]Entry, len(l.Entries))
 	for _, e := range l.Entries {
 		l.loaded[e.ID] = e

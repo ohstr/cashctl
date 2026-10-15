@@ -3,8 +3,6 @@ package cmd
 import (
 	"context"
 	"errors"
-	"fmt"
-	"strings"
 	"time"
 
 	"github.com/ohstr/nmilat/nipcash"
@@ -93,195 +91,13 @@ func protectCashReceipt(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entr
 	// agreeing to something opaque — fixed by naming it plainly, not by
 	// flipping the default.
 	if !Confirm(cmd, true, "This cash is still shared — anyone holding it can spend it.\n"+
-		"Protect it now? (re-keys it; may also merge holdings from the same issuer, which tells the issuer they share an owner)") {
+		"Protect it now? (re-keys it under a new secret only you hold)") {
 		return protectedStatus{Status: "declined"}, entry
 	}
 
-	var consolidateWith []nipcash.Source
-	var consolidateWithIDs []string
-	err := WithSpinner(jsonMode, "Checking holdings...", func() error {
-		cw, ids, cErr := buildConsolidateWith(cmd, l, entry)
-		consolidateWith, consolidateWithIDs = cw, ids
-		return cErr
-	})
-	if err != nil {
-		printProtectFailure(jsonMode, err)
-		return protectedStatus{Status: "failed", Error: err.Error()}, entry
-	}
-
-	// The no-merge case gets its own path (see protectRekeyOnly's doc comment);
-	// the merge case needs RekeyCashSlice's multi-step composite — an interim
-	// reassignment onto a pubkey identity, THEN a consolidate.
-	//
-	// Both are now write-ahead safe. They were not: RekeyCashSlice used to generate
-	// the destination secret deep inside itself, where nothing could persist it ahead
-	// of the call, and that is why this comment used to explain the asymmetry instead
-	// of fixing it. The SDK now takes the target as a parameter precisely so a caller
-	// can write the secret down first, so this path does the same thing
-	// protectRekeyOnly does.
-	if len(consolidateWith) == 0 {
-		return protectRekeyOnly(cmd, l, entry, jsonMode)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	myPubHex, err := localPubKeyHex(cmd)
-	if err != nil {
-		printProtectFailure(jsonMode, err)
-		return protectedStatus{Status: "failed", Error: err.Error()}, entry
-	}
-	cred, err := localCashCredential(cmd)
-	if err != nil {
-		printProtectFailure(jsonMode, err)
-		return protectedStatus{Status: "failed", Error: err.Error()}, entry
-	}
-	// Minted here and persisted BEFORE the call, the same write-ahead discipline
-	// protectRekeyOnly uses: only a one-way commitment crosses the wire, so placing
-	// the call must not be the difference between "the secret is on disk" and "the
-	// secret existed only in this process until it died".
-	//
-	// Parked on the SOURCE entry, although the secret belongs to a wallet that does
-	// not exist yet. That is the only row on disk at this point, and it is the row
-	// whose consolidation produces that wallet, so it is where a later reconciliation
-	// would look. Cleared on success, where result.NewSecret carries the same value
-	// onto the new entry.
-	bt := nipcash.NewCashTarget()
-	entry.PendingCashSecret = bt.Secret()
-	if saveErr := l.Save(); saveErr != nil {
-		// Nothing has reached the Hub yet, so entry.CashSecret is still the only real
-		// secret — an ordinary failure.
-		entry.PendingCashSecret = ""
-		printProtectFailure(jsonMode, saveErr)
-		return protectedStatus{Status: "failed", Error: saveErr.Error()}, entry
-	}
-
-	params := nipcashclient.RekeyCashSliceParams{
-		CashSlice: nipcash.Source{
-			WalletPubkey: entry.WalletPubkey,
-			Amount:       *entry.AmountMillis,
-			Credential:   nipcash.BySecret(entry.CashSecret),
-		},
-		InterimIdentity:   nipcash.Pubkey(myPubHex),
-		InterimCredential: cred,
-		ConsolidateWith:   consolidateWith,
-		NewTarget:         bt,
-	}
-
-	var dialErr bool
-	var result *nipcashclient.RekeyCashSliceResult
-	err = WithSpinner(jsonMode, "Protecting...", func() error {
-		client, cErr := nipcashclient.Connect(ctx, entry.Token)
-		if cErr != nil {
-			dialErr = true
-			return cErr
-		}
-		defer client.Close()
-		r, cErr := client.RekeyCashSlice(ctx, params)
-		if cErr != nil {
-			return cErr
-		}
-		result = r
-		return nil
-	})
-	if err != nil {
-		if dialErr {
-			printProtectFailure(jsonMode, err)
-			return protectedStatus{Status: "failed", Error: err.Error()}, entry
-		}
-		var partial *nipcashclient.PartialProgressError
-		if errors.As(err, &partial) && partial.Transferred != nil {
-			// The interim reassignment landed for real — the old cash
-			// secret is already dead, even though consolidation itself
-			// didn't finish. Apply that real effect before reporting the
-			// failure, per the save-immediately rule: never leave the
-			// ledger mismatched with the last wire call that actually
-			// succeeded. A failure of THIS save is the harder case: the
-			// Hub-side effect is real and, unlike the ordinary path below,
-			// there is no pending-secret trail to fall back on for a
-			// reassign-to-pubkey (not cashMode) interim step — report it
-			// plainly rather than pretending Save() always works.
-			entry.CashSecret = ""
-			entry.IdentityRequired = ptrTo(true)
-			// No longer cash-mode at all — reassigned to the local
-			// identity's own pubkey — so "shared vs protected" no longer
-			// applies (see Entry.CashProtection's own doc comment: empty
-			// means n/a, the same as any other pubkey-mode entry).
-			entry.CashProtection = ""
-			// The interim's own follow-up consolidate merges entry
-			// alongside consolidateWithIDs — if ITS failure is the same
-			// decrypt-family ambiguity cash_consolidate.go's own direct
-			// path can hit (isAmbiguousDeliveryErr's doc comment), those
-			// other, already-held sources may be consumed too. Reconcile
-			// the same way that path does: ask each source's own token,
-			// independently, whether the Hub still has a claim for it.
-			reportErr := err
-			if isAmbiguousDeliveryErr(err) {
-				if gone := reconcileAmbiguousSources(cmd, l, consolidateWithIDs); len(gone) > 0 {
-					// No longer "could not be recovered": the destination secret was
-					// minted here and is on disk, parked on this entry, so a merged
-					// wallet the Hub really did create can still be opened once its
-					// token is recovered from the Hub. Necessary, not sufficient —
-					// without the secret it was impossible even with the Hub's help.
-					reportErr = fmt.Errorf("%w (confirmed consumed on the Hub despite the unreadable reply: %s — marked accordingly so they won't be offered again; the merged wallet's own secret is preserved on entry %s, so it can still be opened if the Hub did create it)",
-						err, strings.Join(gone, ", "), entry.ID)
-				} else {
-					reportErr = warnAmbiguousDelivery(err, consolidateWithIDs)
-				}
-			}
-			if saveErr := l.Save(); saveErr != nil {
-				reportErr = fmt.Errorf("%w (and saving that locally also failed: %v — the ledger may still show the old, now-dead secret)", reportErr, saveErr)
-				printProtectPartialFailure(jsonMode, reportErr)
-				return protectedStatus{Status: "failed", Error: reportErr.Error()}, entry
-			}
-			printProtectPartialFailure(jsonMode, reportErr)
-			return protectedStatus{Status: "failed", Error: reportErr.Error()}, entry
-		}
-		wrongSecret := isWrongSecretDecline(err)
-		if wrongSecret {
-			printProtectFailureWrongSecret(jsonMode, err)
-		} else {
-			printProtectFailure(jsonMode, err)
-		}
-		return protectedStatus{Status: "failed", Error: err.Error(), LikelyWrongSecret: wrongSecret}, entry
-	}
-
-	for _, id := range consolidateWithIDs {
-		_ = l.SetStatus(id, ledger.StatusConsolidated)
-	}
-	_ = l.SetStatus(entry.ID, ledger.StatusConsolidated)
-	var newMinterPubkey *string
-	if entry.MinterPubkey != nil {
-		if newTok, decErr := nipcash.Decode(result.NewToken); decErr == nil {
-			newMinterPubkey = minterPubkeyFromToken(newTok)
-		}
-	}
-	newEntry, addErr := l.Add(ledger.Entry{
-		Token:            result.NewToken,
-		WalletPubkey:     result.NewWalletPubkey,
-		CashSecret:       result.NewSecret,
-		IdentityRequired: ptrTo(false),
-		AmountMillis:     &result.AmountMillis,
-		Verified:         true,
-		MinterPubkey:     newMinterPubkey,
-		CashProtection:   ledger.CashProtected,
-	})
-	if addErr != nil {
-		printProtectFailure(jsonMode, addErr)
-		return protectedStatus{Status: "failed", Error: addErr.Error()}, entry
-	}
-	// The destination secret is now the new entry's own CashSecret, so the parked
-	// copy has done its job.
-	entry.PendingCashSecret = ""
-	l.AppendHistory("secure", fmt.Sprintf("combined with %d other holding(s) from the same issuer into one %s note", len(consolidateWithIDs), output.FormatAmount(int64(result.AmountMillis))))
-	if err := l.Save(); err != nil {
-		printProtectFailure(jsonMode, err)
-		return protectedStatus{Status: "failed", Error: err.Error()}, entry
-	}
-	if !jsonMode {
-		output.Printf("Protected and merged %d holding(s) into %s.\n", len(consolidateWithIDs), output.FormatAmount(int64(result.AmountMillis)))
-	}
-	return protectedStatus{Status: "consolidated", ConsolidatedWith: consolidateWithIDs, FinalEntryID: newEntry.ID}, newEntry
+	// Re-key only, never merge: merging tells the Hub the bills share an owner,
+	// which the holder decides explicitly with `consolidate` (NIP-CASH §Privacy).
+	return protectRekeyOnly(cmd, l, entry, jsonMode)
 }
 
 // protectRekeyOnly is protectCashReceipt's no-merge path: re-key entry's
@@ -411,58 +227,6 @@ func protectRekeyOnly(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entry,
 		output.Println("Protected.")
 	}
 	return protectedStatus{Status: "rekeyed"}, entry
-}
-
-// buildConsolidateWith finds other held, consolidation-eligible entries
-// sharing entry's own MinterPubkey — cashctl's own client-side "same
-// issuer" signal (see internal/ledger/cashselect.go's own reasoning,
-// already used for transfer's auto-consolidate step). A bill naming no
-// issuing Hub cannot be grouped at all, so it always returns empty in that
-// case, never a false positive.
-//
-// Any confirmed-already-expired sibling is left out of the merge rather
-// than refused outright: unlike consolidate/transfer, this isn't an
-// explicit "merge exactly these" request, it's receive's own best-effort
-// protect step (protectCashReceipt's doc comment: a failure here never
-// fails receive itself) — so excluding the poisoned sibling and still
-// protecting the fresh receipt on its own (or merging with whatever
-// healthy siblings remain) is the right default, not refusing the whole
-// step. NIP-CASH's merge rule inherits the EARLIEST expiry across every
-// source, same reasoning as cash_consolidate.go's own refusal — merging
-// an expired sibling in would kill the fresh receipt's own good deadline
-// too.
-func buildConsolidateWith(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entry) ([]nipcash.Source, []string, error) {
-	hubKey := ledger.HubGroupKey(*entry)
-	if hubKey == "" {
-		return nil, nil, nil
-	}
-	jsonMode, _ := cmd.Flags().GetBool("json")
-	groups := ledger.GroupByHub(ledger.GroupableForConsolidation(l.Held()))
-	group := groups[hubKey]
-	var sources []nipcash.Source
-	var ids, excluded []string
-	for i := range group {
-		e := &group[i]
-		if e.ID == entry.ID {
-			continue
-		}
-		// Probed before sourceFromEntry's own dial, so an about-to-be-
-		// excluded sibling doesn't get needlessly resolved first.
-		if ea := fetchExpiresAt(cmd, e.Token); ea != nil && time.Until(time.Unix(*ea, 0)) <= 0 {
-			excluded = append(excluded, e.ID)
-			continue
-		}
-		src, err := sourceFromEntry(cmd, l, e)
-		if err != nil {
-			return nil, nil, err
-		}
-		sources = append(sources, src)
-		ids = append(ids, e.ID)
-	}
-	if len(excluded) > 0 {
-		output.Notef(jsonMode, "Left out %s (already expired) — merging it in would have made the whole protected note unusable too.", strings.Join(excluded, ","))
-	}
-	return sources, ids, nil
 }
 
 func printProtectFailure(jsonMode bool, err error) {

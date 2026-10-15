@@ -52,22 +52,11 @@ for as long as it stays shared. Once `receive` saves a cash-mode
 entry, it asks to protect it immediately (defaults to yes; always
 proceeds non-interactively under `--yes`/`--json` — there's no separate
 flag to opt out). Protecting re-keys the slice under a fresh secret only
-your wallet knows, and — if you already hold other cash mint-signed by
-the same issuer — merges it into that holding in the same step. A
-same-Hub holding that's already expired is left out of that merge
-instead of included: NIP-CASH's merge rule inherits the earliest expiry
-across every source, so folding a dead one in would kill the fresh
-receipt's own good deadline too. The fresh receipt still gets protected
-either way — just re-keyed alone (`"rekeyed"`) instead of merged
-(`"consolidated"`) whenever the only other same-Hub holding was the one
-excluded. There's no `--json` field naming what got left out (the
-in-process note is text-mode only); `secured.status` not matching what
-you expected given the holdings on record is the signal. Reported
-under `"secured"` in `--json` output: `{"status": "rekeyed"}` (re-keyed
-in place), `{"status": "consolidated", "consolidated_with": [...],
-"final_entry_id": "..."}` (merged into a new entry), `{"status":
-"declined"}`, or `{"status": "not_applicable"}` (not a cash-mode
-receive). A wire failure here reports `{"status": "failed", "error":
+your wallet knows. It never merges it with your other holdings: merging
+tells the Hub the bills share an owner, so that is `consolidate`'s job,
+done when you ask. Reported under `"secured"` in `--json` output:
+`{"status": "rekeyed"}` (re-keyed in place), `{"status": "declined"}`, or
+`{"status": "not_applicable"}` (not a cash-mode receive). A wire failure here reports `{"status": "failed", "error":
 "..."}` but never fails `receive` itself — the cash is already genuinely
 yours; retry protecting later with `cashctl wallet protect [id]` (or
 `--token <id>`, same effect — re-keys a single still-shared holding in
@@ -209,9 +198,9 @@ hiding.
 What batching does not hide: every request goes to the Hub's one published
 inbox, so a relay can tell which Hub a client uses (not what it asked).
 cashctl has no proxy option; route it through one if that matters. And any
-merge — `consolidate`, `transfer`'s auto-consolidate, `receive`'s
-protect-and-merge — tells the Hub the merged bills share an owner, which it
-may keep on record: don't merge bills you don't want linked.
+merge — `consolidate` or `transfer`'s auto-consolidate — tells the Hub the
+merged bills share an owner, which it may keep on record: don't merge bills
+you don't want linked. `receive` never merges.
 
 This also means an unsigned bill cannot be spent at all: the mint signature
 is the only thing a token carries that identifies its minting hub, and so the
@@ -345,7 +334,13 @@ verbose form (a `connection-key:` value has its own embedded commas,
 ambiguous in this shorthand — receive it into your ledger first instead).
 IDs are discoverable via `cashctl wallet show --json`'s `held_tokens`
 array — plain-text `wallet show` deliberately never prints them.
-Needs at least 2 sources per call; naming the same source twice is a
+Cash notes merge like any other bill, with no identity needed: each is
+first moved onto a key made for that merge alone (`cash_consolidate` takes
+no cash-mode source), and your merged result is a fresh cash note. If the
+Hub refuses, the notes are moved back to cash notes; if it never answers,
+they stay on that key, still yours and spendable, reported as
+`pending_merge` (`{"notes", "earliest_expires_at"}`) in `wallet show` and
+`balance` until a later `consolidate` finishes the merge. Needs at least 2 sources per call; naming the same source twice is a
 `usage` error, refused before anything is sent. More sources than the Hub takes in one
 call (its announced `max_consolidate_sources`, 48 by default) are merged
 in rounds: chunks first into tokens of your own, each saved as it lands,
@@ -447,13 +442,13 @@ inspect one before deciding whether to `receive` it at all.
 
 Each command above in isolation; here's how they chain in practice.
 
-**Receive a gift, it auto-merges, redeem the result directly** — no need
-to look anything up between the two calls, `receive`'s own response names
-the entry to act on next:
+**Receive a gift, then redeem it directly** — no need to look anything up
+between the two calls, `receive`'s own response names the entry to act on
+next:
 
 ```sh
 cashctl receive lokicash1...#deadbeef --json
-# {"entry": {"id": "tok-new456", ...}, "secured": {"status": "consolidated", "final_entry_id": "tok-new456", "consolidated_with": ["tok-existing999"]}}
+# {"entry": {"id": "tok-new456", ...}, "secured": {"status": "rekeyed"}}
 cashctl redeem --token tok-new456 --json
 ```
 

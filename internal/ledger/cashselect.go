@@ -151,10 +151,11 @@ func SumAmounts(entries []Entry) uint64 {
 }
 
 // GroupableForConsolidation returns the subset of held eligible to be
-// grouped for auto-consolidation: pubkey-mode (not cash-mode, not
-// connection-key-bound — cash_consolidate only accepts pubkey-identified
-// sources), with a known amount (nothing to sum otherwise) and a known
-// issuing Hub (nothing to group by otherwise).
+// grouped for auto-consolidation: pubkey-mode, or cash-mode with its secret
+// known (cash_consolidate takes only pubkey-identified sources, so a merge
+// first moves a cash note onto a throwaway key — see cmd/cash_merge.go), but
+// never connection-key-bound; with a known amount (nothing to sum otherwise)
+// and a known issuing Hub (nothing to group by otherwise).
 func GroupableForConsolidation(held []Entry) []Entry {
 	var out []Entry
 	for _, e := range held {
@@ -162,7 +163,7 @@ func GroupableForConsolidation(held []Entry) []Entry {
 			continue
 		}
 		isCash := e.IdentityRequired != nil && !*e.IdentityRequired
-		if isCash || e.ConnectionKeyPlatform != "" {
+		if (isCash && e.CashSecret == "") || e.ConnectionKeyPlatform != "" {
 			continue
 		}
 		out = append(out, e)

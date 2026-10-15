@@ -101,6 +101,8 @@ func runCashRedeem(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return output.RuntimeError(cmd, err)
 	}
+	// A merge interrupted before its move was confirmed is settled first (I-26).
+	settlePendingMoves(l)
 	entries, err := resolveHeldTokensForRedeem(cmd, l)
 	if err != nil {
 		return err
@@ -1038,6 +1040,10 @@ func resolveCredential(cmd *cobra.Command, entry *ledger.Entry) (nipcash.Credent
 			return nil, output.InvalidInputError(cmd, output.RedactSecretInput(as), err)
 		}
 		return cred, nil
+	}
+	// A cash note moved onto a merge's throwaway key is spent by that key alone.
+	if entry.ThrowawayKey != "" {
+		return nipcash.BySigning(entry.ThrowawayKey), nil
 	}
 	if entry.IdentityRequired != nil && !*entry.IdentityRequired {
 		return nipcash.BySecret(entry.CashSecret), nil

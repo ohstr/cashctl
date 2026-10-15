@@ -58,7 +58,9 @@ CREATE TABLE IF NOT EXISTS entries (
 	pending_cash_secret      TEXT,
 	expires_at                 INTEGER,
 	cash_protection          TEXT,
-	pending_destination_cash_secret TEXT
+	pending_destination_cash_secret TEXT,
+	throwaway_key            TEXT,
+	pending_throwaway_key    TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_entries_status_minter ON entries(status, minter_pubkey);
 
@@ -67,6 +69,19 @@ CREATE TABLE IF NOT EXISTS history (
 	at     TEXT NOT NULL,
 	action TEXT NOT NULL,
 	detail TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS handoffs (
+	id            INTEGER PRIMARY KEY AUTOINCREMENT,
+	at            TEXT NOT NULL,
+	kind          TEXT NOT NULL,
+	handoff       TEXT NOT NULL,
+	amount_millis INTEGER NOT NULL,
+	target        TEXT NOT NULL,
+	wallet_pubkey TEXT NOT NULL,
+	expires_at    INTEGER,
+	status        TEXT NOT NULL,
+	checked_at    TEXT
 );
 `
 
@@ -268,6 +283,12 @@ var addedColumns = []struct{ table, column, ddl string }{
 	// credential" and is consumed as one (cmd/pending_secret_fallback.go,
 	// cmd/redeem_private.go), which a different bill's secret is not.
 	{"entries", "pending_destination_cash_secret", `ALTER TABLE entries ADD COLUMN pending_destination_cash_secret TEXT`},
+	// throwaway_key / pending_throwaway_key: a cash note being merged is first
+	// moved onto a throwaway key (cash_consolidate takes no cash-mode source), and
+	// that key is then the only thing that spends it. Written ahead of the move
+	// as pending, promoted once the move is confirmed (I-26).
+	{"entries", "throwaway_key", `ALTER TABLE entries ADD COLUMN throwaway_key TEXT`},
+	{"entries", "pending_throwaway_key", `ALTER TABLE entries ADD COLUMN pending_throwaway_key TEXT`},
 }
 
 // addColumnsIfMissing applies addedColumns' migrations exactly once each,

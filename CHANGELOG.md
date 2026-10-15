@@ -57,6 +57,15 @@ Fixes from the NIP-CASH / NIP-CW conformance review, for agents above all.
   `usage` error, refused before anything is sent.
   ([#79](https://github.com/ohstr/cashctl/pull/79))
 
+- Adds every cash note and gift you hand out to `wallet history`, kept
+  permanently with its claimed/unclaimed/expired status, so a lost one can be
+  resent; an unclaimed note's secret shows only with `--show-secrets`.
+  ([#82](https://github.com/ohstr/cashctl/pull/82))
+- Fixes cash notes never merging: `consolidate` and `transfer`'s auto-combine
+  now merge them through a key made for that merge, with no identity needed,
+  and `receive` only re-keys, never merges.
+  ([#83](https://github.com/ohstr/cashctl/pull/83))
+
 ## [0.6.0-rc.12]
 
 A dependency update.

@@ -135,6 +135,10 @@ func newWalletShowCmd() *cobra.Command {
 					"held_tokens":     output.NonNil(l.Held()),
 					// The only copy of each secret: see unreconciledDestinationParks.
 					"unfinished_cash_sends": output.NonNil(unfinishedCashSends(l)),
+					// Handed out and not known to be claimed, secrets hidden: `wallet
+					// history --show-secrets` shows them in full to resend.
+					"unclaimed_handoffs": unclaimedHandoffs(l),
+					"pending_merge":      pendingMergeJSON(l),
 				})
 				return nil
 			}
@@ -180,6 +184,10 @@ func newWalletShowCmd() *cobra.Command {
 			// the call but never reconciled. This is the one place that
 			// secret is ever readable again, so it is worth pushing past the
 			// routine summary above — see unreconciledDestinationParks.
+			printPendingMerge(l)
+			if pending := unclaimedHandoffs(l); len(pending) > 0 {
+				output.Printf("\nHanded out, not yet claimed: %d — `cashctl wallet history --show-secrets` to resend\n", len(pending))
+			}
 			if parks := unreconciledDestinationParks(l); len(parks) > 0 {
 				output.Printf("\nUnfinished cash sends: %d\n", len(parks))
 				for _, line := range parks {
@@ -192,30 +200,52 @@ func newWalletShowCmd() *cobra.Command {
 }
 
 func newWalletHistoryCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "history",
-		Short: "Show your local action history",
-		Args:  output.NoArgs,
+		Short: "Show your local action history and everything you handed out",
+		Long: `Shows your local action log, then every cash note and gift you handed out,
+kept permanently so a lost one can be resent. An unclaimed cash note's status
+is re-checked with its Hub; its secret, which still spends it, is hidden
+unless --show-secrets.`,
+		Args: output.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			jsonMode, _ := cmd.Flags().GetBool("json")
+			showSecrets, _ := cmd.Flags().GetBool("show-secrets")
 			l, err := ledger.Load()
 			if err != nil {
 				return output.RuntimeError(cmd, err)
 			}
+			_ = WithSpinner(jsonMode, "Checking sent notes...", func() error {
+				refreshHandoffs(l)
+				return nil
+			})
 			if jsonMode {
-				output.PrintJSON(map[string]any{"history": output.NonNil(l.History)})
+				handoffs := make([]map[string]any, 0, len(l.Handoffs))
+				for _, h := range l.Handoffs {
+					handoffs = append(handoffs, handoffJSON(h, showSecrets))
+				}
+				output.PrintJSON(map[string]any{"history": output.NonNil(l.History), "handoffs": handoffs})
 				return nil
 			}
-			if len(l.History) == 0 {
+			if len(l.History) == 0 && len(l.Handoffs) == 0 {
 				output.Println("No local action history yet.")
 				return nil
 			}
 			for _, h := range l.History {
 				output.Printf("%s  %-12s %s\n", h.At, h.Action, h.Detail)
 			}
+			if len(l.Handoffs) > 0 {
+				output.Println("\nHanded out:")
+				for _, h := range l.Handoffs {
+					shown, _ := maskedHandoff(h, showSecrets)
+					output.Printf("  %s  %s to %s  [%s]\n    %s\n", h.At, output.FormatAmount(int64(h.AmountMillis)), output.Sanitize(h.Target), h.Status, shown)
+				}
+			}
 			return nil
 		},
 	}
+	cmd.Flags().Bool("show-secrets", false, "show unclaimed cash notes in full (their secret still spends them)")
+	return cmd
 }
 
 // dialForCommand resolves and dials the connection this command should

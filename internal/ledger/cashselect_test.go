@@ -130,17 +130,27 @@ func TestSelectForAmount_ConsolidatedSumExactMatch(t *testing.T) {
 	}
 }
 
-func TestSelectForAmount_ExcludesCashAndConnectionKeyFromGrouping(t *testing.T) {
+// A cash note whose secret is held groups like any bill (a merge moves it onto
+// a throwaway key first, I-26); a connection-key bill and a cash note with no
+// secret never do.
+func TestSelectForAmount_GroupsCashNotesButNotConnectionKeyOrBareCash(t *testing.T) {
 	nonCash := false
 	held := []Entry{
-		{ID: "tok-cash", AmountMillis: amountPtr(3000), MinterPubkey: minterPtr(minterA), Token: hubToken(minterA), IdentityRequired: &nonCash},
+		{ID: "tok-cash", AmountMillis: amountPtr(3000), MinterPubkey: minterPtr(minterA), Token: hubToken(minterA), IdentityRequired: &nonCash, CashSecret: "s"},
+		{ID: "tok-bare", AmountMillis: amountPtr(3000), MinterPubkey: minterPtr(minterA), Token: hubToken(minterA), IdentityRequired: &nonCash},
 		{ID: "tok-connkey", AmountMillis: amountPtr(3000), MinterPubkey: minterPtr(minterA), Token: hubToken(minterA), ConnectionKeyPlatform: "discord"},
 		{ID: "tok-pubkey", AmountMillis: amountPtr(3000), MinterPubkey: minterPtr(minterA), Token: hubToken(minterA)},
 	}
-	// Only tok-pubkey is eligible for grouping; alone it can't reach 5000.
-	_, err := SelectForAmount(held, 5000)
-	if !errors.Is(err, ErrFundsFragmented) {
-		t.Fatalf("SelectForAmount() error = %v, want ErrFundsFragmented (cash/connection-key entries must be excluded from grouping)", err)
+	plan, err := SelectForAmount(held, 6000)
+	if err != nil {
+		t.Fatalf("SelectForAmount() error = %v, want the cash note and the pubkey bill combined", err)
+	}
+	ids := map[string]bool{}
+	for _, e := range plan.ConsolidateFirst {
+		ids[e.ID] = true
+	}
+	if !ids["tok-cash"] || !ids["tok-pubkey"] || ids["tok-bare"] || ids["tok-connkey"] {
+		t.Errorf("grouped %v, want exactly tok-cash and tok-pubkey", ids)
 	}
 }
 
