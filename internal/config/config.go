@@ -63,6 +63,16 @@ type Store struct {
 	// everything in Connections is then treated as new, as it is.
 	loaded        map[string]Connection
 	loadedDefault string
+
+	// answeredJoins are pending joins (see PendingJoin) Save removes in the
+	// same transaction that registers their wallet.
+	answeredJoins []string
+}
+
+// AnsweredJoin marks the pending join with this connection pubkey for
+// removal by the next Save, alongside the wallet it produced.
+func (s *Store) AnsweredJoin(connectionPubkey string) {
+	s.answeredJoins = append(s.answeredJoins, connectionPubkey)
 }
 
 // snapshot records s's current contents as the baseline the next Save
@@ -160,6 +170,7 @@ func (s *Store) Save() error {
 	if err := store.WithBusyRetry(s.save); err != nil {
 		return err
 	}
+	s.answeredJoins = nil
 	s.snapshot()
 	return nil
 }
@@ -211,6 +222,11 @@ func (s *Store) save() error {
 		}
 		if _, err := tx.Exec(`DELETE FROM connections WHERE name = ?`, name); err != nil {
 			return fmt.Errorf("cashctl.db: removing connection %s: %w", name, err)
+		}
+	}
+	for _, pub := range s.answeredJoins {
+		if _, err := tx.Exec(`DELETE FROM pending_joins WHERE connection_pubkey = ?`, pub); err != nil {
+			return fmt.Errorf("cashctl.db: removing a pending join: %w", err)
 		}
 	}
 	if s.Default != s.loadedDefault {

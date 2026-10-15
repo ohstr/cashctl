@@ -58,7 +58,7 @@ a `<token>#<secret>` bill (take it with `cashctl receive`) with
 ## `cashctl wallet show` / `history`
 
 ```sh
-cashctl wallet show --json     # {"npub", "identity_source", "wallets", "default_wallet", "held_tokens", "unfinished_cash_sends", "unclaimed_handoffs"}; each held token carries its "cash_hub"
+cashctl wallet show --json     # {"npub", "identity_source", "wallets", "default_wallet", "held_tokens", "unfinished_cash_sends", "unclaimed_handoffs", "pending_joins"}; each held token carries its "cash_hub"
 cashctl wallet history --json  # {"history": [{"at","action","detail"}, ...], "handoffs": [{"id","at","kind","handoff","secret_hidden","amount_millis","target","status","checked_at"}, ...]}
 cashctl wallet history --show-secrets --json  # the same, unclaimed cash notes in full (secret-bearing)
 ```

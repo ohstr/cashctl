@@ -258,4 +258,10 @@ func TestJoinCapSummary_ShowsTheResolvedCapAndFee(t *testing.T) {
 	if unknown := joinCapSummary(500_000, &nipcw.CreateCircleWalletResponse{}, "never"); !strings.Contains(unknown, output.FormatAmount(500_000)) {
 		t.Errorf("with no resolved cap the requested one should show: %q", unknown)
 	}
+	if exp := joinCapSummary(500_000, &nipcw.CreateCircleWalletResponse{ExpiresAt: 1798761600}, "never"); !strings.Contains(exp, "expires 2027-01-01 00:00 UTC") {
+		t.Errorf("summary %q lacks the expiry the Hub set", exp)
+	}
+	if strings.Contains(same, "expires") {
+		t.Errorf("summary %q names an expiry the Hub did not set", same)
+	}
 }
