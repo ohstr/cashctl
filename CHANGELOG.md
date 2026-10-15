@@ -75,6 +75,11 @@ Fixes from the NIP-CASH / NIP-CW conformance review, for agents above all.
   build without release flags, which printed only `dev`.
 - Adds the likely flag and the `--help` to read to an unknown flag or
   command error, which `--json` mode showed with no next step.
+- Adds `decode npub1…`, showing the hex public key, which was refused; an
+  unrecognised `decode` input now lists the forms it takes.
+- Adds a pointer to `connect list` when `connect use`/`wallet use` or
+  `connect rm` names no registered connection, and names `show` in the
+  `skills` help.
 
 ## [0.6.0-rc.12]
 
