@@ -937,32 +937,37 @@ func reconcileAmbiguousSources(cmd *cobra.Command, l *ledger.Ledger, localIDs []
 		if _, decErr := nipcash.Decode(e.Token); decErr != nil {
 			continue
 		}
-		func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-			defer cancel()
-			client, dialErr := nipcashclient.Connect(ctx, e.Token)
-			if dialErr != nil {
-				return // inconclusive — this source's own Hub might just be slow/unreachable right now
-			}
-			defer client.Close()
-			cred, credErr := resolveCredential(cmd, e)
-			if credErr != nil {
-				return // inconclusive: without a credential we cannot ask at all
-			}
-			status, statusErr := client.CashStatus(ctx, cred, nipcash.ScopeMine)
-			if statusErr != nil {
-				return // inconclusive: an error is not evidence either way
-			}
-			if status.IsSpent() {
-				_ = l.SetStatus(id, ledger.StatusConsolidated)
-				confirmedGone = append(confirmedGone, id)
-			}
-		}()
+		status, statusErr := sourceCashStatusFn(cmd, e)
+		if statusErr != nil {
+			continue // inconclusive: an error is not evidence either way
+		}
+		if status.IsSpent() {
+			_ = l.SetStatus(id, ledger.StatusConsolidated)
+			confirmedGone = append(confirmedGone, id)
+		}
 	}
 	if len(confirmedGone) > 0 {
 		_ = l.Save() // best-effort: worst case, the next successful Save picks up the same corrected statuses
 	}
 	return confirmedGone
+}
+
+// sourceCashStatus asks one source's own Hub for its cash_status. Any error
+// — an unreachable Hub, no credential, a refusal — is inconclusive to the
+// caller. A package var so reconcileAmbiguousSources is testable without a Hub.
+var sourceCashStatusFn = func(cmd *cobra.Command, e *ledger.Entry) (*nipcash.CashStatusResult, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	client, err := nipcashclient.Connect(ctx, e.Token)
+	if err != nil {
+		return nil, err
+	}
+	defer client.Close()
+	cred, err := resolveCredential(cmd, e)
+	if err != nil {
+		return nil, err
+	}
+	return client.CashStatus(ctx, cred, nipcash.ScopeMine)
 }
 
 func doCashConsolidate(cmd *cobra.Command, l *ledger.Ledger, dialCandidates []string, sources []nipcash.Source, localIDs []string, target nipcash.Target, isSelfTarget bool) (newEntry *ledger.Entry, expiresAt *int64, err error) {
