@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -170,7 +171,19 @@ func TestRunCashStatus_ATombstoneAmongSeveralStaysARow(t *testing.T) {
 		return &nipcash.CashStatusResult{}, nil
 	}
 	stdout, _ := captureStreams(t, func() { _ = runCashStatus(newTestStatusCmd(true, false), nil) })
-	if !strings.Contains(stdout, `"spent"`) || !strings.Contains(stdout, `"ok"`) {
-		t.Errorf("multi-token report lost a row: %s", stdout)
+	var report struct {
+		Statuses []struct {
+			Status string `json:"status"`
+		} `json:"statuses"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &report); err != nil {
+		t.Fatalf("multi-token report is not JSON: %v\n%s", err, stdout)
+	}
+	got := map[string]int{}
+	for _, r := range report.Statuses {
+		got[r.Status]++
+	}
+	if got["spent"] != 1 || got["ok"] != 1 || len(report.Statuses) != 2 {
+		t.Errorf("multi-token rows = %v, want one spent and one ok: %s", got, stdout)
 	}
 }
