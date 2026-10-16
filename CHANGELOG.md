@@ -124,6 +124,11 @@ Fixes from the NIP-CASH / NIP-CW conformance review, for agents above all.
   and point to `pay` or `redeem --invoice`.
 - Adds `identity` (`created`, `reused` or `existing`) to `init --json`; a re-run
   now also names the identity it kept.
+- Adds to `join`'s `exists` error the name the circle's wallet is registered
+  under here, to use with `-c`.
+- Adds the exit codes to `cashctl --help`, the accepted formats to
+  `connect add --help`, and to `skills install --help` that only
+  `<dir>/cashctl-*` is written.
 
 ## [0.6.0-rc.12]
 

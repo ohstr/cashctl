@@ -319,6 +319,16 @@ func (s *Store) DefaultConnection() (*Connection, bool) {
 	return s.Find(s.Default)
 }
 
+// HintedName is the name SuggestName tries first for hint ("circle:my-circle"),
+// or "" when hint has nothing to keep.
+func HintedName(prefix, hint string) string {
+	slug := strings.ToLower(strings.Trim(slugPattern.ReplaceAllString(hint, "-"), "-"))
+	if slug == "" {
+		return ""
+	}
+	return prefix + ":" + slug
+}
+
 // slugPattern matches characters SuggestName keeps from a hint — letters,
 // digits, and hyphens; everything else (spaces, punctuation from a
 // human-entered label like "Ada's Family Circle") is dropped rather than
@@ -330,9 +340,7 @@ var slugPattern = regexp.MustCompile(`[^a-zA-Z0-9-]+`)
 // back to "<prefix>:<n>" if hint is empty, slugifies to nothing, or
 // collides with an existing connection.
 func (s *Store) SuggestName(prefix, hint string) string {
-	slug := strings.ToLower(strings.Trim(slugPattern.ReplaceAllString(hint, "-"), "-"))
-	if slug != "" {
-		candidate := prefix + ":" + slug
+	if candidate := HintedName(prefix, hint); candidate != "" {
 		if _, ok := s.Find(candidate); !ok {
 			return candidate
 		}

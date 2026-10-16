@@ -53,6 +53,40 @@ func walletExistsFromLegacyRefusal(err error) error {
 	return err
 }
 
+// withHeldWalletHint adds to a WALLET_EXISTS refusal which wallet here is
+// that circle's, so "you already hold one" comes with the name to use it by.
+// The Hub only says one exists; the local name is cashctl's to supply.
+func withHeldWalletHint(err error, label string) error {
+	ce, ok := err.(*output.CLIError)
+	if !ok || ce.NWCCode != nipcw.ErrWalletExists {
+		return err
+	}
+	s, loadErr := config.Load()
+	if loadErr != nil {
+		return err
+	}
+	ce.Err = errors.New(ce.Err.Error() + " " + heldWalletHint(s, label))
+	return ce
+}
+
+func heldWalletHint(s *config.Store, label string) string {
+	if name := config.HintedName("circle", label); name != "" {
+		if _, ok := s.Find(name); ok {
+			return fmt.Sprintf("It is registered here as %q — use it with `-c %s` or `cashctl wallet use %s`.", name, name, name)
+		}
+	}
+	var circles []string
+	for _, c := range s.Connections {
+		if strings.HasPrefix(c.Name, "circle:") {
+			circles = append(circles, c.Name)
+		}
+	}
+	if len(circles) > 0 {
+		return fmt.Sprintf("Your circle wallets here: %s — use one with `-c <name>`.", strings.Join(circles, ", "))
+	}
+	return "It is not registered on this device (joined from another one, or removed); `cashctl connect list` shows what is."
+}
+
 func newCircleCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "circle",
@@ -279,7 +313,7 @@ func runCircleJoin(cmd *cobra.Command, args []string) error {
 			return output.ConflictError(cmd, "", errors.New(
 				"the Hub's identity-proof replay guard rejected two attempts within the same second, even after retrying once — wait a few seconds and run `join` again"))
 		}
-		return classifyNWCErr(cmd, walletExistsFromLegacyRefusal(err))
+		return withHeldWalletHint(classifyNWCErr(cmd, walletExistsFromLegacyRefusal(err)), label)
 	}
 
 	s, err := config.Load()

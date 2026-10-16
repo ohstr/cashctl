@@ -27,7 +27,15 @@ func newConnectAddCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "add <name> <connection>",
 		Short: "Register a connection under a name",
-		Args:  output.ExactArgs(2),
+		Long: `Registers a wallet connection under a name, for -c/--connection, --into
+and the default wallet.
+
+<connection> is a nostr+walletconnect:// URI, or a cash-token-family string
+(lokicash1...) used as a wallet. A circlehub1... connection is joined with
+` + "`cashctl join`" + `, a <token>#<secret> bill is taken with ` + "`cashctl receive`" + `;
+both are refused here. Your first wallet becomes the default.`,
+		Example: `  cashctl connect add savings "nostr+walletconnect://<pubkey>?relay=wss://...&secret=..."`,
+		Args:    output.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			jsonMode, _ := cmd.Flags().GetBool("json")
 			// Trimmed: a stray space/newline makes url.Parse reject an

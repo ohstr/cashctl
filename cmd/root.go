@@ -15,6 +15,21 @@ import (
 var RootCmd = &cobra.Command{
 	Use:   "cashctl",
 	Short: "A wallet CLI for Cash and Circle wallets",
+	Long: `A wallet CLI for Cash and Circle wallets.
+
+Results go to stdout (one JSON document with --json); errors to stderr.
+Exit codes, and --json's "code":
+  0  ok
+  1  internal        anything else
+  2  usage           bad or missing flags/args
+  3  invalid_input   a value failed validation
+  4  not_found       no such token, wallet or entry
+  5  conflict        collides with current state (retryable)
+  6  network         relay/wallet unreachable, or Hub not ready (retryable)
+  7  auth            not authorized, or no longer
+  8  indeterminate   no answer to a spend: check ` + "`cash status`" + ` before resending
+  9  exists          already exists (join: you hold a wallet from that circle)
+  10 spent           the Hub confirmed the bill is spent`,
 	Example: `  cashctl init
   cashctl join <hub-connection> <max-amount>
   cashctl receive <token>

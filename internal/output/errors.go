@@ -55,6 +55,16 @@ var exitCodes = map[ErrorCode]int{
 	CodeSpent:         10,
 }
 
+// ExitCodes returns a copy of the ErrorCode → exit code table, for checking
+// documentation of it against the real thing.
+func ExitCodes() map[ErrorCode]int {
+	out := make(map[ErrorCode]int, len(exitCodes))
+	for k, v := range exitCodes {
+		out[k] = v
+	}
+	return out
+}
+
 // retryableCodes marks which codes describe a transient condition worth an
 // agent retrying without changing anything — surfaced as --json's
 // "retryable" field.
