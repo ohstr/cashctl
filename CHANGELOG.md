@@ -112,6 +112,9 @@ Fixes from the NIP-CASH / NIP-CW conformance review, for agents above all.
   says, instead of `not_found`; a token you transferred away stays `not_found`.
 - Fixes a bare `join` naming only the hub connection; it now names the max
   amount too.
+- Fixes the first `cash status` on a bill its Hub just reported spent exiting
+  0 with the raw reply; it now fails as `spent` (exit 10), like later calls.
+  A lone failure is also no longer printed on stdout as well as stderr.
 
 ## [0.6.0-rc.12]
 

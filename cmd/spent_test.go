@@ -101,3 +101,76 @@ func TestClassifyCashTokenNWCErr_ExplainsAMissingOrWrongCashSecret(t *testing.T)
 		t.Error("an unrelated BAD_REQUEST was explained as a cash-secret refusal")
 	}
 }
+
+// The first `cash status` on a bill whose Hub has just tombstoned it is the
+// same spent error (exit 10, nothing on stdout) every later call gets from
+// the stored status — never the raw tombstone printed as a result.
+func TestRunCashStatus_AFreshTombstoneIsSpentOnTheFirstCall(t *testing.T) {
+	for _, jsonMode := range []bool{true, false} {
+		appdir.SetOverride(t.TempDir())
+		t.Cleanup(func() { appdir.SetOverride("") })
+		l, err := ledger.Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		amt := uint64(1000)
+		e, err := l.Add(ledger.Entry{Token: "tok", WalletPubkey: "pub", AmountMillis: &amt})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := l.Save(); err != nil {
+			t.Fatal(err)
+		}
+		real := fetchCashStatusFn
+		t.Cleanup(func() { fetchCashStatusFn = real })
+		fetchCashStatusFn = func(*cobra.Command, bool, *ledger.Entry) (*nipcash.CashStatusResult, error) {
+			return &nipcash.CashStatusResult{Error: nipcash.ErrorSpent}, nil
+		}
+		cmd := newTestStatusCmd(jsonMode, false)
+		_ = cmd.Flags().Set("token", e.ID)
+
+		var runErr error
+		stdout, _ := captureStreams(t, func() { runErr = runCashStatus(cmd, nil) })
+		if ce := output.AsCLIError(runErr); ce.Code != output.CodeSpent || output.ExitCode(runErr) != 10 {
+			t.Errorf("json=%v: code = %q (exit %d), want spent (exit 10): %v", jsonMode, ce.Code, output.ExitCode(runErr), runErr)
+		}
+		if strings.TrimSpace(stdout) != "" {
+			t.Errorf("json=%v: stdout = %q, want empty", jsonMode, stdout)
+		}
+		fresh, _ := ledger.Load()
+		if got, _ := fresh.Find(e.ID); got.Status != ledger.StatusSpent {
+			t.Errorf("json=%v: saved status = %q, want spent", jsonMode, got.Status)
+		}
+	}
+}
+
+// Several bills: a tombstone stays a "spent" row in the full report, so the
+// other rows are not hidden behind it.
+func TestRunCashStatus_ATombstoneAmongSeveralStaysARow(t *testing.T) {
+	appdir.SetOverride(t.TempDir())
+	t.Cleanup(func() { appdir.SetOverride("") })
+	l, err := ledger.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	amt := uint64(1000)
+	spent, _ := l.Add(ledger.Entry{Token: "tok-a", WalletPubkey: "pub", AmountMillis: &amt})
+	if _, err := l.Add(ledger.Entry{Token: "tok-b", WalletPubkey: "pub", AmountMillis: &amt}); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.Save(); err != nil {
+		t.Fatal(err)
+	}
+	real := fetchCashStatusFn
+	t.Cleanup(func() { fetchCashStatusFn = real })
+	fetchCashStatusFn = func(_ *cobra.Command, _ bool, e *ledger.Entry) (*nipcash.CashStatusResult, error) {
+		if e.ID == spent.ID {
+			return &nipcash.CashStatusResult{Error: nipcash.ErrorSpent}, nil
+		}
+		return &nipcash.CashStatusResult{}, nil
+	}
+	stdout, _ := captureStreams(t, func() { _ = runCashStatus(newTestStatusCmd(true, false), nil) })
+	if !strings.Contains(stdout, `"spent"`) || !strings.Contains(stdout, `"ok"`) {
+		t.Errorf("multi-token report lost a row: %s", stdout)
+	}
+}

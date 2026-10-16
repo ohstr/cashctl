@@ -5,7 +5,6 @@ package integration
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"strings"
 	"testing"
 
 	"github.com/ohstr/nmilat/nipcash"
@@ -149,8 +148,13 @@ func TestMerge_RefusedMergeLeavesCashNotes(t *testing.T) {
 	for _, h := range f.mustJSON("wallet", "show")["held_tokens"].([]any) {
 		id := entryID(t, h)
 		res := f.run("cash", "status", "--token", id)
-		if res.ExitCode != 0 || strings.Contains(res.Stdout, `"spent"`) {
-			t.Errorf("cash status %s after the refused merge: exit %d, want a live note\n%s%s", id, res.ExitCode, res.Stdout, res.Stderr)
+		if res.ExitCode != 0 {
+			t.Errorf("cash status %s after the refused merge: exit %d, want a live note\n%s", id, res.ExitCode, res.Stderr)
+			continue
+		}
+		status := mustDecodeJSON(t, "cash status", res.Stdout)
+		if recips, _ := status["recipients"].([]any); status["error"] != nil || len(recips) == 0 {
+			t.Errorf("cash status %s after the refused merge: want a live roster, got %s", id, res.Stdout)
 		}
 	}
 }

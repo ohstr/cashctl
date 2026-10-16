@@ -113,21 +113,35 @@ func TestSpentBill_TombstoneMarksTheEntrySpent(t *testing.T) {
 	}
 	requireBillSpentAway(t, admin, hub.ID, token, "after redeem")
 
-	// The tombstone is a definite answer, so b's read succeeds and says so.
-	var status map[string]any
+	// The tombstone is a definite answer: b's very first read after it is the
+	// spent error (exit 10, stderr only), the same one every later read gets.
+	bHeld, _ := b.mustJSON("wallet", "show")["held_tokens"].([]any)
+	if len(bHeld) != 1 {
+		t.Fatalf("the copied wallet holds %d bills, want 1", len(bHeld))
+	}
+	id := entryID(t, bHeld[0])
 	deadline := time.Now().Add(20 * time.Second)
 	for {
-		res := b.run("cash", "status")
-		if res.ExitCode == 0 {
-			status = mustDecodeJSON(t, "cash status", res.Stdout)
-			if status["error"] == "spent" {
-				break
+		res := b.run("cash", "status", "--token", id)
+		if res.ExitCode == 10 {
+			if e := parseErrorReport(t, res); e.Code != "spent" || e.Retryable {
+				t.Errorf("first cash status on the tombstone: code=%q retryable=%v, want spent, not retryable", e.Code, e.Retryable)
 			}
+			if strings.TrimSpace(res.Stdout) != "" {
+				t.Errorf("first cash status on the tombstone printed on stdout: %s", res.Stdout)
+			}
+			break
+		}
+		if res.ExitCode != 0 || strings.Contains(res.Stdout, `"spent"`) {
+			t.Fatalf("cash status on the tombstone: exit %d, want 10 (spent)\nstdout: %s\nstderr: %s", res.ExitCode, res.Stdout, res.Stderr)
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("cash status never reported the redeemed bill spent: exit %d\nstdout: %s\nstderr: %s", res.ExitCode, res.Stdout, res.Stderr)
 		}
 		time.Sleep(time.Second)
+	}
+	if again := b.run("cash", "status", "--token", id); again.ExitCode != 10 || parseErrorReport(t, again).Code != "spent" {
+		t.Errorf("second cash status: exit %d, want 10 (spent)\nstderr: %s", again.ExitCode, again.Stderr)
 	}
 
 	show := b.mustJSON("wallet", "show")

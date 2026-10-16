@@ -414,11 +414,12 @@ Only your own allocation by default: other recipients' identities stay out
 of your context unless you need them and ask with `--all`.
 
 **A spent bill.** When the Hub answers that a bill is spent (a tombstone,
-kept for a while after the bill is gone), `cash status` reports it — in a
-`statuses` row as `"status": "spent"` — and cashctl marks the entry spent,
+kept for a while after the bill is gone), cashctl marks the entry spent,
 so `wallet balance` and `redeem --all` stop offering it. Any command that
-hits a tombstone (`receive`, `redeem`, `transfer`) fails with `code:
-"spent"` (exit 10, not retryable); `decode --check` reports
+hits a tombstone for one bill (`cash status`, `receive`, `redeem`,
+`transfer`) fails with `code: "spent"` (exit 10, not retryable), the first
+time as every later time; a `cash status` over several bills reports it as a
+`statuses` row with `"status": "spent"` instead. `decode --check` reports
 `"spent": true`. Silence is never read as spent: no answer is
 `indeterminate` (above).
 

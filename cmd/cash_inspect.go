@@ -58,9 +58,15 @@ func runCashStatus(cmd *cobra.Command, _ []string) error {
 
 	outcomes := make([]cashStatusOutcome, len(entries))
 	for i, entry := range entries {
-		result, fetchErr := fetchCashStatus(cmd, jsonMode, entry)
+		result, fetchErr := fetchCashStatusFn(cmd, jsonMode, entry)
 		if result != nil && result.IsSpent() {
-			markSpent(l, entry)
+			// One bill asked about: a fresh tombstone is the same spent error
+			// the next call gets from the stored status, never a result.
+			if len(entries) == 1 {
+				result, fetchErr = nil, recordSpent(cmd, l, entry)
+			} else {
+				markSpent(l, entry)
+			}
 		}
 		outcomes[i] = cashStatusOutcome{ID: entry.ID, Result: result, Err: fetchErr}
 	}
@@ -83,6 +89,8 @@ type cashStatusOutcome struct {
 // fetchCashStatus is runCashStatus's own single-entry wire call, factored out
 // so it can run once per resolved entry — unchanged from what this command
 // has always done for its one-entry case.
+var fetchCashStatusFn = fetchCashStatus
+
 func fetchCashStatus(cmd *cobra.Command, jsonMode bool, entry *ledger.Entry) (*nipcash.CashStatusResult, error) {
 	var result *nipcash.CashStatusResult
 	var dialErr bool
@@ -132,12 +140,11 @@ func firstCashStatusError(outcomes []cashStatusOutcome) error {
 //
 // A single outcome that succeeded keeps today's exact --json shape —
 // output.PrintJSON(result) directly, the bare CashStatusResult with no
-// wrapper at all — so no existing consumer sees anything different. Every
-// other case (more than one outcome, or the one outcome failed) wraps in a
-// named "statuses" array, where "id" is what makes each row attributable; a
-// single failure still prints nothing on stdout (its classified error on
-// stderr already says everything, matching the same rule protect's own
-// printProtectOutcomes follows).
+// wrapper at all — so no existing consumer sees anything different. More
+// than one outcome wraps in a named "statuses" array, where "id" is what
+// makes each row attributable. A single failure prints nothing on stdout in
+// either mode (its classified error on stderr already says everything,
+// matching the same rule protect's own printProtectOutcomes follows).
 //
 // Human mode mirrors the single-entry rendering this command has always
 // used, once per entry, with a one-line header naming which entry when
@@ -145,13 +152,13 @@ func firstCashStatusError(outcomes []cashStatusOutcome) error {
 // ID (plain text deliberately never prints one, same rule pickHeldToken's
 // own listing follows).
 func printCashStatusOutcomes(jsonMode bool, outcomes []cashStatusOutcome) {
+	if len(outcomes) == 1 && outcomes[0].Err != nil {
+		return // single failure: nothing on stdout in either mode, see doc comment above
+	}
 	if jsonMode {
-		if len(outcomes) == 1 && outcomes[0].Err == nil {
+		if len(outcomes) == 1 {
 			output.PrintJSON(outcomes[0].Result)
 			return
-		}
-		if len(outcomes) == 1 {
-			return // single failure: nothing on stdout, see doc comment above
 		}
 		rows := make([]map[string]any, len(outcomes))
 		for i, o := range outcomes {
