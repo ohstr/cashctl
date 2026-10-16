@@ -611,7 +611,7 @@ func okOutcome(id string, amount uint64, fee uint64, preimage string) redeemOutc
 // keep emitting a top-level redeemed_token/preimage object rather than an array.
 func TestPrintRedeemOutcomes_SingleSuccessKeepsTheLegacyJSONShape(t *testing.T) {
 	outcomes := []redeemOutcome{okOutcome("tok-0", 1000, 7, "deadbeef")}
-	out := withCapturedStdout(func() { printRedeemOutcomes(true, outcomes, "savings", "") })
+	out := withCapturedStdout(func() { printRedeemOutcomes(true, outcomes, "savings", "", nil) })
 
 	var got map[string]any
 	if err := json.Unmarshal([]byte(out), &got); err != nil {
@@ -637,7 +637,7 @@ func TestPrintRedeemOutcomes_PartialRunReportsEveryBill(t *testing.T) {
 		okOutcome("tok-0", 1000, 0, "beef01"),
 		{EntryID: "tok-1", Err: output.NetworkError(&cobra.Command{}, errors.New("relay went away"))},
 	}
-	out := withCapturedStdout(func() { printRedeemOutcomes(true, outcomes, "savings", "") })
+	out := withCapturedStdout(func() { printRedeemOutcomes(true, outcomes, "savings", "", nil) })
 
 	var got map[string]any
 	if err := json.Unmarshal([]byte(out), &got); err != nil {
@@ -662,7 +662,7 @@ func TestPrintRedeemOutcomes_PartialRunReportsEveryBill(t *testing.T) {
 // as failed would invite a retry of something that never happened.
 func TestPrintRedeemOutcomes_NotAttemptedIsNotAFailure(t *testing.T) {
 	outcomes := []redeemOutcome{okOutcome("tok-0", 1000, 0, "beef01"), {EntryID: "tok-1"}}
-	out := withCapturedStdout(func() { printRedeemOutcomes(true, outcomes, "savings", "") })
+	out := withCapturedStdout(func() { printRedeemOutcomes(true, outcomes, "savings", "", nil) })
 
 	if !strings.Contains(out, `"status": "not_attempted"`) {
 		t.Errorf("a bill that was never attempted is not reported as such:\n%s", out)
@@ -674,7 +674,7 @@ func TestPrintRedeemOutcomes_NotAttemptedIsNotAFailure(t *testing.T) {
 
 func TestPrintRedeemOutcomes_InvoiceDestinationUsesItsOwnField(t *testing.T) {
 	outcomes := []redeemOutcome{okOutcome("tok-0", 1000, 0, "beef01"), {EntryID: "tok-1"}}
-	out := withCapturedStdout(func() { printRedeemOutcomes(true, outcomes, "invoice lnbc1…", "lnbc1fullinvoice") })
+	out := withCapturedStdout(func() { printRedeemOutcomes(true, outcomes, "invoice lnbc1…", "lnbc1fullinvoice", nil) })
 
 	if !strings.Contains(out, `"to_invoice": "lnbc1fullinvoice"`) {
 		t.Errorf("an invoice destination must report the whole invoice under to_invoice, not a truncated to_wallet:\n%s", out)
@@ -800,5 +800,26 @@ func TestExactSameHubSum_NeverGroupsFingerprintlessBills(t *testing.T) {
 	got := exactSameHubSum([]quotedEntry{{entry: a, net: 300, hub: "h1"}, {entry: b, net: 200, hub: "h1"}}, 500)
 	if len(got) != 2 {
 		t.Errorf("two bills of one Hub were not summed: %v", got)
+	}
+}
+
+// redeem --all names the bills it left out because their Hub reported them
+// spent, in both result shapes, instead of letting them vanish silently.
+func TestPrintRedeemOutcomes_NamesBillsSkippedAsSpent(t *testing.T) {
+	l := heldLedger(3)
+	l.Entries[1].Status = ledger.StatusSpent
+	l.Entries[2].Status = ledger.StatusRedeemed
+	skipped := reportedSpentIDs(l)
+	if len(skipped) != 1 || skipped[0] != l.Entries[1].ID {
+		t.Fatalf("reportedSpentIDs = %v, want only the Hub-reported spent bill", skipped)
+	}
+	for _, outcomes := range [][]redeemOutcome{
+		{okOutcome("tok-0", 1000, 0, "aa")},
+		{okOutcome("tok-0", 1000, 0, "aa"), okOutcome("tok-9", 1000, 0, "bb")},
+	} {
+		out := withCapturedStdout(func() { printRedeemOutcomes(true, outcomes, "savings", "", skipped) })
+		if !strings.Contains(out, `"skipped_spent"`) || !strings.Contains(out, skipped[0]) {
+			t.Errorf("%d outcome(s): skipped spent bill not named:\n%s", len(outcomes), out)
+		}
 	}
 }

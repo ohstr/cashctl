@@ -196,6 +196,9 @@ func runCashReceive(cmd *cobra.Command, args []string) error {
 
 	if !jsonMode {
 		output.Printf("Received %s.\n", output.FormatAmount(int64(result.AmountMillis)))
+		// NIP-CASH §Removing a Recipient: an unclaimed slice can still be taken
+		// back by its issuer; only redeeming or moving it makes it final.
+		output.Println("Until you redeem or transfer it, the bill's issuer can still take it back.")
 	}
 
 	// result.IsCash, not the pre-check guess above.

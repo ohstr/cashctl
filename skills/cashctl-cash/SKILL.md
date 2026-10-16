@@ -421,7 +421,10 @@ hits a tombstone for one bill (`cash status`, `receive`, `redeem`,
 time as every later time; a `cash status` over several bills still reports
 every bill, this one as a `statuses` row with `"status": "spent"`, and exits
 10 as well (read stdout: the other rows are real answers). `decode --check` reports
-`"spent": true`. Silence is never read as spent: no answer is
+`"spent": true`. A received bill is not final: until you redeem or
+transfer it, its issuer can still take it back (it is then `spent` or
+`not_found` here), so redeem one from a sender you don't trust promptly.
+Silence is never read as spent: no answer is
 `indeterminate` (above).
 
 **A bill you spent yourself.** Naming a token you already redeemed or

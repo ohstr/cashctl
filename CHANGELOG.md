@@ -139,6 +139,9 @@ Fixes from the NIP-CASH / NIP-CW conformance review, for agents above all.
 - Fixes `--json` errors dropping cashctl's own hint after a wallet's message.
 - Changes the RESTRICTED decline text so it no longer reads like a login
   failure, and caps the label part of a joined wallet's name at 24 characters.
+- Adds `skipped_spent` to `redeem --all`: tokens left out because their Hub
+  reported them spent. `receive` now says its issuer can take a bill back
+  until it is redeemed or transferred.
 
 ## [0.6.0-rc.12]
 

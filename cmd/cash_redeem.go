@@ -107,6 +107,10 @@ func runCashRedeem(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	var skippedSpent []string
+	if all, _ := cmd.Flags().GetBool("all"); all {
+		skippedSpent = reportedSpentIDs(l)
+	}
 	if err := refuseInvoiceForManyBills(cmd, explicitInvoice, len(entries)); err != nil {
 		return err
 	}
@@ -137,7 +141,7 @@ func runCashRedeem(cmd *cobra.Command, args []string) error {
 		// Nothing left to pay into, so the destination is never resolved or
 		// dialled — there would be nothing to ask it for.
 		if worthReportingRedeemRun(outcomes) {
-			printRedeemOutcomes(jsonMode, outcomes, "", explicitInvoice)
+			printRedeemOutcomes(jsonMode, outcomes, "", explicitInvoice, skippedSpent)
 		}
 		return firstRedeemError(outcomes)
 	}
@@ -182,7 +186,7 @@ func runCashRedeem(cmd *cobra.Command, args []string) error {
 		plans = makeRedeemInvoices(ctx, cmd, destClient, plans, outcomes, jsonMode)
 		if len(plans) == 0 {
 			if worthReportingRedeemRun(outcomes) {
-				printRedeemOutcomes(jsonMode, outcomes, destName, explicitInvoice)
+				printRedeemOutcomes(jsonMode, outcomes, destName, explicitInvoice, skippedSpent)
 			}
 			return firstRedeemError(outcomes)
 		}
@@ -224,11 +228,11 @@ func runCashRedeem(cmd *cobra.Command, args []string) error {
 		// Reported BEFORE returning the save failure, so the preimages of
 		// payments that really happened are on stdout where they can be
 		// recovered from.
-		printRedeemOutcomes(jsonMode, outcomes, destName, explicitInvoice)
+		printRedeemOutcomes(jsonMode, outcomes, destName, explicitInvoice, skippedSpent)
 		return reportUnsavedResult(cmd, err, "Redeem", redeemRecoveryHint(outcomes))
 	}
 
-	printRedeemOutcomes(jsonMode, outcomes, destName, explicitInvoice)
+	printRedeemOutcomes(jsonMode, outcomes, destName, explicitInvoice, skippedSpent)
 	return firstRedeemError(outcomes)
 }
 
@@ -587,7 +591,7 @@ func redeemConfirmMessage(plans []redeemPlan, destName string) string {
 // when more than one bill was selected or one of them did not succeed — states
 // in which this command previously could not run at all, so nothing can depend
 // on the old shape there.
-func printRedeemOutcomes(jsonMode bool, outcomes []redeemOutcome, destName, explicitInvoice string) {
+func printRedeemOutcomes(jsonMode bool, outcomes []redeemOutcome, destName, explicitInvoice string, skippedSpent []string) {
 	destKey, destVal := "to_wallet", destName
 	if explicitInvoice != "" {
 		// Distinct field, not a repurposed "to_wallet": destName here names an
@@ -613,6 +617,9 @@ func printRedeemOutcomes(jsonMode bool, outcomes []redeemOutcome, destName, expl
 				destKey: destVal,
 			}
 			addPaymentRef(out, o.Invoice)
+			if len(skippedSpent) > 0 {
+				out["skipped_spent"] = skippedSpent
+			}
 			output.PrintJSON(out)
 			return
 		}
@@ -648,7 +655,11 @@ func printRedeemOutcomes(jsonMode bool, outcomes []redeemOutcome, destName, expl
 			}
 			rows[i] = row
 		}
-		output.PrintJSON(map[string]any{"redeemed": rows, destKey: destVal})
+		doc := map[string]any{"redeemed": rows, destKey: destVal}
+		if len(skippedSpent) > 0 {
+			doc["skipped_spent"] = skippedSpent
+		}
+		output.PrintJSON(doc)
 		return
 	}
 
@@ -672,6 +683,23 @@ func printRedeemOutcomes(jsonMode bool, outcomes []redeemOutcome, destName, expl
 	if len(outcomes) > 1 {
 		output.Printf("%d of %d tokens redeemed.\n", paid, len(outcomes))
 	}
+	if len(skippedSpent) > 0 {
+		output.Printf("Not included: %d token(s) their Hub reported spent (%s) — their value already moved.\n",
+			len(skippedSpent), strings.Join(skippedSpent, ", "))
+	}
+}
+
+// reportedSpentIDs names every entry its Hub reported spent: bills taken back
+// or spent elsewhere, which --all leaves out and so must say so — a bill that
+// silently vanished from "everything" reads as one cashctl lost.
+func reportedSpentIDs(l *ledger.Ledger) []string {
+	var ids []string
+	for _, e := range l.Entries {
+		if e.Status == ledger.StatusSpent {
+			ids = append(ids, e.ID)
+		}
+	}
+	return ids
 }
 
 // worthReportingRedeemRun reports whether the run has something to say beyond
