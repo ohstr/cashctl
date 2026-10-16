@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Ground truth for R5, from the operator's view of every hub: each is down to
 # one live slice holding everything (90 loki on A, 20 on B, 50 on C, whose 50
-# notes exceed one merge and so take rounds) — cash notes merge since I-26 —
+# notes exceed one merge and so take rounds) — cash notes merge —
 # and no live slice still answers to a secret from the handed-out notes, so
 # nobody who saw those strings can spend the money.
 ROUND="r5-tidy-and-secure"

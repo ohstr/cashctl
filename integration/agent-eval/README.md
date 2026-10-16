@@ -100,7 +100,7 @@ relays point nowhere, so its not-ready circle cannot resolve membership. The
 original value is saved in `.general-relay.restore` and put back after r3's
 verifier, at teardown, and at the start of the next run if a run died mid-r3.
 Don't run anything else against the Hub during r3. An interrupted cash send
-(F-13) and a lost reply chunk (F-36) cannot be produced on demand against a
+and a lost reply chunk cannot be produced on demand against a
 live Hub without a test hook, so the unit tests cover them.
 
 ## Interpreting a report
