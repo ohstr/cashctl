@@ -191,6 +191,9 @@ func runCashConsolidate(cmd *cobra.Command, args []string) error {
 		}
 		result, err := consolidateItems(cmd, l, items, toFlag, jsonMode, yesFlag)
 		if err != nil {
+			if isCrossHubDeclineClassified(err) {
+				return withSourceHubs(err, l, items)
+			}
 			return err
 		}
 		var results []*consolidateResult
@@ -293,6 +296,27 @@ func isCrossHubDeclineClassified(err error) bool {
 	}
 	return strings.Contains(strings.ToLower(ce.RawMessage), "same cash hub") ||
 		strings.Contains(strings.ToLower(ce.Err.Error()), "same cash hub")
+}
+
+// withSourceHubs adds to the Hub's "same Cash Hub" refusal which Hub each named
+// source is on, so the selection can be split without looking them up.
+func withSourceHubs(err error, l *ledger.Ledger, ids []string) error {
+	ce := output.AsCLIError(err)
+	if ce == nil || ce.Err == nil {
+		return err
+	}
+	parts := make([]string, 0, len(ids))
+	for _, id := range ids {
+		hub := "unknown"
+		if e, ok := l.Find(id); ok {
+			if h := ledger.HubGroupKey(*e); h != "" {
+				hub = shortHub(h)
+			}
+		}
+		parts = append(parts, fmt.Sprintf("%s on hub %s", id, hub))
+	}
+	ce.Err = fmt.Errorf("%s — %s; only bills of one Hub merge (`cashctl wallet show` shows each bill's hub)", ce.Err.Error(), strings.Join(parts, ", "))
+	return ce
 }
 
 // crossHubGroupError replaces the Hub's own "all sources must belong to the same

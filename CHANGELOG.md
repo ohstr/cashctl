@@ -134,6 +134,8 @@ Fixes from the NIP-CASH / NIP-CW conformance review, for agents above all.
 - Adds `outstanding_cash_notes` to `wallet balance`: cash notes you handed out
   that are not claimed yet, outside the total.
 - Adds field guides to `transfer --help` and `wallet show --help`.
+- Adds to a refused merge of named tokens which Hub each one is on, and to
+  `wallet show` that tokens on the same hub can be merged.
 
 ## [0.6.0-rc.12]
 

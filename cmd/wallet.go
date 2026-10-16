@@ -164,8 +164,10 @@ cash send's only secret copy — keep it), pending_joins and pending_merge.`,
 			held := l.Held()
 			if len(held) == 0 {
 				output.Println("\nNo held cash tokens.")
-			} else {
+			} else if len(held) == 1 {
 				output.Printf("\nHeld cash tokens: %d\n", len(held))
+			} else {
+				output.Printf("\nHeld cash tokens: %d (tokens on the same hub can be merged with `cashctl consolidate`)\n", len(held))
 			}
 			for i, e := range held {
 				amount := "unknown amount"
