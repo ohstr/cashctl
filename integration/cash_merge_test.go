@@ -5,6 +5,7 @@ package integration
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"strings"
 	"testing"
 
 	"github.com/ohstr/nmilat/nipcash"
@@ -142,5 +143,14 @@ func TestMerge_RefusedMergeLeavesCashNotes(t *testing.T) {
 	}
 	if n := heldCount(t, f); n != 2 {
 		t.Errorf("held %d, want both notes still held", n)
+	}
+	// Each held note must be the live slice, not the tombstoned one it was
+	// spun off from when it moved back to cash.
+	for _, h := range f.mustJSON("wallet", "show")["held_tokens"].([]any) {
+		id := entryID(t, h)
+		res := f.run("cash", "status", "--token", id)
+		if res.ExitCode != 0 || strings.Contains(res.Stdout, `"spent"`) {
+			t.Errorf("cash status %s after the refused merge: exit %d, want a live note\n%s%s", id, res.ExitCode, res.Stdout, res.Stderr)
+		}
 	}
 }

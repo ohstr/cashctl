@@ -111,6 +111,34 @@ func TestMoveCashNotesToKey_RefusalUndoesEarlierMoves(t *testing.T) {
 	}
 }
 
+// Moving a note back to cash after a refused merge spins it off: its wallet now
+// has had two recipients, so the Hub moves the value to a new wallet and
+// tombstones the old slice. The entry must follow it, or the note's value is
+// held on the Hub while the ledger tracks a spent bill.
+func TestMoveCashNotesToKey_RefusedMergeFollowsTheSpunOffNote(t *testing.T) {
+	l := mergeLedger(t)
+	priv, pub, _ := newThrowawayKey()
+	calls := 0
+	withMoveFn(t, func(e *ledger.Entry, _ nipcash.Credential, target nipcash.Target) (*nipcash.CashTransferResult, error) {
+		calls++
+		switch {
+		case calls == 2:
+			return nil, &relayclient.WalletError{Code: "RESTRICTED", Message: "no"}
+		case !nipcash.IsPubkeyTarget(target):
+			return &nipcash.CashTransferResult{NewWalletPubkey: "pa2", NewWalletToken: "tok-a2"}, nil
+		}
+		return &nipcash.CashTransferResult{}, nil
+	})
+	if _, err := moveCashNotesToKey(&cobra.Command{}, l, ids(l), priv, pub); err == nil {
+		t.Fatal("a refused move reported success")
+	}
+	fresh, _ := ledger.Load()
+	a := fresh.Entries[0]
+	if a.Token != "tok-a2" || a.WalletPubkey != "pa2" || !isCashNote(&a) || a.Status != ledger.StatusHeld {
+		t.Errorf("the spun-off note is not tracked at its new wallet: %+v", a)
+	}
+}
+
 // No answer: the key stays pending, and a later run settles it from what the
 // Hub accepts — never by resending.
 func TestMovesWithNoAnswer_AreSettledNotResent(t *testing.T) {
