@@ -17,6 +17,10 @@ check each against that table:
 7. `cashctl connect use nope`
 8. `cashctl receive -c anything <a token>` (use the contents of `/fixtures/r3-token.txt`)
 9. registering `/fixtures/r3-circlehub.txt` as an ordinary wallet with `connect add`
+10. registering `/fixtures/r3-bill.txt` as a wallet with `connect add`, and using it
+    as `-c` for `cashctl wallet balance`
+11. joining the circle in `/fixtures/r3-unready-hub.txt` (any max amount): this
+    Hub cannot check membership yet — what does the error tell you to do?
 
 For each: does the exit code match the table for its `code`? Is stdout empty?
 Does `retryable` match? Does the message tell you what to do instead? Report

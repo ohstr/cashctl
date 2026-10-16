@@ -144,6 +144,7 @@ for round in "${ROUNDS[@]}"; do
   # The call log before the verifier, not after the loop: r8's verifier reads it.
   [ "${EVAL_CASHCTL}" = local ] && docker compose cp "agent:${SHIM_LOG}" "${RUN_DIR}/cashctl-calls.jsonl" >/dev/null 2>&1
   bin/verify/"${round}.sh" "${RUN_DIR}" || echo "WARNING: [${round}] verifier reported problems" >&2
+  [ "${round}" = r3-error-contract ] && restore_r3
 done
 
 if [ "${EVAL_CASHCTL}" = local ]; then

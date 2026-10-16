@@ -81,9 +81,9 @@ split, reclaimed, ...), never from the agent's report.
 | r0-bootstrap | cashctl runs, an identity exists, the skills are installed | binary runs; npub; the three skill dirs on disk |
 | r1-cash-note | get a cash note's money into a wallet | no slice left `unclaimed`, at least one `redeemed` |
 | r2-circle-join | join a circle with a 500 cap, then try again | one circle wallet; the Hub reports a 500-loki budget; a second join fails as `exists` (exit 9) |
-| r3-error-contract | nine misuses, checked against AGENTS.md's table | the harness re-runs each probe: exit code, `code`, `retryable`, empty stdout |
+| r3-error-contract | twelve misuses (a bill pasted as a wallet, a circle not ready to check membership among them), checked against AGENTS.md's table | the harness re-runs each probe: exit code, `code`, `retryable`, empty stdout |
 | r4-split-send | send 30 of a 90 note to someone, keep the rest as a note | a 30 slice for P's pubkey, a 60 cash slice, and the reported note is takeable |
-| r5-tidy-and-secure | take four notes, secure them, hold as few tokens as possible | one live slice per hub holding everything, none answering to a handed-out secret |
+| r5-tidy-and-secure | take 54 notes from three hubs (50 on one: more than one merge takes), secure them, hold as few tokens as possible | one live slice per hub holding everything, none answering to a handed-out secret |
 | r6-pay-and-cash-out | pay a 60 invoice, cash out exactly 40 | 60 and 24 + 16 `redeemed`, 30 still `unclaimed` |
 | r7-wallet-ops | invoice on a wallet, pay it from the circle wallet, switch default | a settled 21-loki payment on `a`; `a` is the default |
 | r8-partial-redeem | cash out two bills when the operator reclaims one mid-round | one `redeemed`, one `reclaimed`; no blind resend; `cash status` before concluding |
@@ -94,6 +94,14 @@ report lists them.
 What a single-node lokihub cannot show: every redeem is same-node and so
 fee-free, which means a nonzero redeem fee and the zero-payout refusal are not
 exercised here. The unit and integration suites cover them.
+
+r3 changes one Hub-wide setting for the length of the round: the Hub's general
+relays point nowhere, so its not-ready circle cannot resolve membership. The
+original value is saved in `.general-relay.restore` and put back after r3's
+verifier, at teardown, and at the start of the next run if a run died mid-r3.
+Don't run anything else against the Hub during r3. An interrupted cash send
+(F-13) and a lost reply chunk (F-36) cannot be produced on demand against a
+live Hub without a test hook, so the unit tests cover them.
 
 ## Interpreting a report
 

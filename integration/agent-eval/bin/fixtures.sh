@@ -27,6 +27,7 @@ mint() {
 FIXTURE_APPS=()
 cleanup() {
   echo "==> tearing down"
+  restore_r3
   for agent in "${MINT_AGENTS[@]:-}"; do
     [ -n "${agent}" ] && .bin/mint sweep --agent "${agent}" >/dev/null 2>&1 || true
   done
@@ -49,6 +50,7 @@ cleanup() {
 # start_stack — a fresh agent container, responsive.
 start_stack() {
   echo "==> ensuring a clean slate"
+  restore_r3 # a run that died mid-r3 left the Hub's relays pointing nowhere
   docker compose down -v >/dev/null 2>&1 || true
   docker compose build agent
   docker compose up -d
@@ -129,10 +131,43 @@ authorize_r2() {
   echo "${R2_HUB_TOKEN}" > fixtures/r2-hub.txt
 }
 
-# r3: offline fakes — a well-formed token and a circle-hub invite, never funded.
+# r3: offline fakes — a well-formed token and a circle-hub invite, never funded,
+# and a cash bill pasted with its secret — plus one live circle the Hub cannot
+# check membership for yet.
 prepare_r3() {
   mint r3 fake --kind token | jq -r .value > fixtures/r3-token.txt
   mint r3 fake --kind circle-hub | jq -r .value > fixtures/r3-circlehub.txt
+  echo "$(mint r3 fake --kind token-cash | jq -r .value)#$(openssl rand -hex 32)" > fixtures/r3-bill.txt
+  prepare_r3_unready
+}
+
+# prepare_r3_unready — for r3 only, the Hub's general relays point nowhere, so a
+# following-policy circle's first contact-list fetch cannot resolve and its join
+# is NOT_READY (NIP-CW: an unresolved list is never "not a member"). The original
+# value is kept in .general-relay.restore, outside .harness (which a run wipes),
+# so restore_r3 can put it back after r3's verifier, at teardown, or at the start
+# of the next run if this one died.
+prepare_r3_unready() {
+  local hub provider
+  restore_r3
+  admin_api GET /api/info | jq -r '.generalRelay // empty' > .general-relay.restore
+  if [ ! -s .general-relay.restore ]; then
+    rm -f .general-relay.restore
+    echo "r3: could not read the Hub's generalRelay" >&2
+    return 1
+  fi
+  admin_api PATCH /api/settings '{"generalRelay":"ws://127.0.0.1:9"}' >/dev/null
+  provider="$(cd "${REPO_ROOT}" && go run ./integration/agent-eval/decode-npub --new | jq -r .hex)"
+  hub="$(admin_api POST /api/apps '{"name":"cashctl agent-eval '"${RUN_ID}"' r3 unready circle","kind":"circle_hub","scopes":["circle_wallet"],"circleIdentityName":"cashctl agent-eval r3 unready","circlePolicy":"following","providerPubkey":"'"${provider}"'","circleMaxExpSecs":86400,"circlePerWalletMaxMloki":1000000}')"
+  FIXTURE_APPS+=("circle:$(echo "${hub}" | jq -r '.id')")
+  echo "${hub}" | jq -r '.circleHubToken' > fixtures/r3-unready-hub.txt
+}
+
+# restore_r3 — puts back the generalRelay prepare_r3_unready replaced, if any.
+restore_r3() {
+  [ -s .general-relay.restore ] || return 0
+  admin_api PATCH /api/settings "{\"generalRelay\":$(jq -Rs 'rtrimstr("\n")' < .general-relay.restore)}" >/dev/null &&
+    rm -f .general-relay.restore
 }
 
 # r4: one 90-loki cash note to split; P is a fresh third-party npub.
@@ -146,7 +181,9 @@ prepare_r4() {
   jq -r '.npub' "${h}/p.json" > fixtures/r4-npub.txt
 }
 
-# r5: three cash notes from one hub and one from another.
+# r5: three cash notes from one hub, one from another, and 50 one-loki notes from
+# a third — more than a Hub takes in one merge, so tidying them up has to merge in
+# rounds (NIP-CASH §Ceilings).
 prepare_r5() {
   local h out
   h="$(harness_dir r5-tidy-and-secure)"
@@ -162,6 +199,12 @@ prepare_r5() {
   echo "${out}" | jq -r '.gift' >> fixtures/r5-notes.txt
   echo "${out}" | jq -r '.cash_secret' >> "${h}/secrets.txt"
   echo "${out}" | jq -r '.hub_app_id' > "${h}/hub-b-app-id.txt"
+  for _ in $(seq 1 50); do
+    out="$(mint r5 token --hub c --cash --amount 1000)"
+    echo "${out}" | jq -r '.gift' >> fixtures/r5-notes.txt
+    echo "${out}" | jq -r '.cash_secret' >> "${h}/secrets.txt"
+    echo "${out}" | jq -r '.hub_app_id' > "${h}/hub-c-app-id.txt"
+  done
 }
 
 # r6: four bills to the agent's own identity on one hub, an invoice that hub

@@ -93,6 +93,7 @@ for round in "${ROUNDS[@]}"; do
   echo "==> [${round}] solving"
   solve "${round}" || echo "WARNING: [${round}] scripted solution exited non-zero" >&2
   after="$(verdict "${round}")"
+  [ "${round}" = r3-error-contract ] && restore_r3
   ok=no
   { [ "${before}" = FAIL ] || [ "${before}" = skipped ]; } && [ "${after}" = PASS ] && ok=yes
   RESULTS+=("${round}: before=${before} after=${after} ok=${ok}")
