@@ -272,6 +272,7 @@ that mode.
 ```sh
 cashctl init --json
 # {
+#   "identity": "created",
 #   "npub": "npub1...",
 #   "identity_source": "cashctl-local",
 #   "default_wallet": ""

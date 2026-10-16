@@ -30,16 +30,16 @@ func runWalletInit(cmd *cobra.Command, args []string) error {
 	if exists, err := identity.Exists(); err != nil {
 		return output.RuntimeError(cmd, err)
 	} else if exists {
-		return reportAlreadyConfigured(jsonMode)
+		return reportAlreadyConfigured(cmd, jsonMode)
 	}
 
-	npub, source, err := setUpIdentity(cmd, jsonMode)
+	npub, source, created, err := setUpIdentity(cmd, jsonMode)
 	if errors.Is(err, identity.ErrAlreadyConfigured) {
 		// Lost a race with another `init` that claimed the identity between
 		// the Exists check above and this one's save: report what that run
 		// set up — same as if this one had simply started a moment later —
 		// rather than announcing a key that was discarded.
-		return reportAlreadyConfigured(jsonMode)
+		return reportAlreadyConfigured(cmd, jsonMode)
 	}
 	if err != nil {
 		return output.RuntimeError(cmd, err)
@@ -49,7 +49,12 @@ func runWalletInit(cmd *cobra.Command, args []string) error {
 	walletName := offerDefaultWallet(cmd, jsonMode)
 
 	if jsonMode {
+		identityState := "reused"
+		if created {
+			identityState = "created"
+		}
 		output.PrintJSON(map[string]any{
+			"identity":        identityState,
 			"npub":            npub,
 			"identity_source": source,
 			"default_wallet":  walletName,
@@ -58,18 +63,30 @@ func runWalletInit(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func reportAlreadyConfigured(jsonMode bool) error {
-	output.Linef(jsonMode, "Already configured. Run `cashctl wallet show` to see your identity.")
+// reportAlreadyConfigured says which identity is already in place, so a
+// caller learns it was kept (not created or replaced) and which one it is.
+func reportAlreadyConfigured(cmd *cobra.Command, jsonMode bool) error {
+	npub, source, err := currentIdentity()
+	if err != nil {
+		return output.RuntimeError(cmd, err)
+	}
+	output.Linef(jsonMode, "Already configured: identity %s (%s), kept as is. Run `cashctl wallet show` for the rest.", npub, source)
 	if jsonMode {
-		output.PrintJSON(map[string]any{"already_configured": true})
+		output.PrintJSON(map[string]any{
+			"already_configured": true,
+			"identity":           "existing",
+			"npub":               npub,
+			"identity_source":    source,
+		})
 	}
 	return nil
 }
 
 // setUpIdentity offers an existing ncli vault entry if one is available,
 // otherwise generates cashctl's own local identity. Returns the resulting
-// npub and a short human-readable source label.
-func setUpIdentity(cmd *cobra.Command, jsonMode bool) (npub, source string, err error) {
+// npub, a short human-readable source label, and whether it was newly
+// generated (false: an ncli vault entry was reused).
+func setUpIdentity(cmd *cobra.Command, jsonMode bool) (npub, source string, created bool, err error) {
 	// Never the vault under --json: README documents that `init --json`
 	// generates a fresh local identity. This used to adopt entries[0]
 	// silently (`use := jsonMode || Confirm(...)`) — binding whatever
@@ -100,21 +117,21 @@ func setUpIdentity(cmd *cobra.Command, jsonMode bool) (npub, source string, err 
 			use := Confirm(cmd, true, fmt.Sprintf("Use existing identity %q?", entry.Label))
 			if use {
 				if err := identity.SaveNcliVaultRef(entry.Npub, entry.Label); err != nil {
-					return "", "", err
+					return "", "", false, err
 				}
-				return entry.Npub, fmt.Sprintf("ncli vault, label %q", entry.Label), nil
+				return entry.Npub, fmt.Sprintf("ncli vault, label %q", entry.Label), false, nil
 			}
 		}
 	}
 	return generateLocalIdentity()
 }
 
-func generateLocalIdentity() (npub, source string, err error) {
+func generateLocalIdentity() (npub, source string, created bool, err error) {
 	npub, err = identity.GenerateAndSaveLocal()
 	if err != nil {
-		return "", "", err
+		return "", "", false, err
 	}
-	return npub, "cashctl-local", nil
+	return npub, "cashctl-local", true, nil
 }
 
 func parseChoice(s string, n int) int {

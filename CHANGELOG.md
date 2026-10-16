@@ -122,6 +122,8 @@ Fixes from the NIP-CASH / NIP-CW conformance review, for agents above all.
 - Fixes `decode`, `receive` and `connect add` failing on a pasted Lightning
   invoice with a bech32 error; they now say it is an invoice (with its amount)
   and point to `pay` or `redeem --invoice`.
+- Adds `identity` (`created`, `reused` or `existing`) to `init --json`; a re-run
+  now also names the identity it kept.
 
 ## [0.6.0-rc.12]
 

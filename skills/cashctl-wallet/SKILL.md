@@ -21,8 +21,10 @@ Set `NCLI_VAULT_PASSWORD` to unlock an existing ncli vault entry
 non-interactively (no TTY to prompt from — needed for scripted/agentic
 `init` runs against a vault-sourced identity).
 
-Idempotent: re-running it just reports `{"already_configured": true}`
-(`--json`) or a one-line message (text mode) rather than erasing/
+`--json` says `"identity": "created"` (or `"reused"` for an ncli vault
+entry). Idempotent: re-running it reports `{"already_configured": true,
+"identity": "existing", "npub", "identity_source"}` (`--json`) or a
+one-line message naming the identity (text mode) rather than erasing/
 regenerating anything. There is no `--force`/reset flag — remove
 `cashctl.db` under `cashctl`'s config dir (see `cashctl wallet show` for
 where that is, or pass `--config-dir` to point cashctl at a fresh one) if
