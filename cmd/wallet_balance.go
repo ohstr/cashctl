@@ -218,6 +218,11 @@ func runWalletBalanceFrom(cmd *cobra.Command, from string, jsonMode bool) error 
 		output.Printf("%s\n", output.FormatAmount(int64(*e.AmountMillis)))
 		return nil
 	}
+	// A pasted string rather than a name: say what it is, as -c does everywhere else.
+	var wrongKind *wrongConnectionKindError
+	if err := validateConnectionValue(from); errors.As(err, &wrongKind) {
+		return output.InvalidInputError(cmd, from, err)
+	}
 	return output.NotFoundError(cmd, from, fmt.Errorf("no wallet or held token named %q", from))
 }
 

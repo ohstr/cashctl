@@ -142,6 +142,8 @@ Fixes from the NIP-CASH / NIP-CW conformance review, for agents above all.
 - Adds `skipped_spent` to `redeem --all`: tokens left out because their Hub
   reported them spent. `receive` now says its issuer can take a bill back
   until it is redeemed or transferred.
+- Fixes `wallet balance -c <token>#<secret>` failing as `not_found`; it now
+  says to take the bill with `receive`, like `-c` everywhere else.
 
 ## [0.6.0-rc.12]
 

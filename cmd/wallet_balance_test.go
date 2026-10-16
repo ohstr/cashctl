@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ohstr/nmilat/nipcash"
 	relayclient "github.com/ohstr/nmilat/relay/client"
 	"github.com/spf13/cobra"
 
@@ -235,5 +236,26 @@ func TestOutstandingCashNotes(t *testing.T) {
 	})
 	if n != 2 || amt != 5000 {
 		t.Errorf("outstanding = %d notes, %d mloki; want 2, 5000", n, amt)
+	}
+}
+
+// `balance -c <token>#<secret>` says it is a bill to receive, as -c does on
+// every other command, instead of "no wallet named …".
+func TestWalletBalanceFrom_APastedBillIsNamed(t *testing.T) {
+	appdir.SetOverride(t.TempDir())
+	t.Cleanup(func() { appdir.SetOverride("") })
+	tok, err := nipcash.Encode(nipcash.Token{
+		HRP: "lokicash", WalletPubkey: strings.Repeat("aa", 32), Secret: strings.Repeat("bb", 32),
+		RelayURLs: []string{"wss://relay.example"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = runWalletBalanceFrom(testCmdWithFlags(true, false), tok+"#"+strings.Repeat("cc", 32), true)
+	if ce := output.AsCLIError(err); ce.Code != output.CodeInvalidInput || !strings.Contains(err.Error(), "cashctl receive") {
+		t.Errorf("code %q: %v, want invalid_input naming receive", ce.Code, err)
+	}
+	if ce := output.AsCLIError(runWalletBalanceFrom(testCmdWithFlags(true, false), "nosuch", true)); ce.Code != output.CodeNotFound {
+		t.Errorf("unknown name: code %q, want not_found", ce.Code)
 	}
 }
