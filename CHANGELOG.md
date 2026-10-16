@@ -129,6 +129,8 @@ Fixes from the NIP-CASH / NIP-CW conformance review, for agents above all.
 - Adds the exit codes to `cashctl --help`, the accepted formats to
   `connect add --help`, and to `skills install --help` that only
   `<dir>/cashctl-*` is written.
+- Adds `input` to `usage` errors: the unknown flag or command, or the first
+  extra argument.
 
 ## [0.6.0-rc.12]
 

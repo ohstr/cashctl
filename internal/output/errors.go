@@ -203,6 +203,17 @@ func InvocationError(cmd *cobra.Command, err error) error {
 	return wrapped
 }
 
+// InvocationErrorInput is InvocationError naming the one value that was
+// wrong (an unknown flag or command, an extra argument) as the error's
+// input, redacted like every other input.
+func InvocationErrorInput(cmd *cobra.Command, input string, err error) error {
+	wrapped := InvocationError(cmd, err)
+	if ce, ok := wrapped.(*CLIError); ok && ce.Code == CodeUsage && ce.Input == "" {
+		ce.Input = RedactSecretInput(input)
+	}
+	return wrapped
+}
+
 // InvalidInputError classifies err as CodeInvalidInput — input doesn't
 // parse or validate as this method requires. input is redacted before
 // being attached (see RedactSecretInput).
@@ -307,6 +318,9 @@ func AsCLIError(err error) *CLIError {
 // undifferentiated CodeInternal / exit 1 instead of exit 2 usage errors).
 func ExactArgs(n int) cobra.PositionalArgs {
 	return func(cmd *cobra.Command, args []string) error {
+		if len(args) > n {
+			return InvocationErrorInput(cmd, args[n], fmt.Errorf("accepts %d arg(s), received %d", n, len(args)))
+		}
 		if len(args) != n {
 			return InvocationError(cmd, fmt.Errorf("accepts %d arg(s), received %d", n, len(args)))
 		}
@@ -317,7 +331,7 @@ func ExactArgs(n int) cobra.PositionalArgs {
 func MaximumNArgs(n int) cobra.PositionalArgs {
 	return func(cmd *cobra.Command, args []string) error {
 		if len(args) > n {
-			return InvocationError(cmd, fmt.Errorf("accepts at most %d arg(s), received %d", n, len(args)))
+			return InvocationErrorInput(cmd, args[n], fmt.Errorf("accepts at most %d arg(s), received %d", n, len(args)))
 		}
 		return nil
 	}
@@ -334,7 +348,7 @@ func MinimumNArgs(n int) cobra.PositionalArgs {
 
 func NoArgs(cmd *cobra.Command, args []string) error {
 	if len(args) > 0 {
-		return InvocationError(cmd, fmt.Errorf("accepts no arguments, received %d", len(args)))
+		return InvocationErrorInput(cmd, args[0], fmt.Errorf("accepts no arguments, received %d", len(args)))
 	}
 	return nil
 }

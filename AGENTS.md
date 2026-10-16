@@ -100,11 +100,15 @@ plain `Error: ...` line by default, or `{"error", "code", "retryable",
 | `internal` | 1 | no | anything else — a wallet-side decline that isn't one of the above, or a cashctl-side failure |
 
 `input`, when present, is the single specific value that caused the
-failure — **never** raw secret material: an `nsec1...`-shaped or bare
-64-hex-char value is redacted to `""`, and a `pubkey:<privkey>`/`cash:
+failure (for a `usage` error: the unknown flag or command, or the first
+extra argument) — **never** raw secret material: an `nsec1...`-shaped or bare
+64-hex-char value is redacted to `""`, a `pubkey:<privkey>`/`cash:
 <secret>`/`connection-key:<privkey>,...` credential string has just its
 secret component blanked (`pubkey:<redacted>`, etc.), keeping the rest of
-the string legible in the error. `retryable` lets an agent decide whether
+the string legible in the error, a `circlehub1...`/`cashhub1...`/
+`nconnection1...` string becomes `circlehub1<redacted>` (its secret is
+packed in, nothing of it is safe to show), and an NWC URI keeps all but its
+`secret=` value. `retryable` lets an agent decide whether
 to back off and retry (`conflict`/`network`) or fix the input and try
 again (everything else) without string-matching the message. `nwc_code`,
 when present, is the raw NIP-47 error code (`RESTRICTED`, `EXPIRED`,

@@ -24,7 +24,7 @@ import (
 // forgot one".
 func groupRunE(cmd *cobra.Command, args []string) error {
 	if len(args) > 0 {
-		return output.InvocationError(cmd, fmt.Errorf("unknown command %q for %q", args[0], cmd.CommandPath()))
+		return output.InvocationErrorInput(cmd, args[0], fmt.Errorf("unknown command %q for %q", args[0], cmd.CommandPath()))
 	}
 	return output.InvocationError(cmd, fmt.Errorf("%q requires a subcommand", cmd.CommandPath()))
 }

@@ -702,3 +702,22 @@ func TestJSONOutput_NoHTMLEscaping(t *testing.T) {
 		t.Errorf("EmitError escaped HTML: %s", stderr)
 	}
 }
+
+// Too many positional args: the first extra one is the error's input,
+// redacted when it is secret-shaped.
+func TestArgValidators_NameTheFirstExtraArg(t *testing.T) {
+	cmd := &cobra.Command{}
+	if ce := AsCLIError(ExactArgs(1)(cmd, []string{"a", "b"})); ce.Code != CodeUsage || ce.Input != "b" {
+		t.Errorf("ExactArgs extra: code %q input %q, want usage, b", ce.Code, ce.Input)
+	}
+	if ce := AsCLIError(NoArgs(cmd, []string{"x"})); ce.Input != "x" {
+		t.Errorf("NoArgs: input %q, want x", ce.Input)
+	}
+	secret := strings.Repeat("ab", 32)
+	if ce := AsCLIError(MaximumNArgs(0)(cmd, []string{secret})); ce.Input == secret {
+		t.Error("a secret-shaped extra arg was echoed as input")
+	}
+	if ce := AsCLIError(ExactArgs(2)(cmd, []string{"a"})); ce.Input != "" {
+		t.Errorf("too few args has no single wrong value, got input %q", ce.Input)
+	}
+}
