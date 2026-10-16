@@ -119,6 +119,9 @@ Fixes from the NIP-CASH / NIP-CW conformance review, for agents above all.
   secret listed under `unfinished_cash_sends` as if the send were interrupted.
 - Changes `cash status` over several bills to exit 10 when one is spent; every
   row is still reported on stdout.
+- Fixes `decode`, `receive` and `connect add` failing on a pasted Lightning
+  invoice with a bech32 error; they now say it is an invoice (with its amount)
+  and point to `pay` or `redeem --invoice`.
 
 ## [0.6.0-rc.12]
 

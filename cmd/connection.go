@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/flokiorg/go-flokicoin/chainutil/bech32"
 	"github.com/ohstr/nmilat/nip47"
 	"github.com/ohstr/nmilat/nipcash"
 	relayclient "github.com/ohstr/nmilat/relay/client"
@@ -48,6 +49,19 @@ func unusableConnectionError(cmd *cobra.Command, value string) error {
 // actual bytes are already redacted from any error by RedactSecretInput's
 // secretLikePattern, but the generic message alone gave no hint the user
 // had just pasted a private key into the wrong place.
+// lightningMessage names a pasted Lightning invoice (with its amount, when it
+// encodes one) or LNURL, and says what to do with it instead.
+func lightningMessage(value string) string {
+	if hrp, _, err := bech32.DecodeNoLimit(strings.TrimSpace(value)); err == nil && strings.EqualFold(hrp, "lnurl") {
+		return "that's an LNURL, not a cash token or connection — cashctl doesn't resolve LNURLs"
+	}
+	what := "a Lightning invoice"
+	if amt, err := bolt11AmountMloki(value); err == nil && amt != nil {
+		what = "a Lightning invoice for " + output.FormatAmount(*amt)
+	}
+	return "that's " + what + ", not a cash token or connection — pay it with `cashctl pay <invoice>`, or redeem a held token into it with `cashctl redeem --invoice <invoice>`"
+}
+
 func nostrEntityMessage(hrp string) string {
 	switch hrp {
 	case "nsec":
@@ -155,6 +169,8 @@ func validateConnectionValue(value string) error {
 		return &wrongConnectionKindError{"that's a Circle Hub connection, not a wallet — join the circle with `cashctl join <hub-connection> <max-amount>`"}
 	case dial.KindCashHub:
 		return &wrongConnectionKindError{"that's a Cash Hub connection (for minting cash), not a wallet — cashctl can't use it"}
+	case dial.KindLightningInvoice:
+		return &wrongConnectionKindError{lightningMessage(value)}
 	case dial.KindCashToken:
 		if _, err := nipcash.Decode(value); err == nil {
 			return nil

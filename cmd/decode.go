@@ -91,6 +91,8 @@ func newDecodeCmd() *cobra.Command {
 			case dial.KindCashHub:
 				return output.InvalidInputError(cmd, value, fmt.Errorf(
 					"that's a Cash Hub connection (for minting cash) — cashctl has no mint capability and can't decode this format"))
+			case dial.KindLightningInvoice:
+				return output.InvalidInputError(cmd, value, errors.New(lightningMessage(value)))
 			case dial.KindNostrEntity:
 				if dial.NostrEntityHRP(value) == "npub" {
 					return decodeNpub(cmd, value, jsonMode)

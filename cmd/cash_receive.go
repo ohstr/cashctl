@@ -49,6 +49,8 @@ func runCashReceive(cmd *cobra.Command, args []string) error {
 		return output.InvalidInputError(cmd, input, fmt.Errorf("that looks like a wallet connection, not a cash token — use `cashctl connect add <name> <uri>` instead"))
 	case dial.KindNostrEntity:
 		return output.InvalidInputError(cmd, input, errors.New(nostrEntityMessage(dial.NostrEntityHRP(input))))
+	case dial.KindLightningInvoice:
+		return output.InvalidInputError(cmd, input, errors.New(lightningMessage(input)))
 	case dial.KindUnknown:
 		return output.InvalidInputError(cmd, input, fmt.Errorf("doesn't look like a valid cash token"))
 	}
