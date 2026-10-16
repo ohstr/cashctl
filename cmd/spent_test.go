@@ -146,7 +146,7 @@ func TestRunCashStatus_AFreshTombstoneIsSpentOnTheFirstCall(t *testing.T) {
 }
 
 // Several bills: a tombstone stays a "spent" row in the full report, so the
-// other rows are not hidden behind it.
+// other rows are not hidden behind it, and the run exits spent (partial success).
 func TestRunCashStatus_ATombstoneAmongSeveralStaysARow(t *testing.T) {
 	appdir.SetOverride(t.TempDir())
 	t.Cleanup(func() { appdir.SetOverride("") })
@@ -170,7 +170,11 @@ func TestRunCashStatus_ATombstoneAmongSeveralStaysARow(t *testing.T) {
 		}
 		return &nipcash.CashStatusResult{}, nil
 	}
-	stdout, _ := captureStreams(t, func() { _ = runCashStatus(newTestStatusCmd(true, false), nil) })
+	var runErr error
+	stdout, _ := captureStreams(t, func() { runErr = runCashStatus(newTestStatusCmd(true, false), nil) })
+	if output.ExitCode(runErr) != 10 {
+		t.Errorf("exit %d, want 10 (a spent row, reported in full): %v", output.ExitCode(runErr), runErr)
+	}
 	var report struct {
 		Statuses []struct {
 			Status string `json:"status"`

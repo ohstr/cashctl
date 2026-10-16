@@ -117,6 +117,8 @@ Fixes from the NIP-CASH / NIP-CW conformance review, for agents above all.
   A lone failure is also no longer printed on stdout as well as stderr.
 - Fixes a refused `consolidate` or `transfer` to cash leaving its new note's
   secret listed under `unfinished_cash_sends` as if the send were interrupted.
+- Changes `cash status` over several bills to exit 10 when one is spent; every
+  row is still reported on stdout.
 
 ## [0.6.0-rc.12]
 

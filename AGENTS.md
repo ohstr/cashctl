@@ -138,7 +138,9 @@ the exit status. A nonzero exit from such a command therefore does not mean
 nothing happened: stdout is still a complete result document and must be
 read before deciding what to retry. The alternative would be worse than
 untidy — aborting on the first failure leaves the already-committed
-operations unreported, including any new token they produced.
+operations unreported, including any new token they produced. A
+`cash status` over several bills follows the same rule: every row is
+printed, and a row that is `spent` (or failed) drives the exit status.
 
 **Ambiguous selection, with nothing named and more than one candidate**:
 refuse (`usage`, exit 2) only when the operation pays value out of your

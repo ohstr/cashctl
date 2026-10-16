@@ -418,8 +418,9 @@ kept for a while after the bill is gone), cashctl marks the entry spent,
 so `wallet balance` and `redeem --all` stop offering it. Any command that
 hits a tombstone for one bill (`cash status`, `receive`, `redeem`,
 `transfer`) fails with `code: "spent"` (exit 10, not retryable), the first
-time as every later time; a `cash status` over several bills reports it as a
-`statuses` row with `"status": "spent"` instead. `decode --check` reports
+time as every later time; a `cash status` over several bills still reports
+every bill, this one as a `statuses` row with `"status": "spent"`, and exits
+10 as well (read stdout: the other rows are real answers). `decode --check` reports
 `"spent": true`. Silence is never read as spent: no answer is
 `indeterminate` (above).
 
