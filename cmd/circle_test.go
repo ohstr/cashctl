@@ -225,7 +225,7 @@ func TestRunCircleJoin_ZeroCapIsNotTreatedAsMissing(t *testing.T) {
 	}
 }
 
-// I-29: a bare `join` names both required arguments, so following the hint
+// A bare `join` names both required arguments, so following the hint
 // does not fail again on the missing max amount.
 func TestRunCircleJoin_MissingHubHintNamesEveryMissingArgument(t *testing.T) {
 	for _, tc := range []struct {
@@ -270,7 +270,7 @@ func TestWalletExistsFromLegacyRefusal(t *testing.T) {
 	}
 }
 
-// SF-6: join reports the cap the Hub resolved, saying when it differs from the
+// join reports the cap the Hub resolved, saying when it differs from the
 // one asked for, and the in-circle fee (NIP-CW §Response).
 func TestJoinCapSummary_ShowsTheResolvedCapAndFee(t *testing.T) {
 	resolved := uint64(400_000)

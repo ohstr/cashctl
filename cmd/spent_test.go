@@ -40,7 +40,7 @@ func TestRecordSpent_MarksAHeldEntryAndDropsItFromHeld(t *testing.T) {
 	}
 }
 
-// I-29: `cash status` (and redeem/consolidate) on a bill you redeemed or merged
+// `cash status` (and redeem/consolidate) on a bill you redeemed or merged
 // away answers spent, as the Hub's tombstone would; one you transferred away
 // still exists under its new holder, so it is not_found.
 func TestAlreadySpentError_SpentForEveryBillWhoseValueMovedOnTheHub(t *testing.T) {
@@ -57,7 +57,7 @@ func TestAlreadySpentError_SpentForEveryBillWhoseValueMovedOnTheHub(t *testing.T
 	}
 }
 
-// I-29, end to end through cash status's own resolver: `cash status --token`
+// End to end through cash status's own resolver: `cash status --token`
 // on a bill you just redeemed is spent (exit 10), with no network call.
 func TestCashStatus_ATokenYouRedeemedIsSpent(t *testing.T) {
 	l := heldLedger(2)

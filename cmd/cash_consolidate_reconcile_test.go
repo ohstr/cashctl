@@ -12,7 +12,7 @@ import (
 	"github.com/ohstr/cashctl/internal/ledger"
 )
 
-// F-44/I-19 residual: after a consolidate reply nobody could read, only a
+// After a consolidate reply nobody could read, only a
 // source whose Hub answers with a spent tombstone is written off as merged.
 // A live roster, an error, or an undecodable token leaves the entry held.
 func TestReconcileAmbiguousSources_OnlyATombstoneMarksASourceGone(t *testing.T) {

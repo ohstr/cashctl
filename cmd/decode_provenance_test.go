@@ -12,7 +12,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// F-52: known-answer tests for what cashctl shows about a token's mint
+// Known-answer tests for what cashctl shows about a token's mint
 // provenance and its unknown TLVs. The vector is nmilat's frozen KAT
 // (nipcash/kat_test.go), computed outside the code under test: private key
 // 0x11 x 32 signs MintPayload("lokicash", 0x22 x 32, 21000) under flnd's
