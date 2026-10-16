@@ -131,6 +131,9 @@ Fixes from the NIP-CASH / NIP-CW conformance review, for agents above all.
   `<dir>/cashctl-*` is written.
 - Adds `input` to `usage` errors: the unknown flag or command, or the first
   extra argument.
+- Adds `outstanding_cash_notes` to `wallet balance`: cash notes you handed out
+  that are not claimed yet, outside the total.
+- Adds field guides to `transfer --help` and `wallet show --help`.
 
 ## [0.6.0-rc.12]
 

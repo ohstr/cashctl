@@ -70,8 +70,11 @@ cashctl wallet history --show-secrets --json  # the same, unclaimed cash notes i
 (`claimed`) or it lapses (`expired`), re-checked with its Hub each time
 you read history; a gift to someone's identity (`kind: gift`) stays `sent`.
 To resend a lost note, read it with `--show-secrets`. `wallet show --json`
-lists the not-yet-claimed ones as `unclaimed_handoffs` (secrets hidden,
-last known status, no network call).
+lists the ones not known to be claimed as `unclaimed_handoffs` (secrets
+hidden, last known status, no network call): cash notes still `unclaimed`,
+and gifts, which stay `sent` because their claim can't be seen — branch on
+each entry's `status`. `wallet balance` shows the unclaimed cash notes as
+`outstanding_cash_notes`, outside the total.
 
 `unfinished_cash_sends` is normally `[]`. Each entry
 (`{"token_id", "cash_secret"}`) is an interrupted `--to cash` send that may

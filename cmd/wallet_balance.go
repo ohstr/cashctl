@@ -98,6 +98,8 @@ func runWalletBalance(cmd *cobra.Command, args []string) error {
 	total += heldTotal
 	expiredHeld += heldExpired
 
+	notes, notesAmount := outstandingCashNotes(l.Handoffs)
+
 	if jsonMode {
 		output.PrintJSON(map[string]any{
 			"total_mloki":        total,
@@ -106,6 +108,9 @@ func runWalletBalance(cmd *cobra.Command, args []string) error {
 			"unreachable":        output.NonNil(unreachable),
 			"pending_merge":      pendingMergeJSON(l),
 			"breakdown":          output.NonNil(lines),
+			"outstanding_cash_notes": map[string]any{
+				"count": notes, "amount_mloki": notesAmount,
+			},
 		})
 		return nil
 	}
@@ -125,6 +130,10 @@ func runWalletBalance(cmd *cobra.Command, args []string) error {
 		output.Printf("(couldn't reach %s — not counted, may still hold funds)\n", strings.Join(unreachable, ", "))
 	}
 	printPendingMerge(l)
+	if notes > 0 {
+		output.Printf("Handed out, not yet claimed: %d cash note(s), %s — not in the total; `cashctl wallet history` lists them\n",
+			notes, output.FormatAmount(notesAmount))
+	}
 	if breakdown {
 		for _, line := range lines {
 			marker := ""
@@ -253,4 +262,17 @@ func strandedBalanceFallback(err error, c config.Connection) (amount int64, ok b
 		return *c.LastKnownBalanceMloki, true
 	}
 	return 0, false
+}
+
+// outstandingCashNotes counts the cash notes you handed out that were still
+// unclaimed at their last check. Not part of the total: whoever holds the
+// note can take it at any moment, but until then its secret still spends it.
+func outstandingCashNotes(handoffs []ledger.Handoff) (count int, amountMloki int64) {
+	for _, h := range handoffs {
+		if h.Kind == ledger.HandoffCashNote && h.Status == ledger.HandoffUnclaimed {
+			count++
+			amountMloki += int64(h.AmountMillis)
+		}
+	}
+	return count, amountMloki
 }

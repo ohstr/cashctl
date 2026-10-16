@@ -223,3 +223,17 @@ func TestHeldTokensJSON_AddsCashHub(t *testing.T) {
 		t.Error("heldTokensJSON(nil) = nil, want [] in --json")
 	}
 }
+
+// Only unclaimed cash notes are outstanding: a claimed or expired note, and a
+// gift (whose claim cannot be seen), are not.
+func TestOutstandingCashNotes(t *testing.T) {
+	n, amt := outstandingCashNotes([]ledger.Handoff{
+		{Kind: ledger.HandoffCashNote, Status: ledger.HandoffUnclaimed, AmountMillis: 2000},
+		{Kind: ledger.HandoffCashNote, Status: ledger.HandoffUnclaimed, AmountMillis: 3000},
+		{Kind: ledger.HandoffCashNote, Status: ledger.HandoffClaimed, AmountMillis: 7000},
+		{Kind: ledger.HandoffGift, Status: ledger.HandoffSent, AmountMillis: 9000},
+	})
+	if n != 2 || amt != 5000 {
+		t.Errorf("outstanding = %d notes, %d mloki; want 2, 5000", n, amt)
+	}
+}

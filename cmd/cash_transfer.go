@@ -21,6 +21,22 @@ func newCashTransferCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "transfer [amount] [target]",
 		Short: "Send a held cash token",
+		Long: `Sends value from a held cash token. An amount with no target makes a cash
+note: a <token>#<secret> string to hand anyone.
+
+--json fields:
+  amount_millis            what the recipient's new bill holds
+  identity_type/_value     who the new bill is bound to: pubkey + hex key, or
+                           cash + the SHA-256 of the note's secret (not the secret)
+  cash_to_send             a cash note to hand over; the only copy, also kept in
+                           ` + "`wallet history --show-secrets`" + ` until claimed
+  recipient_token          what a pubkey/npub/connection recipient receives
+  new_wallet_pubkey/_token the new bill itself
+  remaining_amount_millis  what stays with you, as remainder_entry (saved
+                           already; verified: false until its Hub confirms the
+                           amount on its next use)
+  target_resolved          what a NIP-05 or nconnection target resolved to
+  consolidated_from        held tokens merged first to reach the amount`,
 		Example: `  cashctl transfer 5
   cashctl transfer 5 <pubkey>
   cashctl transfer alice@example.com --amount 2`,

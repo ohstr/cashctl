@@ -88,6 +88,13 @@ func newWalletShowCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "show",
 		Short: "Show your identity and wallet/ledger summary",
+		Long: `Shows your identity, registered wallets and held cash tokens. No network
+call: amounts are as last known.
+
+--json adds: held_tokens (each with its id and cash_hub — only same-Hub
+tokens merge), unclaimed_handoffs (cash notes still unclaimed and gifts,
+which stay "sent": branch on status), unfinished_cash_sends (an interrupted
+cash send's only secret copy — keep it), pending_joins and pending_merge.`,
 		Args:  output.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			jsonMode, _ := cmd.Flags().GetBool("json")
