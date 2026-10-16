@@ -65,7 +65,7 @@ func withHeldWalletHint(err error, label string) error {
 	if loadErr != nil {
 		return err
 	}
-	ce.Err = errors.New(ce.Err.Error() + " " + heldWalletHint(s, label))
+	ce.Hint = heldWalletHint(s, label)
 	return ce
 }
 

@@ -315,7 +315,7 @@ func withSourceHubs(err error, l *ledger.Ledger, ids []string) error {
 		}
 		parts = append(parts, fmt.Sprintf("%s on hub %s", id, hub))
 	}
-	ce.Err = fmt.Errorf("%s — %s; only bills of one Hub merge (`cashctl wallet show` shows each bill's hub)", ce.Err.Error(), strings.Join(parts, ", "))
+	ce.Hint = fmt.Sprintf("Sources: %s; only bills of one Hub merge (`cashctl wallet show` shows each bill's hub).", strings.Join(parts, ", "))
 	return ce
 }
 

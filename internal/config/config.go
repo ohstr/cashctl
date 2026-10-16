@@ -323,11 +323,18 @@ func (s *Store) DefaultConnection() (*Connection, bool) {
 // or "" when hint has nothing to keep.
 func HintedName(prefix, hint string) string {
 	slug := strings.ToLower(strings.Trim(slugPattern.ReplaceAllString(hint, "-"), "-"))
+	// Capped: a name is typed after -c, and a circle's label can be a sentence.
+	if len(slug) > maxSlugLen {
+		slug = strings.TrimRight(slug[:maxSlugLen], "-")
+	}
 	if slug == "" {
 		return ""
 	}
 	return prefix + ":" + slug
 }
+
+// maxSlugLen bounds the label part of a suggested name.
+const maxSlugLen = 24
 
 // slugPattern matches characters SuggestName keeps from a hint — letters,
 // digits, and hyphens; everything else (spaces, punctuation from a

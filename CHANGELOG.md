@@ -136,6 +136,9 @@ Fixes from the NIP-CASH / NIP-CW conformance review, for agents above all.
 - Adds field guides to `transfer --help` and `wallet show --help`.
 - Adds to a refused merge of named tokens which Hub each one is on, and to
   `wallet show` that tokens on the same hub can be merged.
+- Fixes `--json` errors dropping cashctl's own hint after a wallet's message.
+- Changes the RESTRICTED decline text so it no longer reads like a login
+  failure, and caps the label part of a joined wallet's name at 24 characters.
 
 ## [0.6.0-rc.12]
 

@@ -44,7 +44,7 @@ var nwcErrorMessages = map[string]string{
 	"NOT_IMPLEMENTED":        "This wallet doesn't support that operation.",
 	"INSUFFICIENT_BALANCE":   "Not enough balance to do that.",
 	"QUOTA_EXCEEDED":         "You've hit this wallet's spending limit for this period.",
-	"RESTRICTED":             "This wallet isn't allowed to do that.",
+	"RESTRICTED":             "The wallet declined: this connection isn't permitted to do that (its permissions or limits rule it out, not a login problem).",
 	"UNAUTHORIZED":           "Not authorized for that.",
 	"INTERNAL":               "The wallet hit an internal error. Try again.",
 	"UNSUPPORTED_ENCRYPTION": "This wallet uses an encryption scheme cashctl doesn't support.",

@@ -34,12 +34,12 @@ func TestWithHeldWalletHint_NamesTheCircleWallet(t *testing.T) {
 	if ce := output.AsCLIError(err); ce.Code != output.CodeExists {
 		t.Errorf("code = %q, want exists", ce.Code)
 	}
-	if !strings.Contains(err.Error(), "-c circle:friends") {
+	if !strings.Contains(output.AsCLIError(err).Hint, "-c circle:friends") {
 		t.Errorf("%v does not name the held wallet", err)
 	}
 
 	other := withHeldWalletHint(classifyNWCErr(&cobra.Command{}, &relayclient.WalletError{Code: "RESTRICTED", Message: "no"}), "Friends")
-	if strings.Contains(other.Error(), "circle:friends") {
+	if strings.Contains(output.AsCLIError(other).Hint, "circle:friends") {
 		t.Errorf("a non-exists refusal got the held-wallet hint: %v", other)
 	}
 }

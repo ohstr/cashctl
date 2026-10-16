@@ -37,7 +37,7 @@ func TestWithSourceHubs_NamesEachSourcesHub(t *testing.T) {
 		t.Fatal("test refusal is not recognised as cross-Hub")
 	}
 	err := withSourceHubs(refusal, l, []string{"a", "b"})
-	msg := err.Error()
+	msg := output.AsCLIError(err).Hint
 	for _, want := range []string{"a on hub " + shortHub(ledger.HubGroupKey(l.Entries[0])), "b on hub " + shortHub(ledger.HubGroupKey(l.Entries[1]))} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("%q does not say %q", msg, want)

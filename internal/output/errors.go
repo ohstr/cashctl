@@ -100,7 +100,11 @@ type CLIError struct {
 	Input      string
 	NWCCode    string
 	RawMessage string
-	ShowUsage  bool
+	// Hint is cashctl's own next step, appended to the message in both modes
+	// — after the wallet's RawMessage, which --json otherwise prints in place
+	// of Err, so a hint put into Err never reached a --json caller.
+	Hint      string
+	ShowUsage bool
 	// Recovery is text that must reach the user VERBATIM, deliberately not
 	// passed through RedactSecretInput and never length-capped. It exists for
 	// one situation: a Hub-side mutation that is confirmed to have happened
