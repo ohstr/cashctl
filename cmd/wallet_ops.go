@@ -56,8 +56,8 @@ func newWalletBudgetCmd() *cobra.Command {
 
 func newWalletInvoiceCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:     fmt.Sprintf("invoice <amount-%s>", output.CurrencyUnit),
-		Short:   "Create a Lightning invoice on the connected wallet",
+		Use:   fmt.Sprintf("invoice <amount-%s>", output.CurrencyUnit),
+		Short: "Create a Lightning invoice on the connected wallet",
 		Long: "Creates a Lightning invoice for <amount> " + output.CurrencyUnit + " on the connected wallet.\n\n" +
 			"--json prints the wallet's NIP-47 transaction, whose amount is in m" + output.CurrencyUnit + " (thousandths), as NIP-47 counts it.",
 		Example: `  cashctl invoice 5 --desc "coffee"`,
