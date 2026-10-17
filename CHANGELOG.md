@@ -188,6 +188,9 @@ Fixes from the NIP-CASH / NIP-CW conformance review, for agents above all.
 - Adds `max_amount`, the granted cap in loki, to `join --json`, and says in
   `invoice --help` that its `--json` amount is in mloki.
   ([#87](https://github.com/ohstr/cashctl/pull/87))
+- Updates `nmilat` to v0.5.0-rc.24, whose private transport listens for a
+  reply on the relay it sent the request to and waits for that subscription
+  before sending; a reply could otherwise be lost and read as no answer.
 
 ## [0.6.0-rc.12]
 
