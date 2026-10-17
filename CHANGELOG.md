@@ -149,6 +149,8 @@ Fixes from the NIP-CASH / NIP-CW conformance review, for agents above all.
 - Adds `cash_hub` to `decode`, and makes `decode --check` on a note you
   already took say its value moved to the re-keyed bill rather than that the
   bill is gone.
+- Labels a merged cash note `protected` in `wallet show`, and keeps a split
+  remainder's label; both showed no protection state.
 
 ## [0.6.0-rc.12]
 

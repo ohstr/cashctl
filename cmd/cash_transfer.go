@@ -944,6 +944,7 @@ func credentialModeOf(src ledger.Entry) ledger.Entry {
 	return ledger.Entry{
 		IdentityRequired:        src.IdentityRequired,
 		CashSecret:              src.CashSecret,
+		CashProtection:          src.CashProtection,
 		ConnectionKeyPlatform:   src.ConnectionKeyPlatform,
 		ConnectionKeyExternalID: src.ConnectionKeyExternalID,
 		AttestationEventID:      src.AttestationEventID,

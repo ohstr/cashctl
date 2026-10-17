@@ -928,11 +928,11 @@ func TestCredentialModeOf_CopiesOnlyCredentialFields(t *testing.T) {
 	minter := "minter"
 	src := ledger.Entry{
 		ID: "tok-1", Token: "src-token", WalletPubkey: "src-pub", AmountMillis: &amt, MinterPubkey: &minter,
-		IdentityRequired: ptrTo(false), CashSecret: "sec",
+		IdentityRequired: ptrTo(false), CashSecret: "sec", CashProtection: ledger.CashProtected,
 		ConnectionKeyPlatform: "github", ConnectionKeyExternalID: "42", AttestationEventID: "ev", IAPubkey: "ia",
 	}
 	want := ledger.Entry{
-		IdentityRequired: ptrTo(false), CashSecret: "sec",
+		IdentityRequired: ptrTo(false), CashSecret: "sec", CashProtection: ledger.CashProtected,
 		ConnectionKeyPlatform: "github", ConnectionKeyExternalID: "42", AttestationEventID: "ev", IAPubkey: "ia",
 	}
 	if got := credentialModeOf(src); !reflect.DeepEqual(got, want) {

@@ -1085,6 +1085,9 @@ func doCashConsolidate(cmd *cobra.Command, l *ledger.Ledger, dialCandidates []st
 			if bt, ok := target.(*nipcash.CashTarget); ok {
 				newLedgerEntry.CashSecret = bt.Secret()
 				newLedgerEntry.IdentityRequired = ptrTo(false)
+				// Generated here and never shown to anyone: protected by
+				// construction, and labelled so, like a re-keyed receipt.
+				newLedgerEntry.CashProtection = ledger.CashProtected
 			}
 			// A pubkey/connection_key target other than the caller's own
 			// identity is a gift — the caller doesn't own the resulting
