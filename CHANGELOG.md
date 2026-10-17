@@ -153,6 +153,8 @@ Fixes from the NIP-CASH / NIP-CW conformance review, for agents above all.
   remainder's label; both showed no protection state.
 - Fixes an unknown flag or command's `--json` error splitting its `--help`
   pointer onto a second line.
+- Adds to `redeem --help` that a token is redeemed whole, which invoice amount
+  it needs, and which tokens `--amount` may pick.
 
 ## [0.6.0-rc.12]
 

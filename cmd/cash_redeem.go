@@ -31,7 +31,13 @@ Several tokens can be redeemed in one command: name them with a repeatable
 (or comma-separated) --token, pass --all for every held token, or --amount
 to pick whichever held token(s) sum to it exactly without naming any. Each
 token is paid out into its own invoice, and every selected one is
-attempted even if another fails.`,
+attempted even if another fails.
+
+A token is always redeemed whole: there is no change. With --invoice, a
+fixed-amount invoice must be for exactly the token's net amount (its amount
+minus any redeem fee: net_redeemable_millis in ` + "`cash status --json`" + `); an amountless one takes
+--amount, up to that. Without --invoice, --amount may pick any held token,
+from any round or Hub; name tokens with --token to choose yourself.`,
 		Example: `  cashctl redeem
   cashctl redeem savings --token tok-abc123
   cashctl redeem --token tok-abc123,tok-def456
