@@ -151,6 +151,8 @@ Fixes from the NIP-CASH / NIP-CW conformance review, for agents above all.
   bill is gone.
 - Labels a merged cash note `protected` in `wallet show`, and keeps a split
   remainder's label; both showed no protection state.
+- Fixes an unknown flag or command's `--json` error splitting its `--help`
+  pointer onto a second line.
 
 ## [0.6.0-rc.12]
 

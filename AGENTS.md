@@ -130,8 +130,9 @@ reason as `recovery`: it is the one place a handed-out but unclaimed cash
 note can be read again, so treat its output like the note itself. Without
 the flag, an unclaimed note's secret is replaced by `<hidden: --show-secrets>`
 and `secret_hidden` is `true`. A usage
-mistake in `--json` mode skips the human-readable help dump (which would
-otherwise land on stdout) in favor of the structured error alone.
+mistake prints the command's help after the error, on stderr like the error
+itself; in `--json` mode that dump is skipped in favor of the structured error
+alone.
 
 **Partial success**: a command that performs several independently
 committed operations — `consolidate` when it auto-groups held tokens by

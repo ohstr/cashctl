@@ -39,10 +39,10 @@ func TestWithHelpHint(t *testing.T) {
 	c.Flags().String("token", "", "")
 	c.Flags().Bool("check", false, "")
 	tests := []struct{ in, want string }{
-		{"unknown flag: --tokn", "unknown flag: --tokn; did you mean --token?\nsee `cashctl receive --help`"},
-		{"unknown flag: --tok", "unknown flag: --tok; did you mean --token?\nsee `cashctl receive --help`"},
-		{"unknown flag: --zzzzzz", "unknown flag: --zzzzzz\nsee `cashctl receive --help`"},
-		{"unknown shorthand flag: 'q' in -q", "unknown shorthand flag: 'q' in -q\nsee `cashctl receive --help`"},
+		{"unknown flag: --tokn", "unknown flag: --tokn; did you mean --token?; see `cashctl receive --help`"},
+		{"unknown flag: --tok", "unknown flag: --tok; did you mean --token?; see `cashctl receive --help`"},
+		{"unknown flag: --zzzzzz", "unknown flag: --zzzzzz; see `cashctl receive --help`"},
+		{"unknown shorthand flag: 'q' in -q", "unknown shorthand flag: 'q' in -q; see `cashctl receive --help`"},
 		{"accepts 1 arg(s), received 2", "accepts 1 arg(s), received 2"},
 	}
 	for _, tt := range tests {
