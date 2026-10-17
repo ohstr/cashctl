@@ -146,6 +146,9 @@ Fixes from the NIP-CASH / NIP-CW conformance review, for agents above all.
   says to take the bill with `receive`, like `-c` everywhere else.
 - Adds `skipped` to a bare `consolidate`: tokens left as they are because each
   is the only one from its Cash Hub; text mode says so too.
+- Adds `cash_hub` to `decode`, and makes `decode --check` on a note you
+  already took say its value moved to the re-keyed bill rather than that the
+  bill is gone.
 
 ## [0.6.0-rc.12]
 

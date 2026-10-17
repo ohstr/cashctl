@@ -335,7 +335,8 @@ ambiguous in this shorthand — receive it into your ledger first instead).
 IDs are discoverable via `cashctl wallet show --json`'s `held_tokens`
 array — plain-text `wallet show` deliberately never prints them. Each held
 token's `cash_hub` names the Cash Hub that issued it (`hub …` in text):
-only tokens with the same `cash_hub` can merge.
+only tokens with the same `cash_hub` can merge. `decode` shows a note's
+`cash_hub` before you receive it.
 Cash notes merge like any other bill, with no identity needed: each is
 first moved onto a key made for that merge alone (`cash_consolidate` takes
 no cash-mode source), and your merged result is a fresh cash note. If the

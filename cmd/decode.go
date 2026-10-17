@@ -128,6 +128,9 @@ func decodeCashToken(cmd *cobra.Command, value, embeddedCashSecret string, jsonM
 			output.Printf("identity_required: %v\n", *tok.IdentityRequired)
 		}
 		printMintSignatureStatus(tok)
+		if hub := hubGroupHex(tok); hub != "" {
+			output.Printf("cash_hub: %s (only tokens from the same Cash Hub can be merged)\n", hub)
+		}
 		if hasEmbeddedCashSecret {
 			output.Println("cash_secret: embedded — `cashctl receive` uses it automatically")
 		}
@@ -143,6 +146,9 @@ func decodeCashToken(cmd *cobra.Command, value, embeddedCashSecret string, jsonM
 		"wallet_pubkey":     tok.WalletPubkey,
 		"relays":            tok.RelayURLs,
 		"identity_required": tok.IdentityRequired,
+	}
+	if hub := hubGroupHex(tok); hub != "" {
+		out["cash_hub"] = hub
 	}
 	// Presence only, never the value itself — decode never echoes a
 	// working spending credential (this file's own doc comment).
@@ -367,6 +373,21 @@ type cashCheckResult struct {
 	Spent bool `json:"spent,omitempty"`
 }
 
+// errCheckedBillSpent is decode --check's word for a tombstone. The bill string
+// being checked is often one this wallet already took: `receive` re-keys a cash
+// note into a bill only its holder can spend, which spends the original, so "the
+// bill is gone" read as lost money when it had only moved.
+var errCheckedBillSpent = errors.New("the Hub says this bill is spent: its value has moved to another bill. " +
+	"If you took it with `cashctl receive`, that bill is the re-keyed one you now hold (see `cashctl wallet show`)")
+
+// hubGroupHex is a token's Cash Hub fingerprint, as `wallet show` prints it, or "".
+func hubGroupHex(tok nipcash.Token) string {
+	if len(tok.HubGroup) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%x", tok.HubGroup)
+}
+
 func checkCashTokenAgainstHub(cmd *cobra.Command, jsonMode bool, value, embeddedCashSecret string, tok nipcash.Token) cashCheckResult {
 	var amount uint64
 	var expiresAt *int64
@@ -389,7 +410,7 @@ func checkCashTokenAgainstHub(cmd *cobra.Command, jsonMode bool, value, embedded
 		result, err := client.CheckClaim(ctx, cred, tok, myPubHex)
 		if errors.Is(err, nipcash.ErrSpent) {
 			spent = true
-			return errBillSpent
+			return errCheckedBillSpent
 		}
 		if errors.Is(err, nipcash.ErrClaimNotFound) {
 			if isBareCashModeBill(tok, embeddedCashSecret) {

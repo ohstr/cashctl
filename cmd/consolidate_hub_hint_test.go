@@ -72,3 +72,21 @@ func TestAloneOnTheirHub_IsReported(t *testing.T) {
 		t.Errorf("text = %q, want a count and amount, no id", text)
 	}
 }
+
+// decode shows a token's Cash Hub, so which notes can merge is visible before
+// receiving them — the same fingerprint `wallet show` gives as cash_hub.
+func TestDecode_ShowsTheCashHub(t *testing.T) {
+	tok := tokenOnHub(t, strings.Repeat("a", 64), "hub1")
+	want := ledger.HubGroupKey(ledger.Entry{Token: tok})
+	cmd := newDecodeCmd()
+	cmd.Flags().Bool("json", true, "")
+	cmd.SetArgs([]string{tok})
+	var err error
+	stdout, _ := captureStreams(t, func() { err = cmd.Execute() })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout, `"cash_hub": "`+want+`"`) {
+		t.Errorf("decode --json does not carry cash_hub %s:\n%s", want, stdout)
+	}
+}
