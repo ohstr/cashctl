@@ -73,3 +73,10 @@ func TestMaxAmountText(t *testing.T) {
 		t.Errorf("maxAmountText(nil) = %q, want empty", got)
 	}
 }
+
+// The top-level balance shortcut's examples drop the wallet group.
+func TestShortcutOf_UsesShortcutExamples(t *testing.T) {
+	if ex := shortcutOf(newWalletBalanceCmd()).Example; strings.Contains(ex, "wallet balance") || !strings.Contains(ex, "cashctl balance") {
+		t.Errorf("balance shortcut examples = %q", ex)
+	}
+}
