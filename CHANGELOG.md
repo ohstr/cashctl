@@ -159,6 +159,8 @@ Fixes from the NIP-CASH / NIP-CW conformance review, for agents above all.
   and `wallet show`, so the circle wallet is easy to find.
 - Adds to a wallet call refused as RESTRICTED or NOT_IMPLEMENTED that
   `wallet get-info` lists what the connection allows.
+- Adds `max_amount`, the granted cap in loki, to `join --json`, and says in
+  `invoice --help` that its `--json` amount is in mloki.
 
 ## [0.6.0-rc.12]
 

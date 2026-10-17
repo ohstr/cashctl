@@ -34,11 +34,11 @@ ever dialing the Hub (the Hub would reject it too, just after a
 round-trip).
 
 ```sh
-# {"wallet": "circle:<label-or-n>", "default": true, "response": {"wallet_pubkey", "relays", "connection_pubkey", "expires_at", "max_amount_millis", "fees_ppm", "budget_renewal"}}
+# {"wallet": "circle:<label-or-n>", "default": true, "response": {"wallet_pubkey", "relays", "connection_pubkey", "expires_at", "max_amount_millis", "max_amount", "fees_ppm", "budget_renewal"}}
 cashctl join circlehub1... 100 --json
 ```
 
-`max_amount_millis` is the cap the Hub actually granted, which can be lower
+`max_amount_millis` (`max_amount`: the same in loki) is the cap the Hub actually granted, which can be lower
 than the one you asked for (text mode says so); it is `null` if the Hub did
 not say. `fees_ppm` is the circle's in-circle fee, fixed at join.
 

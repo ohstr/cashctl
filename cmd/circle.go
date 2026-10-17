@@ -369,6 +369,7 @@ func runCircleJoin(cmd *cobra.Command, args []string) error {
 				// The cap as the Hub resolved it, which may differ from the one asked
 				// for (NIP-CW §Response); null when the Hub did not say.
 				"max_amount_millis": resp.MaxAmountMillis,
+				"max_amount":        maxAmountText(resp.MaxAmountMillis),
 				"fees_ppm":          resp.FeesPpm,
 				"budget_renewal":    resp.BudgetRenewal,
 			},
@@ -468,4 +469,14 @@ func joinCapSummary(requested uint64, resp *nipcw.CreateCircleWalletResponse, re
 		summary += "; expires " + time.Unix(resp.ExpiresAt, 0).UTC().Format("2006-01-02 15:04 UTC")
 	}
 	return summary
+}
+
+// maxAmountText is the granted cap in the unit `join` takes it in, next to
+// max_amount_millis, so a caller can check it without converting; "" when the
+// Hub did not say.
+func maxAmountText(millis *uint64) string {
+	if millis == nil {
+		return ""
+	}
+	return output.FormatAmount(int64(*millis))
 }
