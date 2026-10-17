@@ -368,6 +368,7 @@ func mergeThenSend(cmd *cobra.Command, l *ledger.Ledger, tokens []string, source
 			// Refused, or never sent: the merged bill is still whole and ours.
 			toCashNotes(l, []string{mergedID})
 		}
+		parked.forgetIfNothingCreated(classified)
 		return classified
 	}
 	_ = l.SetStatus(mergedID, ledger.StatusTransferred)

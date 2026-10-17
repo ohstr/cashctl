@@ -1054,6 +1054,7 @@ func doCashConsolidate(cmd *cobra.Command, l *ledger.Ledger, dialCandidates []st
 		}
 		lastErr = classifyCashSpendErr(cmd, reportErr, "consolidate", localIDs...)
 		if !isExpiredWalletErr(callErr) || i == len(dialCandidates)-1 {
+			parked.forgetIfNothingCreated(lastErr)
 			return nil, nil, lastErr
 		}
 		// callErr is specifically EXPIRED and a sibling candidate remains —

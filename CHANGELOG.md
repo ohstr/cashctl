@@ -115,6 +115,8 @@ Fixes from the NIP-CASH / NIP-CW conformance review, for agents above all.
 - Fixes the first `cash status` on a bill its Hub just reported spent exiting
   0 with the raw reply; it now fails as `spent` (exit 10), like later calls.
   A lone failure is also no longer printed on stdout as well as stderr.
+- Fixes a refused `consolidate` or `transfer` to cash leaving its new note's
+  secret listed under `unfinished_cash_sends` as if the send were interrupted.
 
 ## [0.6.0-rc.12]
 
