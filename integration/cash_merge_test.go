@@ -143,4 +143,23 @@ func TestMerge_RefusedMergeLeavesCashNotes(t *testing.T) {
 	if n := heldCount(t, f); n != 2 {
 		t.Errorf("held %d, want both notes still held", n)
 	}
+	// A refused merge created no bill, so nothing is left reported as an
+	// interrupted send.
+	if sends, _ := f.mustJSON("wallet", "show")["unfinished_cash_sends"].([]any); len(sends) != 0 {
+		t.Errorf("a refused merge left unfinished_cash_sends: %v", sends)
+	}
+	// Each held note must be the live slice, not the tombstoned one it was
+	// spun off from when it moved back to cash.
+	for _, h := range f.mustJSON("wallet", "show")["held_tokens"].([]any) {
+		id := entryID(t, h)
+		res := f.run("cash", "status", "--token", id)
+		if res.ExitCode != 0 {
+			t.Errorf("cash status %s after the refused merge: exit %d, want a live note\n%s", id, res.ExitCode, res.Stderr)
+			continue
+		}
+		status := mustDecodeJSON(t, "cash status", res.Stdout)
+		if recips, _ := status["recipients"].([]any); status["error"] != nil || len(recips) == 0 {
+			t.Errorf("cash status %s after the refused merge: want a live roster, got %s", id, res.Stdout)
+		}
+	}
 }

@@ -166,6 +166,14 @@ func TestPrintCashStatusOutcomes_SingleFailurePrintsNothing(t *testing.T) {
 	if strings.TrimSpace(s) != "" {
 		t.Errorf("single-failure stdout = %q, want empty", s)
 	}
+	s, _ = captureStreams(t, func() {
+		printCashStatusOutcomes(false, []cashStatusOutcome{
+			{ID: "tok-a", Err: output.NetworkError(cmd, errors.New("boom"))},
+		})
+	})
+	if strings.TrimSpace(s) != "" {
+		t.Errorf("single-failure text stdout = %q, want empty (the error goes to stderr once)", s)
+	}
 }
 
 // TestPrintCashStatusOutcomes_MultipleCarriesID is the new shape's own

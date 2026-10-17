@@ -34,9 +34,25 @@ ever dialing the Hub (the Hub would reject it too, just after a
 round-trip).
 
 ```sh
-# {"wallet": "circle:<label-or-n>", "default": true, "response": {...}}
+# {"wallet": "circle:<label-or-n>", "default": true, "response": {"wallet_pubkey", "relays", "connection_pubkey", "expires_at", "max_amount_millis", "fees_ppm", "budget_renewal"}}
 cashctl join circlehub1... 100 --json
 ```
+
+`max_amount_millis` is the cap the Hub actually granted, which can be lower
+than the one you asked for (text mode says so); it is `null` if the Hub did
+not say. `fees_ppm` is the circle's in-circle fee, fixed at join.
+
+The wallet's connection key is made on your device: `join` generates it,
+saves its secret before asking, and sends the Hub only `connection_pubkey`.
+The Hub never sees the secret and cannot send a connection string back, so
+there is no "show it again": the wallet saved under `wallet` is the only
+copy. If the Hub never answers, whether the wallet was created is unknown;
+the key stays listed under `pending_joins` in `wallet show`. If a later
+`join` then says `exists`, that wallet is the one with that
+`connection_pubkey`: ask the circle's host to delete it, then join again.
+A Hub from before member-generated keys answers with no relays; `join`
+then fails as `internal` (not retryable: the wallet was likely made), and
+the key is kept the same way.
 
 A `--hub` value that's actually a **Cash Hub** connection (`cashhub1...`)
 gets a specific corrective error (`code: "invalid_input"`) — cashctl can't

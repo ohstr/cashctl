@@ -125,6 +125,10 @@ func newWalletShowCmd() *cobra.Command {
 			if err != nil {
 				return output.RuntimeError(cmd, err)
 			}
+			pendingJoins, err := config.PendingJoins()
+			if err != nil {
+				return output.RuntimeError(cmd, err)
+			}
 
 			if jsonMode {
 				output.PrintJSON(map[string]any{
@@ -139,6 +143,9 @@ func newWalletShowCmd() *cobra.Command {
 					// history --show-secrets` shows them in full to resend.
 					"unclaimed_handoffs": unclaimedHandoffs(l),
 					"pending_merge":      pendingMergeJSON(l),
+					// Joins the Hub never answered: the wallet may exist, known to
+					// the Hub by connection_pubkey. The secret is never shown.
+					"pending_joins": pendingJoins,
 				})
 				return nil
 			}
@@ -190,6 +197,16 @@ func newWalletShowCmd() *cobra.Command {
 			printPendingMerge(l)
 			if pending := unclaimedHandoffs(l); len(pending) > 0 {
 				output.Printf("\nHanded out, not yet claimed: %d — `cashctl wallet history --show-secrets` to resend\n", len(pending))
+			}
+			if len(pendingJoins) > 0 {
+				output.Printf("\nJoins with no answer: %d — the wallet may exist; if a join says you already hold one, ask the circle's host to delete the wallet with this connection key, then join again\n", len(pendingJoins))
+				for _, j := range pendingJoins {
+					hub := j.HubLabel
+					if hub == "" {
+						hub = j.HubPubkey
+					}
+					output.Printf("  %s   connection key %s   %s\n", output.Sanitize(hub), j.ConnectionPubkey, j.At)
+				}
 			}
 			if parks := unreconciledDestinationParks(l); len(parks) > 0 {
 				output.Printf("\nUnfinished cash sends: %d\n", len(parks))

@@ -12,6 +12,20 @@ cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || exit 1
 RUN_DIR="$1"; shift
 ROUNDS=("$@")
 
+# The same signs run.sh's run_round looks for in an agent round: an account
+# limit or API failure fails every later call the same way, so it is named
+# (flag judge_usage_limit), the rounds after it are not sent, and the exit
+# status is 3. Ground truth (verify) is unaffected; re-judge those rounds
+# after the reset, then regenerate the report with REPORT_NO_HISTORY=1.
+LIMIT_RE='"terminal_reason":"api_error"|hit your session limit|usage limit'
+LIMIT_HIT=""
+
+limit_verdict() {
+  jq -nc --arg round "$1" --arg why "${LIMIT_HIT}" '{process_quality: "unknown",
+    notes: ("judge not run: " + $why + " -- re-judge this round after the reset, then REPORT_NO_HISTORY=1 bin/report.sh"),
+    flags: ["judge_usage_limit"], ux_critique: [], round: $round}'
+}
+
 condense_transcript() {
   local transcript="$1"
   jq -r '
@@ -33,6 +47,11 @@ for round in "${ROUNDS[@]}"; do
   TRANSCRIPT="${RUN_DIR}/${round}.transcript.jsonl"
   if [ ! -f "${TRANSCRIPT}" ]; then
     echo "judge(${round}): no transcript, skipping"
+    continue
+  fi
+  if [ -n "${LIMIT_HIT}" ]; then
+    limit_verdict "${round}" > "${RUN_DIR}/${round}.judge.json"
+    echo "judge(${round}): not sent (usage limit)"
     continue
   fi
 
@@ -90,9 +109,24 @@ try:
     print(json.dumps(json.loads(m.group(0))) if m else "{}")
 except ValueError:
     print("{}")')"
+  # Only when no verdict came back: a real one may quote a "usage limit" itself.
+  if ! jq -e '.process_quality' >/dev/null 2>&1 <<<"${VERDICT}" &&
+    cat "${RUN_DIR}/${round}.judge.raw.json" "${RUN_DIR}/${round}.judge.stderr.log" 2>/dev/null | grep -Eq "${LIMIT_RE}"; then
+    LIMIT_HIT="$(cat "${RUN_DIR}/${round}.judge.raw.json" "${RUN_DIR}/${round}.judge.stderr.log" 2>/dev/null |
+      grep -Eo 'hit your (session|usage) limit[^"]*|usage limit[^"]*|"terminal_reason":"api_error"' | head -1)"
+    limit_verdict "${round}" > "${RUN_DIR}/${round}.judge.json"
+    echo "ERROR: judge(${round}) stopped on a usage limit or API error (${LIMIT_HIT}); later rounds are not sent." >&2
+    continue
+  fi
   if ! jq -e '.process_quality' >/dev/null 2>&1 <<<"${VERDICT}"; then
     VERDICT='{"process_quality":"unknown","notes":"judge call failed or returned non-JSON","flags":["judge_error"],"ux_critique":[]}'
   fi
   echo "${VERDICT}" | jq -c --arg round "${round}" '. + {round: $round}' > "${RUN_DIR}/${round}.judge.json"
   echo "judge(${round}): $(jq -r '.process_quality' "${RUN_DIR}/${round}.judge.json")"
 done
+
+if [ -n "${LIMIT_HIT}" ]; then
+  echo "ERROR: the judge pass hit a usage limit; rounds flagged judge_usage_limit need re-judging after the reset:" >&2
+  echo "  bin/judge.sh ${RUN_DIR} <rounds> && REPORT_NO_HISTORY=1 bin/report.sh ${RUN_DIR} ${ROUNDS[*]}" >&2
+  exit 3
+fi

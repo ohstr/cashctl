@@ -83,6 +83,14 @@ CREATE TABLE IF NOT EXISTS handoffs (
 	status        TEXT NOT NULL,
 	checked_at    TEXT
 );
+
+CREATE TABLE IF NOT EXISTS pending_joins (
+	connection_pubkey TEXT PRIMARY KEY,
+	connection_secret TEXT NOT NULL,
+	hub_pubkey        TEXT NOT NULL,
+	hub_label         TEXT NOT NULL,
+	at                TEXT NOT NULL
+);
 `
 
 // Path returns cashctl.db's location under appdir.Dir(), without opening

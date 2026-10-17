@@ -225,6 +225,35 @@ func TestRunCircleJoin_ZeroCapIsNotTreatedAsMissing(t *testing.T) {
 	}
 }
 
+// A bare `join` names both required arguments, so following the hint
+// does not fail again on the missing max amount.
+func TestRunCircleJoin_MissingHubHintNamesEveryMissingArgument(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		args   []string
+		want   []string
+		absent string
+	}{
+		{"bare join", nil, []string{"<hub-connection> <max-amount>", "--hub", "--max-amount"}, ""},
+		{"amount only", []string{"100"}, []string{"<hub-connection>", "--hub"}, "--max-amount"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := runCircleJoin(newTestJoinCmd(), tc.args)
+			if output.AsCLIError(err).Code != output.CodeUsage {
+				t.Fatalf("err = %v, want a usage error", err)
+			}
+			for _, w := range tc.want {
+				if !strings.Contains(err.Error(), w) {
+					t.Errorf("hint %q does not name %q", err, w)
+				}
+			}
+			if tc.absent != "" && strings.Contains(err.Error(), tc.absent) {
+				t.Errorf("hint %q asks for %q, which was given", err, tc.absent)
+			}
+		})
+	}
+}
+
 // A pre-SD-20 Hub's RESTRICTED "already has a wallet" refusal reads as
 // WALLET_EXISTS; a plain not-a-member refusal stays RESTRICTED.
 func TestWalletExistsFromLegacyRefusal(t *testing.T) {
@@ -238,5 +267,30 @@ func TestWalletExistsFromLegacyRefusal(t *testing.T) {
 	}
 	if legacy.Code != "RESTRICTED" {
 		t.Error("the Hub's own error was mutated")
+	}
+}
+
+// join reports the cap the Hub resolved, saying when it differs from the
+// one asked for, and the in-circle fee (NIP-CW §Response).
+func TestJoinCapSummary_ShowsTheResolvedCapAndFee(t *testing.T) {
+	resolved := uint64(400_000)
+	got := joinCapSummary(500_000, &nipcw.CreateCircleWalletResponse{MaxAmountMillis: &resolved, FeesPpm: 1000}, "never")
+	for _, want := range []string{output.FormatAmount(400_000), "you asked for " + output.FormatAmount(500_000), "1000 ppm"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("summary %q lacks %q", got, want)
+		}
+	}
+	same := joinCapSummary(500_000, &nipcw.CreateCircleWalletResponse{MaxAmountMillis: ptrTo(uint64(500_000))}, "never")
+	if strings.Contains(same, "asked for") || strings.Contains(same, "ppm") {
+		t.Errorf("summary %q mentions a difference or fee that is not there", same)
+	}
+	if unknown := joinCapSummary(500_000, &nipcw.CreateCircleWalletResponse{}, "never"); !strings.Contains(unknown, output.FormatAmount(500_000)) {
+		t.Errorf("with no resolved cap the requested one should show: %q", unknown)
+	}
+	if exp := joinCapSummary(500_000, &nipcw.CreateCircleWalletResponse{ExpiresAt: 1798761600}, "never"); !strings.Contains(exp, "expires 2027-01-01 00:00 UTC") {
+		t.Errorf("summary %q lacks the expiry the Hub set", exp)
+	}
+	if strings.Contains(same, "expires") {
+		t.Errorf("summary %q names an expiry the Hub did not set", same)
 	}
 }

@@ -100,6 +100,23 @@ Fixes from the NIP-CASH / NIP-CW conformance review, for agents above all.
 - Fixes `--json` output escaping `<`, `>` and `&` as `\u003c`, `\u003e` and
   `\u0026`.
   ([#85](https://github.com/ohstr/cashctl/pull/85))
+- Adds the cap the Hub granted and the in-circle fee to `join`'s output; the
+  cap can be lower than the one asked for.
+- Changes `join` to generate the wallet's connection key on your device, per
+  NIP-CW's member-generated key: the secret is saved before the request and
+  never sent, and the connection string is built from the Hub's reply. A join
+  the Hub never answers stays under `pending_joins` in `wallet show`. Shows
+  the wallet's expiry with its other terms.
+- Changes `cash status`, `redeem` and `consolidate` on a token you already
+  redeemed or merged away to fail as `spent` (exit 10), as the Hub's tombstone
+  says, instead of `not_found`; a token you transferred away stays `not_found`.
+- Fixes a bare `join` naming only the hub connection; it now names the max
+  amount too.
+- Fixes the first `cash status` on a bill its Hub just reported spent exiting
+  0 with the raw reply; it now fails as `spent` (exit 10), like later calls.
+  A lone failure is also no longer printed on stdout as well as stderr.
+- Fixes a refused `consolidate` or `transfer` to cash leaving its new note's
+  secret listed under `unfinished_cash_sends` as if the send were interrupted.
 
 ## [0.6.0-rc.12]
 

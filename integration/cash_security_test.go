@@ -240,7 +240,7 @@ func TestCashRedeem_AlreadyRedeemedTokenRejectedOnRetry(t *testing.T) {
 	if res.ExitCode == 0 {
 		t.Fatalf("redeeming an already-redeemed token unexpectedly succeeded: %s", res.Stdout)
 	}
-	assertTerminalFailure(t, res, "redeem of an already-redeemed token", "not_found", "invalid_input", "conflict")
+	assertTerminalFailure(t, res, "redeem of an already-redeemed token", "spent")
 
 	// The ledger must still show exactly one entry, still marked redeemed
 	// (not reverted, not duplicated) — a rejected re-redemption must be a
@@ -310,7 +310,7 @@ func TestCashConsolidate_ReusingAlreadyConsolidatedSourceRejected(t *testing.T) 
 	if res.ExitCode == 0 {
 		t.Fatalf("consolidating an already-consolidated source unexpectedly succeeded: %s", res.Stdout)
 	}
-	assertTerminalFailure(t, res, "consolidate reusing a spent source", "not_found", "invalid_input", "conflict")
+	assertTerminalFailure(t, res, "consolidate reusing a spent source", "spent")
 
 	// idC must still be untouched and held — a rejected consolidate must
 	// never partially claim its sources.

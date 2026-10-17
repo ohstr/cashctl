@@ -1,6 +1,7 @@
 package output
 
 import (
+	"github.com/ohstr/nmilat/nipcw"
 	relayclient "github.com/ohstr/nmilat/relay/client"
 	"github.com/spf13/cobra"
 )
@@ -22,10 +23,10 @@ var nwcErrorCode = map[string]ErrorCode{
 	"RATE_LIMITED": CodeConflict,
 	// A Hub that cannot serve yet (NIP-CW: "a distinct not-ready error the
 	// caller can retry"): the same back-off-and-retry as an unreachable one.
-	"NOT_READY": CodeNetwork,
+	nipcw.ErrNotReady: CodeNetwork,
 	// NIP-CW join: the identity already holds a wallet under this Hub. Not
 	// retryable, and not RESTRICTED's "not a member" either.
-	"WALLET_EXISTS": CodeExists,
+	nipcw.ErrWalletExists: CodeExists,
 	// INSUFFICIENT_BALANCE, QUOTA_EXCEEDED, NOT_IMPLEMENTED,
 	// UNSUPPORTED_ENCRYPTION, PAYMENT_FAILED, INTERNAL, OTHER: no bucket
 	// above fits (they're legitimate wallet-side declines, not an input
@@ -52,8 +53,8 @@ var nwcErrorMessages = map[string]string{
 	"NOT_FOUND":              "Couldn't find that.",
 	"EXPIRED":                "This wallet has expired and can no longer send payments.",
 	"BAD_REQUEST":            "That request wasn't valid.",
-	"NOT_READY":              "The Hub isn't ready yet. Wait a moment and try again.",
-	"WALLET_EXISTS":          "You already hold a wallet from this circle.",
+	nipcw.ErrNotReady:        "The Hub isn't ready yet. Wait a moment and try again.",
+	nipcw.ErrWalletExists:    "You already hold a wallet from this circle.",
 }
 
 // cashTokenNWCErrorMessages overrides nwcErrorMessages' wallet-oriented

@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -40,13 +41,34 @@ func TestRecordSpent_MarksAHeldEntryAndDropsItFromHeld(t *testing.T) {
 	}
 }
 
-func TestAlreadySpentError_SpentOnlyForAHubTombstone(t *testing.T) {
+// `cash status` (and redeem/consolidate) on a bill you redeemed or merged
+// away answers spent, as the Hub's tombstone would; one you transferred away
+// still exists under its new holder, so it is not_found.
+func TestAlreadySpentError_SpentForEveryBillWhoseValueMovedOnTheHub(t *testing.T) {
 	cmd := &cobra.Command{}
-	if c := output.AsCLIError(alreadySpentError(cmd, "tok", ledger.StatusSpent)).Code; c != output.CodeSpent {
-		t.Errorf("spent entry: code = %q, want spent", c)
+	for status, want := range map[string]output.ErrorCode{
+		ledger.StatusSpent:        output.CodeSpent,
+		ledger.StatusRedeemed:     output.CodeSpent,
+		ledger.StatusConsolidated: output.CodeSpent,
+		ledger.StatusTransferred:  output.CodeNotFound,
+	} {
+		if c := output.AsCLIError(alreadySpentError(cmd, "tok", status)).Code; c != want {
+			t.Errorf("%s entry: code = %q, want %q", status, c, want)
+		}
 	}
-	if c := output.AsCLIError(alreadySpentError(cmd, "tok", ledger.StatusRedeemed)).Code; c != output.CodeNotFound {
-		t.Errorf("redeemed entry: code = %q, want not_found", c)
+}
+
+// End to end through cash status's own resolver: `cash status --token`
+// on a bill you just redeemed is spent (exit 10), with no network call.
+func TestCashStatus_ATokenYouRedeemedIsSpent(t *testing.T) {
+	l := heldLedger(2)
+	l.Entries[1].Status = ledger.StatusRedeemed
+	cmd := testCmdWithFlags(true, false)
+	cmd.Flags().String("token", l.Entries[1].ID, "")
+	_, err := resolveHeldTokensOrAll(cmd, l)
+	ce := output.AsCLIError(err)
+	if ce.Code != output.CodeSpent || output.ExitCode(err) != 10 {
+		t.Fatalf("code = %q (exit %d), want spent (exit 10): %v", ce.Code, output.ExitCode(err), err)
 	}
 }
 
@@ -78,5 +100,90 @@ func TestClassifyCashTokenNWCErr_ExplainsAMissingOrWrongCashSecret(t *testing.T)
 	other := &relayclient.WalletError{Code: "BAD_REQUEST", Message: "something else"}
 	if _, ok := explainCashSecretRefusal(other); ok {
 		t.Error("an unrelated BAD_REQUEST was explained as a cash-secret refusal")
+	}
+}
+
+// The first `cash status` on a bill whose Hub has just tombstoned it is the
+// same spent error (exit 10, nothing on stdout) every later call gets from
+// the stored status — never the raw tombstone printed as a result.
+func TestRunCashStatus_AFreshTombstoneIsSpentOnTheFirstCall(t *testing.T) {
+	for _, jsonMode := range []bool{true, false} {
+		appdir.SetOverride(t.TempDir())
+		t.Cleanup(func() { appdir.SetOverride("") })
+		l, err := ledger.Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		amt := uint64(1000)
+		e, err := l.Add(ledger.Entry{Token: "tok", WalletPubkey: "pub", AmountMillis: &amt})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := l.Save(); err != nil {
+			t.Fatal(err)
+		}
+		real := fetchCashStatusFn
+		t.Cleanup(func() { fetchCashStatusFn = real })
+		fetchCashStatusFn = func(*cobra.Command, bool, *ledger.Entry) (*nipcash.CashStatusResult, error) {
+			return &nipcash.CashStatusResult{Error: nipcash.ErrorSpent}, nil
+		}
+		cmd := newTestStatusCmd(jsonMode, false)
+		_ = cmd.Flags().Set("token", e.ID)
+
+		var runErr error
+		stdout, _ := captureStreams(t, func() { runErr = runCashStatus(cmd, nil) })
+		if ce := output.AsCLIError(runErr); ce.Code != output.CodeSpent || output.ExitCode(runErr) != 10 {
+			t.Errorf("json=%v: code = %q (exit %d), want spent (exit 10): %v", jsonMode, ce.Code, output.ExitCode(runErr), runErr)
+		}
+		if strings.TrimSpace(stdout) != "" {
+			t.Errorf("json=%v: stdout = %q, want empty", jsonMode, stdout)
+		}
+		fresh, _ := ledger.Load()
+		if got, _ := fresh.Find(e.ID); got.Status != ledger.StatusSpent {
+			t.Errorf("json=%v: saved status = %q, want spent", jsonMode, got.Status)
+		}
+	}
+}
+
+// Several bills: a tombstone stays a "spent" row in the full report, so the
+// other rows are not hidden behind it.
+func TestRunCashStatus_ATombstoneAmongSeveralStaysARow(t *testing.T) {
+	appdir.SetOverride(t.TempDir())
+	t.Cleanup(func() { appdir.SetOverride("") })
+	l, err := ledger.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	amt := uint64(1000)
+	spent, _ := l.Add(ledger.Entry{Token: "tok-a", WalletPubkey: "pub", AmountMillis: &amt})
+	if _, err := l.Add(ledger.Entry{Token: "tok-b", WalletPubkey: "pub", AmountMillis: &amt}); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.Save(); err != nil {
+		t.Fatal(err)
+	}
+	real := fetchCashStatusFn
+	t.Cleanup(func() { fetchCashStatusFn = real })
+	fetchCashStatusFn = func(_ *cobra.Command, _ bool, e *ledger.Entry) (*nipcash.CashStatusResult, error) {
+		if e.ID == spent.ID {
+			return &nipcash.CashStatusResult{Error: nipcash.ErrorSpent}, nil
+		}
+		return &nipcash.CashStatusResult{}, nil
+	}
+	stdout, _ := captureStreams(t, func() { _ = runCashStatus(newTestStatusCmd(true, false), nil) })
+	var report struct {
+		Statuses []struct {
+			Status string `json:"status"`
+		} `json:"statuses"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &report); err != nil {
+		t.Fatalf("multi-token report is not JSON: %v\n%s", err, stdout)
+	}
+	got := map[string]int{}
+	for _, r := range report.Statuses {
+		got[r.Status]++
+	}
+	if got["spent"] != 1 || got["ok"] != 1 || len(report.Statuses) != 2 {
+		t.Errorf("multi-token rows = %v, want one spent and one ok: %s", got, stdout)
 	}
 }

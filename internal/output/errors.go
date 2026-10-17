@@ -30,8 +30,9 @@ const (
 	// CodeExists: what you are trying to create already exists. Not retryable —
 	// use the one you have.
 	CodeExists ErrorCode = "exists"
-	// CodeSpent: the Hub confirmed the bill is spent (a tombstone). Not
-	// retryable — its value has already moved.
+	// CodeSpent: the Hub confirmed the bill is spent (a tombstone), or this
+	// wallet redeemed or merged it away itself. Not retryable — its value has
+	// already moved.
 	CodeSpent ErrorCode = "spent"
 )
 

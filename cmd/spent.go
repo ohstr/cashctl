@@ -34,12 +34,19 @@ func markSpent(l *ledger.Ledger, entry *ledger.Entry) {
 	_ = l.Save() // best-effort: the next run asks the Hub again and gets the same tombstone
 }
 
-// alreadySpentError refuses an explicitly named entry that is no longer held:
-// spent when its Hub reported it so, not_found for one cashctl spent itself.
+// alreadySpentError refuses an explicitly named entry that is no longer held.
+//
+// Spent, the same answer the Hub's tombstone gives, for a bill reported spent
+// and for one this wallet redeemed or merged away: those statuses are written
+// only on the Hub's own confirmation, after which the Hub deletes the bill and
+// answers a tombstone for its retention window (NIP-CASH §Answering About a
+// Destroyed Bill). Asking it again would only add a network call, and past the
+// window its silence. not_found for a bill transferred away: it still exists on
+// the Hub, under its new holder, and is simply no longer yours.
 func alreadySpentError(cmd *cobra.Command, id, status string) error {
-	err := fmt.Errorf("token %q was already %s, so it no longer exists on the Hub", id, spentStatusDescription(status))
-	if status == ledger.StatusSpent {
-		return output.SpentError(cmd, id, err)
+	switch status {
+	case ledger.StatusSpent, ledger.StatusRedeemed, ledger.StatusConsolidated:
+		return output.SpentError(cmd, id, fmt.Errorf("token %q was already %s, so it is spent: its value has already moved", id, spentStatusDescription(status)))
 	}
-	return output.NotFoundError(cmd, id, err)
+	return output.NotFoundError(cmd, id, fmt.Errorf("token %q was already %s, so it is no longer yours", id, spentStatusDescription(status)))
 }

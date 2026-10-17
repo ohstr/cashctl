@@ -153,7 +153,9 @@ if [ "${EVAL_CASHCTL}" = local ]; then
 fi
 
 echo "==> judging transcripts"
-bin/judge.sh "${RUN_DIR}" "${ROUNDS[@]}"
+# A judge usage limit still leaves the verified rounds worth reporting; judge.sh
+# names it (judge_usage_limit) and says how to re-judge.
+bin/judge.sh "${RUN_DIR}" "${ROUNDS[@]}" || echo "WARNING: judge pass incomplete (see above); process quality is unknown for the flagged rounds" >&2
 
 echo "==> assembling report"
 bin/report.sh "${RUN_DIR}" "${ROUNDS[@]}"

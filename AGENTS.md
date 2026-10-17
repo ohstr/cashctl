@@ -21,9 +21,9 @@ stderr.
 | Command | Purpose |
 |---|---|
 | `cashctl init` | Set up your identity (reusing an ncli vault entry if you have one) and optionally a default wallet |
-| `cashctl join <hub-connection> <max-amount>` | Join a circle via its Circle Hub connection (`circlehub1...` or a raw NWC URI) and a requested spend cap in loki — both positional, either order, or `--hub`/`--max-amount`. A cap is required; NIP-CW has no "0 means unlimited" convention |
+| `cashctl join <hub-connection> <max-amount>` | Join a circle via its Circle Hub connection (`circlehub1...` or a raw NWC URI) and a requested spend cap in loki — both positional, either order, or `--hub`/`--max-amount`. A cap is required; NIP-CW has no "0 means unlimited" convention. The wallet's connection key is made on your device and its secret saved before the request; only `connection_pubkey` is sent. `--json`'s `response` carries `wallet_pubkey`, `relays`, `connection_pubkey`, `expires_at`, `max_amount_millis` (the cap granted, maybe lower than asked), `fees_ppm`, `budget_renewal` — never the connection string |
 | `cashctl circle join <hub-connection> <max-amount>` | Same as `join` — the canonical, fully-namespaced form |
-| `cashctl wallet show` | Your identity, registered wallets, and held cash tokens |
+| `cashctl wallet show` | Your identity, registered wallets, and held cash tokens; also each `join` the Hub never answered (`pending_joins` in `--json`: `connection_pubkey`, `hub_pubkey`, `at` — never the secret) |
 | `cashctl wallet history [--show-secrets]` | Local action log (receive/redeem/transfer/consolidate), then every cash note and gift you handed out — kept permanently, each `unclaimed`/`claimed`/`expired` (a cash note, re-checked with its Hub on every read) or `sent` (a gift: its sender can't see the claim), so a lost handoff can be resent. An unclaimed note's secret is hidden unless `--show-secrets` |
 | `cashctl wallet use <name>` / `cashctl connect use <name>` | Switch your default wallet |
 | `cashctl wallet balance [--breakdown\|-v] [--from <name>]` | Unified balance: every wallet's live balance + every held token's value |
@@ -90,13 +90,13 @@ plain `Error: ...` line by default, or `{"error", "code", "retryable",
 |---|---|---|---|
 | `usage` | 2 | no | bad/missing/conflicting flags or args, or a group command invoked without a subcommand |
 | `invalid_input` | 3 | no | a supplied value failed validation/parsing (bad token, connection string, credential syntax, amount, ...) |
-| `not_found` | 4 | no | the referenced thing doesn't exist (held token, registered wallet, vault entry, ...) — includes "no wallet configured yet" |
+| `not_found` | 4 | no | the referenced thing doesn't exist (held token, registered wallet, vault entry, ...) — includes "no wallet configured yet", and a token you transferred away (no longer yours) |
 | `conflict` | 5 | yes | collides with existing state (a token already held, a wallet's rate limit) |
 | `network` | 6 | yes | couldn't reach a relay/wallet, or a Hub isn't ready yet (`NOT_READY`) |
 | `auth` | 7 | no | not authorized, or no longer (a wallet declined as restricted/unauthorized/expired) |
 | `indeterminate` | 8 | no | a `redeem`/`transfer`/`consolidate` got no answer (timeout, omission, incomplete reply), so whether it was applied is unknown — never resend it blind; check with `cash status --token <id>` first |
-| `exists` | 9 | no | what you're trying to create already exists (`join`: you already hold a wallet from that circle) — don't retry, use the one you have |
-| `spent` | 10 | no | the bill's Hub confirmed it is spent (a tombstone): its value has already moved. The local entry is marked spent and leaves `wallet balance`/`redeem --all`; never inferred from silence |
+| `exists` | 9 | no | what you're trying to create already exists (`join`: you already hold a wallet from that circle) — don't retry, use the one you have. If an earlier `join` went unanswered (its key is under `pending_joins`), that wallet was made but its details never arrived and can't be fetched again: it is unusable — ask the circle's host to delete the wallet with that `connection_pubkey`, then join again |
+| `spent` | 10 | no | the bill's Hub confirmed it is spent (a tombstone): its value has already moved. The local entry is marked spent and leaves `wallet balance`/`redeem --all`; never inferred from silence. Also what naming a token you redeemed or merged away yourself returns (`cash status --token`, `redeem`, `consolidate`), with no network call |
 | `internal` | 1 | no | anything else — a wallet-side decline that isn't one of the above, or a cashctl-side failure |
 
 `input`, when present, is the single specific value that caused the
@@ -114,7 +114,9 @@ finer-grained branching. `recovery`, when present, is text you must keep
 verbatim: it appears only when a Hub-side mutation is confirmed to have
 happened and recording it locally then failed, and it carries whatever
 makes that money reachable again — for a cash-mode bill the
-`<token>#<cash_secret>` handoff, which nothing else will show again. It is
+`<token>#<cash_secret>` handoff, for `join` the new wallet's connection
+string (register it with `connect add`), neither of which anything else
+will show again. It is
 human-readable text that can name more than one (a `transfer` reports the
 recipient's bill and your own remainder), so match the handoffs inside it
 rather than expecting one bare value. It is the one field deliberately

@@ -83,7 +83,7 @@ func moveCashNotesToKey(cmd *cobra.Command, l *ledger.Ledger, ids []string, priv
 			e.PendingThrowawayKey = ""
 			return moved, output.RuntimeError(cmd, err)
 		}
-		_, err := moveCashFn(e, nipcash.BySecret(e.CashSecret), nipcash.Pubkey(pub))
+		res, err := moveCashFn(e, nipcash.BySecret(e.CashSecret), nipcash.Pubkey(pub))
 		if err != nil {
 			var notSent *notSentError
 			if errors.As(err, &notSent) || isDefiniteRefusal(err) {
@@ -95,6 +95,7 @@ func moveCashNotesToKey(cmd *cobra.Command, l *ledger.Ledger, ids []string, priv
 			// No answer: the move may have happened. Keep the pending key.
 			return moved, classifyCashSpendErr(cmd, err, "merge", id)
 		}
+		followMove(e, res)
 		promoteThrowaway(e)
 		if err := l.Save(); err != nil {
 			return moved, reportUnsavedResult(cmd, err, "Merge (moving a note)", fmt.Sprintf("%s is now spent by the private key %s", e.ID, priv))
@@ -102,6 +103,21 @@ func moveCashNotesToKey(cmd *cobra.Command, l *ledger.Ledger, ids []string, priv
 		moved = append(moved, id)
 	}
 	return moved, nil
+}
+
+// followMove points e at the wallet a whole-amount move left its value in. A
+// move to a pubkey stays in place, but one to a cash secret does only on a
+// wallet that has only ever had one recipient (NIP-CASH §Transferring and
+// Splitting a Slice): a note that went onto a merge key and back has had two,
+// so the Hub spins it off into a new wallet and tombstones the old slice.
+func followMove(e *ledger.Entry, res *nipcash.CashTransferResult) {
+	if res == nil || res.NewWalletToken == "" {
+		return
+	}
+	e.Token = res.NewWalletToken
+	if res.NewWalletPubkey != "" {
+		e.WalletPubkey = res.NewWalletPubkey
+	}
 }
 
 // promoteThrowaway records a confirmed move: the key now spends the note.
@@ -147,13 +163,15 @@ func toCashNotes(l *ledger.Ledger, ids []string) int {
 			e.PendingCashSecret = ""
 			continue
 		}
-		if _, err := moveCashFn(e, nipcash.BySigning(e.ThrowawayKey), target); err != nil {
+		res, err := moveCashFn(e, nipcash.BySigning(e.ThrowawayKey), target)
+		if err != nil {
 			if isDefiniteRefusal(err) {
 				e.PendingCashSecret = ""
 				_ = l.Save()
 			}
 			continue
 		}
+		followMove(e, res)
 		e.CashSecret, e.PendingCashSecret = target.Secret(), ""
 		e.ThrowawayKey = ""
 		e.IdentityRequired = ptrTo(false)
@@ -350,6 +368,7 @@ func mergeThenSend(cmd *cobra.Command, l *ledger.Ledger, tokens []string, source
 			// Refused, or never sent: the merged bill is still whole and ours.
 			toCashNotes(l, []string{mergedID})
 		}
+		parked.forgetIfNothingCreated(classified)
 		return classified
 	}
 	_ = l.SetStatus(mergedID, ledger.StatusTransferred)

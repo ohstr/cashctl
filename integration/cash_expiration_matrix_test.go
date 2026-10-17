@@ -632,14 +632,27 @@ func TestDecodeCheck_ExpiredCashToken_ReportsAccurateDeadlineMessage(t *testing.
 	// this test would assert on an omission while claiming to assert on the
 	// expiry message, and would pass as soon as any wording happened to contain
 	// the word "expired".
-	token := mintPubkeyTokenFromHub(t, hub, myPubHex, 5_000)
-
-	waitPastCashExpiry()
-
-	decodeResp := f.mustJSON("decode", token, "--check")
-	check, _ := decodeResp["check"].(map[string]any)
-	if check == nil {
-		t.Fatalf("decode --check: no check field in response: %v", decodeResp)
+	//
+	// The Hub's expiry sweep runs every few minutes and destroys an expired
+	// bill, after which it answers with a tombstone instead of the deadline.
+	// When the sweep lands between expiry and the check, that answer is right
+	// but is not what this test is about, so it tries again with a fresh bill.
+	var check map[string]any
+	for attempt := 1; ; attempt++ {
+		token := mintPubkeyTokenFromHub(t, hub, myPubHex, 5_000)
+		waitPastCashExpiry()
+		decodeResp := f.mustJSON("decode", token, "--check")
+		check, _ = decodeResp["check"].(map[string]any)
+		if check == nil {
+			t.Fatalf("decode --check: no check field in response: %v", decodeResp)
+		}
+		if spent, _ := check["spent"].(bool); !spent {
+			break
+		}
+		if attempt == 3 {
+			t.Fatalf("the Hub's expiry sweep destroyed the bill before every one of %d checks: %v", attempt, check)
+		}
+		t.Logf("attempt %d: the expiry sweep destroyed the bill first; trying a fresh one", attempt)
 	}
 	if ok, _ := check["ok"].(bool); ok {
 		t.Fatalf("decode --check on an expired token: ok = true, want false: %v", check)

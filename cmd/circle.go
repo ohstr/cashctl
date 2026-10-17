@@ -44,10 +44,10 @@ func isIdentityEventReplayErr(err error) bool {
 // current Hub sends, so a caller branches on one nwc_code for it either way.
 func walletExistsFromLegacyRefusal(err error) error {
 	var walletErr *relayclient.WalletError
-	if errors.As(err, &walletErr) && walletErr.Code == "RESTRICTED" &&
+	if errors.As(err, &walletErr) && walletErr.Code == nip47.ErrRestricted &&
 		strings.Contains(walletErr.Message, "already has an active circle wallet") {
 		normalized := *walletErr
-		normalized.Code = "WALLET_EXISTS"
+		normalized.Code = nipcw.ErrWalletExists
 		return &normalized
 	}
 	return err
@@ -152,8 +152,13 @@ func runCircleJoin(cmd *cobra.Command, args []string) error {
 	// Checked explicitly (not cobra's own MarkFlagRequired) so a missing
 	// hub is a classified UsageError — see cash_consolidate.go's own
 	// comment on --sources for why.
+	// Both arguments named whenever the max amount is missing too: a hint
+	// naming only the hub led straight to the next refusal (I-29).
 	if hub == "" {
-		return output.InvocationError(cmd, fmt.Errorf("a Circle Hub connection is required — pass it directly (cashctl join <hub-connection>) or via --hub"))
+		if positionalMaxAmount == "" && strings.TrimSpace(maxAmountFlag) == "" {
+			return output.InvocationError(cmd, fmt.Errorf("a Circle Hub connection and a max amount are required — pass both (cashctl join <hub-connection> <max-amount>) or use --hub and --max-amount"))
+		}
+		return output.InvocationError(cmd, fmt.Errorf("a Circle Hub connection is required — pass it directly (cashctl join <hub-connection> <max-amount>) or via --hub"))
 	}
 	maxAmount, err := resolvePositionalOrFlagAmount(cmd, positionalMaxAmount, "max-amount", maxAmountFlag)
 	if err != nil {
@@ -175,7 +180,7 @@ func runCircleJoin(cmd *cobra.Command, args []string) error {
 		if positionalMaxAmount != "" || maxAmountFlag != "" {
 			return output.InvalidInputError(cmd, "0", fmt.Errorf("0 isn't a spend cap — there's no \"0 means unlimited\" convention here, so pass the most this wallet may spend"))
 		}
-		return output.InvocationError(cmd, fmt.Errorf("a max amount is required — pass it directly (cashctl join <hub-connection> <amount>) or via --max-amount"))
+		return output.InvocationError(cmd, fmt.Errorf("a max amount is required — pass it directly (cashctl join <hub-connection> <max-amount>) or via --max-amount"))
 	}
 
 	pairingURI, label, err := resolveHubConnection(cmd, hub)
@@ -196,6 +201,25 @@ func runCircleJoin(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// NIP-CW §Pairing Connection: the member generates the wallet's connection
+	// key and only its pubkey is sent. The secret is saved before the request
+	// goes out, so no outcome of the call can leave it only in memory.
+	connKey, err := nipcw.NewConnectionKey()
+	if err != nil {
+		return output.RuntimeError(cmd, err)
+	}
+	hubInfo, err := nip47.ParsePairingURI(pairingURI)
+	if err != nil {
+		return output.InvalidInputError(cmd, hub, err)
+	}
+	if err := config.SavePendingJoin(config.PendingJoin{
+		ConnectionPubkey: connKey.Pubkey(), ConnectionSecret: connKey.Secret(),
+		HubPubkey: hubInfo.WalletPubkey, HubLabel: label,
+		At: time.Now().UTC().Format(time.RFC3339),
+	}); err != nil {
+		return output.RuntimeError(cmd, err)
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -203,16 +227,12 @@ func runCircleJoin(cmd *cobra.Command, args []string) error {
 	var resp *nipcw.CreateCircleWalletResponse
 	attemptJoin := func() error {
 		return WithSpinner(jsonMode, "Joining...", func() error {
-			client, cErr := nipcwclient.Connect(ctx, pairingURI)
-			if cErr != nil {
-				dialErr = true
-				return cErr
-			}
-			defer client.Close()
-			r, cErr := client.CreateCircleWallet(ctx, nipcw.CreateCircleWalletParams{
-				Credential: cred, MaxAmountMillis: maxAmount, Expiry: expiry, BudgetRenewal: budgetRenewal,
+			r, dialed, cErr := joinCircleFn(ctx, pairingURI, nipcw.CreateCircleWalletParams{
+				Credential: cred, Connection: connKey,
+				MaxAmountMillis: maxAmount, Expiry: expiry, BudgetRenewal: budgetRenewal,
 			})
 			if cErr != nil {
+				dialErr = !dialed
 				return cErr
 			}
 			resp = r
@@ -233,8 +253,23 @@ func runCircleJoin(cmd *cobra.Command, args []string) error {
 		err = attemptJoin()
 	}
 	if err != nil {
+		// A refusal, or a request that never left, created nothing: the key is
+		// forgotten. Anything else may have created the wallet, so it is kept.
+		if dialErr || joinWasRefused(err) {
+			if dErr := config.DeletePendingJoin(connKey.Pubkey()); dErr != nil {
+				output.Notef(jsonMode, "Could not forget the unused connection key: %v", dErr)
+			}
+		} else {
+			err = fmt.Errorf("%w — whether the wallet was created is unknown. If a later join says you already hold one, "+
+				"it is the wallet with connection key %s (listed under pending joins in `cashctl wallet show`): "+
+				"the Hub sends its details only once, so ask the circle's host to delete it, then join again", err, connKey.Pubkey())
+		}
 		if dialErr {
 			return output.NetworkError(cmd, err)
+		}
+		if isUnusableJoinReply(err) {
+			// The Hub did answer, so asking again only meets the wallet it made.
+			return output.RuntimeError(cmd, fmt.Errorf("the Hub's reply has no usable wallet details; it may run a NIP-CW version from before member-generated connection keys: %w", err))
 		}
 		if isIdentityEventReplayErr(err) {
 			// Still colliding even after the retry (another process
@@ -256,6 +291,7 @@ func runCircleJoin(cmd *cobra.Command, args []string) error {
 	if err := s.Add(name, resp.PairingURI); err != nil {
 		return output.RuntimeError(cmd, err)
 	}
+	s.AnsweredJoin(connKey.Pubkey())
 
 	setDefault := false
 	if wasEmpty {
@@ -270,7 +306,10 @@ func runCircleJoin(cmd *cobra.Command, args []string) error {
 		_ = s.SetDefault(name)
 	}
 	if err := s.Save(); err != nil {
-		return output.RuntimeError(cmd, err)
+		// The wallet exists on the Hub and this is the only copy of its
+		// connection string: the Hub cannot send it again.
+		return output.RecoveryError(cmd, err, fmt.Sprintf(
+			"Your new wallet was created but could not be saved. Register it with `cashctl connect add %s <connection>`, using: %s", name, resp.PairingURI))
 	}
 
 	if jsonMode {
@@ -288,10 +327,15 @@ func runCircleJoin(cmd *cobra.Command, args []string) error {
 		output.PrintJSON(map[string]any{
 			"wallet": name, "default": setDefault,
 			"response": map[string]any{
-				"wallet_pubkey":  resp.WalletPubkey,
-				"expires_at":     expiresAt,
-				"fees_ppm":       resp.FeesPpm,
-				"budget_renewal": resp.BudgetRenewal,
+				"wallet_pubkey":     resp.WalletPubkey,
+				"relays":            resp.Relays,
+				"connection_pubkey": connKey.Pubkey(),
+				"expires_at":        expiresAt,
+				// The cap as the Hub resolved it, which may differ from the one asked
+				// for (NIP-CW §Response); null when the Hub did not say.
+				"max_amount_millis": resp.MaxAmountMillis,
+				"fees_ppm":          resp.FeesPpm,
+				"budget_renewal":    resp.BudgetRenewal,
 			},
 		})
 		return nil
@@ -306,13 +350,42 @@ func runCircleJoin(cmd *cobra.Command, args []string) error {
 	if renewal == "" {
 		renewal = "never"
 	}
-	output.Printf("%s New wallet: %s (max %s/%s)\n", greeting, name, output.FormatAmount(int64(maxAmount)), output.Sanitize(renewal))
+	output.Printf("%s New wallet: %s (%s)\n", greeting, name, joinCapSummary(maxAmount, resp, renewal))
 	if setDefault {
 		output.Printf("Default wallet set to %s.\n", name)
 	} else if !wasEmpty {
 		output.Printf("Saved as %s. Switch anytime with `cashctl wallet use %s`.\n", name, name)
 	}
 	return nil
+}
+
+// joinCircle dials the Circle Hub and places one create_circle_wallet call.
+// dialed is false when the request never left: the dial itself failed.
+func joinCircle(ctx context.Context, hubURI string, params nipcw.CreateCircleWalletParams) (resp *nipcw.CreateCircleWalletResponse, dialed bool, err error) {
+	client, err := nipcwclient.Connect(ctx, hubURI)
+	if err != nil {
+		return nil, false, err
+	}
+	defer client.Close()
+	resp, err = client.CreateCircleWallet(ctx, params)
+	return resp, true, err
+}
+
+// joinCircleFn is joinCircle, swapped out in tests.
+var joinCircleFn = joinCircle
+
+// isUnusableJoinReply reports a reply the Hub did send whose wallet details
+// cashctl cannot build a connection from (no wallet_pubkey or relays).
+func isUnusableJoinReply(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "nipcw: wallet details carry no") || strings.Contains(msg, "nipcw: parse wallet details")
+}
+
+// joinWasRefused reports an explicit answer from the Hub, after which no
+// wallet exists for this request: a decline, or the SDK refusing to send it.
+func joinWasRefused(err error) bool {
+	var walletErr *relayclient.WalletError
+	return errors.As(err, &walletErr) || errors.Is(err, nipcw.ErrNoConnectionKey)
 }
 
 // resolveHubConnection sniffs --hub and returns a plain NWC pairing URI to
@@ -338,4 +411,26 @@ func resolveHubConnection(cmd *cobra.Command, hub string) (pairingURI, label str
 	default:
 		return "", "", output.InvalidInputError(cmd, hub, fmt.Errorf("not a valid Circle Hub connection"))
 	}
+}
+
+// joinCapSummary describes the wallet's terms as the Hub resolved them: its cap
+// (saying so when it differs from the one asked for), renewal, in-circle fee
+// and expiry.
+func joinCapSummary(requested uint64, resp *nipcw.CreateCircleWalletResponse, renewal string) string {
+	capMillis := requested
+	note := ""
+	if resp.MaxAmountMillis != nil {
+		capMillis = *resp.MaxAmountMillis
+		if capMillis != requested {
+			note = fmt.Sprintf(", you asked for %s", output.FormatAmount(int64(requested)))
+		}
+	}
+	summary := fmt.Sprintf("max %s/%s%s", output.FormatAmount(int64(capMillis)), output.Sanitize(renewal), note)
+	if resp.FeesPpm > 0 {
+		summary += fmt.Sprintf("; in-circle fee %d ppm", resp.FeesPpm)
+	}
+	if resp.ExpiresAt > 0 {
+		summary += "; expires " + time.Unix(resp.ExpiresAt, 0).UTC().Format("2006-01-02 15:04 UTC")
+	}
+	return summary
 }

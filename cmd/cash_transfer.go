@@ -638,12 +638,15 @@ func transferWithAutoConsolidate(cmd *cobra.Command, l *ledger.Ledger, group []l
 		// side — the funds exist but cannot be assembled into one payment — and it
 		// is the answer they can act on. Leaving the raw decline through would name
 		// an internal grouping rule and suggest their input was malformed.
+		parked.forgetIfNothingCreated(ffsErr)
 		return output.UsageError(cmd, fmt.Errorf("%w: you hold %s total, but these tokens come from different Cash Hubs and only same-hub tokens can be merged into the %s you're sending",
 			ledger.ErrFundsFragmented,
 			output.FormatAmount(int64(ledger.SumAmounts(l.Held()))),
 			output.FormatAmount(int64(sendAmount))))
 	}
-	return classifyCashSpendErr(cmd, ffsErr, "transfer", sourceIDs...)
+	classified := classifyCashSpendErr(cmd, ffsErr, "transfer", sourceIDs...)
+	parked.forgetIfNothingCreated(classified)
+	return classified
 }
 
 // isCrossHubSourcesDecline reports whether err is a Hub refusing a consolidate
@@ -1201,7 +1204,9 @@ func runCashTransfer(cmd *cobra.Command, args []string) error {
 		return nil
 	})
 	if err != nil {
-		return classifyCashSpendErr(cmd, err, "transfer", entry.ID)
+		classified := classifyCashSpendErr(cmd, err, "transfer", entry.ID)
+		parked.forgetIfNothingCreated(classified)
+		return classified
 	}
 
 	_ = l.SetStatus(entry.ID, ledger.StatusTransferred)

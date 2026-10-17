@@ -6,6 +6,7 @@ import (
 	"github.com/ohstr/nmilat/nipcash"
 
 	"github.com/ohstr/cashctl/internal/ledger"
+	"github.com/ohstr/cashctl/internal/output"
 )
 
 // parkedCashSecret is a destination cash secret written to disk ahead of the
@@ -121,6 +122,19 @@ func (p parkedCashSecret) release() {
 	if e.PendingDestinationCashSecret == p.secret {
 		e.PendingDestinationCashSecret = ""
 	}
+}
+
+// forgetIfNothingCreated drops the park after a failed call that cannot have
+// created the destination bill — the Hub refused it, or it was never sent — and
+// saves. Without this a refused merge left the secret parked, and `wallet show`
+// reported an interrupted send forever. An indeterminate failure keeps it: the
+// bill may exist, and then this is the only copy of its secret.
+func (p parkedCashSecret) forgetIfNothingCreated(failure error) {
+	if p.ledger == nil || output.AsCLIError(failure).Code == output.CodeIndeterminate || isAmbiguousDeliveryErr(failure) {
+		return
+	}
+	p.release()
+	_ = p.ledger.Save() // best-effort: a park left behind costs a stale warning, never money
 }
 
 // unreconciledDestinationParks returns one line per ledger row still carrying
