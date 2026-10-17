@@ -179,6 +179,7 @@ func offerDefaultWallet(cmd *cobra.Command, jsonMode bool) string {
 		output.Notef(false, "Couldn't save that connection: %s", err)
 		return ""
 	}
+	s.SetKind(name, connectionKindOf(value))
 	_ = s.SetDefault(name) // first wallet ever — see cashctl-plan.md's default-pointer rule
 	if err := s.Save(); err != nil {
 		output.Notef(false, "Couldn't save that connection: %s", err)

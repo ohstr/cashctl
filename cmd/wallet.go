@@ -158,7 +158,7 @@ cash send's only secret copy — keep it), pending_joins and pending_merge.`,
 					if c.Name == s.Default {
 						marker = " [default]"
 					}
-					output.Printf("  %s%s\n", c.Name, marker)
+					output.Printf("  %s (%s)%s\n", c.Name, c.Kind, marker)
 				}
 			}
 			held := l.Held()

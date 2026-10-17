@@ -297,6 +297,10 @@ var addedColumns = []struct{ table, column, ddl string }{
 	// as pending, promoted once the move is confirmed (I-26).
 	{"entries", "throwaway_key", `ALTER TABLE entries ADD COLUMN throwaway_key TEXT`},
 	{"entries", "pending_throwaway_key", `ALTER TABLE entries ADD COLUMN pending_throwaway_key TEXT`},
+	// kind: what a registered connection is (circle wallet, plain NWC wallet,
+	// cash-token-family string), so `connect list`/`wallet show` can say which
+	// is the circle wallet. NULL on rows saved before it; config.Load infers.
+	{"connections", "kind", `ALTER TABLE connections ADD COLUMN kind TEXT`},
 }
 
 // addColumnsIfMissing applies addedColumns' migrations exactly once each,

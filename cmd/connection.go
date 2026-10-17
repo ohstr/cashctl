@@ -200,3 +200,12 @@ func DialGeneric(ctx context.Context, value string) (*relayclient.NWCClient, err
 	pairing := &nip47.PairingInfo{WalletPubkey: tok.WalletPubkey, RelayURLs: tok.RelayURLs, Secret: tok.Secret}
 	return relayclient.NewNWCClient(ctx, pairing, nip47.EncryptionNIP44V2)
 }
+
+// connectionKindOf is what a validated `connect add` value is: a
+// cash-token-family string used as a wallet, or a plain NWC URI.
+func connectionKindOf(value string) string {
+	if dial.Sniff(value) == dial.KindCashToken {
+		return config.KindCashToken
+	}
+	return config.KindNWC
+}

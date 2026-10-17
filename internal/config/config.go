@@ -35,6 +35,9 @@ type Connection struct {
 	// this makes --json match that, not introduce a new restriction.
 	Value   string `json:"-"`
 	AddedAt string `json:"added_at"`
+	// Kind is what the connection is: KindCircle (made by `join`), KindNWC or
+	// KindCashToken (registered with `connect add`).
+	Kind string `json:"kind"`
 
 	// LastKnownBalanceMloki/LastKnownBalanceAt cache the most recent
 	// successful live get_balance result — the only way to show a figure
@@ -91,6 +94,32 @@ func (s *Store) snapshot() {
 	s.loadedDefault = s.Default
 }
 
+// Connection kinds.
+const (
+	KindCircle    = "circle"
+	KindNWC       = "nwc"
+	KindCashToken = "cash_token"
+)
+
+// inferKind is a row saved before Kind existed: `join` always named its wallet
+// circle:<label>, so that prefix is the one thing that says it was a join.
+func inferKind(name string) string {
+	if strings.HasPrefix(name, "circle:") {
+		return KindCircle
+	}
+	return KindNWC
+}
+
+// SetKind records what the named connection is.
+func (s *Store) SetKind(name, kind string) {
+	for i := range s.Connections {
+		if s.Connections[i].Name == name {
+			s.Connections[i].Kind = kind
+			return
+		}
+	}
+}
+
 // connectionsEqual reports whether a and b hold the same data — a plain ==
 // would compare LastKnownBalanceMloki by pointer identity.
 func connectionsEqual(a, b Connection) bool {
@@ -101,7 +130,7 @@ func connectionsEqual(a, b Connection) bool {
 		return false
 	}
 	return a.Name == b.Name && a.Value == b.Value && a.AddedAt == b.AddedAt &&
-		a.LastKnownBalanceAt == b.LastKnownBalanceAt
+		a.LastKnownBalanceAt == b.LastKnownBalanceAt && a.Kind == b.Kind
 }
 
 // Load reads every connection from cashctl.db, returning an empty (not
@@ -118,7 +147,7 @@ func Load() (*Store, error) {
 	// added_at only has 1-second precision, so two connections added in
 	// the same second would otherwise sort by name instead of reliably
 	// preserving insertion order.
-	rows, err := db.Query(`SELECT name, value, added_at, last_known_balance_mloki, last_known_balance_at, is_default
+	rows, err := db.Query(`SELECT name, value, added_at, last_known_balance_mloki, last_known_balance_at, is_default, kind
 		FROM connections ORDER BY rowid`)
 	if err != nil {
 		return nil, fmt.Errorf("cashctl.db: reading connections: %w", err)
@@ -131,7 +160,8 @@ func Load() (*Store, error) {
 		var lastKnownBalance sql.NullInt64
 		var lastKnownBalanceAt sql.NullString
 		var isDefault bool
-		if err := rows.Scan(&c.Name, &c.Value, &c.AddedAt, &lastKnownBalance, &lastKnownBalanceAt, &isDefault); err != nil {
+		var kind sql.NullString
+		if err := rows.Scan(&c.Name, &c.Value, &c.AddedAt, &lastKnownBalance, &lastKnownBalanceAt, &isDefault, &kind); err != nil {
 			return nil, fmt.Errorf("cashctl.db: reading connections: %w", err)
 		}
 		if lastKnownBalance.Valid {
@@ -139,6 +169,10 @@ func Load() (*Store, error) {
 			c.LastKnownBalanceMloki = &v
 		}
 		c.LastKnownBalanceAt = lastKnownBalanceAt.String
+		c.Kind = kind.String
+		if c.Kind == "" {
+			c.Kind = inferKind(c.Name)
+		}
 		if isDefault {
 			s.Default = c.Name
 		}
@@ -200,9 +234,9 @@ func (s *Store) save() error {
 			lastKnownBalance = sql.NullInt64{Int64: *c.LastKnownBalanceMloki, Valid: true}
 		}
 		if !existed {
-			if _, err := tx.Exec(`INSERT INTO connections (name, value, added_at, last_known_balance_mloki, last_known_balance_at, is_default)
-				VALUES (?, ?, ?, ?, ?, 0)`,
-				c.Name, c.Value, c.AddedAt, lastKnownBalance, c.LastKnownBalanceAt); err != nil {
+			if _, err := tx.Exec(`INSERT INTO connections (name, value, added_at, last_known_balance_mloki, last_known_balance_at, is_default, kind)
+				VALUES (?, ?, ?, ?, ?, 0, ?)`,
+				c.Name, c.Value, c.AddedAt, lastKnownBalance, c.LastKnownBalanceAt, nullIfEmpty(c.Kind)); err != nil {
 				if store.IsUniqueViolation(err) {
 					return ErrDuplicateName
 				}
@@ -210,9 +244,9 @@ func (s *Store) save() error {
 			}
 			continue
 		}
-		if _, err := tx.Exec(`UPDATE connections SET value = ?, added_at = ?, last_known_balance_mloki = ?, last_known_balance_at = ?
+		if _, err := tx.Exec(`UPDATE connections SET value = ?, added_at = ?, last_known_balance_mloki = ?, last_known_balance_at = ?, kind = ?
 			WHERE name = ?`,
-			c.Value, c.AddedAt, lastKnownBalance, c.LastKnownBalanceAt, c.Name); err != nil {
+			c.Value, c.AddedAt, lastKnownBalance, c.LastKnownBalanceAt, nullIfEmpty(c.Kind), c.Name); err != nil {
 			return fmt.Errorf("cashctl.db: saving connection %s: %w", c.Name, err)
 		}
 	}
@@ -358,4 +392,8 @@ func (s *Store) SuggestName(prefix, hint string) string {
 			return candidate
 		}
 	}
+}
+
+func nullIfEmpty(s string) sql.NullString {
+	return sql.NullString{String: s, Valid: s != ""}
 }

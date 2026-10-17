@@ -40,7 +40,7 @@ register one afterward with `cashctl connect add` instead.
 
 ```sh
 cashctl connect add work nostr+walletconnect://...
-cashctl connect list --json
+cashctl connect list --json    # each connection carries "kind": circle (from join), nwc or cash_token
 cashctl wallet use work    # same as `cashctl connect use work`
 cashctl connect rm work
 ```

@@ -56,6 +56,7 @@ both are refused here. Your first wallet becomes the default.`,
 				// never succeed — the caller has to pick a different one.
 				return output.InvalidInputError(cmd, name, err)
 			}
+			s.SetKind(name, connectionKindOf(value))
 
 			setDefault := false
 			if wasEmpty {
@@ -111,7 +112,7 @@ func newConnectListCmd() *cobra.Command {
 				if c.Name == s.Default {
 					marker = " [default]"
 				}
-				output.Printf("%s%s\n", c.Name, marker)
+				output.Printf("%s (%s)%s\n", c.Name, c.Kind, marker)
 			}
 			return nil
 		},

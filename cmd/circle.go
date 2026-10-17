@@ -325,6 +325,7 @@ func runCircleJoin(cmd *cobra.Command, args []string) error {
 	if err := s.Add(name, resp.PairingURI); err != nil {
 		return output.RuntimeError(cmd, err)
 	}
+	s.SetKind(name, config.KindCircle)
 	s.AnsweredJoin(connKey.Pubkey())
 
 	setDefault := false

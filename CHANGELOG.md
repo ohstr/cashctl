@@ -155,6 +155,8 @@ Fixes from the NIP-CASH / NIP-CW conformance review, for agents above all.
   pointer onto a second line.
 - Adds to `redeem --help` that a token is redeemed whole, which invoice amount
   it needs, and which tokens `--amount` may pick.
+- Adds each wallet's `kind` (`circle`, `nwc` or `cash_token`) to `connect list`
+  and `wallet show`, so the circle wallet is easy to find.
 
 ## [0.6.0-rc.12]
 

@@ -448,3 +448,36 @@ func TestHintedName_CapsALongLabel(t *testing.T) {
 		t.Errorf("HintedName(short) = %q", got)
 	}
 }
+
+// A connection's kind survives a save and reload; a row saved before kind
+// existed is inferred from the name `join` always gave a circle wallet.
+func TestConnectionKind_RoundTripsAndInfersLegacyRows(t *testing.T) {
+	appdir.SetOverride(t.TempDir())
+	t.Cleanup(func() { appdir.SetOverride("") })
+	s, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Stored kinds chosen against what the name would suggest, so a kind that
+	// was not saved cannot pass for one that was.
+	for _, name := range []string{"circle:actually-nwc", "my-circle", "circle:legacy", "plain-legacy"} {
+		if err := s.Add(name, "nostr+walletconnect://x?secret=y&relay=wss://r"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.SetKind("circle:actually-nwc", KindNWC)
+	s.SetKind("my-circle", KindCircle)
+	if err := s.Save(); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"circle:actually-nwc": KindNWC, "my-circle": KindCircle, "circle:legacy": KindCircle, "plain-legacy": KindNWC}
+	for _, c := range got.Connections {
+		if c.Kind != want[c.Name] {
+			t.Errorf("%s: kind %q, want %q", c.Name, c.Kind, want[c.Name])
+		}
+	}
+}
