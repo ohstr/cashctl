@@ -144,6 +144,8 @@ Fixes from the NIP-CASH / NIP-CW conformance review, for agents above all.
   until it is redeemed or transferred.
 - Fixes `wallet balance -c <token>#<secret>` failing as `not_found`; it now
   says to take the bill with `receive`, like `-c` everywhere else.
+- Adds `skipped` to a bare `consolidate`: tokens left as they are because each
+  is the only one from its Cash Hub; text mode says so too.
 
 ## [0.6.0-rc.12]
 

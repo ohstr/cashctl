@@ -91,7 +91,7 @@ func (o consolidateOutcome) declined() bool { return o.Result == nil && o.Err ==
 // when there is more than one outcome or one of them did not succeed — states in
 // which this command previously returned an error and printed no result at all,
 // so no consumer can be depending on the old shape there.
-func printConsolidateOutcomes(jsonMode bool, outcomes []consolidateOutcome) {
+func printConsolidateOutcomes(jsonMode bool, outcomes []consolidateOutcome, alone []ledger.Entry) {
 	succeeded := make([]*consolidateResult, 0, len(outcomes))
 	for _, o := range outcomes {
 		if o.Result != nil {
@@ -102,7 +102,7 @@ func printConsolidateOutcomes(jsonMode bool, outcomes []consolidateOutcome) {
 
 	if jsonMode {
 		if len(outcomes) == 1 && allOK {
-			printConsolidateResults(true, succeeded)
+			printConsolidateResults(true, succeeded, alone)
 			return
 		}
 		out := make([]map[string]any, len(outcomes))
@@ -133,7 +133,7 @@ func printConsolidateOutcomes(jsonMode bool, outcomes []consolidateOutcome) {
 			}
 			out[i] = row
 		}
-		output.PrintJSON(map[string]any{"consolidated": out})
+		output.PrintJSON(withAlone(map[string]any{"consolidated": out}, alone))
 		return
 	}
 
@@ -156,6 +156,51 @@ func printConsolidateOutcomes(jsonMode bool, outcomes []consolidateOutcome) {
 	if len(outcomes) > 1 && !allOK {
 		output.Printf("%d of %d groups consolidated.\n", len(succeeded), len(outcomes))
 	}
+	printAlone(alone)
+}
+
+// aloneOnTheirHub is every held token that can take part in a merge but is the
+// only one from its Cash Hub, so a bare `consolidate` leaves it as it is. It
+// used to do that without a word, and a holder could not tell "already as few
+// as possible" from "missed".
+func aloneOnTheirHub(held []ledger.Entry) []ledger.Entry {
+	var out []ledger.Entry
+	for _, entries := range ledger.GroupByHub(ledger.GroupableForConsolidation(held)) {
+		if len(entries) == 1 {
+			out = append(out, entries[0])
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
+}
+
+// withAlone adds the left-alone tokens to a --json result document.
+func withAlone(doc map[string]any, alone []ledger.Entry) map[string]any {
+	if len(alone) == 0 {
+		return doc
+	}
+	rows := make([]map[string]any, len(alone))
+	for i, e := range alone {
+		rows[i] = map[string]any{"id": e.ID, "cash_hub": ledger.HubGroupKey(e), "reason": "the only held token from its Cash Hub; only same-Hub tokens merge"}
+	}
+	doc["skipped"] = rows
+	return doc
+}
+
+// printAlone says, in text mode, what withAlone lists — by count and amount,
+// never ID, like the rest of this command's plain-text output.
+func printAlone(alone []ledger.Entry) {
+	if len(alone) == 0 {
+		return
+	}
+	var total uint64
+	for _, e := range alone {
+		if e.AmountMillis != nil {
+			total += *e.AmountMillis
+		}
+	}
+	output.Printf("Left as is: %d token(s), %s, each the only one from its Cash Hub (only tokens from the same Hub merge).\n",
+		len(alone), output.FormatAmount(int64(total)))
 }
 
 // shortHub trims a Hub fingerprint to something readable in a line of output, the
@@ -200,7 +245,7 @@ func runCashConsolidate(cmd *cobra.Command, args []string) error {
 		if result != nil {
 			results = []*consolidateResult{result}
 		}
-		printConsolidateResults(jsonMode, results)
+		printConsolidateResults(jsonMode, results, nil)
 		return nil
 	}
 
@@ -211,11 +256,13 @@ func runCashConsolidate(cmd *cobra.Command, args []string) error {
 	// process each such group, rather than erroring out and making the
 	// common "tidy up my dust" case require first hunting down IDs.
 	groups := mergeableHubGroups(l.Held())
+	alone := aloneOnTheirHub(l.Held())
 	if len(groups) == 0 {
 		if jsonMode {
-			output.PrintJSON(map[string]any{"consolidated": []any{}})
+			output.PrintJSON(withAlone(map[string]any{"consolidated": []any{}}, alone))
 		} else {
-			output.Println("Nothing to consolidate — no minter has more than one held token.")
+			output.Println("Nothing to consolidate — no Cash Hub has more than one of your tokens.")
+			printAlone(alone)
 		}
 		return nil
 	}
@@ -232,7 +279,7 @@ func runCashConsolidate(cmd *cobra.Command, args []string) error {
 	// unchanged. With more than one group, or any group that actually merged,
 	// the error alone cannot describe the run.
 	if len(outcomes) > 1 || (len(outcomes) == 1 && outcomes[0].Err == nil) {
-		printConsolidateOutcomes(jsonMode, outcomes)
+		printConsolidateOutcomes(jsonMode, outcomes, alone)
 	}
 
 	// Reported first, then failed. The full picture is already on stdout in both
@@ -638,7 +685,7 @@ func consolidateItems(cmd *cobra.Command, l *ledger.Ledger, items []string, toFl
 // existing scripts); multiple results (auto-detected across more than one
 // minter) use a "consolidated" list instead, only ever reached via the
 // no-args/no---sources path.
-func printConsolidateResults(jsonMode bool, results []*consolidateResult) {
+func printConsolidateResults(jsonMode bool, results []*consolidateResult, alone []ledger.Entry) {
 	if jsonMode {
 		if len(results) == 1 {
 			// new_entry (a ledger.Entry, properly snake_case-tagged) already
@@ -647,19 +694,20 @@ func printConsolidateResults(jsonMode bool, results []*consolidateResult) {
 			// own) worth surfacing separately (see cash_transfer.go's own fix
 			// for the same underlying issue).
 			r := results[0]
-			output.PrintJSON(map[string]any{"new_entry": r.NewEntry, "expires_at": r.ExpiresAt, "target_resolved": r.TargetResolved})
+			output.PrintJSON(withAlone(map[string]any{"new_entry": r.NewEntry, "expires_at": r.ExpiresAt, "target_resolved": r.TargetResolved}, alone))
 			return
 		}
 		out := make([]map[string]any, len(results))
 		for i, r := range results {
 			out[i] = map[string]any{"new_entry": r.NewEntry, "expires_at": r.ExpiresAt, "target_resolved": r.TargetResolved}
 		}
-		output.PrintJSON(map[string]any{"consolidated": out})
+		output.PrintJSON(withAlone(map[string]any{"consolidated": out}, alone))
 		return
 	}
 	for _, r := range results {
 		output.Printf("Consolidated into one %s note, saved to your wallet.\n", output.FormatAmount(int64(*r.NewEntry.AmountMillis)))
 	}
+	printAlone(alone)
 }
 
 // resolveConsolidateSources decides which source items runCashConsolidate

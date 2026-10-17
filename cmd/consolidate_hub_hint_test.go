@@ -47,3 +47,28 @@ func TestWithSourceHubs_NamesEachSourcesHub(t *testing.T) {
 		t.Error("the refusal's code changed")
 	}
 }
+
+// A bare consolidate names the tokens it leaves alone — each the only one from
+// its Cash Hub — instead of skipping them without a word: in --json by id, in
+// text by count and amount.
+func TestAloneOnTheirHub_IsReported(t *testing.T) {
+	amt := uint64(20_000)
+	held := []ledger.Entry{
+		{ID: "a", Status: ledger.StatusHeld, AmountMillis: &amt, Token: tokenOnHub(t, strings.Repeat("a", 64), "hub1")},
+		{ID: "b", Status: ledger.StatusHeld, AmountMillis: &amt, Token: tokenOnHub(t, strings.Repeat("b", 64), "hub1")},
+		{ID: "c", Status: ledger.StatusHeld, AmountMillis: &amt, Token: tokenOnHub(t, strings.Repeat("c", 64), "hub2")},
+	}
+	alone := aloneOnTheirHub(held)
+	if len(alone) != 1 || alone[0].ID != "c" {
+		t.Fatalf("alone = %+v, want only c", alone)
+	}
+	doc := withAlone(map[string]any{"consolidated": []any{}}, alone)
+	rows, _ := doc["skipped"].([]map[string]any)
+	if len(rows) != 1 || rows[0]["id"] != "c" {
+		t.Errorf("--json skipped = %v, want c", doc["skipped"])
+	}
+	text, _ := captureStreams(t, func() { printAlone(alone) })
+	if !strings.Contains(text, "Left as is: 1 token(s)") || strings.Contains(text, `"c"`) {
+		t.Errorf("text = %q, want a count and amount, no id", text)
+	}
+}
