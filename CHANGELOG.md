@@ -102,65 +102,92 @@ Fixes from the NIP-CASH / NIP-CW conformance review, for agents above all.
   ([#85](https://github.com/ohstr/cashctl/pull/85))
 - Adds the cap the Hub granted and the in-circle fee to `join`'s output; the
   cap can be lower than the one asked for.
+  ([#86](https://github.com/ohstr/cashctl/pull/86))
 - Changes `join` to generate the wallet's connection key on your device, per
   NIP-CW's member-generated key: the secret is saved before the request and
   never sent, and the connection string is built from the Hub's reply. A join
   the Hub never answers stays under `pending_joins` in `wallet show`. Shows
   the wallet's expiry with its other terms.
+  ([#86](https://github.com/ohstr/cashctl/pull/86))
 - Changes `cash status`, `redeem` and `consolidate` on a token you already
   redeemed or merged away to fail as `spent` (exit 10), as the Hub's tombstone
   says, instead of `not_found`; a token you transferred away stays `not_found`.
+  ([#86](https://github.com/ohstr/cashctl/pull/86))
 - Fixes a bare `join` naming only the hub connection; it now names the max
   amount too.
+  ([#86](https://github.com/ohstr/cashctl/pull/86))
 - Fixes the first `cash status` on a bill its Hub just reported spent exiting
   0 with the raw reply; it now fails as `spent` (exit 10), like later calls.
   A lone failure is also no longer printed on stdout as well as stderr.
+  ([#86](https://github.com/ohstr/cashctl/pull/86))
 - Fixes a refused `consolidate` or `transfer` to cash leaving its new note's
   secret listed under `unfinished_cash_sends` as if the send were interrupted.
+  ([#86](https://github.com/ohstr/cashctl/pull/86))
 - Changes `cash status` over several bills to exit 10 when one is spent; every
   row is still reported on stdout.
+  ([#87](https://github.com/ohstr/cashctl/pull/87))
 - Fixes `decode`, `receive` and `connect add` failing on a pasted Lightning
   invoice with a bech32 error; they now say it is an invoice (with its amount)
   and point to `pay` or `redeem --invoice`.
+  ([#87](https://github.com/ohstr/cashctl/pull/87))
 - Adds `identity` (`created`, `reused` or `existing`) to `init --json`; a re-run
   now also names the identity it kept.
+  ([#87](https://github.com/ohstr/cashctl/pull/87))
 - Adds to `join`'s `exists` error the name the circle's wallet is registered
   under here, to use with `-c`.
+  ([#87](https://github.com/ohstr/cashctl/pull/87))
 - Adds the exit codes to `cashctl --help`, the accepted formats to
   `connect add --help`, and to `skills install --help` that only
   `<dir>/cashctl-*` is written.
+  ([#87](https://github.com/ohstr/cashctl/pull/87))
 - Adds `input` to `usage` errors: the unknown flag or command, or the first
   extra argument.
+  ([#87](https://github.com/ohstr/cashctl/pull/87))
 - Adds `outstanding_cash_notes` to `wallet balance`: cash notes you handed out
   that are not claimed yet, outside the total.
+  ([#87](https://github.com/ohstr/cashctl/pull/87))
 - Adds field guides to `transfer --help` and `wallet show --help`.
+  ([#87](https://github.com/ohstr/cashctl/pull/87))
 - Adds to a refused merge of named tokens which Hub each one is on, and to
   `wallet show` that tokens on the same hub can be merged.
+  ([#87](https://github.com/ohstr/cashctl/pull/87))
 - Fixes `--json` errors dropping cashctl's own hint after a wallet's message.
+  ([#87](https://github.com/ohstr/cashctl/pull/87))
 - Changes the RESTRICTED decline text so it no longer reads like a login
   failure, and caps the label part of a joined wallet's name at 24 characters.
+  ([#87](https://github.com/ohstr/cashctl/pull/87))
 - Adds `skipped_spent` to `redeem --all`: tokens left out because their Hub
   reported them spent. `receive` now says its issuer can take a bill back
   until it is redeemed or transferred.
+  ([#87](https://github.com/ohstr/cashctl/pull/87))
 - Fixes `wallet balance -c <token>#<secret>` failing as `not_found`; it now
   says to take the bill with `receive`, like `-c` everywhere else.
+  ([#87](https://github.com/ohstr/cashctl/pull/87))
 - Adds `skipped` to a bare `consolidate`: tokens left as they are because each
   is the only one from its Cash Hub; text mode says so too.
+  ([#87](https://github.com/ohstr/cashctl/pull/87))
 - Adds `cash_hub` to `decode`, and makes `decode --check` on a note you
   already took say its value moved to the re-keyed bill rather than that the
   bill is gone.
+  ([#87](https://github.com/ohstr/cashctl/pull/87))
 - Labels a merged cash note `protected` in `wallet show`, and keeps a split
   remainder's label; both showed no protection state.
+  ([#87](https://github.com/ohstr/cashctl/pull/87))
 - Fixes an unknown flag or command's `--json` error splitting its `--help`
   pointer onto a second line.
+  ([#87](https://github.com/ohstr/cashctl/pull/87))
 - Adds to `redeem --help` that a token is redeemed whole, which invoice amount
   it needs, and which tokens `--amount` may pick.
+  ([#87](https://github.com/ohstr/cashctl/pull/87))
 - Adds each wallet's `kind` (`circle`, `nwc` or `cash_token`) to `connect list`
   and `wallet show`, so the circle wallet is easy to find.
+  ([#87](https://github.com/ohstr/cashctl/pull/87))
 - Adds to a wallet call refused as RESTRICTED or NOT_IMPLEMENTED that
   `wallet get-info` lists what the connection allows.
+  ([#87](https://github.com/ohstr/cashctl/pull/87))
 - Adds `max_amount`, the granted cap in loki, to `join --json`, and says in
   `invoice --help` that its `--json` amount is in mloki.
+  ([#87](https://github.com/ohstr/cashctl/pull/87))
 
 ## [0.6.0-rc.12]
 
