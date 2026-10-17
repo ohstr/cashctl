@@ -54,3 +54,11 @@ func TestClassifyWalletCallErr_PointsAtGetInfo(t *testing.T) {
 		}
 	}
 }
+
+// A shortcut's --help shows its examples the way the shortcut is typed.
+func TestShortcutExample_DropsTheGroup(t *testing.T) {
+	got := shortcutExample(&cobra.Command{Use: "balance", Example: "  cashctl wallet balance\n  cashctl wallet balance --from work"})
+	if strings.Contains(got, "wallet balance") || !strings.Contains(got, "cashctl balance --from work") {
+		t.Errorf("shortcutExample = %q", got)
+	}
+}
