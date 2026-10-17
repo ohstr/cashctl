@@ -47,6 +47,18 @@ func explainNoAnswer(err error) (error, bool) {
 // *CLIError: a *relayclient.WalletError becomes output.NWCError (plain-
 // language translation, correct exit code); anything else (a dial/network
 // failure) becomes output.NetworkError.
+// classifyWalletCallErr is classifyNWCErr for an ordinary NIP-47 call on a
+// registered wallet: a method the connection is not allowed (RESTRICTED) or
+// the wallet does not offer (NOT_IMPLEMENTED) also says where to see what it
+// does allow, so the decline is not read as a login or permission failure.
+func classifyWalletCallErr(cmd *cobra.Command, err error) error {
+	classified := classifyNWCErr(cmd, err)
+	if ce, ok := classified.(*output.CLIError); ok && (ce.NWCCode == "RESTRICTED" || ce.NWCCode == "NOT_IMPLEMENTED") {
+		ce.Hint = "`cashctl wallet get-info` lists the methods this connection allows."
+	}
+	return classified
+}
+
 func classifyNWCErr(cmd *cobra.Command, err error) error {
 	var walletErr *relayclient.WalletError
 	if errors.As(err, &walletErr) {

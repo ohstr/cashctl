@@ -37,7 +37,7 @@ func newWalletBudgetCmd() *cobra.Command {
 				if dialErr {
 					return err
 				}
-				return classifyNWCErr(cmd, err)
+				return classifyWalletCallErr(cmd, err)
 			}
 			if jsonMode {
 				output.PrintJSON(budget)
@@ -88,7 +88,7 @@ func newWalletInvoiceCmd() *cobra.Command {
 				if dialErr {
 					return err
 				}
-				return classifyNWCErr(cmd, err)
+				return classifyWalletCallErr(cmd, err)
 			}
 			if jsonMode {
 				output.PrintJSON(tx)
@@ -149,7 +149,7 @@ func newWalletPayCmd() *cobra.Command {
 				if dialErr {
 					return err
 				}
-				return classifyNWCErr(cmd, err)
+				return classifyWalletCallErr(cmd, err)
 			}
 			if jsonMode {
 				output.PrintJSON(result)
@@ -200,7 +200,7 @@ func newWalletListTxCmd() *cobra.Command {
 				if dialErr {
 					return err
 				}
-				return classifyNWCErr(cmd, err)
+				return classifyWalletCallErr(cmd, err)
 			}
 			if jsonMode {
 				result.Transactions = output.NonNil(result.Transactions)
@@ -249,7 +249,7 @@ func newWalletSignMessageCmd() *cobra.Command {
 				if dialErr {
 					return err
 				}
-				return classifyNWCErr(cmd, err)
+				return classifyWalletCallErr(cmd, err)
 			}
 			if jsonMode {
 				output.PrintJSON(result)

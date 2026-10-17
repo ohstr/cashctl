@@ -43,3 +43,14 @@ func TestWithHeldWalletHint_NamesTheCircleWallet(t *testing.T) {
 		t.Errorf("a non-exists refusal got the held-wallet hint: %v", other)
 	}
 }
+
+// A wallet call the connection may not make points at get-info, which lists
+// what it may; other declines get no such hint.
+func TestClassifyWalletCallErr_PointsAtGetInfo(t *testing.T) {
+	for code, want := range map[string]bool{"RESTRICTED": true, "NOT_IMPLEMENTED": true, "INSUFFICIENT_BALANCE": false} {
+		err := classifyWalletCallErr(&cobra.Command{}, &relayclient.WalletError{Code: code, Message: "no"})
+		if got := strings.Contains(output.AsCLIError(err).Hint, "wallet get-info"); got != want {
+			t.Errorf("%s: get-info hint = %v, want %v", code, got, want)
+		}
+	}
+}

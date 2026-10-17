@@ -157,6 +157,8 @@ Fixes from the NIP-CASH / NIP-CW conformance review, for agents above all.
   it needs, and which tokens `--amount` may pick.
 - Adds each wallet's `kind` (`circle`, `nwc` or `cash_token`) to `connect list`
   and `wallet show`, so the circle wallet is easy to find.
+- Adds to a wallet call refused as RESTRICTED or NOT_IMPLEMENTED that
+  `wallet get-info` lists what the connection allows.
 
 ## [0.6.0-rc.12]
 
