@@ -37,7 +37,7 @@ func newWalletBudgetCmd() *cobra.Command {
 				if dialErr {
 					return err
 				}
-				return classifyNWCErr(cmd, err)
+				return classifyWalletCallErr(cmd, err)
 			}
 			if jsonMode {
 				output.PrintJSON(budget)
@@ -56,8 +56,10 @@ func newWalletBudgetCmd() *cobra.Command {
 
 func newWalletInvoiceCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:     fmt.Sprintf("invoice <amount-%s>", output.CurrencyUnit),
-		Short:   "Create a Lightning invoice on the connected wallet",
+		Use:   fmt.Sprintf("invoice <amount-%s>", output.CurrencyUnit),
+		Short: "Create a Lightning invoice on the connected wallet",
+		Long: "Creates a Lightning invoice for <amount> " + output.CurrencyUnit + " on the connected wallet.\n\n" +
+			"--json prints the wallet's NIP-47 transaction, whose amount is in m" + output.CurrencyUnit + " (thousandths), as NIP-47 counts it.",
 		Example: `  cashctl invoice 5 --desc "coffee"`,
 		Args:    output.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -88,7 +90,7 @@ func newWalletInvoiceCmd() *cobra.Command {
 				if dialErr {
 					return err
 				}
-				return classifyNWCErr(cmd, err)
+				return classifyWalletCallErr(cmd, err)
 			}
 			if jsonMode {
 				output.PrintJSON(tx)
@@ -149,7 +151,7 @@ func newWalletPayCmd() *cobra.Command {
 				if dialErr {
 					return err
 				}
-				return classifyNWCErr(cmd, err)
+				return classifyWalletCallErr(cmd, err)
 			}
 			if jsonMode {
 				output.PrintJSON(result)
@@ -200,7 +202,7 @@ func newWalletListTxCmd() *cobra.Command {
 				if dialErr {
 					return err
 				}
-				return classifyNWCErr(cmd, err)
+				return classifyWalletCallErr(cmd, err)
 			}
 			if jsonMode {
 				result.Transactions = output.NonNil(result.Transactions)
@@ -249,7 +251,7 @@ func newWalletSignMessageCmd() *cobra.Command {
 				if dialErr {
 					return err
 				}
-				return classifyNWCErr(cmd, err)
+				return classifyWalletCallErr(cmd, err)
 			}
 			if jsonMode {
 				output.PrintJSON(result)

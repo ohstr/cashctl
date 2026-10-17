@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
-# Ground truth for R5, from the operator's view of both hubs: each hub is down
-# to one live slice holding everything (90 loki on A, 20 on B) — cash notes
-# merge since I-26 — and no live slice still answers to a secret from the
-# handed-out notes, so nobody who saw those strings can spend the money.
+# Ground truth for R5, from the operator's view of every hub: each is down to
+# one live slice holding everything (90 loki on A, 20 on B, 50 on C, whose 50
+# notes exceed one merge and so take rounds) — cash notes merge —
+# and no live slice still answers to a secret from the handed-out notes, so
+# nobody who saw those strings can spend the money.
 ROUND="r5-tidy-and-secure"
 source "$(dirname "$0")/_head.sh" "$1"
 need_admin
 hub_a="$(harness_file "${ROUND}" hub-a-app-id.txt)"
 hub_b="$(harness_file "${ROUND}" hub-b-app-id.txt)"
+hub_c="$(harness_file "${ROUND}" hub-c-app-id.txt)"
 secrets="$(harness_file "${ROUND}" secrets.txt)"
 # A cash slice's identity_value is the hex SHA-256 of its secret's bytes.
 commitments="$(python3 -c '
@@ -33,4 +35,5 @@ check_hub() {
 }
 check_hub a "${hub_a}" 90000
 check_hub b "${hub_b}" 20000
+check_hub c "${hub_c}" 50000
 write_verify "${ROUND}" "${RUN_DIR}"

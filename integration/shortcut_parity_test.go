@@ -3,6 +3,7 @@
 package integration
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -72,7 +73,12 @@ func TestShortcutParity_Init(t *testing.T) {
 			t.Errorf("`wallet init` returns key %q that `init` does not", k)
 		}
 	}
-	if s, c := a.run("init"), b.run("wallet", "init"); s.ExitCode != c.ExitCode || s.Stdout != c.Stdout || s.Stderr != c.Stderr {
+	// The second run names each wallet's own identity, so only the npub may differ.
+	s, c := a.run("init"), b.run("wallet", "init")
+	js, jc := mustDecodeJSON(t, "init", s.Stdout), mustDecodeJSON(t, "wallet init", c.Stdout)
+	delete(js, "npub")
+	delete(jc, "npub")
+	if s.ExitCode != c.ExitCode || !reflect.DeepEqual(js, jc) || s.Stderr != c.Stderr {
 		t.Errorf("second run differs: init -> (%d) %q / wallet init -> (%d) %q", s.ExitCode, s.Stdout, c.ExitCode, c.Stdout)
 	}
 }

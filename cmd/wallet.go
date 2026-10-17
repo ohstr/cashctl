@@ -88,7 +88,14 @@ func newWalletShowCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "show",
 		Short: "Show your identity and wallet/ledger summary",
-		Args:  output.NoArgs,
+		Long: `Shows your identity, registered wallets and held cash tokens. No network
+call: amounts are as last known.
+
+--json adds: held_tokens (each with its id and cash_hub — only same-Hub
+tokens merge), unclaimed_handoffs (cash notes still unclaimed and gifts,
+which stay "sent": branch on status), unfinished_cash_sends (an interrupted
+cash send's only secret copy — keep it), pending_joins and pending_merge.`,
+		Args: output.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			jsonMode, _ := cmd.Flags().GetBool("json")
 
@@ -98,23 +105,9 @@ func newWalletShowCmd() *cobra.Command {
 			// all work without one) still holds real wallets/tokens worth
 			// listing. Only a genuine identity.Load failure OTHER than
 			// "none configured yet" is still a real error.
-			var npub, source string
-			var err error
-			idStored, idErr := identity.Load()
-			switch {
-			case idErr == nil:
-				npub, err = identityNpub()
-				if err != nil {
-					return output.RuntimeError(cmd, err)
-				}
-				source = string(idStored.Source)
-				if idStored.Source == identity.SourceNcliVault {
-					source = fmt.Sprintf("ncli-vault:%s", idStored.Label)
-				}
-			case errors.Is(idErr, identity.ErrNotConfigured):
-				// npub/source stay "" — surfaced as such below.
-			default:
-				return output.RuntimeError(cmd, idErr)
+			npub, source, err := currentIdentity()
+			if err != nil {
+				return output.RuntimeError(cmd, err)
 			}
 
 			s, err := config.Load()
@@ -165,14 +158,16 @@ func newWalletShowCmd() *cobra.Command {
 					if c.Name == s.Default {
 						marker = " [default]"
 					}
-					output.Printf("  %s%s\n", c.Name, marker)
+					output.Printf("  %s (%s)%s\n", c.Name, c.Kind, marker)
 				}
 			}
 			held := l.Held()
 			if len(held) == 0 {
 				output.Println("\nNo held cash tokens.")
-			} else {
+			} else if len(held) == 1 {
 				output.Printf("\nHeld cash tokens: %d\n", len(held))
+			} else {
+				output.Printf("\nHeld cash tokens: %d (tokens on the same hub can be merged with `cashctl consolidate`)\n", len(held))
 			}
 			for i, e := range held {
 				amount := "unknown amount"
@@ -395,4 +390,27 @@ func heldTokensJSON(held []ledger.Entry) []heldToken {
 		out[i] = heldToken{Entry: e, CashHub: ledger.HubGroupKey(e)}
 	}
 	return out
+}
+
+// currentIdentity is the configured identity's npub and source label, or two
+// empty strings when none is configured yet (not an error: "none configured
+// yet" is something `wallet show` and `init` report, not fail on).
+func currentIdentity() (npub, source string, err error) {
+	idStored, idErr := identity.Load()
+	switch {
+	case idErr == nil:
+		npub, err = identityNpub()
+		if err != nil {
+			return "", "", err
+		}
+		source = string(idStored.Source)
+		if idStored.Source == identity.SourceNcliVault {
+			source = fmt.Sprintf("ncli-vault:%s", idStored.Label)
+		}
+		return npub, source, nil
+	case errors.Is(idErr, identity.ErrNotConfigured):
+		return "", "", nil
+	default:
+		return "", "", idErr
+	}
 }

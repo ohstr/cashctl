@@ -394,9 +394,6 @@ func TestCashTransfer_ToCashTarget_SecretMustBeRecoverable(t *testing.T) {
 	}
 }
 
-// extractHexSecret pulls the first 64-hex-char substring out of s — used
-// to recover a cash secret from a human-readable "resolves to:"-style
-// message without hard-coding its exact wording.
 // cashToSend is a cash transfer's <token>#<secret> handoff, failing t if
 // the secret was never surfaced (the funds would be unspendable) or is
 // repeated in target_resolved.
@@ -410,18 +407,4 @@ func cashToSend(t *testing.T, resp map[string]any) string {
 		t.Errorf("cash transfer: target_resolved = %q, want empty: the secret is in cash_to_send", resolved)
 	}
 	return note
-}
-
-func extractHexSecret(t *testing.T, s string) string {
-	t.Helper()
-	fields := strings.FieldsFunc(s, func(r rune) bool {
-		return !strings.ContainsRune("0123456789abcdefABCDEF", r)
-	})
-	for _, f := range fields {
-		if len(f) == 64 {
-			return f
-		}
-	}
-	t.Fatalf("no 64-hex-char secret found in %q", s)
-	return ""
 }

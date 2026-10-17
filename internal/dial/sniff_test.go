@@ -162,3 +162,21 @@ func TestSniff_Unknown(t *testing.T) {
 		}
 	}
 }
+
+// A pasted Lightning invoice or LNURL is valid bech32 with an unknown HRP, and
+// used to be taken for a cash token and fail on its bytes.
+func TestSniff_LightningInvoice(t *testing.T) {
+	data, err := bech32.ConvertBits(make([]byte, 40), 8, 5, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, hrp := range []string{"lnfc600n", "lnbc10u", "lntb", "lnurl"} {
+		s, err := bech32.Encode(hrp, data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := Sniff(s); got != KindLightningInvoice {
+			t.Errorf("Sniff(%s...) = %v, want KindLightningInvoice", hrp, got)
+		}
+	}
+}

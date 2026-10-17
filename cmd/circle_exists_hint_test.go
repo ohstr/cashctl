@@ -1,0 +1,82 @@
+package cmd
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/ohstr/nmilat/nipcw"
+	relayclient "github.com/ohstr/nmilat/relay/client"
+	"github.com/spf13/cobra"
+
+	"github.com/ohstr/cashctl/internal/appdir"
+	"github.com/ohstr/cashctl/internal/config"
+	"github.com/ohstr/cashctl/internal/output"
+)
+
+// A join refused because you already hold a wallet from that circle names the
+// wallet it is registered as here, keeping the exists code.
+func TestWithHeldWalletHint_NamesTheCircleWallet(t *testing.T) {
+	appdir.SetOverride(t.TempDir())
+	t.Cleanup(func() { appdir.SetOverride("") })
+	s, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Add("circle:friends", "nostr+walletconnect://"+strings.Repeat("a", 64)+"?relay=wss://r.example&secret="+strings.Repeat("b", 64)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	refusal := classifyNWCErr(&cobra.Command{}, &relayclient.WalletError{Code: nipcw.ErrWalletExists, Message: "exists"})
+	err = withHeldWalletHint(refusal, "Friends")
+	if ce := output.AsCLIError(err); ce.Code != output.CodeExists {
+		t.Errorf("code = %q, want exists", ce.Code)
+	}
+	if !strings.Contains(output.AsCLIError(err).Hint, "-c circle:friends") {
+		t.Errorf("%v does not name the held wallet", err)
+	}
+
+	other := withHeldWalletHint(classifyNWCErr(&cobra.Command{}, &relayclient.WalletError{Code: "RESTRICTED", Message: "no"}), "Friends")
+	if strings.Contains(output.AsCLIError(other).Hint, "circle:friends") {
+		t.Errorf("a non-exists refusal got the held-wallet hint: %v", other)
+	}
+}
+
+// A wallet call the connection may not make points at get-info, which lists
+// what it may; other declines get no such hint.
+func TestClassifyWalletCallErr_PointsAtGetInfo(t *testing.T) {
+	for code, want := range map[string]bool{"RESTRICTED": true, "NOT_IMPLEMENTED": true, "INSUFFICIENT_BALANCE": false} {
+		err := classifyWalletCallErr(&cobra.Command{}, &relayclient.WalletError{Code: code, Message: "no"})
+		if got := strings.Contains(output.AsCLIError(err).Hint, "wallet get-info"); got != want {
+			t.Errorf("%s: get-info hint = %v, want %v", code, got, want)
+		}
+	}
+}
+
+// A shortcut's --help shows its examples the way the shortcut is typed.
+func TestShortcutExample_DropsTheGroup(t *testing.T) {
+	got := shortcutExample(&cobra.Command{Use: "balance", Example: "  cashctl wallet balance\n  cashctl wallet balance --from work"})
+	if strings.Contains(got, "wallet balance") || !strings.Contains(got, "cashctl balance --from work") {
+		t.Errorf("shortcutExample = %q", got)
+	}
+}
+
+// join reports the granted cap in the unit it takes it in, beside the millis.
+func TestMaxAmountText(t *testing.T) {
+	v := uint64(500_000)
+	if got := maxAmountText(&v); got != output.FormatAmount(500_000) || got == "" {
+		t.Errorf("maxAmountText(500000) = %q", got)
+	}
+	if got := maxAmountText(nil); got != "" {
+		t.Errorf("maxAmountText(nil) = %q, want empty", got)
+	}
+}
+
+// The top-level balance shortcut's examples drop the wallet group.
+func TestShortcutOf_UsesShortcutExamples(t *testing.T) {
+	if ex := shortcutOf(newWalletBalanceCmd()).Example; strings.Contains(ex, "wallet balance") || !strings.Contains(ex, "cashctl balance") {
+		t.Errorf("balance shortcut examples = %q", ex)
+	}
+}

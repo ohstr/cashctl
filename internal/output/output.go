@@ -248,6 +248,9 @@ func EmitError(cmd *cobra.Command, err error) {
 		if ce.RawMessage != "" {
 			errMessage = ce.RawMessage
 		}
+		if ce.Hint != "" {
+			errMessage += " " + ce.Hint
+		}
 		// Sanitized here rather than relying on PrintJSON's generic round trip:
 		// EmitError writes its own encoder to stderr, and these fields are few
 		// and known, so doing it explicitly keeps it auditable. SanitizeText for
@@ -291,6 +294,9 @@ func EmitError(cmd *cobra.Command, err error) {
 	// appending it there would just repeat the same sentence twice.
 	if ce.RawMessage != "" && ce.RawMessage != msg {
 		msg = fmt.Sprintf("%s (%s)", msg, ce.RawMessage)
+	}
+	if ce.Hint != "" {
+		msg += " " + ce.Hint
 	}
 	// SanitizeText at the sink: msg is cashctl's own sentence with a wallet's
 	// own text appended, and until now nothing on this path sanitized either, so

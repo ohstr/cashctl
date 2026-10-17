@@ -1,6 +1,10 @@
 package cmd
 
-import "github.com/spf13/cobra"
+import (
+	"strings"
+
+	"github.com/spf13/cobra"
+)
 
 // Top-level shortcuts for the highest-frequency verbs — same relationship
 // as `docker run` to `docker container run`: each shares its RunE (and
@@ -35,10 +39,21 @@ func shortcutOf(cmd *cobra.Command) *cobra.Command {
 		Use:     cmd.Use,
 		Short:   cmd.Short,
 		Long:    cmd.Long,
-		Example: cmd.Example,
+		Example: shortcutExample(cmd),
 		Args:    cmd.Args,
 		RunE:    cmd.RunE,
 	}
 	clone.Flags().AddFlagSet(cmd.Flags())
 	return clone
+}
+
+// shortcutExample is cmd's Example written the way the shortcut is typed:
+// `cashctl balance` under `cashctl balance --help`, not `cashctl wallet balance`.
+func shortcutExample(cmd *cobra.Command) string {
+	verb := strings.Fields(cmd.Use)[0]
+	ex := cmd.Example
+	for _, group := range []string{"wallet", "cash", "circle"} {
+		ex = strings.ReplaceAll(ex, "cashctl "+group+" "+verb, "cashctl "+verb)
+	}
+	return ex
 }

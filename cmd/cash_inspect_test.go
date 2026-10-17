@@ -110,7 +110,7 @@ func TestFirstCashStatusError_AllSucceededIsNil(t *testing.T) {
 		{ID: "a", Result: &nipcash.CashStatusResult{}},
 		{ID: "b", Result: &nipcash.CashStatusResult{}},
 	}
-	if err := firstCashStatusError(outcomes); err != nil {
+	if err := firstCashStatusError(newTestStatusCmd(false, false), outcomes); err != nil {
 		t.Errorf("firstCashStatusError(all ok) = %v, want nil", err)
 	}
 }
@@ -126,12 +126,27 @@ func TestFirstCashStatusError_FirstFailureWins(t *testing.T) {
 		{ID: "a", Err: first},
 		{ID: "b", Err: second},
 	}
-	err := firstCashStatusError(outcomes)
+	err := firstCashStatusError(cmd, outcomes)
 	if err == nil {
 		t.Fatal("firstCashStatusError() = nil, want the first failure")
 	}
 	if got := output.ExitCode(err); got != 3 { // invalid_input, from "a", not network's 6
 		t.Errorf("ExitCode = %d, want 3 (the FIRST outcome's own code)", got)
+	}
+}
+
+// A spent row is not ok: the report still shows every row, and the run exits
+// as the first non-ok row says — spent here, ahead of a later network failure.
+func TestFirstCashStatusError_ASpentRowIsNotOK(t *testing.T) {
+	cmd := newTestStatusCmd(true, false)
+	outcomes := []cashStatusOutcome{
+		{ID: "a", Result: &nipcash.CashStatusResult{}},
+		{ID: "b", Result: &nipcash.CashStatusResult{Error: nipcash.ErrorSpent}},
+		{ID: "c", Err: output.NetworkError(cmd, errors.New("later"))},
+	}
+	err := firstCashStatusError(cmd, outcomes)
+	if ce := output.AsCLIError(err); ce.Code != output.CodeSpent || output.ExitCode(err) != 10 {
+		t.Errorf("code = %q (exit %d), want spent (exit 10): %v", ce.Code, output.ExitCode(err), err)
 	}
 }
 

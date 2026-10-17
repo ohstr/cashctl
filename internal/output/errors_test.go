@@ -702,3 +702,39 @@ func TestJSONOutput_NoHTMLEscaping(t *testing.T) {
 		t.Errorf("EmitError escaped HTML: %s", stderr)
 	}
 }
+
+// Too many positional args: the first extra one is the error's input,
+// redacted when it is secret-shaped.
+func TestArgValidators_NameTheFirstExtraArg(t *testing.T) {
+	cmd := &cobra.Command{}
+	if ce := AsCLIError(ExactArgs(1)(cmd, []string{"a", "b"})); ce.Code != CodeUsage || ce.Input != "b" {
+		t.Errorf("ExactArgs extra: code %q input %q, want usage, b", ce.Code, ce.Input)
+	}
+	if ce := AsCLIError(NoArgs(cmd, []string{"x"})); ce.Input != "x" {
+		t.Errorf("NoArgs: input %q, want x", ce.Input)
+	}
+	secret := strings.Repeat("ab", 32)
+	if ce := AsCLIError(MaximumNArgs(0)(cmd, []string{secret})); ce.Input == secret {
+		t.Error("a secret-shaped extra arg was echoed as input")
+	}
+	if ce := AsCLIError(ExactArgs(2)(cmd, []string{"a"})); ce.Input != "" {
+		t.Errorf("too few args has no single wrong value, got input %q", ce.Input)
+	}
+}
+
+// A Hint reaches the caller in both modes, after the wallet's own text —
+// in --json too, where RawMessage replaces Err and a hint inside Err was lost.
+func TestEmitError_HintReachesBothModes(t *testing.T) {
+	for _, jsonMode := range []bool{true, false} {
+		cmd := newTestCmd()
+		if jsonMode {
+			_ = cmd.Flags().Set("json", "true")
+		}
+		err := NWCError(cmd, &relayclient.WalletError{Code: "RESTRICTED", Message: "wallet says no"})
+		AsCLIError(err).Hint = "use -c circle:x"
+		stderr := string(captureStderr(t, func() { EmitError(cmd, err) }))
+		if !strings.Contains(stderr, "wallet says no") || !strings.Contains(stderr, "use -c circle:x") {
+			t.Errorf("json=%v: stderr = %q, want the wallet's text and the hint", jsonMode, stderr)
+		}
+	}
+}

@@ -92,6 +92,7 @@ func newSkillsInstallCmd() *cobra.Command {
 		Short: "Copy the built-in skills into an agent's skills directory",
 		Long: `Writes every built-in skill's files (SKILL.md and anything it references)
 under <dir>/<name>/, replacing older copies so they match this binary.
+Only <dir>/cashctl-*/ is written; nothing else in <dir> is touched.
 --dir is required: point it wherever your agent reads skills from.`,
 		Example: `  cashctl skills install --dir ~/.agents/skills
   cashctl skills install --dir .agents/skills`,

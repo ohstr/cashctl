@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -50,7 +51,33 @@ func classifyRootErr(cmd *cobra.Command, err error) error {
 	if cmd != nil && jsonRequested(os.Args[1:]) {
 		_ = cmd.Flags().Set("json", "true")
 	}
-	return output.InvocationError(cmd, withHelpHint(cmd, err))
+	return output.InvocationErrorInput(cmd, rootErrInput(err.Error()), withHelpHint(cmd, err))
+}
+
+// rootErrInput is the one flag, command or value a cobra/pflag parse error
+// names ("unknown flag: --bogus" → "--bogus"), or "" when it names none.
+func rootErrInput(msg string) string {
+	for _, p := range []*regexp.Regexp{
+		regexp.MustCompile(`^unknown flag: (\S+)`),
+		regexp.MustCompile(`^unknown shorthand flag: '(.)'`),
+		regexp.MustCompile(`^unknown command "([^"]*)"`),
+		regexp.MustCompile(`^flag needs an argument: (?:'(.)' in -\S+|(\S+))`),
+		regexp.MustCompile(`^invalid argument "([^"]*)" for`),
+	} {
+		m := p.FindStringSubmatch(msg)
+		if m == nil {
+			continue
+		}
+		for _, g := range m[1:] {
+			if g != "" {
+				if len(g) == 1 && strings.Contains(msg, "'"+g+"'") {
+					return "-" + g
+				}
+				return g
+			}
+		}
+	}
+	return ""
 }
 
 // withHelpHint ends an unknown flag or command error with the flag it most
@@ -71,7 +98,9 @@ func withHelpHint(cmd *cobra.Command, err error) error {
 			hint = fmt.Sprintf("; did you mean --%s?", guess)
 		}
 	}
-	return fmt.Errorf("%s%s\nsee `%s --help`", strings.TrimRight(msg, "\n"), hint, cmd.CommandPath())
+	// One line: a --json consumer that shows only the first line of "error"
+	// used to lose the pointer to --help.
+	return fmt.Errorf("%s%s; see `%s --help`", strings.TrimRight(msg, "\n"), hint, cmd.CommandPath())
 }
 
 // closestFlag is the flag of cmd within two edits of name, or one name

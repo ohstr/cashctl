@@ -49,6 +49,8 @@ func runCashReceive(cmd *cobra.Command, args []string) error {
 		return output.InvalidInputError(cmd, input, fmt.Errorf("that looks like a wallet connection, not a cash token — use `cashctl connect add <name> <uri>` instead"))
 	case dial.KindNostrEntity:
 		return output.InvalidInputError(cmd, input, errors.New(nostrEntityMessage(dial.NostrEntityHRP(input))))
+	case dial.KindLightningInvoice:
+		return output.InvalidInputError(cmd, input, errors.New(lightningMessage(input)))
 	case dial.KindUnknown:
 		return output.InvalidInputError(cmd, input, fmt.Errorf("doesn't look like a valid cash token"))
 	}
@@ -194,6 +196,9 @@ func runCashReceive(cmd *cobra.Command, args []string) error {
 
 	if !jsonMode {
 		output.Printf("Received %s.\n", output.FormatAmount(int64(result.AmountMillis)))
+		// NIP-CASH §Removing a Recipient: an unclaimed slice can still be taken
+		// back by its issuer; only redeeming or moving it makes it final.
+		output.Println("Until you redeem or transfer it, the bill's issuer can still take it back.")
 	}
 
 	// result.IsCash, not the pre-check guess above.

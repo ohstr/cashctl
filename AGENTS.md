@@ -21,7 +21,7 @@ stderr.
 | Command | Purpose |
 |---|---|
 | `cashctl init` | Set up your identity (reusing an ncli vault entry if you have one) and optionally a default wallet |
-| `cashctl join <hub-connection> <max-amount>` | Join a circle via its Circle Hub connection (`circlehub1...` or a raw NWC URI) and a requested spend cap in loki — both positional, either order, or `--hub`/`--max-amount`. A cap is required; NIP-CW has no "0 means unlimited" convention. The wallet's connection key is made on your device and its secret saved before the request; only `connection_pubkey` is sent. `--json`'s `response` carries `wallet_pubkey`, `relays`, `connection_pubkey`, `expires_at`, `max_amount_millis` (the cap granted, maybe lower than asked), `fees_ppm`, `budget_renewal` — never the connection string |
+| `cashctl join <hub-connection> <max-amount>` | Join a circle via its Circle Hub connection (`circlehub1...` or a raw NWC URI) and a requested spend cap in loki — both positional, either order, or `--hub`/`--max-amount`. A cap is required; NIP-CW has no "0 means unlimited" convention. The wallet's connection key is made on your device and its secret saved before the request; only `connection_pubkey` is sent. `--json`'s `response` carries `wallet_pubkey`, `relays`, `connection_pubkey`, `expires_at`, `max_amount_millis` (the cap granted, maybe lower than asked; `max_amount` is the same in loki), `fees_ppm`, `budget_renewal` — never the connection string |
 | `cashctl circle join <hub-connection> <max-amount>` | Same as `join` — the canonical, fully-namespaced form |
 | `cashctl wallet show` | Your identity, registered wallets, and held cash tokens; also each `join` the Hub never answered (`pending_joins` in `--json`: `connection_pubkey`, `hub_pubkey`, `at` — never the secret) |
 | `cashctl wallet history [--show-secrets]` | Local action log (receive/redeem/transfer/consolidate), then every cash note and gift you handed out — kept permanently, each `unclaimed`/`claimed`/`expired` (a cash note, re-checked with its Hub on every read) or `sent` (a gift: its sender can't see the claim), so a lost handoff can be resent. An unclaimed note's secret is hidden unless `--show-secrets` |
@@ -100,11 +100,15 @@ plain `Error: ...` line by default, or `{"error", "code", "retryable",
 | `internal` | 1 | no | anything else — a wallet-side decline that isn't one of the above, or a cashctl-side failure |
 
 `input`, when present, is the single specific value that caused the
-failure — **never** raw secret material: an `nsec1...`-shaped or bare
-64-hex-char value is redacted to `""`, and a `pubkey:<privkey>`/`cash:
+failure (for a `usage` error: the unknown flag or command, or the first
+extra argument) — **never** raw secret material: an `nsec1...`-shaped or bare
+64-hex-char value is redacted to `""`, a `pubkey:<privkey>`/`cash:
 <secret>`/`connection-key:<privkey>,...` credential string has just its
 secret component blanked (`pubkey:<redacted>`, etc.), keeping the rest of
-the string legible in the error. `retryable` lets an agent decide whether
+the string legible in the error, a `circlehub1...`/`cashhub1...`/
+`nconnection1...` string becomes `circlehub1<redacted>` (its secret is
+packed in, nothing of it is safe to show), and an NWC URI keeps all but its
+`secret=` value. `retryable` lets an agent decide whether
 to back off and retry (`conflict`/`network`) or fix the input and try
 again (everything else) without string-matching the message. `nwc_code`,
 when present, is the raw NIP-47 error code (`RESTRICTED`, `EXPIRED`,
@@ -126,8 +130,9 @@ reason as `recovery`: it is the one place a handed-out but unclaimed cash
 note can be read again, so treat its output like the note itself. Without
 the flag, an unclaimed note's secret is replaced by `<hidden: --show-secrets>`
 and `secret_hidden` is `true`. A usage
-mistake in `--json` mode skips the human-readable help dump (which would
-otherwise land on stdout) in favor of the structured error alone.
+mistake prints the command's help after the error, on stderr like the error
+itself; in `--json` mode that dump is skipped in favor of the structured error
+alone.
 
 **Partial success**: a command that performs several independently
 committed operations — `consolidate` when it auto-groups held tokens by
@@ -138,7 +143,9 @@ the exit status. A nonzero exit from such a command therefore does not mean
 nothing happened: stdout is still a complete result document and must be
 read before deciding what to retry. The alternative would be worse than
 untidy — aborting on the first failure leaves the already-committed
-operations unreported, including any new token they produced.
+operations unreported, including any new token they produced. A
+`cash status` over several bills follows the same rule: every row is
+printed, and a row that is `spent` (or failed) drives the exit status.
 
 **Ambiguous selection, with nothing named and more than one candidate**:
 refuse (`usage`, exit 2) only when the operation pays value out of your

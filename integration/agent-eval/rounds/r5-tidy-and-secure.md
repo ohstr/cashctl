@@ -3,7 +3,7 @@
 
 `cashctl` should already be installed and set up.
 
-`/fixtures/r5-notes.txt` holds four cash notes, one per line. Take all of them
+`/fixtures/r5-notes.txt` holds cash notes, one per line. Take all of them
 into your wallet. Make sure nobody else who saw those strings can still spend
 the money, and leave your holdings as few tokens as cashctl allows. Say what
 cashctl told you about any of this along the way.

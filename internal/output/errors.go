@@ -55,6 +55,16 @@ var exitCodes = map[ErrorCode]int{
 	CodeSpent:         10,
 }
 
+// ExitCodes returns a copy of the ErrorCode → exit code table, for checking
+// documentation of it against the real thing.
+func ExitCodes() map[ErrorCode]int {
+	out := make(map[ErrorCode]int, len(exitCodes))
+	for k, v := range exitCodes {
+		out[k] = v
+	}
+	return out
+}
+
 // retryableCodes marks which codes describe a transient condition worth an
 // agent retrying without changing anything — surfaced as --json's
 // "retryable" field.
@@ -90,7 +100,11 @@ type CLIError struct {
 	Input      string
 	NWCCode    string
 	RawMessage string
-	ShowUsage  bool
+	// Hint is cashctl's own next step, appended to the message in both modes
+	// — after the wallet's RawMessage, which --json otherwise prints in place
+	// of Err, so a hint put into Err never reached a --json caller.
+	Hint      string
+	ShowUsage bool
 	// Recovery is text that must reach the user VERBATIM, deliberately not
 	// passed through RedactSecretInput and never length-capped. It exists for
 	// one situation: a Hub-side mutation that is confirmed to have happened
@@ -189,6 +203,17 @@ func InvocationError(cmd *cobra.Command, err error) error {
 	wrapped := UsageError(cmd, err)
 	if ce, ok := wrapped.(*CLIError); ok && ce.Code == CodeUsage {
 		ce.ShowUsage = true
+	}
+	return wrapped
+}
+
+// InvocationErrorInput is InvocationError naming the one value that was
+// wrong (an unknown flag or command, an extra argument) as the error's
+// input, redacted like every other input.
+func InvocationErrorInput(cmd *cobra.Command, input string, err error) error {
+	wrapped := InvocationError(cmd, err)
+	if ce, ok := wrapped.(*CLIError); ok && ce.Code == CodeUsage && ce.Input == "" {
+		ce.Input = RedactSecretInput(input)
 	}
 	return wrapped
 }
@@ -297,6 +322,9 @@ func AsCLIError(err error) *CLIError {
 // undifferentiated CodeInternal / exit 1 instead of exit 2 usage errors).
 func ExactArgs(n int) cobra.PositionalArgs {
 	return func(cmd *cobra.Command, args []string) error {
+		if len(args) > n {
+			return InvocationErrorInput(cmd, args[n], fmt.Errorf("accepts %d arg(s), received %d", n, len(args)))
+		}
 		if len(args) != n {
 			return InvocationError(cmd, fmt.Errorf("accepts %d arg(s), received %d", n, len(args)))
 		}
@@ -307,7 +335,7 @@ func ExactArgs(n int) cobra.PositionalArgs {
 func MaximumNArgs(n int) cobra.PositionalArgs {
 	return func(cmd *cobra.Command, args []string) error {
 		if len(args) > n {
-			return InvocationError(cmd, fmt.Errorf("accepts at most %d arg(s), received %d", n, len(args)))
+			return InvocationErrorInput(cmd, args[n], fmt.Errorf("accepts at most %d arg(s), received %d", n, len(args)))
 		}
 		return nil
 	}
@@ -324,7 +352,7 @@ func MinimumNArgs(n int) cobra.PositionalArgs {
 
 func NoArgs(cmd *cobra.Command, args []string) error {
 	if len(args) > 0 {
-		return InvocationError(cmd, fmt.Errorf("accepts no arguments, received %d", len(args)))
+		return InvocationErrorInput(cmd, args[0], fmt.Errorf("accepts no arguments, received %d", len(args)))
 	}
 	return nil
 }

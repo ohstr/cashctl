@@ -32,6 +32,11 @@ check_probe unknown_skill_is_not_found 4 not_found false "cashctl skills show no
 check_probe unknown_wallet_use_is_not_found 4 not_found false "cashctl connect use nope --json"
 check_probe receive_rejects_connection_flag 2 usage false "cashctl receive -c anything \"\$(cat /fixtures/r3-token.txt)\" --json"
 check_probe circlehub_is_not_a_wallet 3 invalid_input false "cashctl connect add eval-r3 \"\$(cat /fixtures/r3-circlehub.txt)\" --json"
+# A cash bill pasted with its secret where a wallet goes.
+check_probe bill_is_not_a_wallet 3 invalid_input false "cashctl connect add eval-r3b \"\$(cat /fixtures/r3-bill.txt)\" --json"
+check_probe bill_is_not_a_connection 3 invalid_input false "cashctl wallet balance -c \"\$(cat /fixtures/r3-bill.txt)\" --json"
+# A circle that cannot check membership yet is NOT_READY: network, retryable.
+check_probe unready_join_is_retryable 6 network true "cashctl init --json >/dev/null 2>&1; cashctl join \"\$(cat /fixtures/r3-unready-hub.txt)\" 100 --json"
 
 # The bare transfer's message names the amount-only cash-note form (I-2).
 msg="$(agent_exec 'cashctl transfer --json 2>&1 >/dev/null' | jq -r '.error // empty')"

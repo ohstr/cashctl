@@ -72,7 +72,7 @@ func runCashStatus(cmd *cobra.Command, _ []string) error {
 	}
 
 	printCashStatusOutcomes(jsonMode, outcomes)
-	return firstCashStatusError(outcomes)
+	return firstCashStatusError(cmd, outcomes)
 }
 
 // cashStatusOutcome is one resolved entry's own cash_status call. Mirrors
@@ -123,14 +123,19 @@ func fetchCashStatus(cmd *cobra.Command, jsonMode bool, entry *ledger.Entry) (*n
 	return result, nil
 }
 
-// firstCashStatusError returns the first failed outcome's own already-
-// classified error, or nil if every fetch succeeded — same contract as
-// firstOutcomeError/firstProtectOutcomeError: the FIRST failure drives the
-// exit code, and no later outcome changes that.
-func firstCashStatusError(outcomes []cashStatusOutcome) error {
+// firstCashStatusError returns the first outcome that is not ok, in order:
+// its own already-classified error, or spent for a tombstone row — same
+// contract as firstOutcomeError/firstProtectOutcomeError: the FIRST failure
+// drives the exit code, and no later outcome changes that. A spent row is
+// still printed in full (the report is a partial success), so its exit code
+// is the only place a script branching on status alone would learn of it.
+func firstCashStatusError(cmd *cobra.Command, outcomes []cashStatusOutcome) error {
 	for _, o := range outcomes {
 		if o.Err != nil {
 			return o.Err
+		}
+		if o.Result != nil && o.Result.IsSpent() {
+			return output.SpentError(cmd, o.ID, errBillSpent)
 		}
 	}
 	return nil

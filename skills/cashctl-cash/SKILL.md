@@ -335,7 +335,8 @@ ambiguous in this shorthand — receive it into your ledger first instead).
 IDs are discoverable via `cashctl wallet show --json`'s `held_tokens`
 array — plain-text `wallet show` deliberately never prints them. Each held
 token's `cash_hub` names the Cash Hub that issued it (`hub …` in text):
-only tokens with the same `cash_hub` can merge.
+only tokens with the same `cash_hub` can merge. `decode` shows a note's
+`cash_hub` before you receive it.
 Cash notes merge like any other bill, with no identity needed: each is
 first moved onto a key made for that merge alone (`cash_consolidate` takes
 no cash-mode source), and your merged result is a fresh cash note. If the
@@ -418,9 +419,13 @@ kept for a while after the bill is gone), cashctl marks the entry spent,
 so `wallet balance` and `redeem --all` stop offering it. Any command that
 hits a tombstone for one bill (`cash status`, `receive`, `redeem`,
 `transfer`) fails with `code: "spent"` (exit 10, not retryable), the first
-time as every later time; a `cash status` over several bills reports it as a
-`statuses` row with `"status": "spent"` instead. `decode --check` reports
-`"spent": true`. Silence is never read as spent: no answer is
+time as every later time; a `cash status` over several bills still reports
+every bill, this one as a `statuses` row with `"status": "spent"`, and exits
+10 as well (read stdout: the other rows are real answers). `decode --check` reports
+`"spent": true`. A received bill is not final: until you redeem or
+transfer it, its issuer can still take it back (it is then `spent` or
+`not_found` here), so redeem one from a sender you don't trust promptly.
+Silence is never read as spent: no answer is
 `indeterminate` (above).
 
 **A bill you spent yourself.** Naming a token you already redeemed or

@@ -654,7 +654,7 @@ func TestConsolidateGroups_SucceededGroupIsStillReportedAfterALaterFailure(t *te
 	})
 
 	outcomes := consolidateGroups(&cobra.Command{}, &ledger.Ledger{}, twoGroups(), "", true, true)
-	out := withCapturedStdout(func() { printConsolidateOutcomes(true, outcomes) })
+	out := withCapturedStdout(func() { printConsolidateOutcomes(true, outcomes, nil) })
 
 	if !strings.Contains(out, "merged-token") {
 		t.Errorf("output does not name the token group 1 actually minted:\n%s", out)
@@ -686,7 +686,7 @@ func TestConsolidateGroups_DeclineIsNeitherSuccessNorFailure(t *testing.T) {
 	if err := firstOutcomeError(outcomes); err != nil {
 		t.Errorf("firstOutcomeError = %v, want nil — a decline is not a failure and must not set an exit code", err)
 	}
-	out := withCapturedStdout(func() { printConsolidateOutcomes(true, outcomes) })
+	out := withCapturedStdout(func() { printConsolidateOutcomes(true, outcomes, nil) })
 	if !strings.Contains(out, `"status": "declined"`) {
 		t.Errorf("declined group not reported as such:\n%s", out)
 	}
@@ -700,7 +700,7 @@ func TestConsolidateGroups_DeclineIsNeitherSuccessNorFailure(t *testing.T) {
 // command previously printed no result at all, so nothing can depend on them.
 func TestPrintConsolidateOutcomes_SingleSuccessKeepsTheLegacyJSONShape(t *testing.T) {
 	outcomes := []consolidateOutcome{{Hub: hubKey("hub-a"), IDs: []string{"tok-a1", "tok-a2"}, Result: consolidateOK(3000)}}
-	out := withCapturedStdout(func() { printConsolidateOutcomes(true, outcomes) })
+	out := withCapturedStdout(func() { printConsolidateOutcomes(true, outcomes, nil) })
 
 	var got map[string]any
 	if err := json.Unmarshal([]byte(out), &got); err != nil {

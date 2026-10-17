@@ -21,8 +21,10 @@ Set `NCLI_VAULT_PASSWORD` to unlock an existing ncli vault entry
 non-interactively (no TTY to prompt from — needed for scripted/agentic
 `init` runs against a vault-sourced identity).
 
-Idempotent: re-running it just reports `{"already_configured": true}`
-(`--json`) or a one-line message (text mode) rather than erasing/
+`--json` says `"identity": "created"` (or `"reused"` for an ncli vault
+entry). Idempotent: re-running it reports `{"already_configured": true,
+"identity": "existing", "npub", "identity_source"}` (`--json`) or a
+one-line message naming the identity (text mode) rather than erasing/
 regenerating anything. There is no `--force`/reset flag — remove
 `cashctl.db` under `cashctl`'s config dir (see `cashctl wallet show` for
 where that is, or pass `--config-dir` to point cashctl at a fresh one) if
@@ -38,7 +40,7 @@ register one afterward with `cashctl connect add` instead.
 
 ```sh
 cashctl connect add work nostr+walletconnect://...
-cashctl connect list --json
+cashctl connect list --json    # each connection carries "kind": circle (from join), nwc or cash_token
 cashctl wallet use work    # same as `cashctl connect use work`
 cashctl connect rm work
 ```
@@ -68,8 +70,11 @@ cashctl wallet history --show-secrets --json  # the same, unclaimed cash notes i
 (`claimed`) or it lapses (`expired`), re-checked with its Hub each time
 you read history; a gift to someone's identity (`kind: gift`) stays `sent`.
 To resend a lost note, read it with `--show-secrets`. `wallet show --json`
-lists the not-yet-claimed ones as `unclaimed_handoffs` (secrets hidden,
-last known status, no network call).
+lists the ones not known to be claimed as `unclaimed_handoffs` (secrets
+hidden, last known status, no network call): cash notes still `unclaimed`,
+and gifts, which stay `sent` because their claim can't be seen — branch on
+each entry's `status`. `wallet balance` shows the unclaimed cash notes as
+`outstanding_cash_notes`, outside the total.
 
 `unfinished_cash_sends` is normally `[]`. Each entry
 (`{"token_id", "cash_secret"}`) is an interrupted `--to cash` send that may

@@ -42,6 +42,11 @@ const (
 	// place. NostrEntityHRP recovers which one, for a caller that wants
 	// to name it specifically.
 	KindNostrEntity
+	// KindLightningInvoice: a BOLT11 invoice (lnbc1..., lnfc1..., any HRP
+	// starting "ln") or an LNURL — recognized so a mis-paste is named as
+	// what it is instead of being decoded as a cash token and failing on
+	// the bytes.
+	KindLightningInvoice
 )
 
 // hub HRPs are matched exactly; anything else that decodes as valid
@@ -100,6 +105,8 @@ func Sniff(s string) Kind {
 		return KindCashHub
 	case nostrEntityHRPs[hrp]:
 		return KindNostrEntity
+	case strings.HasPrefix(hrp, "ln"):
+		return KindLightningInvoice
 	default:
 		return KindCashToken
 	}
