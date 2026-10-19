@@ -18,6 +18,9 @@ var RootCmd = &cobra.Command{
 	Long: `A wallet CLI for Cash and Circle wallets.
 
 Results go to stdout (one JSON document with --json); errors to stderr.
+With --json an error is {"error", "code", "retryable", "input"?, "nwc_code"?,
+"recovery"?}. Keep "recovery" verbatim: it is the only copy of a handoff whose
+local save failed.
 Exit codes, and --json's "code":
   0  ok
   1  internal        anything else

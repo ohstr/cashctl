@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.6.0-rc.15]
+
+- Adds the `--json` error object's fields to `cashctl --help`; the cash skill
+  now points there instead of AGENTS.md, which an installed binary doesn't have.
+
 ## [0.6.0-rc.14]
 
 cashctl gets its own logo; no CLI changes since rc.13.

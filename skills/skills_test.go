@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -62,5 +63,24 @@ func TestFrontmatter(t *testing.T) {
 	}
 	if name, _ := frontmatter("no frontmatter\n"); name != "" {
 		t.Fatalf("got name %q from a file without frontmatter", name)
+	}
+}
+
+// An installed skill can't point at AGENTS.md: it doesn't ship with the binary.
+func TestAll_NoSkillRefersToAgentsMD(t *testing.T) {
+	all, err := All()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range all {
+		for _, rel := range s.Files {
+			raw, err := s.ReadFile(rel)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(raw), "AGENTS.md") {
+				t.Errorf("%s/%s refers to AGENTS.md, which an installed binary doesn't have", s.Name, rel)
+			}
+		}
 	}
 }

@@ -81,7 +81,7 @@ already have been applied. Resending it may pay twice; run `cashctl cash
 status --token <id>` (the error names the id) and act on what it reports.
 A failure to reach the Hub at all is still `network`, since nothing was
 sent. This is the same top-level `{"error", "code", "retryable", ...}`
-shape AGENTS.md's error table describes for every command, not something
+shape `cashctl --help` describes for every command, not something
 special to this skill's own three. `recovery` is the one field exempt from
 secret redaction and never truncated, and it appears only when a Hub-side
 mutation is *confirmed* to have happened but the local save that was

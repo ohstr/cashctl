@@ -17,3 +17,13 @@ func TestRootHelp_ListsEveryExitCode(t *testing.T) {
 		}
 	}
 }
+
+// `cashctl --help` names every field of the --json error object, since AGENTS.md
+// doesn't ship with the binary.
+func TestRootHelp_DescribesJSONErrorShape(t *testing.T) {
+	for _, field := range []string{"error", "code", "retryable", "input", "nwc_code", "recovery"} {
+		if !regexp.MustCompile(`"` + field + `"`).MatchString(RootCmd.Long) {
+			t.Errorf("root help does not name the --json error field %q", field)
+		}
+	}
+}
