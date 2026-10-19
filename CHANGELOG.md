@@ -28,10 +28,13 @@
   ([#107](https://github.com/ohstr/cashctl/pull/107))
 - Adds `wallet get-balance` as an alias of `wallet balance`, and an
   `amount_mloki` field to `invoice --json`.
+  ([#109](https://github.com/ohstr/cashctl/pull/109))
 - Fixes `init --json` reporting an empty `default_wallet` when one is already
   set, and generated circle wallet names cut mid-word.
+  ([#109](https://github.com/ohstr/cashctl/pull/109))
 - Fixes `decode --check` on a cash note someone else re-keyed: it now says the
   secret no longer answers instead of "no matching recipient".
+  ([#109](https://github.com/ohstr/cashctl/pull/109))
 
 ## [0.6.0-rc.14]
 
