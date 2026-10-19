@@ -21,6 +21,7 @@
 - Fixes a `transfer` that auto-merges your bills losing the merged bill if it
   was interrupted between the merge and the send; the merged bill is now saved
   first, so it stays in your wallet whatever happens to the send.
+  ([#105](https://github.com/ohstr/cashctl/pull/105))
 
 ## [0.6.0-rc.14]
 
