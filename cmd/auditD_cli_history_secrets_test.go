@@ -98,9 +98,9 @@ func TestAuditD_CLI_HistoryKeepsPublicTargetsIntact(t *testing.T) {
 }
 
 // TestAuditD_CLI_HistoryCashTargetInterpolatesNothing guards the trap in the
-// other direction: ResolvedTarget.Resolved for a CASH target is
-// "Generated a cash secret: <secret>", so a blanket "just use Resolved" would
-// write a spending secret into the action log.
+// other direction: a cash target's Resolved used to carry its spending secret
+// (#98), so the history line must never interpolate anything for a cash
+// target, whatever Resolved holds.
 func TestAuditD_CLI_HistoryCashTargetInterpolatesNothing(t *testing.T) {
 	secret := strings.Repeat("a1b2c3d4", 8)
 	cash := credential.ResolvedTarget{

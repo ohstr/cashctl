@@ -8,6 +8,8 @@
 - Fixes `redeem --amount` picking a different Hub's bills from run to run when
   more than one Hub can land the amount exactly; it now always picks the same.
   ([#102](https://github.com/ohstr/cashctl/pull/102))
+- Fixes a `cash` target carrying its new note's spending secret in the field
+  meant as a public description; the secret is now only in the note handed over.
 
 ## [0.6.0-rc.14]
 

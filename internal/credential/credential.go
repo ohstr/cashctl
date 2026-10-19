@@ -188,27 +188,13 @@ func resolveIdentityString(s string) (hexPubkey string, viaNIP05 bool, err error
 // sniffing in front of the existing parser, not a replacement of it.
 func ParseTarget(s string) (ResolvedTarget, error) {
 	if s == "cash" {
-		target := nipcash.NewCashTarget()
-		// The wire request only ever carries a one-way commitment of this
-		// secret (NIP-CASH §Cash-Mode Slices: "the caller supplies the
-		// commitment themselves") — the secret itself exists nowhere else
-		// once this call returns. Losing it here is equivalent to losing
-		// the funds, same as any other cash note, so it MUST be
-		// surfaced via Resolved rather than silently discarded — the
-		// caller shows it before/alongside committing, exactly like any
-		// other value this field carries. Deliberately doesn't say
-		// whether it's shown again later: `consolidate --to cash`
-		// (self-securing) stores it in the caller's own ledger entry and
-		// never re-displays it raw; `transfer`'s own cash-mode case (a gift
-		// to someone else) *does* re-display it, combined with the
-		// resulting token, once the call completes — a caller-specific
-		// claim this shared parser has no way to make accurately for both.
-		secret := target.Secret()
+		// Resolved stays empty: it is the public description of a target, and
+		// the secret this generates spends the note. Callers that hand the note
+		// over read it from the target (CashTarget.Secret), once.
 		return ResolvedTarget{
-			Target:   target,
-			Kind:     TargetKindCash,
-			Input:    s,
-			Resolved: fmt.Sprintf("Generated a cash secret: %s", secret),
+			Target: nipcash.NewCashTarget(),
+			Kind:   TargetKindCash,
+			Input:  s,
 		}, nil
 	}
 	if isHexPubkey(s) || strings.HasPrefix(s, "npub1") || looksLikeNIP05(s) {

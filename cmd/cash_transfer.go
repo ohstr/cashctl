@@ -128,9 +128,9 @@ func resolveTarget(cmd *cobra.Command, s string) (credential.ResolvedTarget, err
 // Deliberately NOT a blanket use of Resolved, and deliberately NOT redaction
 // applied to every kind:
 //
-//   - For a cash target Resolved is "Generated a cash secret: <secret>", so using
-//     it unconditionally would write a spending secret into the log. The cash
-//     branch of targetClause interpolates no value at all and must stay that way.
+//   - The cash branch of targetClause interpolates no value at all and must stay
+//     that way: whatever a cash target carries, a spending secret never belongs
+//     in the log.
 //   - RedactSecretInput blanks a bare 64-hex string entirely, and a pubkey target
 //     IS bare 64-hex. Applying it outside the connection branch would erase a
 //     perfectly public destination from the history line.
@@ -173,23 +173,11 @@ func transferConfirmMessage(sendAmount uint64, toValue string, kind credential.T
 }
 
 // shouldPrintResolvedTarget decides whether a resolved target's Resolved
-// string is worth showing before confirming anything. Deliberately false
-// for a cash-mode target specifically: its Resolved carries the freshly
-// generated secret (needed intact for --json's target_resolved field —
-// see credential.go's own ParseTarget), but printing it here, before
-// anything is even confirmed, is pure noise — nothing is actionable with
-// the bare secret alone, and it's shown again anyway, combined with the
-// resulting token, once the transfer actually completes
-// (printAndSaveTransferResult's cashToSend). Every other resolution (a
-// NIP-05 lookup, an nconnection's IA) genuinely benefits from review
-// before confirming, so only the cash-mode case is skipped. Pure so it's
-// unit-testable without a cobra.Command.
+// string is worth showing before confirming anything: a NIP-05 lookup or an
+// nconnection's IA benefits from review. A cash target has none (its secret is
+// never in Resolved). Pure so it's unit-testable without a cobra.Command.
 func shouldPrintResolvedTarget(target credential.ResolvedTarget) bool {
-	if target.Resolved == "" {
-		return false
-	}
-	_, isCash := target.Target.(*nipcash.CashTarget)
-	return !isCash
+	return target.Resolved != ""
 }
 
 // fetchExpiresAt best-effort fetches token's current Hub-side expiry
@@ -890,9 +878,6 @@ func printAndSaveTransferResult(cmd *cobra.Command, l *ledger.Ledger, transferRe
 		}
 		if cashToSend != "" {
 			out["cash_to_send"] = cashToSend
-			// The secret is in cash_to_send already; a second copy is only one
-			// more place for a log to keep it.
-			out["target_resolved"] = ""
 		}
 		// recipient_token: the exact string a pubkey/npub/connection-key
 		// recipient needs to `receive` this — distinct from cash_to_send

@@ -116,22 +116,17 @@ func TestResolveTarget_PlainTargetUnaffected(t *testing.T) {
 }
 
 // --- shouldPrintResolvedTarget: the pre-confirm "resolves to:" gate.
-// A cash-mode target's Resolved carries the freshly generated secret (needed
-// intact for --json's target_resolved field — pinned by
-// TestParseTarget_CashTarget_ResolvedSurfacesSecret in
-// internal/credential), but printing it before anything is confirmed is
-// pure noise since it's shown again anyway, combined with the resulting
-// token, once the transfer completes. These two tests pin both halves at
-// once: the data survives untouched, only the premature print is gated.
 
+// A cash target resolves to nothing worth showing: its secret is never in
+// Resolved, and is handed over only with the note once the transfer completes.
 func TestShouldPrintResolvedTarget_CashTargetIsFalse(t *testing.T) {
 	c := newTestTransferCmd()
 	rt, err := resolveTarget(c, "cash")
 	if err != nil {
 		t.Fatalf("resolveTarget(cash) error = %v", err)
 	}
-	if rt.Resolved == "" {
-		t.Fatal("resolveTarget(cash) Resolved is empty — the generated secret would be unrecoverable (see credential.go's own ParseTarget)")
+	if rt.Resolved != "" {
+		t.Fatalf("resolveTarget(cash) Resolved = %q, want empty", rt.Resolved)
 	}
 	if shouldPrintResolvedTarget(rt) {
 		t.Error("shouldPrintResolvedTarget(cash-mode target) = true, want false — the secret shouldn't be printed before anything is confirmed")
