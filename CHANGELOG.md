@@ -22,6 +22,9 @@
   was interrupted between the merge and the send; the merged bill is now saved
   first, so it stays in your wallet whatever happens to the send.
   ([#105](https://github.com/ohstr/cashctl/pull/105))
+- Fixes error text: a Hub's message and cashctl's hint no longer run together,
+  `wallet balance -c <unknown>` says where to look, `decode` names npub in its
+  list, and `wallet history` says "(pubkey)" instead of "identity cash".
 
 ## [0.6.0-rc.14]
 

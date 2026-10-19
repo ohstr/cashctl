@@ -100,7 +100,7 @@ func newDecodeCmd() *cobra.Command {
 				return output.InvalidInputError(cmd, value, errors.New(nostrEntityMessage(dial.NostrEntityHRP(value))))
 			default:
 				return output.InvalidInputError(cmd, value, fmt.Errorf(
-					"not a recognized cash token, Circle Hub connection, or NWC URI; "+
+					"not a recognized cash token, Circle Hub connection, NWC URI or npub; "+
 						"decode takes a cash token (lokicash1..., or <token>#<secret>), "+
 						"a circlehub1... connection, a nostr+walletconnect:// URI, or an npub1... key"))
 			}

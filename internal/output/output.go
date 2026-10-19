@@ -248,9 +248,7 @@ func EmitError(cmd *cobra.Command, err error) {
 		if ce.RawMessage != "" {
 			errMessage = ce.RawMessage
 		}
-		if ce.Hint != "" {
-			errMessage += " " + ce.Hint
-		}
+		errMessage = withHint(errMessage, ce.Hint)
 		// Sanitized here rather than relying on PrintJSON's generic round trip:
 		// EmitError writes its own encoder to stderr, and these fields are few
 		// and known, so doing it explicitly keeps it auditable. SanitizeText for
@@ -295,9 +293,7 @@ func EmitError(cmd *cobra.Command, err error) {
 	if ce.RawMessage != "" && ce.RawMessage != msg {
 		msg = fmt.Sprintf("%s (%s)", msg, ce.RawMessage)
 	}
-	if ce.Hint != "" {
-		msg += " " + ce.Hint
-	}
+	msg = withHint(msg, ce.Hint)
 	// SanitizeText at the sink: msg is cashctl's own sentence with a wallet's
 	// own text appended, and until now nothing on this path sanitized either, so
 	// a Hub could rewrite or hide what the user was shown. Newline-permitting,
@@ -518,4 +514,17 @@ func sanitizeArgs(args []any) []any {
 		}
 	}
 	return out
+}
+
+// withHint appends cashctl's next-step hint to an error message as its own
+// sentence: a Hub's or wallet's text often has no closing period, and the two
+// used to run together ("...under this hub It is registered here as ...").
+func withHint(msg, hint string) string {
+	if hint == "" {
+		return msg
+	}
+	if trimmed := strings.TrimRight(msg, " "); trimmed != "" && !strings.ContainsAny(trimmed[len(trimmed)-1:], ".!?") {
+		msg = trimmed + "."
+	}
+	return msg + " " + hint
 }

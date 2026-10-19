@@ -223,7 +223,7 @@ func runWalletBalanceFrom(cmd *cobra.Command, from string, jsonMode bool) error 
 	if err := validateConnectionValue(from); errors.As(err, &wrongKind) {
 		return output.InvalidInputError(cmd, from, err)
 	}
-	return output.NotFoundError(cmd, from, fmt.Errorf("no wallet or held token named %q", from))
+	return output.NotFoundError(cmd, from, fmt.Errorf("no wallet or held token named %q — see `cashctl connect list` for wallets and `cashctl wallet show` for held tokens", from))
 }
 
 // liveBalanceMloki dials c and calls get_balance. On a CodeAuth decline

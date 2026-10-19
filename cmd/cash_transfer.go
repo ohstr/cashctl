@@ -99,9 +99,9 @@ func resolveTarget(cmd *cobra.Command, s string) (credential.ResolvedTarget, err
 // targetClause renders how a transfer's destination reads inside a
 // sentence: "as cash" for a cash-mode target (no destination was ever given,
 // so the result is redeemable by whoever ends up holding it), or "to
-// <toValue> as identity cash" / "to <toValue> as web identity cash" for a
+// <toValue> (pubkey)" / "to <toValue> as web identity cash" for a
 // resolved recipient — matching whichever Kind credential.ParseTarget/
-// ResolveConnectionTarget assigned. "Cash"/"identity cash"/"web identity
+// ResolveConnectionTarget assigned. "Cash"/"(pubkey)"/"web identity
 // cash" deliberately avoid the word "token" (or any other developer-facing
 // jargon) in every user-facing message: the string this all builds up to
 // (recipientToken, or the combined cash-mode <token>#<secret>) is real,
@@ -151,7 +151,7 @@ func targetClause(toValue string, kind credential.TargetKind) string {
 	case credential.TargetKindCash:
 		return "as cash"
 	default:
-		return fmt.Sprintf("to %s as identity cash", toValue)
+		return fmt.Sprintf("to %s (pubkey)", toValue)
 	}
 }
 
