@@ -908,3 +908,53 @@ func TestResolveConsolidateSources_RefusesARepeatedSource(t *testing.T) {
 		t.Errorf("distinct sources refused: %v", err)
 	}
 }
+
+// A merge into a cash note gets a secret generated here and shown to nobody, so
+// the merged note is saved, and shown by `wallet show`, as protected (#87).
+func TestDoCashConsolidate_CashTargetResultIsLabelledProtected(t *testing.T) {
+	auditDTempLedger(t)
+	l, err := ledger.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tok := range []string{"lokicash1src-a", "lokicash1src-b"} {
+		amt := uint64(1000)
+		if _, err := l.Add(ledger.Entry{
+			Token: tok, WalletPubkey: tok + "-pub", AmountMillis: &amt, IdentityRequired: ptrTo(false),
+			CashSecret: "old-" + tok, CashProtection: ledger.CashShared, Verified: true,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := l.Save(); err != nil {
+		t.Fatal(err)
+	}
+	ids := []string{l.Entries[0].ID, l.Entries[1].ID}
+	target := nipcash.NewCashTarget()
+	withFakeAttemptCashConsolidate(t, func(string, []nipcash.Source, nipcash.Target) (*nipcash.CashConsolidateResult, error) {
+		return &nipcash.CashConsolidateResult{AmountMillis: 2000, NewWalletToken: "lokicash1merged", NewWalletPubkey: "merged-pub"}, nil
+	})
+
+	if _, _, err := doCashConsolidate(&cobra.Command{}, l, []string{"dial-a"}, nil, ids, target, false); err != nil {
+		t.Fatalf("doCashConsolidate() error = %v", err)
+	}
+	// doCashConsolidate never saves; its callers do, at once.
+	if err := l.Save(); err != nil {
+		t.Fatal(err)
+	}
+	fresh, err := ledger.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	merged, ok := fresh.FindByToken("lokicash1merged")
+	if !ok {
+		t.Fatal("the merged cash note was not saved")
+	}
+	if merged.CashProtection != ledger.CashProtected || merged.CashSecret != target.Secret() {
+		t.Errorf("merged note saved with protection %q, secret match %v; want protected with the generated secret",
+			merged.CashProtection, merged.CashSecret == target.Secret())
+	}
+	if got := cashModeLabel(*merged); got != "cash (protected)" {
+		t.Errorf("wallet show label = %q, want %q", got, "cash (protected)")
+	}
+}
