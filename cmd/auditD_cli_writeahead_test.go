@@ -5,8 +5,8 @@ package cmd
 // auditD_cli_killwindow_test.go covers the consolidate site, which is the one
 // the finding was demonstrated against. D-CLI-1 has three sites, though — every
 // path that can reach a cash-mode destination — and the other two live in
-// cash_transfer.go. These cover transferWithAutoConsolidate end to end through
-// its existing attemptTransferFromSourcesFn seam, plus the contract of
+// cash_transfer.go. These cover the auto-consolidating transfer's send
+// (mergeThenSend, cash_merge.go), plus the contract of
 // parkDestinationCashSecret itself, which runCashTransfer's direct path has no
 // seam to exercise (it dials nipcashclient.Connect itself).
 //
@@ -60,8 +60,7 @@ func auditDSeedTwoHeldCash(t *testing.T) (*ledger.Ledger, []string) {
 // Both are unreachable end to end without a relay, and not for a shallow
 // reason: runCashTransfer dials nipcashclient.Connect itself, and
 // transferWithAutoConsolidate's "Preparing sources..." step calls
-// sourceFromEntry, which dials once per source before the seam the suite does
-// have (attemptTransferFromSourcesFn) is ever reached. That is also why the
+// sourceFromEntry, which dials once per source before the merge. That is also why the
 // pre-existing TestTransferWithAutoConsolidate_Declined stops at the confirm.
 //
 // So this is a source-ordering test, with the same honest limit as the
@@ -72,22 +71,22 @@ func auditDSeedTwoHeldCash(t *testing.T) (*ledger.Ledger, []string) {
 // that moves or drops one of these two calls while the other two sites keep
 // their tests green.
 func TestAuditD_CLI_TransferSitesParkBeforeTheirWireCall(t *testing.T) {
-	src, err := os.ReadFile("cash_transfer.go")
-	if err != nil {
-		t.Fatalf("reading cash_transfer.go: %v", err)
-	}
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, "cash_transfer.go", src, 0)
-	if err != nil {
-		t.Fatalf("parsing cash_transfer.go: %v", err)
-	}
-
 	// wireCall is the call that can commit money at each site: once it has
-	// been placed, a kill destroys an unparked cash secret for good.
-	for _, tc := range []struct{ fn, wireCall string }{
-		{"runCashTransfer", "client.CashTransfer("},
-		{"transferWithAutoConsolidate", "attemptTransferFromSourcesWithRetry("},
+	// been placed, a kill destroys an unparked cash secret for good. The
+	// auto-consolidating transfer sends through mergeThenSend (#96).
+	for _, tc := range []struct{ file, fn, wireCall string }{
+		{"cash_transfer.go", "runCashTransfer", "client.CashTransfer("},
+		{"cash_merge.go", "mergeThenSend", "sendFromEntryFn("},
 	} {
+		src, err := os.ReadFile(tc.file)
+		if err != nil {
+			t.Fatalf("reading %s: %v", tc.file, err)
+		}
+		fset := token.NewFileSet()
+		file, err := parser.ParseFile(fset, tc.file, src, 0)
+		if err != nil {
+			t.Fatalf("parsing %s: %v", tc.file, err)
+		}
 		var body string
 		for _, decl := range file.Decls {
 			fd, ok := decl.(*ast.FuncDecl)
@@ -97,8 +96,8 @@ func TestAuditD_CLI_TransferSitesParkBeforeTheirWireCall(t *testing.T) {
 			body = string(src[fset.Position(fd.Body.Pos()).Offset:fset.Position(fd.Body.End()).Offset])
 		}
 		if body == "" {
-			t.Fatalf("%s not found in cash_transfer.go — this test is pinning a function that no "+
-				"longer exists, so fix the test rather than assuming the site is safe", tc.fn)
+			t.Fatalf("%s not found in %s — this test is pinning a function that no "+
+				"longer exists, so fix the test rather than assuming the site is safe", tc.fn, tc.file)
 		}
 		park := strings.Index(body, "parkDestinationCashSecret(")
 		wire := strings.Index(body, tc.wireCall)

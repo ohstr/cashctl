@@ -464,193 +464,28 @@ func transferWithAutoConsolidate(cmd *cobra.Command, l *ledger.Ledger, group []l
 		return err
 	}
 
-	// With a throwaway key, the merge and the send are separate, saved steps
-	// (mergeThenSend), never the composite below with its unsaved interim bill.
-	if throwawayPriv != "" {
-		tokens := make([]string, len(group))
-		for i := range group {
-			tokens[i] = group[i].Token
-		}
-		err := mergeThenSend(cmd, l, tokens, sources, sourceIDs, sum, sendAmount, throwawayPriv, interimPub, toValue, target)
-		if err != nil && len(movedIDs) > 0 && output.AsCLIError(err).Code != output.CodeIndeterminate {
-			undoMoves(cmd, l, movedIDs) // only bills still held: never ones a landed merge consumed
-		}
-		return err
-	}
-
-	// The interim consolidate takes at most the Hub's cap in sources (NIP-CASH
-	// §Ceilings): merge just enough of them to self first, saved, to fit.
-	if limit := max(hubConsolidateCapFn(group[0].Token), 2); len(sources) > limit {
-		n := len(sources) - limit + 1
-		tokens := make([]string, n)
-		for i := range tokens {
-			tokens[i] = group[i].Token
-		}
-		merged, _, mErr := consolidateInRounds(cmd, l, tokens, sources[:n], sourceIDs[:n], nipcash.Pubkey(myPub), true, limit, "")
-		if mErr != nil {
-			return mErr
-		}
-		if err := l.Save(); err != nil {
-			return reportUnsavedResult(cmd, err, "Transfer (interim consolidate)", entryRecoveryHint(merged))
-		}
-		cred, cErr := resolveCredential(cmd, merged)
-		if cErr != nil {
-			return cErr
-		}
-		group = append([]ledger.Entry{*merged}, group[n:]...)
-		sources = append([]nipcash.Source{{WalletPubkey: merged.WalletPubkey, Amount: *merged.AmountMillis, Credential: cred}}, sources[n:]...)
-		sourceIDs = append([]string{merged.ID}, sourceIDs[n:]...)
-	}
-
-	interimCred, err := localCashCredential(cmd)
-	if err != nil {
-		return output.RuntimeError(cmd, err)
-	}
-
-	params := nipcashclient.TransferFromSourcesParams{
-		Sources:           sources,
-		Amount:            sendAmount,
-		To:                target.Target,
-		InterimIdentity:   nipcash.Pubkey(myPub),
-		InterimCredential: interimCred,
-	}
-
-	// Dial candidates in group order, but not committed to group[0]: NIP-
-	// CASH's cash_consolidate accepts "any connected source's client" to
-	// place the interim call (sources are authorized per-source by their
-	// own proof, not by the calling connection) — but lokihub's generic
-	// per-app permission-expiry gate (nip47/permissions.HasPermission)
-	// checks ONLY the connection actually dialed, independent of every
-	// other source's own expiry (confirmed live:
-	// cash_consolidate_controller.go never re-checks a non-dialed
-	// source's own wallet expiry). So a batch that happens to include one
-	// already-expired member, dialed first, must not fail to even PLACE
-	// the interim consolidate when a sibling member's own connection
-	// would have carried the exact same request just fine — same
-	// reasoning as doCashConsolidate's own retry loop in
-	// cash_consolidate.go. This does NOT make the overall transfer
-	// succeed when a member is already expired, though (see this
-	// function's own pre-confirm warning above): the interim merge
-	// inherits that member's already-past deadline (NIP-CASH's
-	// earliest-wins merge rule), so the SECOND leg below — transferring
-	// onward from the just-merged wallet — still fails; there's no
-	// sibling to retry through for that leg, since only the merged wallet
-	// itself holds the combined funds. What retrying the interim call
-	// does buy: the funds still land somewhere real and traceable (the
-	// PartialProgressError branch below records it), rather than the
-	// whole attempt failing before anything happens at all, on a pick
-	// that had nothing to do with the actual request.
-	dialCandidates := make([]string, len(group))
+	// The merge and the send are separate, saved steps (mergeThenSend): the merged
+	// bill is in the ledger before the send goes out, so a crash or lost reply
+	// between the two never leaves it only in this process's memory (#96).
+	tokens := make([]string, len(group))
 	for i := range group {
-		dialCandidates[i] = group[i].Token
+		tokens[i] = group[i].Token
 	}
-	// The third site of D-CLI-1, and the easiest to miss: this path reaches a
-	// `--to cash` destination too, so the same locally-minted secret is at
-	// the same risk here as on the direct transfer path. Parked against the
-	// first source row that is still in the ledger — the interim wallet this
-	// call mints has no row of its own by design (see the full-success branch
-	// below), so a source is the only thing on disk to hang it from.
-	parked, parkErr := parkDestinationCashSecret(l, sourceIDs, target.Target)
-	if parkErr != nil {
-		return output.RuntimeError(cmd, parkErr)
+	err = mergeThenSend(cmd, l, tokens, sources, sourceIDs, sum, sendAmount, throwawayPriv, interimPub, toValue, target)
+	if err != nil && len(movedIDs) > 0 && output.AsCLIError(err).Code != output.CodeIndeterminate {
+		undoMoves(cmd, l, movedIDs) // only bills still held: never ones a landed merge consumed
 	}
-
-	var result *nipcashclient.TransferFromSourcesResult
-	var ffsErr error
-	_ = WithSpinner(jsonMode, "Transferring...", func() error {
-		result, ffsErr = attemptTransferFromSourcesWithRetry(dialCandidates, params)
-		return nil
-	})
-	if ffsErr == nil {
-		// Full success: the interim wallet was spent again by the very
-		// same call, within milliseconds of existing — it never needs
-		// a ledger entry of its own (see this function's own doc
-		// comment). If the final leg turned out to be an exact-match
-		// reassignment of that interim wallet rather than a real
-		// split, nipcash/client.TransferFromSources itself already
-		// patches Transfer.NewWalletToken/NewWalletPubkey in from the
-		// consolidate result before returning — see its own comment
-		// for why that's needed (a real fund-inaccessibility gap this
-		// integration suite's own multi-party tests caught, since no
-		// prior test ever tried to actually receive an
-		// auto-consolidated transfer's result on the other end).
-		markSourcesConsolidated(l, sourceIDs, result.ConsolidatedFirst.AmountMillis)
-		// In memory only, for printAndSaveTransferResult's own Save to carry
-		// — same reasoning as the direct path's. Deliberately NOT cleared on
-		// either failure branch below: the partial case means the interim
-		// consolidate landed and the transfer onward from it did not, and a
-		// "did not" that arrives as a lost or unreadable reply is
-		// indistinguishable from a transfer that actually happened. Keeping
-		// the park there costs a stale warning; dropping it could drop the
-		// only copy of a live bill's secret.
-		parked.release()
-		// The transfer's actual source here is the interim wallet, which
-		// TransferFromSources minted under the caller's own pubkey
-		// (InterimIdentity above) — so any remainder is pubkey-mode too.
-		// "" for originalToken: the interim wallet was never shown to the
-		// user or saved, so there is nothing to fall back to — and
-		// nothing to fall back to is ever needed here, since an in-place
-		// reassignment of the interim wallet always arrives with
-		// NewWalletToken already populated (see this function's own
-		// comment above on TransferFromSources' own patching).
-		return printAndSaveTransferResult(cmd, l, result.Transfer, sendAmount, toValue, target, sourceIDs, ledger.Entry{IdentityRequired: ptrTo(true), MinterPubkey: sharedMinter(group)}, "")
-	}
-
-	var partial *nipcashclient.PartialProgressError
-	if errors.As(ffsErr, &partial) && partial.Consolidated != nil {
-		// The interim consolidate landed for real, even though the
-		// final transfer then failed — unlike RekeyCashSlice's own
-		// interim step (an in-place transfer, same wallet pubkey
-		// throughout), cash_consolidate always spins off a genuinely
-		// NEW wallet. That wallet's funds are still sitting there,
-		// under the caller's own identity, real and spendable — it
-		// must get its own ledger entry now, or those funds go
-		// untracked entirely (the same fund-safety rule
-		// receive_secure.go's own PartialProgressError handling
-		// follows, just for a spun-off wallet instead of an
-		// in-place reassignment). Never worth retrying: the sources
-		// are already consumed by the consolidate that just landed.
-		markSourcesConsolidated(l, sourceIDs, partial.Consolidated.AmountMillis)
-		newEntry, addErr := l.Add(ledger.Entry{
-			Token:        partial.Consolidated.NewWalletToken,
-			WalletPubkey: partial.Consolidated.NewWalletPubkey,
-			AmountMillis: &partial.Consolidated.AmountMillis,
-			Verified:     true,
-			MinterPubkey: sharedMinter(group),
-		})
-		if addErr == nil {
-			addErr = l.Save()
-		}
-		if addErr != nil {
-			// Both the interim consolidate AND the transfer onward from it
-			// are done for — the interim wallet is the only place this
-			// money is now reachable, and this save failing means even
-			// cashctl's own in-memory record of it dies with this process.
-			return reportUnsavedResult(cmd, addErr, "Transfer (interim consolidate)", entryRecoveryHint(newEntry))
-		}
-		return classifyCashSpendErr(cmd, ffsErr, "transfer", newEntry.ID)
-	}
-
-	if isCrossHubSourcesDecline(ffsErr) {
+	if err != nil && isCrossHubDeclineClassified(err) {
 		// The sources turned out to live under different Cash Hubs. cashctl cannot
 		// know that locally: a bill's recovered minter identifies the NODE that
-		// signed it, and one node can run many Cash Hubs, so same-minter is a
-		// necessary but not sufficient signal for same-hub. Only the hub can settle
-		// it, which is why this arrives as a decline rather than a local refusal.
-		//
-		// Reported as fragmentation because that is what it IS from the holder's
-		// side — the funds exist but cannot be assembled into one payment — and it
-		// is the answer they can act on. Leaving the raw decline through would name
-		// an internal grouping rule and suggest their input was malformed.
-		parked.forgetIfNothingCreated(ffsErr)
+		// signed it, and one node can run many Cash Hubs. Reported as fragmentation,
+		// which is what it is from the holder's side and the answer they can act on.
 		return output.UsageError(cmd, fmt.Errorf("%w: you hold %s total, but these tokens come from different Cash Hubs and only same-hub tokens can be merged into the %s you're sending",
 			ledger.ErrFundsFragmented,
 			output.FormatAmount(int64(ledger.SumAmounts(l.Held()))),
 			output.FormatAmount(int64(sendAmount))))
 	}
-	classified := classifyCashSpendErr(cmd, ffsErr, "transfer", sourceIDs...)
-	parked.forgetIfNothingCreated(classified)
-	return classified
+	return err
 }
 
 // isCrossHubSourcesDecline reports whether err is a Hub refusing a consolidate
@@ -667,81 +502,6 @@ func isCrossHubSourcesDecline(err error) bool {
 		return false
 	}
 	return strings.Contains(strings.ToLower(walletErr.Message), "same cash hub")
-}
-
-// attemptTransferFromSourcesWithRetry places the interim-consolidate-then-
-// transfer call once per dialCandidate in order, applying the identical
-// retry policy as doCashConsolidate's own loop (cash_consolidate.go — see
-// its doc comment for the full reasoning): stop at the first success, the
-// first *nipcashclient.PartialProgressError (the interim consolidate
-// already landed for real and the sources are consumed — never worth
-// trying a different dial after that), or the first non-EXPIRED failure;
-// otherwise retry the next candidate. Factored out of
-// transferWithAutoConsolidate so this policy is unit-testable without a
-// network call — see attemptTransferFromSourcesFn's own doc comment for how
-// a test swaps out the actual dial, and cash_transfer_test.go for coverage.
-func attemptTransferFromSourcesWithRetry(dialCandidates []string, params nipcashclient.TransferFromSourcesParams) (*nipcashclient.TransferFromSourcesResult, error) {
-	if len(dialCandidates) == 0 {
-		// See transferWithAutoConsolidate's own len(group)==0 guard — not
-		// reachable from there today, guarded here too so this function
-		// can't silently report a nil-error, nil-result "success" on its
-		// own if some future caller ever passes an empty list directly.
-		return nil, fmt.Errorf("attemptTransferFromSourcesWithRetry: no dial candidates given")
-	}
-	var lastErr error
-	for i, dialToken := range dialCandidates {
-		result, err := attemptTransferFromSourcesFn(dialToken, params)
-		if err == nil {
-			return result, nil
-		}
-
-		var partial *nipcashclient.PartialProgressError
-		if errors.As(err, &partial) && partial.Consolidated != nil {
-			return nil, err
-		}
-
-		lastErr = err
-		if !isExpiredWalletErr(err) || i == len(dialCandidates)-1 {
-			return nil, err
-		}
-		// This group member's own connection is what's expired, not
-		// necessarily the whole batch — try the next one before giving up.
-	}
-	return nil, lastErr
-}
-
-// attemptTransferFromSources places one TransferFromSources call, dialed
-// through dialToken specifically — the one piece of
-// attemptTransferFromSourcesWithRetry's own retry-on-EXPIRED loop needs to
-// vary per attempt. Returns the raw (unclassified) error so that loop can
-// inspect the real NWC code (via isExpiredWalletErr) before deciding
-// whether to retry; classifying here would erase which underlying failure
-// this even was.
-func attemptTransferFromSources(dialToken string, params nipcashclient.TransferFromSourcesParams) (*nipcashclient.TransferFromSourcesResult, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	client, err := nipcashclient.Connect(ctx, dialToken)
-	if err != nil {
-		return nil, &notSentError{err}
-	}
-	defer client.Close()
-	return client.TransferFromSources(ctx, params)
-}
-
-// attemptTransferFromSourcesFn is attemptTransferFromSources by default —
-// swapped out in cash_transfer_test.go (same package-var-swap pattern
-// prompt.go's own stdin uses, and cash_consolidate.go's own
-// attemptCashConsolidateFn) so attemptTransferFromSourcesWithRetry's retry
-// policy can be exercised deterministically, with no real dial.
-var attemptTransferFromSourcesFn = attemptTransferFromSources
-
-// markSourcesConsolidated marks every source ID as consolidated and
-// records the merge in history.
-func markSourcesConsolidated(l *ledger.Ledger, sourceIDs []string, amountMillis uint64) {
-	for _, id := range sourceIDs {
-		_ = l.SetStatus(id, ledger.StatusConsolidated)
-	}
-	l.AppendHistory("consolidate", fmt.Sprintf("consolidated %d tokens into one %s note", len(sourceIDs), output.FormatAmount(int64(amountMillis))))
 }
 
 // printAndSaveTransferResult applies a completed cash_transfer call's
