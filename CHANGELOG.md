@@ -10,6 +10,7 @@
   ([#102](https://github.com/ohstr/cashctl/pull/102))
 - Fixes a `cash` target carrying its new note's spending secret in the field
   meant as a public description; the secret is now only in the note handed over.
+  ([#103](https://github.com/ohstr/cashctl/pull/103))
 
 ## [0.6.0-rc.14]
 
