@@ -11,7 +11,7 @@ files, so no font is needed).
 | `cashctl-mark.svg`, `cashctl-mark-light.svg` | fanned bills, for dark / light backgrounds | docs header (`logo-dark` / `logo`) |
 | `cashctl-mark-mono-white.svg`, `cashctl-mark-mono-black.svg` | one-color bills | single-color print, overlays |
 | `favicon.svg`, `favicon-16.svg` | bills simplified for small sizes | docs site favicon; `favicon-16` for 16px slots |
-| `app-icon.svg` | bills on a purple tile | avatars, app icons |
+| `cashctl-icon.svg`, `cashctl-icon-{16,32,48,192,512}.png`, `favicon.ico`, `apple-touch-icon.png` | bills on a purple tile | app icons, avatars, browser and home-screen icons |
 | `cashctl-social.svg`, `cashctl-social.png` | logo on `#0C0A14`, 1280×640 | GitHub social preview |
 
-`cashctl-social.png` is rendered from `cashctl-social.svg`.
+PNG and ICO files are rendered from the SVGs.
