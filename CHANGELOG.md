@@ -14,8 +14,10 @@
 - Fixes a protect or cash-note move whose reply was lost leaving the bill shown
   as shared until a later spend: `redeem`, `transfer` and `consolidate` now ask
   the Hub first and record the secret that works.
+  ([#104](https://github.com/ohstr/cashctl/pull/104))
 - Fixes a cash note whose move off a merge key lost its reply possibly losing
   its only working secret: it is no longer moved again before that is settled.
+  ([#104](https://github.com/ohstr/cashctl/pull/104))
 
 ## [0.6.0-rc.14]
 
