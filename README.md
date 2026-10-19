@@ -1,4 +1,4 @@
-# >_ cashctl
+# <picture><source media="(prefers-color-scheme: dark)" srcset="docs/brand/cashctl-logo-horizontal.svg"><img alt="cashctl" src="docs/brand/cashctl-logo-horizontal-light.svg" height="72"></picture>
 
 [![Release](https://img.shields.io/github/v/release/ohstr/cashctl)](https://github.com/ohstr/cashctl/releases/latest)
 [![CI](https://github.com/ohstr/cashctl/actions/workflows/ci.yml/badge.svg)](https://github.com/ohstr/cashctl/actions/workflows/ci.yml)
