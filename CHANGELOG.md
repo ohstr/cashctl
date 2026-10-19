@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0-rc.14]
+
+cashctl gets its own logo; no CLI changes since rc.13.
+
+- Adds the cashctl logo to the README and docs site, with a matching favicon
+  and purple accent. ([#89](https://github.com/ohstr/cashctl/pull/89))
+
 ## [0.6.0-rc.13]
 
 Fixes from the NIP-CASH / NIP-CW conformance review, for agents above all.
