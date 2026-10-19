@@ -13,7 +13,7 @@ plus error-text and agent-facing UX fixes from the agent evals.
   ([#109](https://github.com/ohstr/cashctl/pull/109))
 - Fixes a wallet reply signed by another key being taken as the wallet's own,
   which could fake a payment or point a redeem at someone else's invoice; picks
-  up nmilat v0.5.0-rc.27.
+  up nmilat v0.5.0-rc.27. ([#110](https://github.com/ohstr/cashctl/pull/110))
 - Fixes `redeem --amount` picking a different Hub's bills from run to run when
   more than one Hub can land the amount exactly; it now always picks the same.
   ([#102](https://github.com/ohstr/cashctl/pull/102))
