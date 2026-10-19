@@ -213,6 +213,9 @@ func TestSettlePendingMoves_TurnsLeftoversIntoCashNotes(t *testing.T) {
 	if !isCashNote(&a) || a.ThrowawayKey != "" {
 		t.Errorf("the leftover is not a cash note again: %+v", a)
 	}
+	if a.CashProtection != ledger.CashProtected {
+		t.Errorf("the settled cash note's protection = %q, want %q: its secret was generated here", a.CashProtection, ledger.CashProtected)
+	}
 	if n, _ := pendingMerge(fresh); n != 1 {
 		t.Errorf("pendingMerge = %d, want only the unsettled move", n)
 	}
