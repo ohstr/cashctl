@@ -293,7 +293,18 @@ resolving) — never trust an auto-detected identity silently.
 
 A successful split transfer's remainder is saved back into your own
 ledger automatically — check the response's `remainder_entry` field
-(`--json`) or the new `tok-...` ID printed in text mode.
+(`--json`) or the new `tok-...` ID printed in text mode. Its
+`verified: false` only means the amount came from the Hub's reply; it is
+re-checked with the Hub the next time you spend it, so spending it right
+away is fine.
+
+cashctl does not deliver anything to the recipient. Hand them what the
+response gives you: `recipient_token` for a pubkey/npub/connection
+recipient (the same string as `new_wallet_token`), or `cash_to_send`
+(`<token>#<secret>`) for `cash`; they run `cashctl receive` on it. Both
+are also kept in `wallet history`. To send part of a bill to someone and
+keep the rest as a cash note, chain two transfers: `transfer <amount>
+<npub>`, then `transfer cash --token <remainder-id>`.
 
 **Cash selection**: giving an amount without `--token` doesn't just pick
 *a* held token — cashctl picks which one(s) reach that amount exactly:

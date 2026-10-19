@@ -214,19 +214,19 @@ func warnAmbiguousDelivery(err error, sourceIDs []string) error {
 }
 
 // explainCashSecretRefusal rewrites a Hub's refusal to answer about a cash-mode
-// bill without its cash secret, or with the wrong one (NIP-CASH §Bearer Items),
-// into what to do about it. Both arrive as BAD_REQUEST, told apart only by the
-// Hub's message.
+// bill sent without its cash secret (NIP-CASH §Bearer Items, a BAD_REQUEST)
+// into what to do about it. A wrong secret is not explained here: the Hub
+// answers it NOT_FOUND, which for a held bill means it is no longer yours
+// (someone holding the note re-keyed or spent it), and stays not_found. A
+// pasted `<token>#<secret>` gets its own message through CheckClaim's
+// ErrClaimNotFound.
 func explainCashSecretRefusal(err error) (error, bool) {
 	var walletErr *relayclient.WalletError
 	if !errors.As(err, &walletErr) || walletErr.Code != "BAD_REQUEST" {
 		return err, false
 	}
-	switch {
-	case strings.Contains(walletErr.Message, "neither a slice proof nor a cash secret"):
+	if strings.Contains(walletErr.Message, "neither a slice proof nor a cash secret") {
 		return fmt.Errorf("%w: %w", errNeedsCashSecret, err), true
-	case strings.Contains(walletErr.Message, "matches this cash secret"):
-		return fmt.Errorf("the cash secret does not match this bill: check the part after '#' in `<token>#<secret>`: %w", err), true
 	}
 	return err, false
 }

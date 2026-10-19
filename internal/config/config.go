@@ -358,8 +358,16 @@ func (s *Store) DefaultConnection() (*Connection, bool) {
 func HintedName(prefix, hint string) string {
 	slug := strings.ToLower(strings.Trim(slugPattern.ReplaceAllString(hint, "-"), "-"))
 	// Capped: a name is typed after -c, and a circle's label can be a sentence.
+	// Cut at a hyphen when there is one, so a word or timestamp is dropped
+	// whole rather than kept half ("eval-r2-20261019t1453" -> "eval-r2").
 	if len(slug) > maxSlugLen {
-		slug = strings.TrimRight(slug[:maxSlugLen], "-")
+		cut := slug[:maxSlugLen]
+		if slug[maxSlugLen] != '-' {
+			if i := strings.LastIndex(cut, "-"); i > 0 {
+				cut = cut[:i]
+			}
+		}
+		slug = strings.TrimRight(cut, "-")
 	}
 	if slug == "" {
 		return ""

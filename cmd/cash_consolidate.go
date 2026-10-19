@@ -227,7 +227,7 @@ func runCashConsolidate(cmd *cobra.Command, args []string) error {
 		return output.RuntimeError(cmd, err)
 	}
 	// A merge interrupted before its move was confirmed is settled first (I-26).
-	settlePendingMoves(l)
+	settlePendingMoves(cmd, l)
 
 	if len(args) > 0 || sourcesFlag != "" {
 		items, err := resolveConsolidateSources(args, sourcesFlag, l.Held())
@@ -560,12 +560,6 @@ func consolidateItems(cmd *cobra.Command, l *ledger.Ledger, items []string, toFl
 		}
 		target = rt.Target
 		targetResolved = rt.Resolved
-		// shouldPrintResolvedTarget (cash_transfer.go): a cash-mode target's
-		// Resolved carries the freshly generated secret itself — printing
-		// it here, before anything is confirmed, is the exact cash-mode-
-		// target-secret-before-confirm bug already found and fixed for
-		// transfer's own "resolves to:" line. Still returned in --json's
-		// target_resolved either way, same as transfer.
 		if shouldPrintResolvedTarget(rt) {
 			output.Notef(jsonMode, "  resolves to: %s", targetResolved)
 		}
@@ -670,11 +664,6 @@ func consolidateItems(cmd *cobra.Command, l *ledger.Ledger, items []string, toFl
 		return nil, reportUnsavedResult(cmd, err, "Consolidate", entryRecoveryHint(newEntry))
 	}
 
-	// A cash target's secret is saved with the new entry; target_resolved
-	// would only repeat it.
-	if _, isCash := target.(*nipcash.CashTarget); isCash {
-		targetResolved = ""
-	}
 	return &consolidateResult{NewEntry: newEntry, ExpiresAt: expiresAt, TargetResolved: targetResolved}, nil
 }
 

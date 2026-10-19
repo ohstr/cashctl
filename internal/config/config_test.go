@@ -441,11 +441,21 @@ func TestSave_ChangedBalanceIsPersistedAndSurvivesRepeatedSaves(t *testing.T) {
 // A long circle label still makes a short name to type after -c.
 func TestHintedName_CapsALongLabel(t *testing.T) {
 	got := HintedName("circle", "The Friday Evening Neighbourhood Savings Circle of Elm Street")
-	if want := "circle:the-friday-evening-neigh"; got != want {
+	if want := "circle:the-friday-evening"; got != want {
 		t.Errorf("HintedName = %q, want %q", got, want)
 	}
 	if got := HintedName("circle", "Friends"); got != "circle:friends" {
 		t.Errorf("HintedName(short) = %q", got)
+	}
+}
+
+// I-38: a cut never keeps half a word or timestamp.
+func TestHintedName_CutsAtAWordBoundary(t *testing.T) {
+	if got := HintedName("circle", "eval r2 circle 20261019T145318Z"); got != "circle:eval-r2-circle" {
+		t.Errorf("HintedName = %q, want circle:eval-r2-circle", got)
+	}
+	if got := HintedName("circle", "abcdefghijklmnopqrstuvwxyz0123"); got != "circle:abcdefghijklmnopqrstuvwx" {
+		t.Errorf("HintedName(one long word) = %q, want the first 24 characters", got)
 	}
 }
 

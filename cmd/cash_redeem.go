@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"time"
 
@@ -108,7 +110,7 @@ func runCashRedeem(cmd *cobra.Command, args []string) error {
 		return output.RuntimeError(cmd, err)
 	}
 	// A merge interrupted before its move was confirmed is settled first (I-26).
-	settlePendingMoves(l)
+	settlePendingMoves(cmd, l)
 	entries, err := resolveHeldTokensForRedeem(cmd, l)
 	if err != nil {
 		return err
@@ -1550,7 +1552,10 @@ func exactSameHubSum(quotes []quotedEntry, target uint64) []*ledger.Entry {
 		}
 		byHub[q.hub] = append(byHub[q.hub], q)
 	}
-	for _, group := range byHub {
+	// Hubs in sorted order, not map order: when two Hubs can each land the
+	// amount, the same one is picked every run (as ledger.SelectForAmount does).
+	for _, hub := range slices.Sorted(maps.Keys(byHub)) {
+		group := byHub[hub]
 		nets := make([]uint64, len(group))
 		for i, g := range group {
 			nets[i] = g.net

@@ -2,9 +2,45 @@
 
 ## [0.6.0-rc.15]
 
+Fixes several ways an interrupted or forged reply could lose or misdirect money,
+plus error-text and agent-facing UX fixes from the agent evals.
+
 - Adds the `--json` error object's fields to `cashctl --help`; the cash skill
   now points there instead of AGENTS.md, which an installed binary doesn't have.
   ([#94](https://github.com/ohstr/cashctl/pull/94))
+- Adds `wallet get-balance` as an alias of `wallet balance`, and an
+  `amount_mloki` field to `invoice --json`.
+  ([#109](https://github.com/ohstr/cashctl/pull/109))
+- Fixes a wallet reply signed by another key being taken as the wallet's own,
+  which could fake a payment or point a redeem at someone else's invoice; picks
+  up nmilat v0.5.0-rc.27. ([#110](https://github.com/ohstr/cashctl/pull/110))
+- Fixes `redeem --amount` picking a different Hub's bills from run to run when
+  more than one Hub can land the amount exactly; it now always picks the same.
+  ([#102](https://github.com/ohstr/cashctl/pull/102))
+- Fixes a `cash` target carrying its new note's spending secret in the field
+  meant as a public description; the secret is now only in the note handed over.
+  ([#103](https://github.com/ohstr/cashctl/pull/103))
+- Fixes a protect or cash-note move whose reply was lost leaving the bill shown
+  as shared until a later spend: `redeem`, `transfer` and `consolidate` now ask
+  the Hub first and record the secret that works.
+  ([#104](https://github.com/ohstr/cashctl/pull/104))
+- Fixes a cash note whose move off a merge key lost its reply possibly losing
+  its only working secret: it is no longer moved again before that is settled.
+  ([#104](https://github.com/ohstr/cashctl/pull/104))
+- Fixes a `transfer` that auto-merges your bills losing the merged bill if it
+  was interrupted between the merge and the send; the merged bill is now saved
+  first, so it stays in your wallet whatever happens to the send.
+  ([#105](https://github.com/ohstr/cashctl/pull/105))
+- Fixes error text: a Hub's message and cashctl's hint no longer run together,
+  `wallet balance -c <unknown>` says where to look, `decode` names npub in its
+  list, and `wallet history` says "(pubkey)" instead of "identity cash".
+  ([#107](https://github.com/ohstr/cashctl/pull/107))
+- Fixes `init --json` reporting an empty `default_wallet` when one is already
+  set, and generated circle wallet names cut mid-word.
+  ([#109](https://github.com/ohstr/cashctl/pull/109))
+- Fixes `decode --check` on a cash note someone else re-keyed: it now says the
+  secret no longer answers instead of "no matching recipient".
+  ([#109](https://github.com/ohstr/cashctl/pull/109))
 
 ## [0.6.0-rc.14]
 

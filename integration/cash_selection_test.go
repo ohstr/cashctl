@@ -268,4 +268,14 @@ func TestCashTransfer_CashSelection_AutoConsolidate(t *testing.T) {
 	for _, tok := range []string{token1, token2} {
 		requireBillSpentAway(t, admin, hub.ID, tok, "consolidated source")
 	}
+
+	// #96: the merge is committed locally before the split, and the split then
+	// spends it, so what is left held is exactly the remainder, nothing interim.
+	held, _ := f.mustJSON("wallet", "show")["held_tokens"].([]any)
+	if len(held) != 1 {
+		t.Fatalf("wallet show: %d held tokens after the transfer, want just the remainder: %v", len(held), held)
+	}
+	if amt, _ := held[0].(map[string]any)["amount_millis"].(float64); uint64(amt) != amount1+amount2-targetAmount {
+		t.Errorf("held remainder = %v, want %d", amt, amount1+amount2-targetAmount)
+	}
 }

@@ -81,25 +81,33 @@ func TestCashStatusRowStatus_SpentIsNotOK(t *testing.T) {
 	}
 }
 
-// I-22: a Hub refusing to answer about a cash-mode bill without its secret (or
-// with the wrong one) is explained as that, not as a generic bad request.
-func TestClassifyCashTokenNWCErr_ExplainsAMissingOrWrongCashSecret(t *testing.T) {
-	for msg, want := range map[string]string{
-		"this item carries neither a slice proof nor a cash secret": "<token>#<secret>",
-		"no slice of this bill matches this cash secret":            "does not match",
-	} {
-		err := classifyCashTokenNWCErr(&cobra.Command{}, &relayclient.WalletError{Code: "BAD_REQUEST", Message: msg})
-		ce := output.AsCLIError(err)
-		if ce.Code != output.CodeInvalidInput {
-			t.Errorf("%q: code = %q, want invalid_input (not retryable)", msg, ce.Code)
-		}
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("%q: %v does not say %q", msg, err, want)
-		}
+// I-22: a Hub refusing to answer about a cash-mode bill without its secret is
+// explained as that, not as a generic bad request.
+func TestClassifyCashTokenNWCErr_ExplainsAMissingCashSecret(t *testing.T) {
+	msg := "this item carries neither a slice proof nor a cash secret"
+	err := classifyCashTokenNWCErr(&cobra.Command{}, &relayclient.WalletError{Code: "BAD_REQUEST", Message: msg})
+	if ce := output.AsCLIError(err); ce.Code != output.CodeInvalidInput {
+		t.Errorf("code = %q, want invalid_input (not retryable)", ce.Code)
+	}
+	if !strings.Contains(err.Error(), "<token>#<secret>") {
+		t.Errorf("%v does not say how to pass the secret", err)
 	}
 	other := &relayclient.WalletError{Code: "BAD_REQUEST", Message: "something else"}
 	if _, ok := explainCashSecretRefusal(other); ok {
 		t.Error("an unrelated BAD_REQUEST was explained as a cash-secret refusal")
+	}
+}
+
+// #100: lokihub answers a secret that no longer matches with NOT_FOUND
+// (nip47/private_dispatch.go), as NIP-CASH requires. For a held bill that
+// means it is no longer yours, so it stays not_found, never "check your input".
+func TestClassifyCashTokenNWCErr_AWrongSecretStaysNotFound(t *testing.T) {
+	lokihub := &relayclient.WalletError{Code: "NOT_FOUND", Message: "no slice of this bill matches this cash secret"}
+	if _, ok := explainCashSecretRefusal(lokihub); ok {
+		t.Error("lokihub's wrong-secret answer was explained as an input mistake")
+	}
+	if ce := output.AsCLIError(classifyCashTokenNWCErr(&cobra.Command{}, lokihub)); ce.Code != output.CodeNotFound {
+		t.Errorf("code = %q, want not_found", ce.Code)
 	}
 }
 

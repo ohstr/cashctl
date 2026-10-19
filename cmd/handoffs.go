@@ -3,7 +3,6 @@ package cmd
 import (
 	"context"
 	"errors"
-	"strings"
 	"time"
 
 	"github.com/ohstr/nmilat/nipcash"
@@ -89,12 +88,12 @@ func checkHandoff(note string) string {
 	switch {
 	case err == nil:
 		return ledger.HandoffUnclaimed
+	// A secret that no longer matches arrives as NOT_FOUND, which CheckClaim
+	// returns as ErrClaimNotFound: someone took the note and re-keyed it.
 	case errors.Is(err, nipcash.ErrSpent), errors.Is(err, nipcash.ErrClaimNotFound):
 		return ledger.HandoffClaimed
 	case errors.As(err, &walletErr) && walletErr.Code == "EXPIRED":
 		return ledger.HandoffExpired
-	case errors.As(err, &walletErr) && walletErr.Code == "BAD_REQUEST" && strings.Contains(walletErr.Message, "matches this cash secret"):
-		return ledger.HandoffClaimed
 	}
 	return ""
 }

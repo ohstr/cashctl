@@ -171,7 +171,7 @@ func TestMovesWithNoAnswer_AreSettledNotResent(t *testing.T) {
 		}
 		return &nipcash.CashTransferResult{}, nil
 	})
-	settlePendingMoves(fresh)
+	settlePendingMoves(&cobra.Command{}, fresh)
 	again, _ := ledger.Load()
 	a := again.Entries[0]
 	if a.PendingThrowawayKey != "" || a.ThrowawayKey != "" || !isCashNote(&a) || a.CashSecret == "sa" {
@@ -204,7 +204,7 @@ func TestSettlePendingMoves_TurnsLeftoversIntoCashNotes(t *testing.T) {
 		spentWith = append(spentWith, cred)
 		return &nipcash.CashTransferResult{}, nil
 	})
-	settlePendingMoves(l)
+	settlePendingMoves(&cobra.Command{}, l)
 	fresh, _ := ledger.Load()
 	a := fresh.Entries[0]
 	if len(spentWith) != 1 || spentWith[0] != nipcash.BySigning(priv) {
@@ -308,7 +308,7 @@ func TestMergeThenSend_TheMergedBillSurvivesAFailedSend(t *testing.T) {
 			if n, _ := pendingMerge(fresh); n != 1 || m.ThrowawayKey != priv {
 				t.Errorf("an unanswered send's bill is not listed as a merge left midway (%d): %+v", n, m)
 			}
-			settlePendingMoves(fresh)
+			settlePendingMoves(&cobra.Command{}, fresh)
 			if m := mergedEntry(t); !isCashNote(m) {
 				t.Errorf("the next command did not settle it into a cash note: %+v", m)
 			}

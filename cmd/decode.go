@@ -100,7 +100,7 @@ func newDecodeCmd() *cobra.Command {
 				return output.InvalidInputError(cmd, value, errors.New(nostrEntityMessage(dial.NostrEntityHRP(value))))
 			default:
 				return output.InvalidInputError(cmd, value, fmt.Errorf(
-					"not a recognized cash token, Circle Hub connection, or NWC URI; "+
+					"not a recognized cash token, Circle Hub connection, NWC URI or npub; "+
 						"decode takes a cash token (lokicash1..., or <token>#<secret>), "+
 						"a circlehub1... connection, a nostr+walletconnect:// URI, or an npub1... key"))
 			}
@@ -415,6 +415,11 @@ func checkCashTokenAgainstHub(cmd *cobra.Command, jsonMode bool, value, embedded
 		if errors.Is(err, nipcash.ErrClaimNotFound) {
 			if isBareCashModeBill(tok, embeddedCashSecret) {
 				return errNeedsCashSecret
+			}
+			if embeddedCashSecret != "" {
+				// A cash note's Hub answers only to its current secret: this one was
+				// re-keyed (protected) or spent by whoever took the note.
+				return fmt.Errorf("this cash note no longer answers to that secret: whoever took it has re-keyed or spent it")
 			}
 			return fmt.Errorf("no matching recipient found on the Hub")
 		}

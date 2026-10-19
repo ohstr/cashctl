@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/ohstr/nmilat/nipcash"
-	nipcashclient "github.com/ohstr/nmilat/nipcash/client"
 	relayclient "github.com/ohstr/nmilat/relay/client"
 	"github.com/spf13/cobra"
 
@@ -17,7 +16,6 @@ import (
 	"github.com/ohstr/cashctl/internal/credential"
 	"github.com/ohstr/cashctl/internal/identity"
 	"github.com/ohstr/cashctl/internal/ledger"
-	"github.com/ohstr/cashctl/internal/output"
 )
 
 // newTestTransferCmd builds a *cobra.Command carrying the same flags
@@ -116,22 +114,17 @@ func TestResolveTarget_PlainTargetUnaffected(t *testing.T) {
 }
 
 // --- shouldPrintResolvedTarget: the pre-confirm "resolves to:" gate.
-// A cash-mode target's Resolved carries the freshly generated secret (needed
-// intact for --json's target_resolved field — pinned by
-// TestParseTarget_CashTarget_ResolvedSurfacesSecret in
-// internal/credential), but printing it before anything is confirmed is
-// pure noise since it's shown again anyway, combined with the resulting
-// token, once the transfer completes. These two tests pin both halves at
-// once: the data survives untouched, only the premature print is gated.
 
+// A cash target resolves to nothing worth showing: its secret is never in
+// Resolved, and is handed over only with the note once the transfer completes.
 func TestShouldPrintResolvedTarget_CashTargetIsFalse(t *testing.T) {
 	c := newTestTransferCmd()
 	rt, err := resolveTarget(c, "cash")
 	if err != nil {
 		t.Fatalf("resolveTarget(cash) error = %v", err)
 	}
-	if rt.Resolved == "" {
-		t.Fatal("resolveTarget(cash) Resolved is empty — the generated secret would be unrecoverable (see credential.go's own ParseTarget)")
+	if rt.Resolved != "" {
+		t.Fatalf("resolveTarget(cash) Resolved = %q, want empty", rt.Resolved)
 	}
 	if shouldPrintResolvedTarget(rt) {
 		t.Error("shouldPrintResolvedTarget(cash-mode target) = true, want false — the secret shouldn't be printed before anything is confirmed")
@@ -331,162 +324,6 @@ func TestFetchExpiresAt_UnreachableRelayReturnsNil(t *testing.T) {
 	c := newTestTransferCmd()
 	if got := fetchExpiresAt(c, encoded); got != nil {
 		t.Errorf("fetchExpiresAt(unreachable relay) = %v, want nil", *got)
-	}
-}
-
-// --- attemptTransferFromSourcesWithRetry: the dial-candidate retry policy,
-// exercised with no network via attemptTransferFromSourcesFn (a
-// package-var seam, the same pattern prompt.go's own stdin uses) instead
-// of a real dial. Mirrors cash_consolidate_test.go's doCashConsolidate
-// coverage — see doCashConsolidate's own doc comment for the shared
-// reasoning both retry loops implement.
-
-func withFakeAttemptTransferFromSources(t *testing.T, fn func(dialToken string, params nipcashclient.TransferFromSourcesParams) (*nipcashclient.TransferFromSourcesResult, error)) {
-	t.Helper()
-	orig := attemptTransferFromSourcesFn
-	attemptTransferFromSourcesFn = fn
-	t.Cleanup(func() { attemptTransferFromSourcesFn = orig })
-}
-
-func TestAttemptTransferFromSourcesWithRetry_SucceedsOnFirstCandidate(t *testing.T) {
-	calls := 0
-	withFakeAttemptTransferFromSources(t, func(dialToken string, params nipcashclient.TransferFromSourcesParams) (*nipcashclient.TransferFromSourcesResult, error) {
-		calls++
-		return &nipcashclient.TransferFromSourcesResult{
-			ConsolidatedFirst: &nipcash.CashConsolidateResult{AmountMillis: 1000},
-			Transfer:          &nipcash.CashTransferResult{AmountMillis: 1000},
-		}, nil
-	})
-
-	result, err := attemptTransferFromSourcesWithRetry([]string{"tok-a", "tok-b"}, nipcashclient.TransferFromSourcesParams{})
-	if err != nil {
-		t.Fatalf("error = %v, want nil", err)
-	}
-	if result == nil || result.Transfer == nil || result.Transfer.AmountMillis != 1000 {
-		t.Fatalf("result = %+v, want the fake success result", result)
-	}
-	if calls != 1 {
-		t.Errorf("attemptTransferFromSourcesFn called %d times, want 1 (first candidate already succeeded)", calls)
-	}
-}
-
-func TestAttemptTransferFromSourcesWithRetry_RetriesOnExpiredThenSucceeds(t *testing.T) {
-	var dialed []string
-	withFakeAttemptTransferFromSources(t, func(dialToken string, params nipcashclient.TransferFromSourcesParams) (*nipcashclient.TransferFromSourcesResult, error) {
-		dialed = append(dialed, dialToken)
-		if dialToken == "expired-a" {
-			return nil, &relayclient.WalletError{Method: "cash_consolidate", Code: "EXPIRED", Message: "expired"}
-		}
-		return &nipcashclient.TransferFromSourcesResult{Transfer: &nipcash.CashTransferResult{AmountMillis: 500}}, nil
-	})
-
-	result, err := attemptTransferFromSourcesWithRetry([]string{"expired-a", "healthy-b"}, nipcashclient.TransferFromSourcesParams{})
-	if err != nil {
-		t.Fatalf("error = %v, want nil (should succeed via the healthy sibling)", err)
-	}
-	if result == nil || result.Transfer == nil || result.Transfer.AmountMillis != 500 {
-		t.Fatalf("result = %+v, want the healthy sibling's result", result)
-	}
-	if want := []string{"expired-a", "healthy-b"}; !reflect.DeepEqual(dialed, want) {
-		t.Errorf("dialed %v, want %v (retry only after an EXPIRED decline, in order)", dialed, want)
-	}
-}
-
-// TestAttemptTransferFromSourcesWithRetry_AllExpiredFails mirrors
-// TestCashConsolidate_AllSourcesExpired_ClassifiedAsAuth's live coverage
-// (docs/private/audit-round2-expiration-matrix.md) for this composite's
-// own interim-consolidate leg: every candidate exhausted must still fail
-// cleanly as the real classified EXPIRED/auth error, not hang, loop, or
-// misreport as something else.
-func TestAttemptTransferFromSourcesWithRetry_AllExpiredFails(t *testing.T) {
-	calls := 0
-	withFakeAttemptTransferFromSources(t, func(dialToken string, params nipcashclient.TransferFromSourcesParams) (*nipcashclient.TransferFromSourcesResult, error) {
-		calls++
-		return nil, &relayclient.WalletError{Method: "cash_consolidate", Code: "EXPIRED", Message: "expired"}
-	})
-
-	_, err := attemptTransferFromSourcesWithRetry([]string{"a", "b", "c"}, nipcashclient.TransferFromSourcesParams{})
-	if err == nil {
-		t.Fatal("error = nil, want the real EXPIRED error once every candidate is exhausted")
-	}
-	if calls != 3 {
-		t.Errorf("attemptTransferFromSourcesFn called %d times, want 3 (every candidate tried once)", calls)
-	}
-	ce := output.AsCLIError(classifyNWCErr(&cobra.Command{}, err))
-	if ce.Code != output.CodeAuth || ce.NWCCode != "EXPIRED" {
-		t.Errorf("classified = {code: %s, nwc_code: %s}, want {auth, EXPIRED} — AGENTS.md's error table for an expired-wallet decline", ce.Code, ce.NWCCode)
-	}
-}
-
-// TestAttemptTransferFromSourcesWithRetry_PartialProgressStopsImmediately
-// confirms a *nipcashclient.PartialProgressError (the interim consolidate
-// landed for real; the sources are already consumed) is never retried
-// through a further candidate, even with siblings left and even though its
-// own Cause here is EXPIRED-coded — the sources being spent already is
-// what matters, not the failure's own code (see
-// attemptTransferFromSourcesWithRetry's own doc comment).
-func TestAttemptTransferFromSourcesWithRetry_PartialProgressStopsImmediately(t *testing.T) {
-	calls := 0
-	partialErr := &nipcashclient.PartialProgressError{
-		Consolidated: &nipcash.CashConsolidateResult{AmountMillis: 700, NewWalletToken: "interim-token", NewWalletPubkey: "interim-pub"},
-		Cause:        &relayclient.WalletError{Code: "EXPIRED"},
-	}
-	withFakeAttemptTransferFromSources(t, func(dialToken string, params nipcashclient.TransferFromSourcesParams) (*nipcashclient.TransferFromSourcesResult, error) {
-		calls++
-		return nil, partialErr
-	})
-
-	_, err := attemptTransferFromSourcesWithRetry([]string{"a", "b", "c"}, nipcashclient.TransferFromSourcesParams{})
-	var partial *nipcashclient.PartialProgressError
-	if !errors.As(err, &partial) || partial.Consolidated == nil || partial.Consolidated.NewWalletToken != "interim-token" {
-		t.Fatalf("error = %v, want the PartialProgressError surfaced unchanged", err)
-	}
-	if calls != 1 {
-		t.Errorf("attemptTransferFromSourcesFn called %d times, want 1 (never retry once the interim consolidate has actually landed)", calls)
-	}
-}
-
-// TestAttemptTransferFromSourcesWithRetry_NonExpiredFailureStopsImmediately
-// confirms a decline unrelated to which connection placed the call (e.g.
-// insufficient balance) is never retried through a sibling, even with
-// candidates left — only an EXPIRED decline is about the dial choice
-// itself.
-func TestAttemptTransferFromSourcesWithRetry_NonExpiredFailureStopsImmediately(t *testing.T) {
-	calls := 0
-	withFakeAttemptTransferFromSources(t, func(dialToken string, params nipcashclient.TransferFromSourcesParams) (*nipcashclient.TransferFromSourcesResult, error) {
-		calls++
-		return nil, &relayclient.WalletError{Code: "INSUFFICIENT_BALANCE"}
-	})
-
-	_, err := attemptTransferFromSourcesWithRetry([]string{"a", "b"}, nipcashclient.TransferFromSourcesParams{})
-	if err == nil {
-		t.Fatal("error = nil, want the INSUFFICIENT_BALANCE failure")
-	}
-	if calls != 1 {
-		t.Errorf("attemptTransferFromSourcesFn called %d times, want 1 (a non-EXPIRED decline is about the request itself, never worth retrying via a sibling connection)", calls)
-	}
-}
-
-// TestAttemptTransferFromSourcesWithRetry_ZeroCandidates guards the
-// defensive check added alongside doCashConsolidate's own equivalent: an
-// empty dial-candidate list must return a real error, not a silent
-// (nil, nil) "success".
-func TestAttemptTransferFromSourcesWithRetry_ZeroCandidates(t *testing.T) {
-	calls := 0
-	withFakeAttemptTransferFromSources(t, func(dialToken string, params nipcashclient.TransferFromSourcesParams) (*nipcashclient.TransferFromSourcesResult, error) {
-		calls++
-		return nil, nil
-	})
-
-	result, err := attemptTransferFromSourcesWithRetry(nil, nipcashclient.TransferFromSourcesParams{})
-	if err == nil {
-		t.Fatal("error = nil, want an error instead of a silent (nil, nil) 'success'")
-	}
-	if result != nil {
-		t.Errorf("result = %+v, want nil", result)
-	}
-	if calls != 0 {
-		t.Errorf("attemptTransferFromSourcesFn called %d times, want 0", calls)
 	}
 }
 

@@ -14,13 +14,10 @@ import (
 // specifically as a wrong-secret NOT_FOUND, retries once with the pending
 // secret instead.
 //
-// This is the only place cashctl can ever actually learn which of two
-// candidate cash secrets an interrupted rekey left live — NIP-CASH has
-// no read-only way to ask (nipcashclient.CheckClaim's own doc comment: a
-// cash-mode match only proves *some* recipient exists, never *which* secret)
-// — so it happens here, at the point an entry is genuinely about to be
-// spent, rather than as a separate "reconcile" step nothing else in
-// cashctl calls unprompted.
+// settlePendingMoves resolves the same ambiguity read-only at the start of
+// redeem/transfer/consolidate (a Hub answers cash_status only to a matching
+// secret, NIP-CASH §Scoping the Roster); this catches whatever it could not
+// reach, at the point the entry is genuinely about to be spent.
 //
 // Deliberately doesn't Save() the promotion itself: every caller of this
 // (redeem, transfer) already does its own SetStatus+Save immediately after
@@ -46,7 +43,7 @@ func spendCashEntry[T any](entry *ledger.Entry, cred nipcash.Credential, place f
 		// wrong-secret signal, now for a genuinely-wrong pending value).
 		return result, err
 	}
-	entry.CashSecret = pending
-	entry.PendingCashSecret = ""
+	entry.PendingCashSecret = pending
+	promotePendingSecret(entry)
 	return retryResult, nil
 }

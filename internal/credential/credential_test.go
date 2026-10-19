@@ -196,7 +196,9 @@ func TestParseTarget_CashTarget_GeneratesFreshSecretEachTime(t *testing.T) {
 // funds permanently unspendable (caught by a live integration test
 // against a real Hub, redeeming with the secret extracted from this
 // exact field). Resolved is the only place it's recoverable from.
-func TestParseTarget_CashTarget_ResolvedSurfacesSecret(t *testing.T) {
+// #98: Resolved is a public description, so it never carries the generated
+// secret; the secret is read from the target itself.
+func TestParseTarget_CashTarget_KeepsTheSecretOutOfResolved(t *testing.T) {
 	rt, err := ParseTarget("cash")
 	if err != nil {
 		t.Fatalf("ParseTarget() error = %v", err)
@@ -205,11 +207,11 @@ func TestParseTarget_CashTarget_ResolvedSurfacesSecret(t *testing.T) {
 	if !ok {
 		t.Fatal("cash target result does not expose Secret()")
 	}
-	if rt.Resolved == "" {
-		t.Fatal("Resolved is empty — the generated secret would be lost with no way to recover it")
+	if bt.Secret() == "" {
+		t.Fatal("the cash target has no secret")
 	}
-	if !strings.Contains(rt.Resolved, bt.Secret()) {
-		t.Errorf("Resolved = %q, want it to contain the actual generated secret %q", rt.Resolved, bt.Secret())
+	if rt.Resolved != "" {
+		t.Errorf("Resolved = %q, want empty (it would carry the spending secret)", rt.Resolved)
 	}
 }
 

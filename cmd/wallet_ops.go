@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -93,7 +94,14 @@ func newWalletInvoiceCmd() *cobra.Command {
 				return classifyWalletCallErr(cmd, err)
 			}
 			if jsonMode {
-				output.PrintJSON(tx)
+				// NIP-47's amount is in mloki; amount_mloki says so, like every
+				// other cashctl amount field.
+				out := map[string]any{}
+				if b, mErr := json.Marshal(tx); mErr == nil {
+					_ = json.Unmarshal(b, &out)
+				}
+				out["amount_mloki"] = tx.AmountMloki
+				output.PrintJSON(out)
 				return nil
 			}
 			output.Println(tx.Invoice)
