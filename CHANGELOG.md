@@ -4,6 +4,7 @@
 
 - Adds the `--json` error object's fields to `cashctl --help`; the cash skill
   now points there instead of AGENTS.md, which an installed binary doesn't have.
+  ([#94](https://github.com/ohstr/cashctl/pull/94))
 
 ## [0.6.0-rc.14]
 
