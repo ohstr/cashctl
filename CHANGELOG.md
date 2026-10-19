@@ -5,6 +5,8 @@
 - Adds the `--json` error object's fields to `cashctl --help`; the cash skill
   now points there instead of AGENTS.md, which an installed binary doesn't have.
   ([#94](https://github.com/ohstr/cashctl/pull/94))
+- Fixes `redeem --amount` picking a different Hub's bills from run to run when
+  more than one Hub can land the amount exactly; it now always picks the same.
 
 ## [0.6.0-rc.14]
 

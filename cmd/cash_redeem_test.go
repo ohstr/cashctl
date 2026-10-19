@@ -803,6 +803,27 @@ func TestExactSameHubSum_NeverGroupsFingerprintlessBills(t *testing.T) {
 	}
 }
 
+// #99: when two Hubs can each land the amount exactly, redeem --amount picks
+// the same one every run (the first by Hub fingerprint), never map order.
+func TestExactSameHubSum_PicksTheSameHubEveryRun(t *testing.T) {
+	q := []quotedEntry{
+		{entry: &ledger.Entry{ID: "b1"}, net: 250, hub: "hub-b"},
+		{entry: &ledger.Entry{ID: "a1"}, net: 300, hub: "hub-a"},
+		{entry: &ledger.Entry{ID: "b2"}, net: 250, hub: "hub-b"},
+		{entry: &ledger.Entry{ID: "a2"}, net: 200, hub: "hub-a"},
+	}
+	for range 200 {
+		got := exactSameHubSum(q, 500)
+		var ids []string
+		for _, e := range got {
+			ids = append(ids, e.ID)
+		}
+		if strings.Join(ids, ",") != "a1,a2" {
+			t.Fatalf("picked %v, want hub-a's a1,a2 every run", ids)
+		}
+	}
+}
+
 // redeem --all names the bills it left out because their Hub reported them
 // spent, in both result shapes, instead of letting them vanish silently.
 func TestPrintRedeemOutcomes_NamesBillsSkippedAsSpent(t *testing.T) {
