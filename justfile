@@ -63,4 +63,4 @@ dev *args:
 docs-dev:
     [ -d .docs-kit/.git ] && git -C .docs-kit pull --quiet || git clone --quiet https://github.com/ohstr/docs-kit .docs-kit
     cd .docs-kit && [ -d node_modules ] || npm install
-    cd .docs-kit && DOCS_CONTENT_DIR="{{justfile_directory()}}" DOCS_TITLE=cashctl DOCS_ACCENT_HUE=142 DOCS_FAVICON_GLYPH='$' npm run dev
+    cd .docs-kit && DOCS_CONTENT_DIR="{{justfile_directory()}}" DOCS_TITLE=cashctl DOCS_ACCENT_HUE=265 DOCS_FAVICON="{{justfile_directory()}}/docs/brand/favicon.svg" DOCS_LOGO="{{justfile_directory()}}/docs/brand/cashctl-mark-light.svg" DOCS_LOGO_DARK="{{justfile_directory()}}/docs/brand/cashctl-mark.svg" npm run dev

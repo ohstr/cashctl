@@ -8,6 +8,7 @@ on:
       - AGENTS.md
       - CHANGELOG.md
       - docs/public/**
+      - docs/brand/**
       - .github/workflows/pages.yml
   workflow_dispatch:
 
@@ -23,6 +24,8 @@ jobs:
     with:
       title: cashctl
       description: A wallet CLI for NIP-CASH cash tokens and NIP-CW circle wallets.
-      accent-hue: 142 # money green
-      favicon-glyph: "$"
+      accent-hue: 265 # the logo's purple, #9B5CF6
+      favicon: docs/brand/favicon.svg
+      logo: docs/brand/cashctl-mark-light.svg
+      logo-dark: docs/brand/cashctl-mark.svg
       extra-public-dir: docs/public # install.sh, install.ps1, PROMPT.md
