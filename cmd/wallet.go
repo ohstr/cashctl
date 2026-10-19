@@ -363,9 +363,10 @@ func newWalletGetInfoCmd() *cobra.Command {
 
 func newWalletBalanceCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "balance",
-		Short: "Show your unified balance",
-		Long:  `Sums every wallet's balance plus unredeemed held cash into one figure.`,
+		Use:     "balance",
+		Aliases: []string{"get-balance"},
+		Short:   "Show your unified balance",
+		Long:    `Sums every wallet's balance plus unredeemed held cash into one figure.`,
 		Example: `  cashctl wallet balance
   cashctl wallet balance --breakdown
   cashctl wallet balance --from work`,

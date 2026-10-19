@@ -67,10 +67,15 @@ A Hub's refusal tells you whether to retry — branch on `code`, with
 
 | refusal | `nwc_code` | `code` | retry? |
 |---|---|---|---|
-| Hub still starting up | `NOT_READY` | `network` | yes, after a short wait |
+| Hub still starting up | `NOT_READY` | `network` | yes, after a short wait (see below) |
 | asking too often | `RATE_LIMITED` | `conflict` | yes, after a wait |
 | not a member of this circle | `RESTRICTED` | `auth` | no |
 | you already hold a wallet here | `WALLET_EXISTS` | `exists` | no — use the wallet you have |
+
+`NOT_READY` means the Hub cannot check circle membership yet (typically its
+relays are not reachable). `decode --check` does not detect this. Retry with
+a growing delay — about 5s, 15s, then 60s — and if it persists past a few
+minutes, it is for the circle's host to fix, not something to keep retrying.
 
 Two joins from one identity within the same second look like a replayed
 proof to the Hub; `join` then waits a second and asks again once, so the

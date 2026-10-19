@@ -416,6 +416,11 @@ func checkCashTokenAgainstHub(cmd *cobra.Command, jsonMode bool, value, embedded
 			if isBareCashModeBill(tok, embeddedCashSecret) {
 				return errNeedsCashSecret
 			}
+			if embeddedCashSecret != "" {
+				// A cash note's Hub answers only to its current secret: this one was
+				// re-keyed (protected) or spent by whoever took the note.
+				return fmt.Errorf("this cash note no longer answers to that secret: whoever took it has re-keyed or spent it")
+			}
 			return fmt.Errorf("no matching recipient found on the Hub")
 		}
 		if err != nil {

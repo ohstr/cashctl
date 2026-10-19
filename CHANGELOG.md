@@ -26,6 +26,12 @@
   `wallet balance -c <unknown>` says where to look, `decode` names npub in its
   list, and `wallet history` says "(pubkey)" instead of "identity cash".
   ([#107](https://github.com/ohstr/cashctl/pull/107))
+- Adds `wallet get-balance` as an alias of `wallet balance`, and an
+  `amount_mloki` field to `invoice --json`.
+- Fixes `init --json` reporting an empty `default_wallet` when one is already
+  set, and generated circle wallet names cut mid-word.
+- Fixes `decode --check` on a cash note someone else re-keyed: it now says the
+  secret no longer answers instead of "no matching recipient".
 
 ## [0.6.0-rc.14]
 

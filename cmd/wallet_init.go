@@ -47,6 +47,12 @@ func runWalletInit(cmd *cobra.Command, args []string) error {
 	output.Linef(jsonMode, "Using identity %s (%s)", npub, source)
 
 	walletName := offerDefaultWallet(cmd, jsonMode)
+	if walletName == "" {
+		// None registered now: report the default already in effect, if any.
+		if s, err := config.Load(); err == nil {
+			walletName = s.Default
+		}
+	}
 
 	if jsonMode {
 		identityState := "reused"
