@@ -514,8 +514,8 @@ func retryWithPendingSecrets(
 			// Not Saved here: the caller's own recordRedeemed does that, and picks
 			// these fields up because Entry is a pointer into the ledger's slice —
 			// the same contract spendCashEntry relies on.
-			entry.CashSecret = pendingByID[rr.ID]
-			entry.PendingCashSecret = ""
+			entry.PendingCashSecret = pendingByID[rr.ID]
+			promotePendingSecret(entry)
 		}
 		for i := range results {
 			if results[i].ID == rr.ID {

@@ -227,7 +227,7 @@ func runCashConsolidate(cmd *cobra.Command, args []string) error {
 		return output.RuntimeError(cmd, err)
 	}
 	// A merge interrupted before its move was confirmed is settled first (I-26).
-	settlePendingMoves(l)
+	settlePendingMoves(cmd, l)
 
 	if len(args) > 0 || sourcesFlag != "" {
 		items, err := resolveConsolidateSources(args, sourcesFlag, l.Held())

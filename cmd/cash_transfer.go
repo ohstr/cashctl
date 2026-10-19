@@ -1053,7 +1053,7 @@ func runCashTransfer(cmd *cobra.Command, args []string) error {
 		return output.RuntimeError(cmd, err)
 	}
 	// A merge interrupted before its move was confirmed is settled first (I-26).
-	settlePendingMoves(l)
+	settlePendingMoves(cmd, l)
 
 	tokenFlag, _ := cmd.Flags().GetString("token")
 	var entry *ledger.Entry
