@@ -25,6 +25,7 @@
 - Fixes error text: a Hub's message and cashctl's hint no longer run together,
   `wallet balance -c <unknown>` says where to look, `decode` names npub in its
   list, and `wallet history` says "(pubkey)" instead of "identity cash".
+  ([#107](https://github.com/ohstr/cashctl/pull/107))
 
 ## [0.6.0-rc.14]
 
