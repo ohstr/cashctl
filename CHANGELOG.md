@@ -7,6 +7,7 @@
   ([#94](https://github.com/ohstr/cashctl/pull/94))
 - Fixes `redeem --amount` picking a different Hub's bills from run to run when
   more than one Hub can land the amount exactly; it now always picks the same.
+  ([#102](https://github.com/ohstr/cashctl/pull/102))
 
 ## [0.6.0-rc.14]
 
