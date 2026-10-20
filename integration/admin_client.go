@@ -95,6 +95,10 @@ type adminCreateAppRequest struct {
 	CashMaxExpSecs        int   `json:"cashMaxExpSecs,omitempty"`
 	CashRedeemFeePpm      int   `json:"cashRedeemFeePpm,omitempty"`
 	CashMinTransferMloki  int64 `json:"cashMinTransferMloki,omitempty"`
+	// CashSpentRetentionSecs is how long the hub keeps answering "spent" for a
+	// bill it destroyed; a pointer because 0 (fall silent at once) differs
+	// from omitted (the server default).
+	CashSpentRetentionSecs *int `json:"cashSpentRetentionSecs,omitempty"`
 
 	// circle_hub-only fields (Kind == "circle_hub") — CircleIdentityName/
 	// CirclePolicy create a brand-new CircleIdentity, "allowlist" or
@@ -219,6 +223,12 @@ func (c *adminClient) deleteCashWallet(hubAppID, walletAppID uint) error {
 		time.Sleep(time.Duration(attempt) * time.Second)
 	}
 	return err
+}
+
+// deleteCashClaim removes one recipient's slice from a bill, as the Hub
+// owner can (DELETE /api/apps/:id/cash-wallets/:walletId/claims/:claimId).
+func (c *adminClient) deleteCashClaim(hubAppID, walletAppID, claimID uint) error {
+	return c.doBody(http.MethodDelete, fmt.Sprintf("/api/apps/%d/cash-wallets/%d/claims/%d", hubAppID, walletAppID, claimID), nil, nil)
 }
 
 type adminCircleChild struct {

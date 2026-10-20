@@ -75,6 +75,13 @@ or with a real user's own cashctl/ncli state:
   under a pseudo-terminal, `NCLI_VAULT_PASSWORD`, the literal `connection:`
   target, `consolidate --ia`, the canonical `cash ...`/`wallet ...` forms, and a
   `redeem --all` where one bill is gone (every bill reported, nonzero exit).
+- `attack_surface_test.go` — attacks a live Hub can stage: two wallets
+  receiving one cash note at once (exactly one can spend it), no NIP-47 request
+  addressed to a bill on the shared transport while every bill command runs (a
+  bill stripped of its mint provenance is refused, not sent there), a slice the
+  Hub owner deleted (`not_found`), a Hub keeping no tombstone (silence is never
+  `spent`), a forged newer follow set (ignored), terminal escapes in a hub label
+  (never printed raw), and a pre-existing 0755 config directory (made 0700).
 - `TestReceive_PersistsMinterPubkeyForSignedToken` — mints with a mint
   signature requested and confirms `receive` persists the recovered minter
   pubkey onto the held entry (skips cleanly if the Hub doesn't attach one —
