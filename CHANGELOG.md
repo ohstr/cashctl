@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.6.0-rc.16]
+
+- Fixes a malformed NIP-04 reply from a wallet crashing cashctl; it is now
+  reported as an error. Picks up nmilat v0.5.0-rc.28.
+  ([#111](https://github.com/ohstr/cashctl/pull/111))
+
 ## [0.6.0-rc.15]
 
 Fixes several ways an interrupted or forged reply could lose or misdirect money,
