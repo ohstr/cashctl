@@ -137,7 +137,7 @@ cashctl decode circlehub1... --json     # {"type":"circlehub","hrp","wallet_pubk
 cashctl decode nostr+walletconnect://... --json  # {"type":"nwc_uri","wallet_pubkey","relays"}
 cashctl decode npub1... --json          # {"type":"npub","pubkey"} — the hex form
 cashctl decode lokicash1... --check --json    # adds "check":{"ok","amount_millis"?,"expires_at"?,"spent"?,"error"?} — a network call
-cashctl decode circlehub1... --check --json   # adds "check":{"ok","note"?,"error"?} — is joining even possible here
+cashctl decode circlehub1... --check --json   # adds "check":{"ok","note"?,"error"?,"private_join"?,"circle_policy"?} — is joining even possible here, and privately
 ```
 
 The one general-purpose local decoder: paste in whichever of the three

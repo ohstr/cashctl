@@ -495,6 +495,12 @@ type circleCheckResult struct {
 	OK    bool   `json:"ok"`
 	Error string `json:"error,omitempty"`
 	Note  string `json:"note,omitempty"`
+	// PrivateJoin is whether get_info names the node identity that NIP-CW
+	// Private Join needs; nil when the check didn't get that far. Offered is
+	// not verified: join still checks the Hub's announcement.
+	PrivateJoin *bool `json:"private_join,omitempty"`
+	// CirclePolicy is get_info's circle_policy as sent.
+	CirclePolicy string `json:"circle_policy,omitempty"`
 }
 
 // circleJoinableCaveat is circleCheckResult's own Note/text-mode wording
@@ -503,6 +509,7 @@ type circleCheckResult struct {
 const circleJoinableCaveat = "reachable and supports circle wallets — doesn't confirm the Hub hasn't expired or that you're allowlisted; an actual `join` can still fail"
 
 func checkCircleHubJoinable(jsonMode bool, conn nipcw.CircleHubConnection) circleCheckResult {
+	var cw *nip47.CircleWalletInfo
 	err := WithSpinner(jsonMode, "Checking...", func() error {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
@@ -519,6 +526,7 @@ func checkCircleHubJoinable(jsonMode bool, conn nipcw.CircleHubConnection) circl
 		}
 		for _, m := range info.Methods {
 			if m == nipcw.MethodCreateCircleWallet {
+				cw = info.CircleWallet
 				return nil
 			}
 		}
@@ -528,13 +536,51 @@ func checkCircleHubJoinable(jsonMode bool, conn nipcw.CircleHubConnection) circl
 		// Sanitized: same reasoning as checkCashTokenAgainstHub above.
 		return circleCheckResult{OK: false, Error: output.Sanitize(err.Error())}
 	}
-	return circleCheckResult{OK: true, Note: circleJoinableCaveat}
+	return circleJoinableResult(cw)
+}
+
+// circleJoinableResult is a passed check's report, with what get_info's
+// circle_wallet says about private join and membership.
+func circleJoinableResult(cw *nip47.CircleWalletInfo) circleCheckResult {
+	offered := cw != nil && cw.Identity != ""
+	r := circleCheckResult{OK: true, Note: circleJoinableCaveat, PrivateJoin: &offered}
+	if cw != nil {
+		r.CirclePolicy = output.Sanitize(cw.CirclePolicy)
+	}
+	return r
 }
 
 func printCircleCheck(r circleCheckResult) {
-	if r.OK {
-		output.Printf("check: appears joinable (%s)\n", r.Note)
+	if !r.OK {
+		output.Printf("check: %s\n", r.Error)
 		return
 	}
-	output.Printf("check: %s\n", r.Error)
+	output.Printf("check: appears joinable (%s)\n", r.Note)
+	if r.PrivateJoin != nil {
+		output.Printf("private join: %s\n", offeredText(*r.PrivateJoin))
+	}
+	if r.CirclePolicy != "" {
+		output.Printf("circle policy: %s\n", circlePolicyPhrase(r.CirclePolicy))
+	}
+}
+
+// offeredText is how decode and get-info say whether a Hub offers private join.
+func offeredText(offered bool) string {
+	if offered {
+		return "offered"
+	}
+	return "not offered"
+}
+
+// circlePolicyPhrase names get_info's circle_policy in words; an unknown
+// value is shown as sent.
+func circlePolicyPhrase(policy string) string {
+	switch policy {
+	case nip47.CirclePolicyFollowSet:
+		return "follow set"
+	case nip47.CirclePolicyAllowlist:
+		return "allowlist"
+	default:
+		return output.Sanitize(policy)
+	}
 }

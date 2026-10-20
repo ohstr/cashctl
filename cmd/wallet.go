@@ -352,7 +352,8 @@ func newWalletGetInfoCmd() *cobra.Command {
 			// against a raw Circle Hub connection show its forwarding-fee
 			// rate before joining, matching what `--json` already exposes.
 			if cw := info.CircleWallet; cw != nil {
-				output.Printf("circle policy:    %s\n", output.Sanitize(cw.CirclePolicy))
+				output.Printf("circle policy:    %s\n", circlePolicyPhrase(cw.CirclePolicy))
+				output.Printf("private join:     %s\n", offeredText(cw.Identity != ""))
 				output.Printf("circle fee:       %d ppm\n", cw.FeesPpm)
 				output.Printf("circle available: %s\n", output.FormatAmount(cw.AvailableMillis))
 			}
