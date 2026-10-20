@@ -74,3 +74,30 @@ func TestDir_TightensALooseExistingDirectory(t *testing.T) {
 		t.Errorf("notices = %q, want exactly one", out.String())
 	}
 }
+
+// A directory that isn't cashctl's own (neither empty nor holding
+// cashctl.db) is left as it is: --config-dir pointed at $HOME by mistake must
+// not lock it down.
+func TestDir_LeavesAForeignDirectoryAlone(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no POSIX modes on Windows")
+	}
+	dir := filepath.Join(t.TempDir(), "home")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".bashrc"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	SetOverride(dir)
+	t.Cleanup(func() { SetOverride("") })
+	if _, err := Dir(); err != nil {
+		t.Fatalf("Dir() error = %v", err)
+	}
+	if info, _ := os.Stat(dir); info.Mode().Perm() != 0o755 {
+		t.Errorf("mode = %04o, want a foreign directory left at 0755", info.Mode().Perm())
+	}
+}
