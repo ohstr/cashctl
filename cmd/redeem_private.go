@@ -206,7 +206,6 @@ func quoteHubGroup(
 	}
 	incomplete := incompleteReply(sendErr)
 
-	myPubHex, _ := signerPubKeyHex(cmd)
 	byID := map[string]*ledger.Entry{}
 	for _, e := range entries {
 		byID[e.ID] = e
@@ -220,6 +219,7 @@ func quoteHubGroup(
 		case r.Succeeded() && r.Result != nil && r.Result.IsSpent():
 			errs[r.ID] = recordSpent(cmd, l, entry)
 		case r.Succeeded() && r.Result != nil:
+			myPubHex, _ := signerPubKeyHex(cmd, entry)
 			recipient, ok := nipcash.MatchClaimAuto(r.Result.Recipients, myPubHex)
 			if !ok {
 				errs[r.ID] = output.NotFoundError(cmd, r.ID,

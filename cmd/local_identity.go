@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/ohstr/cashctl/internal/identity"
+	"github.com/ohstr/cashctl/internal/ledger"
 	"github.com/ohstr/cashctl/internal/output"
 )
 
@@ -41,12 +42,24 @@ func localPubKeyHex(cmd *cobra.Command) (string, error) {
 	return utils.GetPublicKey(priv)
 }
 
-// signerPubKeyHex is the pubkey a Hub's reply is matched against when this
-// run spends: the --as credential's when it is pubkey:<privkey>, since that
-// key and not the stored identity signs every request, and the local
-// identity's otherwise.
-func signerPubKeyHex(cmd *cobra.Command) (string, error) {
+// signerPubKeyHex is the pubkey a Hub's reply about entry is matched against:
+// that of the key resolveCredential signs with — a pubkey:<privkey> --as,
+// else a merge's throwaway key, else the local identity. entry may be nil.
+func signerPubKeyHex(cmd *cobra.Command, entry *ledger.Entry) (string, error) {
 	if priv, ok := strings.CutPrefix(asCredentialValue(cmd), "pubkey:"); ok {
+		return utils.GetPublicKey(priv)
+	}
+	if entry != nil && entry.ThrowawayKey != "" {
+		return utils.GetPublicKey(entry.ThrowawayKey)
+	}
+	return localPubKeyHex(cmd)
+}
+
+// credentialPubKeyHex is the pubkey a credential string (consolidate's
+// <token>:<amount>:<credential> source form) signs as: its own key for
+// pubkey:<privkey>, the local identity's otherwise.
+func credentialPubKeyHex(cmd *cobra.Command, credential string) (string, error) {
+	if priv, ok := strings.CutPrefix(credential, "pubkey:"); ok {
 		return utils.GetPublicKey(priv)
 	}
 	return localPubKeyHex(cmd)

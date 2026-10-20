@@ -7,6 +7,7 @@ import (
 
 	"github.com/ohstr/nmilat/utils"
 
+	"github.com/ohstr/cashctl/internal/ledger"
 	"github.com/ohstr/cashctl/internal/output"
 )
 
@@ -60,7 +61,30 @@ func TestSignerPubKeyHex_FollowsAPubkeyAsCredential(t *testing.T) {
 	}
 	c := testCmdWithFlags(true, false)
 	c.Flags().String("as", "pubkey:"+priv, "")
-	if got, err := signerPubKeyHex(c); err != nil || got != want {
+	if got, err := signerPubKeyHex(c, nil); err != nil || got != want {
 		t.Fatalf("signerPubKeyHex = %q, %v; want %q", got, err, want)
+	}
+}
+
+// A cash note moved onto a merge's throwaway key is spent by that key, so
+// the Hub's reply about it is matched against the throwaway key's pubkey.
+func TestSignerPubKeyHex_FollowsAThrowawayKey(t *testing.T) {
+	throwaway := strings.Repeat("22", 32)
+	want, err := utils.GetPublicKey(throwaway)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := testCmdWithFlags(true, false)
+	c.Flags().String("as", "", "")
+	if got, err := signerPubKeyHex(c, &ledger.Entry{ThrowawayKey: throwaway}); err != nil || got != want {
+		t.Fatalf("signerPubKeyHex = %q, %v; want the throwaway key's %q", got, err, want)
+	}
+}
+
+func TestCredentialPubKeyHex_PubkeyCredential(t *testing.T) {
+	priv := strings.Repeat("33", 32)
+	want, _ := utils.GetPublicKey(priv)
+	if got, err := credentialPubKeyHex(testCmdWithFlags(true, false), "pubkey:"+priv); err != nil || got != want {
+		t.Fatalf("credentialPubKeyHex = %q, %v; want %q", got, err, want)
 	}
 }

@@ -12,8 +12,9 @@
 - Fixes `receive` refusing a signed bill split between several recipients: it
   compared the holder's own share against the whole bill's attested amount.
   ([#116](https://github.com/ohstr/cashctl/pull/116))
-- Fixes `redeem --as pubkey:<key>` (and `CASHCTL_AS`) failing with "couldn't
-  determine this token's amount" when that key isn't your stored identity.
+- Fixes `redeem --as pubkey:<key>` (and `CASHCTL_AS`), and redeeming or sending
+  a cash note left `pending_merge`, failing with "couldn't determine this
+  token's amount": the Hub's reply was matched against your stored identity.
   ([#116](https://github.com/ohstr/cashctl/pull/116))
 
 ## [0.6.0-rc.16]
