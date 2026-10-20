@@ -2,6 +2,10 @@
 
 ## [0.6.0-rc.17]
 
+Refuses a Hub that raises a bill's redeem fee after you received it, and keeps
+secrets off the command line with `-`. Fixes receiving a bill split between
+several people and spending with `--as pubkey:`.
+
 - Adds `-` in place of `receive`'s token, `connect add`'s connection and
   `join`'s hub connection, read from stdin so the secret stays out of `ps` and
   shell history.
