@@ -21,8 +21,10 @@
   ([#118](https://github.com/ohstr/cashctl/pull/118))
 - Fixes a Hub being able to charge a larger redeem fee, or quote a larger
   amount, for a bill than it did when you received it; `redeem` now refuses.
+  ([#120](https://github.com/ohstr/cashctl/pull/120))
 - Adds a note when `receive` is handed a bill whose relay is on your own
   machine or local network, which a bill from someone else has no reason to name.
+  ([#120](https://github.com/ohstr/cashctl/pull/120))
 
 ## [0.6.0-rc.16]
 
