@@ -5,12 +5,16 @@
 - Adds `-` in place of `receive`'s token, `connect add`'s connection and
   `join`'s hub connection, read from stdin so the secret stays out of `ps` and
   shell history.
+  ([#116](https://github.com/ohstr/cashctl/pull/116))
 - Fixes `skills install` writing through a symlink planted where a skill file
   goes; it now replaces the link, and refuses a skill directory that is one.
+  ([#116](https://github.com/ohstr/cashctl/pull/116))
 - Fixes `receive` refusing a signed bill split between several recipients: it
   compared the holder's own share against the whole bill's attested amount.
+  ([#116](https://github.com/ohstr/cashctl/pull/116))
 - Fixes `redeem --as pubkey:<key>` (and `CASHCTL_AS`) failing with "couldn't
   determine this token's amount" when that key isn't your stored identity.
+  ([#116](https://github.com/ohstr/cashctl/pull/116))
 
 ## [0.6.0-rc.16]
 
