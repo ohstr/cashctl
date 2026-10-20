@@ -66,6 +66,8 @@ func runCashReceive(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return output.InvalidInputError(cmd, input, err)
 	}
+	// Before anything below dials the bill's relays.
+	warnLocalRelays(jsonMode, tok.RelayURLs)
 
 	// Local-only guess, used below just to decide whether to bail at Step
 	// 0 and what to print pre-network. tok.IdentityRequired is a
@@ -146,7 +148,6 @@ func runCashReceive(cmd *cobra.Command, args []string) error {
 
 	printCashBill(jsonMode, tok, isCash)
 
-	warnLocalRelays(jsonMode, tok.RelayURLs)
 	result, err := checkClaimWithCashHub(cmd, input, embeddedSecret, tok)
 	if err != nil {
 		return err
