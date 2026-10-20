@@ -455,15 +455,11 @@ func joinCircle(ctx context.Context, hubURI string, params nipcw.CreateCircleWal
 	}
 	defer client.Close()
 	result, err = client.Join(ctx, params, opts)
-	if err != nil && strings.HasPrefix(err.Error(), joinGetInfoErrPrefix) {
+	if errors.Is(err, nipcwclient.ErrJoinNotSent) {
 		return nil, false, err
 	}
 	return result, true, err
 }
-
-// joinGetInfoErrPrefix starts the error Join returns when its get_info failed,
-// before any join was sent; nmilat has no sentinel for it.
-const joinGetInfoErrPrefix = "nipcw/client: get_info: "
 
 // wrappedPair returns the two errors err wraps directly, as nmilat's Join
 // builds a failure after a fallback ("%w (after private join was unavailable:
@@ -494,7 +490,8 @@ func privateJoinUnavailableErr(cmd *cobra.Command, err error) error {
 // fallbackFailureReason reports why the private join was skipped when err is a
 // join that then failed over the standard transport.
 func fallbackFailureReason(err error) (error, bool) {
-	if errors.Is(err, nipcwclient.ErrPrivateJoinUnavailable) {
+	// Both wrap a cause the same way but mean nothing was sent.
+	if errors.Is(err, nipcwclient.ErrPrivateJoinUnavailable) || errors.Is(err, nipcwclient.ErrJoinNotSent) {
 		return nil, false
 	}
 	_, reason, ok := wrappedPair(err)

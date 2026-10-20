@@ -202,3 +202,26 @@ func TestJoin_UnansweredPrivateJoinKeepsTheKey(t *testing.T) {
 		t.Errorf("pending joins = %+v, err = %v; want the key kept and named", p, err)
 	}
 }
+
+// A Join that failed before sending (its get_info, say) wraps ErrJoinNotSent:
+// no wallet exists, so the key is forgotten, and the "%w: get_info: %w" shape is
+// not mistaken for a failure after a fallback.
+func TestJoin_NotSentForgetsTheKeyWithoutAFallbackNote(t *testing.T) {
+	notSent := fmt.Errorf("%w: get_info: %w", nipcwclient.ErrJoinNotSent, context.DeadlineExceeded)
+	f := &fakeJoin{t: t, dialed: false, err: notSent}
+	setUpJoinTest(t, f)
+	_, _, err := runTestJoinWith(t, map[string]string{"json": "true"})
+	ce := output.AsCLIError(err)
+	if ce == nil || ce.Code != output.CodeNetwork {
+		t.Fatalf("err = %v, want a network error", err)
+	}
+	if strings.Contains(ce.Hint, "shared Hub connection") {
+		t.Errorf("hint %q claims a fallback that did not happen", ce.Hint)
+	}
+	if p := pendingJoins(t); len(p) != 0 {
+		t.Errorf("pending joins = %+v, want none: nothing was sent", p)
+	}
+	if _, isFallback := fallbackFailureReason(notSent); isFallback {
+		t.Error("fallbackFailureReason took ErrJoinNotSent for a fallback")
+	}
+}
