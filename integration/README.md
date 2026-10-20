@@ -68,6 +68,13 @@ or with a real user's own cashctl/ncli state:
   — each join limit (expiry, minimum cap, per-wallet and hub ceilings) maps to
   its exit code and leaves no pending join, and an expired wallet blocks a
   re-join (`exists`) until the host deletes it.
+- `command_coverage_test.go` — the commands, flags and environment variables
+  nothing else ran: `skills list|show|install` (including a planted symlink),
+  `version`, `wallet get-balance`, `cash status --all`, every `--as` form and
+  `CASHCTL_AS` (the flag winning), `-` reading a secret from stdin, `NO_COLOR`
+  under a pseudo-terminal, `NCLI_VAULT_PASSWORD`, the literal `connection:`
+  target, `consolidate --ia`, the canonical `cash ...`/`wallet ...` forms, and a
+  `redeem --all` where one bill is gone (every bill reported, nonzero exit).
 - `TestReceive_PersistsMinterPubkeyForSignedToken` — mints with a mint
   signature requested and confirms `receive` persists the recovered minter
   pubkey onto the held entry (skips cleanly if the Hub doesn't attach one —
