@@ -142,21 +142,6 @@ func newMember(t *testing.T) (*fixture, string) {
 	return f, pubHex
 }
 
-// requireAdmin loads config.local.yaml's admin client, skipping the test
-// when it isn't configured.
-func requireAdmin(t *testing.T) *adminClient {
-	t.Helper()
-	cfg, err := LoadConfig("")
-	if err != nil {
-		t.Skipf("skipping: could not load integration config (%v) — see integration/README.md", err)
-	}
-	admin, ok := newAdminClient(cfg)
-	if !ok {
-		t.Skip("skipping: admin_api not configured — see integration/README.md")
-	}
-	return admin
-}
-
 // cliError is cashctl's --json error document (stderr).
 type cliError struct {
 	Error     string `json:"error"`

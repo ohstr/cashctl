@@ -122,7 +122,7 @@ func requirePendingJoinsEmpty(t *testing.T, step string, f *fixture) {
 // republish drops a member who already holds a wallet, and an empty set
 // closes the circle to someone who was a member until then.
 func TestFollowSetCircle_ManagedSet(t *testing.T) {
-	admin := requireAdmin(t)
+	admin := adminOrSkip(t)
 	public, publicPub := newMember(t)
 	hidden, hiddenPub := newMember(t)
 	later, laterPub := newMember(t)
@@ -199,7 +199,7 @@ func TestFollowSetCircle_ManagedSet(t *testing.T) {
 // network code), and a newer version replaces the old one once the Hub has
 // read it.
 func TestFollowSetCircle_ExternalProvider(t *testing.T) {
-	admin := requireAdmin(t)
+	admin := adminOrSkip(t)
 	info, err := admin.getInfo()
 	if err != nil || info.GeneralRelay == "" {
 		t.Skipf("skipping: no general relay to publish a follow set to (info=%+v err=%v)", info, err)

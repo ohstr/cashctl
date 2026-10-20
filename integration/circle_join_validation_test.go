@@ -12,7 +12,7 @@ import (
 
 // TestCircleJoin_RefusedTerms asks for terms the Hub does not grant.
 func TestCircleJoin_RefusedTerms(t *testing.T) {
-	admin := requireAdmin(t)
+	admin := adminOrSkip(t)
 
 	for _, tc := range []struct {
 		name    string
@@ -77,7 +77,7 @@ func TestCircleJoin_RefusedTerms(t *testing.T) {
 // TestCircleJoin_AmountFirstPositional joins with the amount before the hub
 // connection: the two positionals are told apart by shape, not position.
 func TestCircleJoin_AmountFirstPositional(t *testing.T) {
-	admin := requireAdmin(t)
+	admin := adminOrSkip(t)
 	f, pub := newMember(t)
 	hub := setUpCircleHub(t, admin, pub)
 	joined := f.mustJSON("join", "10", *hub.CircleHubToken)
@@ -91,7 +91,7 @@ func TestCircleJoin_AmountFirstPositional(t *testing.T) {
 // wallet still counts as the member's one wallet, so a re-join is `exists`
 // until the host deletes it, after which the member can join again.
 func TestCircleJoin_ExpiredWalletBlocksRejoinUntilDeleted(t *testing.T) {
-	admin := requireAdmin(t)
+	admin := adminOrSkip(t)
 	f, pub := newMember(t)
 	hub := setUpCircleHub(t, admin, pub)
 

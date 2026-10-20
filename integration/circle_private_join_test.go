@@ -55,7 +55,7 @@ func circleHubInbox(t *testing.T, pairingURI string) (relay, inbox string) {
 // once by default and once with --private=require (through the canonical
 // `circle join`), and confirms each request reached the Hub's private inbox.
 func TestCircleJoin_PrivateWhenOffered(t *testing.T) {
-	admin := requireAdmin(t)
+	admin := adminOrSkip(t)
 	byDefault, byDefaultPub := newMember(t)
 	required, requiredPub := newMember(t)
 
