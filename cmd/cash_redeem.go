@@ -1287,8 +1287,9 @@ type redeemQuote struct {
 // than silently fall back to a possibly-wrong amount. Same failure
 // contract resolveAmount has always had for an entry that didn't already
 // have its amount cached — this just always pays that same cost, since the
-// fee can change server-side at any time up to redeem, cached amount or
-// not.
+// amount can shrink (a co-holder spending part of a shared bill) and the
+// Hub's figures have to be checked against what was recorded
+// (checkQuoteDrift).
 func resolveRedeemQuote(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entry, sourceClient *nipcashclient.Client) (redeemQuote, error) {
 	tok, err := nipcash.Decode(entry.Token)
 	if err != nil {

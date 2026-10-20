@@ -396,18 +396,6 @@ func credentialForToken(cmd *cobra.Command, embeddedSecret string) (nipcash.Cred
 	return localCashCredential(cmd)
 }
 
-// recordQuote turns a matched roster row into a quote and writes the ledger
-// bookkeeping resolveRedeemQuote does, so the batched and single-bill paths cannot
-// drift in what a quote records.
-//
-// Returns an error rather than a bare quote because the Hub's figures are validated
-// here (validateQuotedAmounts) and a refusal has to reach the caller: this used to
-// persist whatever arrived and set Verified = true, so a hostile Hub — reachable via
-// nothing more than a token's own RelayURLs — could write an arbitrary "verified"
-// balance into the ledger. The attested amount comes from the TOKEN rather than from
-// entry.AmountMillis, deliberately: the line below overwrites the entry's amount with
-// the Hub's, so on a second attempt the entry no longer holds an independent figure to
-// check against, while the token's is signed and immutable.
 // checkQuoteDrift refuses a Hub figure for a held slice that it could only
 // reach by lying: a slice never grows (anything paid to you is a new bill),
 // and a redeem fee never rises for the same or a smaller amount. Without
@@ -427,6 +415,18 @@ func checkQuoteDrift(cmd *cobra.Command, entry *ledger.Entry, amountMillis, feeM
 	return nil
 }
 
+// recordQuote turns a matched roster row into a quote and writes the ledger
+// bookkeeping resolveRedeemQuote does, so the batched and single-bill paths cannot
+// drift in what a quote records.
+//
+// Returns an error rather than a bare quote because the Hub's figures are validated
+// here (validateQuotedAmounts) and a refusal has to reach the caller: this used to
+// persist whatever arrived and set Verified = true, so a hostile Hub — reachable via
+// nothing more than a token's own RelayURLs — could write an arbitrary "verified"
+// balance into the ledger. The attested amount comes from the TOKEN rather than from
+// entry.AmountMillis, deliberately: the line below overwrites the entry's amount with
+// the Hub's, so on a second attempt the entry no longer holds an independent figure to
+// check against, while the token's is signed and immutable.
 func recordQuote(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entry, recipient nipcash.RecipientStatus) (redeemQuote, error) {
 	q := redeemQuote{
 		AmountMillis:        recipient.AmountMillis,
