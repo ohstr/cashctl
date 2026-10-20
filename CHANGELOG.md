@@ -4,6 +4,7 @@
 
 - Adds private joins: `circle join` joins privately when the Hub offers it and
   says so when it can't; `--private=require` refuses instead.
+  ([#112](https://github.com/ohstr/cashctl/pull/112))
 
 - Fixes a malformed NIP-04 reply from a wallet crashing cashctl; it is now
   reported as an error. Picks up nmilat v0.5.0-rc.28.
