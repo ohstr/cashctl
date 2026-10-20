@@ -16,6 +16,8 @@
   a cash note left `pending_merge`, failing with "couldn't determine this
   token's amount": the Hub's reply was matched against your stored identity.
   ([#116](https://github.com/ohstr/cashctl/pull/116))
+- Fixes an existing config directory open to group or others (e.g. 0755) being
+  left that way; cashctl now makes it 0700 on first use and says so.
 
 ## [0.6.0-rc.16]
 
