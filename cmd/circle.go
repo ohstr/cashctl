@@ -111,7 +111,27 @@ func newCircleJoinCmd() *cobra.Command {
 	cmd.Flags().Duration("expiry", 0, "requested expiry duration (0 = Hub default)")
 	cmd.Flags().String("budget-renewal", "", "daily|weekly|monthly|yearly|never (default: Hub default)")
 	cmd.Flags().String("as", "", "override credential (defaults to your local identity)")
+	cmd.Flags().String("private", privatePrefer, "prefer: join privately when the Hub offers it, else over the shared Hub connection, saying so; require: refuse rather than join over the shared connection")
 	return cmd
+}
+
+// --private's values.
+const (
+	privatePrefer  = "prefer"
+	privateRequire = "require"
+)
+
+// joinOptions reads --private.
+func joinOptions(cmd *cobra.Command) (nipcwclient.JoinOptions, error) {
+	v, _ := cmd.Flags().GetString("private")
+	switch strings.TrimSpace(v) {
+	case "", privatePrefer:
+		return nipcwclient.JoinOptions{}, nil
+	case privateRequire:
+		return nipcwclient.JoinOptions{RequirePrivate: true}, nil
+	default:
+		return nipcwclient.JoinOptions{}, output.InvocationError(cmd, fmt.Errorf("--private takes %q or %q, not %q", privatePrefer, privateRequire, v))
+	}
 }
 
 // disambiguateJoinArgs decides which of join's up-to-2 positional args is
@@ -176,6 +196,10 @@ func runCircleJoin(cmd *cobra.Command, args []string) error {
 	expiry, _ := cmd.Flags().GetDuration("expiry")
 	budgetRenewal, _ := cmd.Flags().GetString("budget-renewal")
 	asFlag := asCredentialValue(cmd)
+	opts, err := joinOptions(cmd)
+	if err != nil {
+		return err
+	}
 
 	positionalHub, positionalMaxAmount := disambiguateJoinArgs(args)
 
@@ -258,18 +282,18 @@ func runCircleJoin(cmd *cobra.Command, args []string) error {
 	defer cancel()
 
 	var dialErr bool
-	var resp *nipcw.CreateCircleWalletResponse
+	var result *nipcwclient.JoinResult
 	attemptJoin := func() error {
 		return WithSpinner(jsonMode, "Joining...", func() error {
 			r, dialed, cErr := joinCircleFn(ctx, pairingURI, nipcw.CreateCircleWalletParams{
 				Credential: cred, Connection: connKey,
 				MaxAmountMillis: maxAmount, Expiry: expiry, BudgetRenewal: budgetRenewal,
-			})
+			}, opts)
 			if cErr != nil {
 				dialErr = !dialed
 				return cErr
 			}
-			resp = r
+			result = r
 			return nil
 		})
 	}
@@ -287,33 +311,14 @@ func runCircleJoin(cmd *cobra.Command, args []string) error {
 		err = attemptJoin()
 	}
 	if err != nil {
-		// A refusal, or a request that never left, created nothing: the key is
-		// forgotten. Anything else may have created the wallet, so it is kept.
-		if dialErr || joinWasRefused(err) {
-			if dErr := config.DeletePendingJoin(connKey.Pubkey()); dErr != nil {
-				output.Notef(jsonMode, "Could not forget the unused connection key: %v", dErr)
-			}
-		} else {
-			err = fmt.Errorf("%w — whether the wallet was created is unknown. If a later join says you already hold one, "+
-				"it is the wallet with connection key %s (listed under pending joins in `cashctl wallet show`): "+
-				"the Hub sends its details only once, so ask the circle's host to delete it, then join again", err, connKey.Pubkey())
-		}
-		if dialErr {
-			return output.NetworkError(cmd, err)
-		}
-		if isUnusableJoinReply(err) {
-			// The Hub did answer, so asking again only meets the wallet it made.
-			return output.RuntimeError(cmd, fmt.Errorf("the Hub's reply has no usable wallet details; it may run a NIP-CW version from before member-generated connection keys: %w", err))
-		}
-		if isIdentityEventReplayErr(err) {
-			// Still colliding even after the retry (another process
-			// landed on the same fresh second, most likely) — conflict,
-			// not invalid_input: nothing about the request itself was
-			// wrong, and a further retry is exactly the right move.
-			return output.ConflictError(cmd, "", errors.New(
-				"the Hub's identity-proof replay guard rejected two attempts within the same second, even after retrying once — wait a few seconds and run `join` again"))
-		}
-		return withHeldWalletHint(classifyNWCErr(cmd, walletExistsFromLegacyRefusal(err)), label)
+		return withFallbackNote(classifyJoinErr(cmd, err, dialErr, connKey, label), err)
+	}
+	resp := result.CreateCircleWalletResponse
+	fallbackReason := ""
+	if result.FallbackReason != nil {
+		// NIP-CW §Finding the Private Transport: a fallback is never silent.
+		fallbackReason = output.Sanitize(result.FallbackReason.Error())
+		output.Notef(jsonMode, "joined without private transport: %s", fallbackReason)
 	}
 
 	s, err := config.Load()
@@ -361,6 +366,10 @@ func runCircleJoin(cmd *cobra.Command, args []string) error {
 		}
 		output.PrintJSON(map[string]any{
 			"wallet": name, "default": setDefault,
+			// How the join travelled: private is false both when the Hub offers
+			// no private join and when it fell back, which fallback_reason tells
+			// apart ("" unless it fell back).
+			"private": result.Private, "fallback_reason": fallbackReason,
 			"response": map[string]any{
 				"wallet_pubkey":     resp.WalletPubkey,
 				"relays":            resp.Relays,
@@ -395,16 +404,111 @@ func runCircleJoin(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// joinCircle dials the Circle Hub and places one create_circle_wallet call.
-// dialed is false when the request never left: the dial itself failed.
-func joinCircle(ctx context.Context, hubURI string, params nipcw.CreateCircleWalletParams) (resp *nipcw.CreateCircleWalletResponse, dialed bool, err error) {
+// classifyJoinErr turns a failed join into its classified error, first
+// forgetting the connection key when the outcome shows no wallet was made.
+func classifyJoinErr(cmd *cobra.Command, err error, dialErr bool, connKey nipcw.ConnectionKey, label string) error {
+	jsonMode, _ := cmd.Flags().GetBool("json")
+	if errors.Is(err, nipcwclient.ErrPrivateJoinUnavailable) {
+		// --private=require refused before anything was sent.
+		if dErr := config.DeletePendingJoin(connKey.Pubkey()); dErr != nil {
+			output.Notef(jsonMode, "Could not forget the unused connection key: %v", dErr)
+		}
+		return privateJoinUnavailableErr(cmd, err)
+	}
+	// A refusal, or a request that never left, created nothing: the key is
+	// forgotten. Anything else may have created the wallet, so it is kept.
+	if dialErr || joinWasRefused(err) {
+		if dErr := config.DeletePendingJoin(connKey.Pubkey()); dErr != nil {
+			output.Notef(jsonMode, "Could not forget the unused connection key: %v", dErr)
+		}
+	} else {
+		err = fmt.Errorf("%w — whether the wallet was created is unknown. If a later join says you already hold one, "+
+			"it is the wallet with connection key %s (listed under pending joins in `cashctl wallet show`): "+
+			"the Hub sends its details only once, so ask the circle's host to delete it, then join again", err, connKey.Pubkey())
+	}
+	if dialErr {
+		return output.NetworkError(cmd, err)
+	}
+	if isUnusableJoinReply(err) {
+		// The Hub did answer, so asking again only meets the wallet it made.
+		return output.RuntimeError(cmd, fmt.Errorf("the Hub's reply has no usable wallet details; it may run a NIP-CW version from before member-generated connection keys: %w", err))
+	}
+	if isIdentityEventReplayErr(err) {
+		// Still colliding even after the retry (another process
+		// landed on the same fresh second, most likely) — conflict,
+		// not invalid_input: nothing about the request itself was
+		// wrong, and a further retry is exactly the right move.
+		return output.ConflictError(cmd, "", errors.New(
+			"the Hub's identity-proof replay guard rejected two attempts within the same second, even after retrying once — wait a few seconds and run `join` again"))
+	}
+	return withHeldWalletHint(classifyNWCErr(cmd, walletExistsFromLegacyRefusal(err)), label)
+}
+
+// joinCircle dials the Circle Hub and places one join, over the private
+// transport when the Hub offers it (NIP-CW §Private Join). dialed is false
+// when the request never left: the dial, or the get_info that picks the
+// transport, failed.
+func joinCircle(ctx context.Context, hubURI string, params nipcw.CreateCircleWalletParams, opts nipcwclient.JoinOptions) (result *nipcwclient.JoinResult, dialed bool, err error) {
 	client, err := nipcwclient.Connect(ctx, hubURI)
 	if err != nil {
 		return nil, false, err
 	}
 	defer client.Close()
-	resp, err = client.CreateCircleWallet(ctx, params)
-	return resp, true, err
+	result, err = client.Join(ctx, params, opts)
+	if err != nil && strings.HasPrefix(err.Error(), joinGetInfoErrPrefix) {
+		return nil, false, err
+	}
+	return result, true, err
+}
+
+// joinGetInfoErrPrefix starts the error Join returns when its get_info failed,
+// before any join was sent; nmilat rc.28 has no sentinel for it.
+const joinGetInfoErrPrefix = "nipcw/client: get_info: "
+
+// privateJoinUnavailableErr is --private=require's refusal: nothing was sent.
+// A Hub that does not offer private join won't start to on a retry; one whose
+// announcement could not be fetched or verified might.
+func privateJoinUnavailableErr(cmd *cobra.Command, err error) error {
+	const advice = "nothing was sent. Without --private=require the join goes over the shared Hub connection, where the circle's other members can see your pubkey"
+	if strings.Contains(err.Error(), "the Hub does not offer it") {
+		return output.NotFoundError(cmd, "", fmt.Errorf("this Hub does not offer private join, so %s", advice))
+	}
+	reason := strings.TrimPrefix(err.Error(), nipcwclient.ErrPrivateJoinUnavailable.Error()+": ")
+	return output.NetworkError(cmd, fmt.Errorf("private join is unavailable (%s), so %s", output.Sanitize(reason), advice))
+}
+
+// fallbackFailureMarker is how nmilat rc.28 reports a join that failed over
+// the standard transport after the private one was unavailable. It wraps the
+// reason with %v, so only the text carries it.
+// TODO(nmilat): match a wrapped error once nipcw/client/join.go wraps the
+// reason with %w (the follow-up to nmilat #146).
+const fallbackFailureMarker = " (after private join was unavailable: "
+
+// fallbackFailureReason reports why the private join was skipped when err is a
+// join that then failed over the standard transport.
+func fallbackFailureReason(err error) (string, bool) {
+	msg := err.Error()
+	i := strings.LastIndex(msg, fallbackFailureMarker)
+	if i < 0 || !strings.HasSuffix(msg, ")") {
+		return "", false
+	}
+	return msg[i+len(fallbackFailureMarker) : len(msg)-1], true
+}
+
+// withFallbackNote adds to a classified join failure that the attempt went
+// over the shared Hub connection because the private transport was unavailable.
+func withFallbackNote(classified, joinErr error) error {
+	reason, ok := fallbackFailureReason(joinErr)
+	ce, isCLI := classified.(*output.CLIError)
+	if !ok || !isCLI {
+		return classified
+	}
+	note := fmt.Sprintf("This join went over the shared Hub connection, not the private transport, which was unavailable: %s.", output.Sanitize(reason))
+	if ce.Hint != "" {
+		note = ce.Hint + " " + note
+	}
+	ce.Hint = note
+	return ce
 }
 
 // joinCircleFn is joinCircle, swapped out in tests.
