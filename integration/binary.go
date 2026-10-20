@@ -93,9 +93,19 @@ func (r result) Combined() string { return r.Stdout + r.Stderr }
 // (e.g. "no held tokens") is an expected, correct outcome for several tests.
 func (f *fixture) run(args ...string) result {
 	f.t.Helper()
+	return f.runWith(nil, "", args...)
+}
+
+// runWith is run with extra environment variables (KEY=value) and, when
+// stdinText is non-empty, that text on stdin.
+func (f *fixture) runWith(env []string, stdinText string, args ...string) result {
+	f.t.Helper()
 	full := append([]string{"--config-dir", f.configDir, "--json"}, args...)
 	cmd := exec.Command(f.bin, full...)
-	cmd.Env = append(os.Environ(), "XDG_CONFIG_HOME="+f.xdgHome)
+	cmd.Env = append(append(os.Environ(), "XDG_CONFIG_HOME="+f.xdgHome), env...)
+	if stdinText != "" {
+		cmd.Stdin = strings.NewReader(stdinText)
+	}
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

@@ -207,8 +207,16 @@ func TestTransfer_LedgerSaveFailureAfterHubSuccess_IsNotSilentlyDiscarded(t *tes
 	if res.Stdout != "" {
 		t.Errorf("transfer failed but still wrote to stdout: %q", res.Stdout)
 	}
-	if !strings.Contains(res.Stderr, "lokicash") {
-		t.Errorf("transfer failed after the Hub had already split the token, but neither the recipient's new token nor the remainder was surfaced anywhere for recovery:\nexit=%d stdout=%q stderr=%q",
-			res.ExitCode, res.Stdout, res.Stderr)
+	// The handoffs travel in the error's own recovery field, the one part of
+	// the report exempt from redaction, so a script can recover them without
+	// parsing prose.
+	var body struct {
+		Recovery string `json:"recovery"`
+	}
+	if err := json.Unmarshal([]byte(res.Stderr), &body); err != nil {
+		t.Fatalf("stderr is not a --json error: %v\n%s", err, res.Stderr)
+	}
+	if strings.Count(body.Recovery, "lokicash") < 2 {
+		t.Errorf("recovery = %q, want both the recipient's new token and the remainder in it", body.Recovery)
 	}
 }
