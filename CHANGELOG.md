@@ -18,6 +18,7 @@
   ([#116](https://github.com/ohstr/cashctl/pull/116))
 - Fixes an existing config directory open to group or others (e.g. 0755) being
   left that way; cashctl now makes it 0700 on first use and says so.
+  ([#118](https://github.com/ohstr/cashctl/pull/118))
 
 ## [0.6.0-rc.16]
 
