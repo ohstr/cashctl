@@ -102,7 +102,8 @@ func newCircleJoinCmd() *cobra.Command {
 		Use:   "join [hub-connection] [max-amount]",
 		Short: "Join a circle",
 		Example: `  cashctl join circlehub1... 100
-  cashctl join circlehub1... --max-amount 100`,
+  cashctl join circlehub1... --max-amount 100
+  cashctl join - 100 < hub.txt    # read the connection from stdin, keeping it out of ps and shell history`,
 		Args: output.MaximumNArgs(2),
 		RunE: runCircleJoin,
 	}
@@ -205,6 +206,9 @@ func runCircleJoin(cmd *cobra.Command, args []string) error {
 
 	hub, err := resolvePositionalOrFlag(cmd, positionalHub, "hub", hubFlag)
 	if err != nil {
+		return err
+	}
+	if hub, err = argOrStdin(cmd, hub); err != nil {
 		return err
 	}
 	// Checked explicitly (not cobra's own MarkFlagRequired) so a missing

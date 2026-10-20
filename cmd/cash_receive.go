@@ -23,7 +23,8 @@ func newCashReceiveCmd() *cobra.Command {
 		Short: `"Cash-in" a token: verify and add it to your wallet`,
 		Long:  `Verifies a cash token against the Hub before saving it. A cash-mode token needs its secret embedded as "<token>#<secret>".`,
 		Example: `  cashctl receive lokicash1...
-  cashctl receive lokicash1...#deadbeef`,
+  cashctl receive lokicash1...#deadbeef
+  cashctl receive - < bill.txt    # read it from stdin, keeping the secret out of ps and shell history`,
 		Args: output.ExactArgs(1),
 		RunE: runCashReceive,
 	}
@@ -35,10 +36,14 @@ func runCashReceive(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	jsonMode, _ := cmd.Flags().GetBool("json")
+	raw, err := argOrStdin(cmd, args[0])
+	if err != nil {
+		return err
+	}
 	// Trimmed: dial.Sniff trims for its own classification but the raw
 	// string would otherwise still reach nipcash.Decode, which rejects a
 	// stray leading/trailing space as invalid bech32.
-	input, embeddedSecret := nipcash.SplitCashSliceString(strings.TrimSpace(args[0]))
+	input, embeddedSecret := nipcash.SplitCashSliceString(strings.TrimSpace(raw))
 
 	switch dial.Sniff(input) {
 	case dial.KindCircleHub:

@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.6.0-rc.17]
+
+- Adds `-` in place of `receive`'s token, `connect add`'s connection and
+  `join`'s hub connection, read from stdin so the secret stays out of `ps` and
+  shell history.
+
 ## [0.6.0-rc.16]
 
 Joins circles privately when the Hub offers it, so other members can't see who

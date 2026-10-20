@@ -12,6 +12,7 @@ change. -->
 
 ```sh
 cashctl join circlehub1... 100 --json
+cashctl join - 100 --json < hub.txt    # "-" reads the connection from stdin, out of ps and shell history
 ```
 
 `join` is a top-level shortcut for `cashctl circle join` — identical flags

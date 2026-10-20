@@ -34,13 +34,18 @@ and the default wallet.
 (lokicash1...) used as a wallet. A circlehub1... connection is joined with
 ` + "`cashctl join`" + `, a <token>#<secret> bill is taken with ` + "`cashctl receive`" + `;
 both are refused here. Your first wallet becomes the default.`,
-		Example: `  cashctl connect add savings "nostr+walletconnect://<pubkey>?relay=wss://...&secret=..."`,
-		Args:    output.ExactArgs(2),
+		Example: `  cashctl connect add savings "nostr+walletconnect://<pubkey>?relay=wss://...&secret=..."
+  cashctl connect add savings - < savings.uri    # read it from stdin, keeping the secret out of ps and shell history`,
+		Args: output.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			jsonMode, _ := cmd.Flags().GetBool("json")
 			// Trimmed: a stray space/newline makes url.Parse reject an
 			// otherwise-valid nostr+walletconnect:// URI outright.
-			name, value := args[0], strings.TrimSpace(args[1])
+			raw, err := argOrStdin(cmd, args[1])
+			if err != nil {
+				return err
+			}
+			name, value := args[0], strings.TrimSpace(raw)
 			if err := validateConnectionValue(value); err != nil {
 				return output.InvalidInputError(cmd, value, err)
 			}
