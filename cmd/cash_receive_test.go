@@ -142,6 +142,19 @@ func TestValidateClaimedAmount_MatchingProvenanceIsAccepted(t *testing.T) {
 	}
 }
 
+// A multi-recipient bill's signature attests the whole bill; the holder's
+// own slice of it is smaller, and that is no reason to refuse it.
+func TestValidateClaimedAmount_SliceSmallerThanTheWholeBillIsAccepted(t *testing.T) {
+	c := testCmdWithFlags(true, false)
+	whole, slice := uint64(5000), uint64(3000)
+	minter := "minterpubkey"
+	tok := nipcash.Token{AttestedAmountMillis: &whole}
+	result := &nipcash.CheckClaimResult{AmountMillis: slice, MinterPubkey: &minter}
+	if err := validateClaimedAmount(c, tok, result); err != nil {
+		t.Errorf("validateClaimedAmount() error = %v, want a slice under the attested whole accepted", err)
+	}
+}
+
 func TestValidateClaimedAmount_RejectsMismatchAgainstVerifiedProvenance(t *testing.T) {
 	// The regression test for R2-10: a forged/misbehaving Hub reporting an
 	// amount that disagrees with the token's own cryptographically
@@ -193,5 +206,27 @@ func TestValidateClaimedAmount_RejectsAbsurdlyLargeAmount(t *testing.T) {
 	err := validateClaimedAmount(c, tok, result)
 	if err == nil {
 		t.Fatal("validateClaimedAmount() = nil error, want an absurd amount rejected")
+	}
+}
+
+func TestWarnLocalRelays(t *testing.T) {
+	for _, tc := range []struct {
+		relay string
+		warn  bool
+	}{
+		{"ws://127.0.0.1:7777", true},
+		{"ws://localhost:7777", true},
+		{"wss://10.1.2.3", true},
+		{"wss://[::1]:7777", true},
+		{"wss://relay.example.com", false},
+		{"wss://8.8.8.8", false},
+	} {
+		_, errOut := captureStreams(t, func() { warnLocalRelays(false, []string{tc.relay}) })
+		if got := strings.Contains(errOut, "your own machine or network"); got != tc.warn {
+			t.Errorf("%s: warned = %v, want %v (%q)", tc.relay, got, tc.warn, errOut)
+		}
+	}
+	if _, errOut := captureStreams(t, func() { warnLocalRelays(true, []string{"ws://127.0.0.1"}) }); errOut != "" {
+		t.Errorf("--json mode printed a note: %q", errOut)
 	}
 }

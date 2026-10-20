@@ -206,7 +206,6 @@ func quoteHubGroup(
 	}
 	incomplete := incompleteReply(sendErr)
 
-	myPubHex, _ := localPubKeyHex(cmd)
 	byID := map[string]*ledger.Entry{}
 	for _, e := range entries {
 		byID[e.ID] = e
@@ -220,6 +219,7 @@ func quoteHubGroup(
 		case r.Succeeded() && r.Result != nil && r.Result.IsSpent():
 			errs[r.ID] = recordSpent(cmd, l, entry)
 		case r.Succeeded() && r.Result != nil:
+			myPubHex, _ := signerPubKeyHex(cmd, entry)
 			recipient, ok := nipcash.MatchClaimAuto(r.Result.Recipients, myPubHex)
 			if !ok {
 				errs[r.ID] = output.NotFoundError(cmd, r.ID,
@@ -396,6 +396,25 @@ func credentialForToken(cmd *cobra.Command, embeddedSecret string) (nipcash.Cred
 	return localCashCredential(cmd)
 }
 
+// checkQuoteDrift refuses a Hub figure for a held slice that it could only
+// reach by lying: a slice never grows (anything paid to you is a new bill),
+// and a redeem fee never rises for the same or a smaller amount. Without
+// it, a Hub could quote a larger fee at redeem time than at receive and the
+// difference would be paid out of the holder's money under --yes/--json.
+func checkQuoteDrift(cmd *cobra.Command, entry *ledger.Entry, amountMillis, feeMillis uint64) error {
+	if entry.AmountMillis != nil && amountMillis > *entry.AmountMillis {
+		return output.InvalidInputError(cmd, entry.ID, fmt.Errorf(
+			"the Hub now quotes %s for this bill, more than the %s it held when you last checked — refusing to trust it",
+			output.FormatAmount(int64(amountMillis)), output.FormatAmount(int64(*entry.AmountMillis))))
+	}
+	if entry.RedeemFeeMillis != nil && feeMillis > *entry.RedeemFeeMillis {
+		return output.InvalidInputError(cmd, entry.ID, fmt.Errorf(
+			"the Hub now charges a %s redeem fee for this bill, more than the %s it quoted before — refusing to pay it",
+			output.FormatAmount(int64(feeMillis)), output.FormatAmount(int64(*entry.RedeemFeeMillis))))
+	}
+	return nil
+}
+
 // recordQuote turns a matched roster row into a quote and writes the ledger
 // bookkeeping resolveRedeemQuote does, so the batched and single-bill paths cannot
 // drift in what a quote records.
@@ -426,7 +445,11 @@ func recordQuote(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entry, reci
 	if err := validateQuotedAmounts(cmd, tok, entry.MinterPubkey, q); err != nil {
 		return redeemQuote{}, err
 	}
+	if err := checkQuoteDrift(cmd, entry, q.AmountMillis, q.RedeemFeeMillis); err != nil {
+		return redeemQuote{}, err
+	}
 	entry.AmountMillis = &recipient.AmountMillis
+	entry.RedeemFeeMillis = &recipient.RedeemFeeMillis
 	entry.ExpiresAt = recipient.ExpiresAt
 	_ = l.SetVerified(entry.ID, true)
 	return q, nil

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net"
+	"net/url"
 	"strings"
 	"time"
 
@@ -23,7 +25,8 @@ func newCashReceiveCmd() *cobra.Command {
 		Short: `"Cash-in" a token: verify and add it to your wallet`,
 		Long:  `Verifies a cash token against the Hub before saving it. A cash-mode token needs its secret embedded as "<token>#<secret>".`,
 		Example: `  cashctl receive lokicash1...
-  cashctl receive lokicash1...#deadbeef`,
+  cashctl receive lokicash1...#deadbeef
+  cashctl receive - < bill.txt    # read it from stdin, keeping the secret out of ps and shell history`,
 		Args: output.ExactArgs(1),
 		RunE: runCashReceive,
 	}
@@ -35,10 +38,14 @@ func runCashReceive(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	jsonMode, _ := cmd.Flags().GetBool("json")
+	raw, err := argOrStdin(cmd, args[0])
+	if err != nil {
+		return err
+	}
 	// Trimmed: dial.Sniff trims for its own classification but the raw
 	// string would otherwise still reach nipcash.Decode, which rejects a
 	// stray leading/trailing space as invalid bech32.
-	input, embeddedSecret := nipcash.SplitCashSliceString(strings.TrimSpace(args[0]))
+	input, embeddedSecret := nipcash.SplitCashSliceString(strings.TrimSpace(raw))
 
 	switch dial.Sniff(input) {
 	case dial.KindCircleHub:
@@ -59,6 +66,8 @@ func runCashReceive(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return output.InvalidInputError(cmd, input, err)
 	}
+	// Before anything below dials the bill's relays.
+	warnLocalRelays(jsonMode, tok.RelayURLs)
 
 	// Local-only guess, used below just to decide whether to bail at Step
 	// 0 and what to print pre-network. tok.IdentityRequired is a
@@ -161,6 +170,7 @@ func runCashReceive(cmd *cobra.Command, args []string) error {
 		Verified:         true,
 		MinterPubkey:     result.MinterPubkey,
 		ExpiresAt:        result.ExpiresAt,
+		RedeemFeeMillis:  &result.RedeemFeeMillis,
 	}
 	if result.IsCash {
 		// Shared, not yet protected: this is the secret exactly as it
@@ -294,9 +304,12 @@ func validateClaimedAmount(cmd *cobra.Command, tok nipcash.Token, result *nipcas
 		return output.InvalidInputError(cmd, "", fmt.Errorf(
 			"the Hub reports an amount (%d mloki) too large to be real — refusing to trust it", result.AmountMillis))
 	}
-	if result.MinterPubkey != nil && tok.AttestedAmountMillis != nil && result.AmountMillis != *tok.AttestedAmountMillis {
+	// The signature attests the whole bill, and the Hub reports only this
+	// holder's slice of it, which on a multi-recipient bill is legitimately
+	// smaller. Only more than the whole bill is impossible.
+	if result.MinterPubkey != nil && tok.AttestedAmountMillis != nil && result.AmountMillis > *tok.AttestedAmountMillis {
 		return output.InvalidInputError(cmd, "", fmt.Errorf(
-			"the Hub reports %s for this token, but its own signed provenance attests to %s — refusing to trust either figure",
+			"the Hub reports %s for your share, but this bill's signed provenance attests only %s for the whole bill — refusing to trust it",
 			output.FormatAmount(int64(result.AmountMillis)), output.FormatAmount(int64(*tok.AttestedAmountMillis))))
 	}
 	return nil
@@ -313,13 +326,10 @@ const maxSaneAmountMillis = uint64(math.MaxInt64)
 // validateQuotedAmounts bounds the three amounts a redeem quote takes from the Hub,
 // before any of them is persisted, rendered, or turned into an invoice.
 //
-// A second validator rather than reusing validateClaimedAmount, for one reason: that
-// one demands EXACT equality with the token's signed provenance, which is right at
-// receive time — the whole bill is being claimed, so the mint signature's amount IS
-// the claim's amount — and wrong here. A redeem quote is for THIS holder's slice, and
-// a slice of a multi-recipient bill is legitimately smaller than what the mint
-// signature commits to. Only the UPPER bound carries over: the Hub may quote less than
-// the bill was minted for, never more.
+// A second validator rather than reusing validateClaimedAmount: both hold a figure
+// for THIS holder's slice to the mint signature's whole-bill amount as an upper
+// bound (a slice of a multi-recipient bill is legitimately smaller, never larger),
+// but a quote carries a fee and a net amount as well.
 //
 // verifiedMinter is the caller's live proof that the provenance signature actually
 // verified (ledger.Entry.MinterPubkey, or CheckClaimResult.MinterPubkey — both set
@@ -464,4 +474,24 @@ func checkClaimOnce(cmd *cobra.Command, input, embeddedSecret string, tok nipcas
 		return nil, err
 	}
 	return client.CheckClaim(ctx, cred, tok, nipcash.NoLocalIdentity)
+}
+
+// warnLocalRelays says so when a bill's relay hints point at this machine or
+// its local network. receive dials them as soon as the bill is pasted, and a
+// bill from someone else has no reason to name such a relay: it can be a way
+// to make cashctl connect to a local service. A warning, not a refusal, since
+// a local test Hub legitimately lives there.
+func warnLocalRelays(jsonMode bool, relays []string) {
+	for _, r := range relays {
+		u, err := url.Parse(r)
+		if err != nil {
+			continue
+		}
+		host := u.Hostname()
+		ip := net.ParseIP(host)
+		if host == "localhost" || strings.HasSuffix(host, ".localhost") ||
+			(ip != nil && (ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified())) {
+			output.Notef(jsonMode, "Note: this bill names a relay on your own machine or network (%s); a bill from someone else has no reason to.", output.Sanitize(u.Host))
+		}
+	}
 }

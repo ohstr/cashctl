@@ -17,6 +17,7 @@ change. -->
 ```sh
 cashctl receive lokicash1... --json                            # prints the token's details, then verifies against the Cash Hub
 cashctl receive lokicash1...#deadbeef --json                   # cash-mode: the combined "<token>#<cash_secret>" presentation
+cashctl receive - --json < bill.txt                            # "-" reads it from stdin, keeping the secret out of ps and shell history
 ```
 
 Always a network call: receive prints the token's details, then

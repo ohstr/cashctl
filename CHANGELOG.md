@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.6.0-rc.17]
+
+- Adds `-` in place of `receive`'s token, `connect add`'s connection and
+  `join`'s hub connection, read from stdin so the secret stays out of `ps` and
+  shell history.
+  ([#116](https://github.com/ohstr/cashctl/pull/116))
+- Fixes `skills install` writing through a symlink planted where a skill file
+  goes; it now replaces the link, and refuses a skill directory that is one.
+  ([#116](https://github.com/ohstr/cashctl/pull/116))
+- Fixes `receive` refusing a signed bill split between several recipients: it
+  compared the holder's own share against the whole bill's attested amount.
+  ([#116](https://github.com/ohstr/cashctl/pull/116))
+- Fixes `redeem --as pubkey:<key>` (and `CASHCTL_AS`), and redeeming or sending
+  a cash note left `pending_merge`, failing with "couldn't determine this
+  token's amount": the Hub's reply was matched against your stored identity.
+  ([#116](https://github.com/ohstr/cashctl/pull/116))
+- Fixes an existing config directory open to group or others (e.g. 0755) being
+  left that way; cashctl now makes it 0700 on first use and says so.
+  ([#118](https://github.com/ohstr/cashctl/pull/118))
+- Fixes a Hub being able to charge a larger redeem fee, or quote a larger
+  amount, for a bill than it did when you received it; `redeem` now refuses.
+  ([#120](https://github.com/ohstr/cashctl/pull/120))
+- Adds a note when `receive` is handed a bill whose relay is on your own
+  machine or local network, which a bill from someone else has no reason to name.
+  ([#120](https://github.com/ohstr/cashctl/pull/120))
+
 ## [0.6.0-rc.16]
 
 Joins circles privately when the Hub offers it, so other members can't see who

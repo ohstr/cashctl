@@ -13,7 +13,9 @@ anything scripted: `--as` is always secret-bearing, and a value on the
 command line is visible to `ps` while the process runs and is written to
 the shell's history file. It is an improvement, not airtight — an
 environment variable is inherited by child processes and readable from
-`/proc/<pid>/environ` by the same user. `NO_COLOR` disables ANSI color on
+`/proc/<pid>/environ` by the same user. For the same reason, `-` in place
+of `receive`'s token, `connect add`'s connection or `join`'s hub
+connection reads that value from the first line of stdin. `NO_COLOR` disables ANSI color on
 stderr.
 
 ## Commands

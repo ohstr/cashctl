@@ -1218,7 +1218,7 @@ func resolveAmount(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entry, so
 	if err != nil {
 		return 0, err
 	}
-	myPubHex, _ := localPubKeyHex(cmd)
+	myPubHex, _ := signerPubKeyHex(cmd, entry)
 	result, err := sourceClient.CheckClaim(ctx, cred, tok, myPubHex)
 	if errors.Is(err, nipcash.ErrSpent) {
 		return 0, recordSpent(cmd, l, entry)
@@ -1243,7 +1243,11 @@ func resolveAmount(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entry, so
 	}); vErr != nil {
 		return 0, vErr
 	}
+	if dErr := checkQuoteDrift(cmd, entry, result.AmountMillis, result.RedeemFeeMillis); dErr != nil {
+		return 0, dErr
+	}
 	entry.AmountMillis = &result.AmountMillis
+	entry.RedeemFeeMillis = &result.RedeemFeeMillis
 	entry.ExpiresAt = result.ExpiresAt
 	_ = l.SetVerified(entry.ID, true)
 	return result.AmountMillis, nil
@@ -1283,8 +1287,9 @@ type redeemQuote struct {
 // than silently fall back to a possibly-wrong amount. Same failure
 // contract resolveAmount has always had for an entry that didn't already
 // have its amount cached — this just always pays that same cost, since the
-// fee can change server-side at any time up to redeem, cached amount or
-// not.
+// amount can shrink (a co-holder spending part of a shared bill) and the
+// Hub's figures have to be checked against what was recorded
+// (checkQuoteDrift).
 func resolveRedeemQuote(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entry, sourceClient *nipcashclient.Client) (redeemQuote, error) {
 	tok, err := nipcash.Decode(entry.Token)
 	if err != nil {
@@ -1298,7 +1303,7 @@ func resolveRedeemQuote(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entr
 	if err != nil {
 		return redeemQuote{}, err
 	}
-	myPubHex, _ := localPubKeyHex(cmd)
+	myPubHex, _ := signerPubKeyHex(cmd, entry)
 	result, err := sourceClient.CheckClaim(ctx, cred, tok, myPubHex)
 	if errors.Is(err, nipcash.ErrSpent) {
 		return redeemQuote{}, recordSpent(cmd, l, entry)
@@ -1323,7 +1328,11 @@ func resolveRedeemQuote(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entr
 	if err := validateQuotedAmounts(cmd, tok, result.MinterPubkey, q); err != nil {
 		return redeemQuote{}, err
 	}
+	if err := checkQuoteDrift(cmd, entry, q.AmountMillis, q.RedeemFeeMillis); err != nil {
+		return redeemQuote{}, err
+	}
 	entry.AmountMillis = &result.AmountMillis
+	entry.RedeemFeeMillis = &result.RedeemFeeMillis
 	entry.ExpiresAt = result.ExpiresAt
 	_ = l.SetVerified(entry.ID, true)
 	return q, nil

@@ -59,3 +59,67 @@ func TestInstallSkill_Statuses(t *testing.T) {
 		t.Fatal("edited file not restored")
 	}
 }
+
+// A symlink planted where a skill file goes is replaced, and the file it
+// pointed at is left alone.
+func TestInstallSkill_ReplacesASymlinkInsteadOfWritingThroughIt(t *testing.T) {
+	s, ok, err := skills.Get("cashctl-cash")
+	if err != nil || !ok {
+		t.Fatalf("Get = %v, %v", ok, err)
+	}
+	dir := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "victim")
+	if err := os.WriteFile(outside, []byte("keep me"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, s.Name, "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := installSkill(dir, s); err != nil {
+		t.Fatalf("installSkill: %v", err)
+	}
+	if got, _ := os.ReadFile(outside); string(got) != "keep me" {
+		t.Errorf("the symlink's target was overwritten: %q", got)
+	}
+	fi, err := os.Lstat(link)
+	if err != nil || !fi.Mode().IsRegular() {
+		t.Errorf("SKILL.md = %v, %v; want a regular file in place of the symlink", fi, err)
+	}
+}
+
+// A skill directory that is itself a symlink is refused, not written into.
+func TestInstallSkill_RefusesASymlinkedSkillDir(t *testing.T) {
+	s, ok, err := skills.Get("cashctl-cash")
+	if err != nil || !ok {
+		t.Fatalf("Get = %v, %v", ok, err)
+	}
+	dir, elsewhere := t.TempDir(), t.TempDir()
+	if err := os.Symlink(elsewhere, filepath.Join(dir, s.Name)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := installSkill(dir, s); err == nil {
+		t.Fatal("installSkill into a symlinked skill dir succeeded, want a refusal")
+	}
+	if entries, _ := os.ReadDir(elsewhere); len(entries) != 0 {
+		t.Errorf("files written through the symlink: %v", entries)
+	}
+}
+
+// A symlinked skill dir is refused before anything is created through it,
+// including a nested file's parent directory.
+func TestRefuseSymlinkedDirs_BeforeAnythingIsCreated(t *testing.T) {
+	dir, elsewhere := t.TempDir(), t.TempDir()
+	if err := os.Symlink(elsewhere, filepath.Join(dir, "cashctl-cash")); err != nil {
+		t.Fatal(err)
+	}
+	if err := refuseSymlinkedDirs(dir, filepath.Join(dir, "cashctl-cash", "refs")); err == nil {
+		t.Fatal("refuseSymlinkedDirs passed a path through a symlink")
+	}
+	if err := refuseSymlinkedDirs(dir, filepath.Join(dir, "not-yet", "refs")); err != nil {
+		t.Errorf("a path that doesn't exist yet was refused: %v", err)
+	}
+}

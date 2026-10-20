@@ -4,6 +4,7 @@ package integration
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -23,6 +24,7 @@ type circleHubOpts struct {
 	FeesPpm           int    // 0 is itself meaningful (no fee) - never defaulted
 	MinBudgetRenewal  string // "" -> lokihub defaults to "monthly" server-side
 	FundLoki          uint64 // 0 -> 100
+	HubMaxAmountLoki  uint64 // the hub's own budget ceiling; 0 -> none
 }
 
 func (o circleHubOpts) withDefaults() circleHubOpts {
@@ -36,6 +38,72 @@ func (o circleHubOpts) withDefaults() circleHubOpts {
 		o.FundLoki = 100
 	}
 	return o
+}
+
+// circleHubRequest is the create request every circle fixture shares, for
+// policy ("allowlist" or "follow_set") under opts.
+func circleHubRequest(name, policy string, scopes []string, opts circleHubOpts) adminCreateAppRequest {
+	return adminCreateAppRequest{
+		Name:          ephemeralFixtureNamePrefix + " " + name,
+		Kind:          "circle_hub",
+		MaxAmountLoki: opts.HubMaxAmountLoki,
+		// Scope literal mirrors lokihub's constants.CIRCLE_WALLET_SCOPE
+		// ("circle_wallet", not "circle_hub" — see cash_test.go's
+		// setUpCashHub comment on why this suite names scopes directly
+		// rather than importing lokihub's own package.
+		Scopes:                  scopes,
+		CircleIdentityName:      ephemeralFixtureNamePrefix + " " + name + " identity",
+		CirclePolicy:            policy,
+		CircleMaxExpSecs:        opts.MaxExpSecs,
+		CirclePerWalletMaxMloki: opts.PerWalletMaxMloki,
+		CircleFeesPpm:           opts.FeesPpm,
+		CircleMinBudgetRenewal:  opts.MinBudgetRenewal,
+	}
+}
+
+// createCircleHubApp creates the circle_hub req describes, root-funds it
+// with fundLoki, and registers its cleanup: every joined child, then the
+// hub, then its own CircleIdentity (t.Cleanup is LIFO, and each step
+// refuses while the next one down still exists).
+func createCircleHubApp(t *testing.T, admin *adminClient, req adminCreateAppRequest, fundLoki uint64) adminCreateAppResponse {
+	t.Helper()
+	hubResp, err := admin.createApp(req)
+	if err != nil {
+		t.Fatalf("create ephemeral circle_hub: %v", err)
+	}
+	if identityID, err := admin.getCircleIdentityID(hubResp.ID); err != nil {
+		t.Logf("cleanup: resolve circle identity of ephemeral circle_hub app_id=%d: %v", hubResp.ID, err)
+	} else {
+		t.Cleanup(func() {
+			if err := admin.deleteCircleIdentity(identityID); err != nil {
+				t.Logf("cleanup: delete ephemeral circle identity id=%d: %v", identityID, err)
+			}
+		})
+	}
+	t.Cleanup(func() {
+		if err := admin.deleteApp(hubResp.ID); err != nil {
+			t.Logf("cleanup: delete ephemeral circle_hub app_id=%d: %v", hubResp.ID, err)
+		}
+	})
+	t.Cleanup(func() {
+		children, err := admin.listCircleChildren(hubResp.ID)
+		if err != nil {
+			t.Logf("cleanup: list circle children for ephemeral hub app_id=%d: %v", hubResp.ID, err)
+			return
+		}
+		for _, child := range children {
+			if err := admin.deleteCircleChild(hubResp.ID, child.AppID); err != nil {
+				t.Logf("cleanup: delete ephemeral circle child app_id=%d: %v", child.AppID, err)
+			}
+		}
+	})
+	if err := admin.transfer(hubResp.ID, fundLoki); err != nil {
+		t.Fatalf("fund ephemeral circle_hub: %v", err)
+	}
+	if hubResp.CircleHubToken == nil || *hubResp.CircleHubToken == "" {
+		t.Fatalf("create ephemeral circle_hub: no circleHubToken in response: %+v", hubResp)
+	}
+	return hubResp
 }
 
 // setUpCircleHub provisions a throwaway allowlist-policy circle_hub,
@@ -54,51 +122,47 @@ func setUpCircleHub(t *testing.T, admin *adminClient, pubkeyHex string) adminCre
 func setUpCircleHubOpts(t *testing.T, admin *adminClient, pubkeyHex string, opts circleHubOpts) adminCreateAppResponse {
 	t.Helper()
 	opts = opts.withDefaults()
-	hubResp, err := admin.createApp(adminCreateAppRequest{
-		Name: ephemeralFixtureNamePrefix + " circle_hub",
-		Kind: "circle_hub",
-		// Scope literal mirrors lokihub's constants.CIRCLE_WALLET_SCOPE
-		// ("circle_wallet", not "circle_hub" — see cash_test.go's
-		// setUpCashHub comment on why this suite names scopes directly
-		// rather than importing lokihub's own package.
-		Scopes:                  []string{"circle_wallet"},
-		CircleIdentityName:      ephemeralFixtureNamePrefix + " circle identity",
-		CirclePolicy:            "allowlist",
-		CircleMaxExpSecs:        opts.MaxExpSecs,
-		CirclePerWalletMaxMloki: opts.PerWalletMaxMloki,
-		CircleFeesPpm:           opts.FeesPpm,
-		CircleMinBudgetRenewal:  opts.MinBudgetRenewal,
-	})
-	if err != nil {
-		t.Fatalf("create ephemeral circle_hub: %v", err)
-	}
-	// Registered before the reclaim sweep below so it runs second
-	// (t.Cleanup is LIFO): the circle_wallet child `join` mints must be
-	// reclaimed before the hub itself can be deleted.
-	t.Cleanup(func() {
-		if err := admin.deleteApp(hubResp.ID); err != nil {
-			t.Logf("cleanup: delete ephemeral circle_hub app_id=%d: %v", hubResp.ID, err)
-		}
-	})
-	t.Cleanup(func() {
-		children, err := admin.listCircleChildren(hubResp.ID)
-		if err != nil {
-			t.Logf("cleanup: list circle children for ephemeral hub app_id=%d: %v", hubResp.ID, err)
-			return
-		}
-		for _, child := range children {
-			if err := admin.deleteCircleChild(hubResp.ID, child.AppID); err != nil {
-				t.Logf("cleanup: delete ephemeral circle child app_id=%d: %v", child.AppID, err)
-			}
-		}
-	})
-	if err := admin.transfer(hubResp.ID, opts.FundLoki); err != nil {
-		t.Fatalf("fund ephemeral circle_hub: %v", err)
-	}
+	hubResp := createCircleHubApp(t, admin, circleHubRequest("circle_hub", "allowlist", []string{"circle_wallet"}, opts), opts.FundLoki)
 	if err := admin.addCircleAllowlistMember(hubResp.ID, pubkeyHex); err != nil {
 		t.Fatalf("authorize identity under circle_hub allowlist: %v", err)
 	}
 	return hubResp
+}
+
+// newMember is a fresh fixture with its own local identity, and that
+// identity's hex pubkey — one would-be circle member.
+func newMember(t *testing.T) (*fixture, string) {
+	t.Helper()
+	f := newFixture(t)
+	npub, _ := f.mustJSON("wallet", "init")["npub"].(string)
+	pubHex, err := npubToHex(npub)
+	if err != nil {
+		t.Fatalf("decode local identity npub %q: %v", npub, err)
+	}
+	return f, pubHex
+}
+
+// cliError is cashctl's --json error document (stderr).
+type cliError struct {
+	Error     string `json:"error"`
+	Code      string `json:"code"`
+	Retryable bool   `json:"retryable"`
+	NWCCode   string `json:"nwc_code"`
+}
+
+// requireFailure asserts res failed with exit code exit and cashctl code
+// code (and, when nwcCode != "", that wallet code), returning the error.
+func requireFailure(t *testing.T, step string, res result, exit int, code, nwcCode string) cliError {
+	t.Helper()
+	var e cliError
+	if err := json.Unmarshal([]byte(res.Stderr), &e); err != nil {
+		t.Fatalf("%s: exit %d, stderr is not a --json error: %v\nstdout: %s\nstderr: %s", step, res.ExitCode, err, res.Stdout, res.Stderr)
+	}
+	if res.ExitCode != exit || e.Code != code || (nwcCode != "" && e.NWCCode != nwcCode) {
+		t.Fatalf("%s: exit %d code %q nwc_code %q, want exit %d code %q nwc_code %q\nstderr: %s",
+			step, res.ExitCode, e.Code, e.NWCCode, exit, code, nwcCode, res.Stderr)
+	}
+	return e
 }
 
 // TestCircleJoin_CreateWalletAndGetInfo provisions a throwaway allowlist-

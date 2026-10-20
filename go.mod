@@ -5,6 +5,7 @@ go 1.26.9
 require (
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.0
 	github.com/flokiorg/go-flokicoin v0.26.1-alpha
+	github.com/gorilla/websocket v1.5.3
 	github.com/ohstr/ncli v0.6.0
 	github.com/ohstr/nmilat v0.5.0-rc.31
 	github.com/spf13/cobra v1.10.2
@@ -18,7 +19,6 @@ require (
 	github.com/decred/dcrd/crypto/blake256 v1.1.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
-	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect

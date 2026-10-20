@@ -29,6 +29,8 @@ type cashHubOpts struct {
 	RedeemFeePpm      int    // 0 is itself meaningful (no fee) - never defaulted
 	MinTransferMloki  int64  // 0 is itself meaningful (no floor) - never defaulted
 	FundLoki          uint64 // 0 -> 2000
+	// SpentRetentionSecs: nil -> the server default; 0 -> no tombstone at all.
+	SpentRetentionSecs *int
 }
 
 func (o cashHubOpts) withDefaults() cashHubOpts {
@@ -69,11 +71,12 @@ func setUpCashHubOpts(t *testing.T, admin *adminClient, opts cashHubOpts) adminC
 		// (cash_hub, pay_invoice, make_invoice, get_balance) — this suite
 		// stays a black-box HTTP/NWC client, so it names them directly
 		// rather than importing lokihub's internal constants package.
-		Scopes:                []string{"cash_hub", "pay_invoice", "make_invoice", "get_balance"},
-		CashPerWalletMaxMloki: opts.PerWalletMaxMloki,
-		CashMaxExpSecs:        opts.MaxExpSecs,
-		CashRedeemFeePpm:      opts.RedeemFeePpm,
-		CashMinTransferMloki:  opts.MinTransferMloki,
+		Scopes:                 []string{"cash_hub", "pay_invoice", "make_invoice", "get_balance"},
+		CashPerWalletMaxMloki:  opts.PerWalletMaxMloki,
+		CashMaxExpSecs:         opts.MaxExpSecs,
+		CashRedeemFeePpm:       opts.RedeemFeePpm,
+		CashMinTransferMloki:   opts.MinTransferMloki,
+		CashSpentRetentionSecs: opts.SpentRetentionSecs,
 	})
 	if err != nil {
 		t.Fatalf("create ephemeral cash_hub: %v", err)

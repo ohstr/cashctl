@@ -207,7 +207,8 @@ func fetchExpiresAt(cmd *cobra.Command, token string) *int64 {
 	if credErr != nil {
 		return nil
 	}
-	return fetchExpiresAtWithCredential(cmd, token, cred)
+	myPub, _ := signerPubKeyHex(cmd, nil)
+	return fetchExpiresAtWithCredential(cmd, token, cred, myPub)
 }
 
 // fetchExpiresAtWithCredential is fetchExpiresAt with cred supplied by the
@@ -219,7 +220,10 @@ func fetchExpiresAt(cmd *cobra.Command, token string) *int64 {
 // pubkey/connection-key/cash, never just "local identity" — probing it
 // with fetchExpiresAt's own derivation would silently ask with the wrong
 // credential and read as permanently "unknown".
-func fetchExpiresAtWithCredential(cmd *cobra.Command, token string, cred nipcash.Credential) *int64 {
+//
+// matchPubHex is the pubkey cred signs as, which the Hub's reply is matched
+// against; a mismatch reads as "no slice" and the expiry as unknown.
+func fetchExpiresAtWithCredential(cmd *cobra.Command, token string, cred nipcash.Credential, matchPubHex string) *int64 {
 	tok, err := nipcash.Decode(token)
 	if err != nil {
 		return nil
@@ -231,8 +235,7 @@ func fetchExpiresAtWithCredential(cmd *cobra.Command, token string, cred nipcash
 		return nil
 	}
 	defer client.Close()
-	myPubHex, _ := localPubKeyHex(cmd)
-	result, err := client.CheckClaim(ctx, cred, tok, myPubHex)
+	result, err := client.CheckClaim(ctx, cred, tok, matchPubHex)
 	return expiresAtFromCheck(result, err)
 }
 
@@ -380,7 +383,8 @@ func transferWithAutoConsolidate(cmd *cobra.Command, l *ledger.Ledger, group []l
 			// to its secret.
 			var ea *int64
 			if cred, cErr := resolveCredential(cmd, &group[i]); cErr == nil {
-				ea = fetchExpiresAtWithCredential(cmd, group[i].Token, cred)
+				myPub, _ := signerPubKeyHex(cmd, &group[i])
+				ea = fetchExpiresAtWithCredential(cmd, group[i].Token, cred, myPub)
 			}
 			earliest = earliestExpiry(earliest, ea)
 			if ea == nil {

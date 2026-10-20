@@ -60,7 +60,8 @@ CREATE TABLE IF NOT EXISTS entries (
 	cash_protection          TEXT,
 	pending_destination_cash_secret TEXT,
 	throwaway_key            TEXT,
-	pending_throwaway_key    TEXT
+	pending_throwaway_key    TEXT,
+	redeem_fee_millis        INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_entries_status_minter ON entries(status, minter_pubkey);
 
@@ -279,6 +280,10 @@ var addedColumns = []struct{ table, column, ddl string }{
 	// before this column existed need no backfill and SQLite never rewrites
 	// them.
 	{"entries", "version", `ALTER TABLE entries ADD COLUMN version INTEGER`},
+	// redeem_fee_millis: the redeem fee the Hub quoted for this slice when it
+	// was received, so a later quote charging more for the same slice is
+	// caught rather than silently accepted (cmd's checkQuoteDrift).
+	{"entries", "redeem_fee_millis", `ALTER TABLE entries ADD COLUMN redeem_fee_millis INTEGER`},
 	// pending_destination_cash_secret: the cash secret of a bill some OTHER
 	// row's spend is about to create — `transfer --to cash` and
 	// `consolidate --to cash` both mint one locally and only a one-way

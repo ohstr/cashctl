@@ -53,6 +53,41 @@ or with a real user's own cashctl/ncli state:
   join --hub <circlehub1...>` (the real bech32 Circle Hub connection format,
   end to end), and confirms the resulting personal wallet is live via
   `cashctl wallet get-info`.
+- `TestFollowSetCircle_ManagedSet` / `TestFollowSetCircle_ExternalProvider` —
+  follow_set circles: a public and a hidden member join, an outsider and a
+  member dropped by a republish get `auth` (RESTRICTED) while the dropped
+  member's wallet keeps working, a remaining member's re-join is `exists`, an
+  empty set closes the circle, and a provider's set the Hub has not found yet
+  is `network` (NOT_READY, retryable) until published and refreshed. The
+  external-provider test publishes to the node's general relay, read from
+  `GET /api/info`.
+- `TestCircleJoin_PrivateWhenOffered` — a join by default and one with
+  `--private=require` both go over the private transport, confirmed by a
+  listener on the Hub's inbox, not just by cashctl's own `private: true`.
+- `TestCircleJoin_RefusedTerms` / `TestCircleJoin_ExpiredWalletBlocksRejoinUntilDeleted`
+  — each join limit (expiry, minimum cap, per-wallet and hub ceilings) maps to
+  its exit code and leaves no pending join, and an expired wallet blocks a
+  re-join (`exists`) until the host deletes it.
+- `command_coverage_test.go` — the commands, flags and environment variables
+  nothing else ran: `skills list|show|install` (including a planted symlink),
+  `version`, `wallet get-balance`, `cash status --all`, every `--as` form and
+  `CASHCTL_AS` (the flag winning), `-` reading a secret from stdin, `NO_COLOR`
+  under a pseudo-terminal, `NCLI_VAULT_PASSWORD`, the literal `connection:`
+  target, `consolidate --ia`, the canonical `cash ...`/`wallet ...` forms, and a
+  `redeem --all` where one bill is gone (every bill reported, nonzero exit).
+- `attack_surface_test.go` — attacks a live Hub can stage: two wallets
+  receiving one cash note at once (exactly one can spend it), no NIP-47 request
+  addressed to a bill on the shared transport while every bill command runs (a
+  bill stripped of its mint provenance is refused, not sent there), a slice the
+  Hub owner deleted (`not_found`), a Hub keeping no tombstone (silence is never
+  `spent`), a forged newer follow set (ignored), terminal escapes in a hub label
+  (never printed raw), and a pre-existing 0755 config directory (made 0700).
+- `hostile_hub_test.go` (no live node needed) — the binary against a Hub that
+  lies, served by `fakehub_test.go`'s relay-plus-hub: a slice larger than the
+  signed bill (refused), the issuing key recorded, a redeem fee raised after
+  receive (refused, nothing sent), a reply chunk that never comes
+  (`indeterminate`, not resent), an announcement signed by another key and a
+  stale one listed first (neither used), and a relay on this machine (noted).
 - `TestReceive_PersistsMinterPubkeyForSignedToken` — mints with a mint
   signature requested and confirms `receive` persists the recovered minter
   pubkey onto the held entry (skips cleanly if the Hub doesn't attach one —

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -148,17 +149,26 @@ func installSkill(dir string, s skills.Skill) (installResult, error) {
 			return r, err
 		}
 		path := filepath.Join(root, filepath.FromSlash(rel))
-		existing, err := os.ReadFile(path)
-		if err == nil && bytes.Equal(existing, want) {
-			continue
-		}
-		if err != nil && !errors.Is(err, os.ErrNotExist) {
+		// Checked before MkdirAll as well as after: MkdirAll itself follows a
+		// symlinked directory, and would create the rest of the path wherever
+		// it points.
+		if err := refuseSymlinkedDirs(dir, filepath.Dir(path)); err != nil {
 			return r, err
 		}
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			return r, err
 		}
-		if err := os.WriteFile(path, want, 0o644); err != nil {
+		if err := refuseSymlinkedDirs(dir, filepath.Dir(path)); err != nil {
+			return r, err
+		}
+		if fi, err := os.Lstat(path); err == nil && fi.Mode().IsRegular() {
+			if existing, err := os.ReadFile(path); err == nil && bytes.Equal(existing, want) {
+				continue
+			}
+		} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return r, err
+		}
+		if err := replaceFile(path, want); err != nil {
 			return r, err
 		}
 		if r.Status == "unchanged" {
@@ -166,4 +176,56 @@ func installSkill(dir string, s skills.Skill) (installResult, error) {
 		}
 	}
 	return r, nil
+}
+
+// refuseSymlinkedDirs fails when sub, or any directory between dir and sub,
+// is a symlink: writing through one would put the skill's files wherever it
+// points instead of under dir. Components that don't exist yet are fine.
+func refuseSymlinkedDirs(dir, sub string) error {
+	rel, err := filepath.Rel(dir, sub)
+	if err != nil {
+		return err
+	}
+	cur := dir
+	for _, part := range strings.Split(rel, string(filepath.Separator)) {
+		if part == "." {
+			continue
+		}
+		cur = filepath.Join(cur, part)
+		fi, err := os.Lstat(cur)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if fi.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("%s is a symlink; remove it to install there", cur)
+		}
+	}
+	return nil
+}
+
+// replaceFile writes data to path through a temporary file renamed over it:
+// a symlink already at path is replaced, never written through to its target.
+func replaceFile(path string, data []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*")
+	if err != nil {
+		return err
+	}
+	// After a successful rename there is nothing left to remove; before it,
+	// this cleans up the temporary file.
+	defer func() { _ = os.Remove(tmp.Name()) }()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(0o644); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
 }

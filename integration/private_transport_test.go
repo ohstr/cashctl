@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"net/url"
 	"strings"
-	"sync/atomic"
+	"sync"
 	"testing"
 	"time"
 
@@ -47,6 +47,20 @@ func hubIdentityFromToken(t *testing.T, token string) (hubXOnly string, relays [
 // to observe one is to be listening when it goes past.
 func countPrivateRequests(t *testing.T, relayURL, inbox string) (stop func() int64) {
 	t.Helper()
+	return countEvents(t, relayURL, transport.KindPrivateRequest, inbox)
+}
+
+// countEvents counts, live, the events of kind p-tagged with pubkey on
+// relayURL until stop is called.
+func countEvents(t *testing.T, relayURL string, kind int, pubkey string) (stop func() int64) {
+	t.Helper()
+	capture := captureEvents(t, relayURL, kind, pubkey)
+	return func() int64 { return int64(len(capture())) }
+}
+
+// captureEvents is countEvents keeping the events themselves.
+func captureEvents(t *testing.T, relayURL string, kind int, pubkey string) (stop func() []*nip01.Event) {
+	t.Helper()
 	u, err := url.Parse(relayURL)
 	if err != nil {
 		t.Fatalf("parse relay url %q: %v", relayURL, err)
@@ -62,17 +76,18 @@ func countPrivateRequests(t *testing.T, relayURL, inbox string) (stop func() int
 	// kind-23190 request is ephemeral and arrives live, so a Subscribe-based
 	// observer counts zero however many requests actually go past — which is
 	// exactly the bug this transport's own reply path had.
-	subID := "e2e-private-request-counter"
+	subID := "e2e-event-counter"
 	if !conn.SubscribeWithID(subID, nip01.NewSubscriptionFilterGroup(&nip01.SubscriptionFilter{
-		Kinds: []int{transport.KindPrivateRequest},
-		Tags:  map[string][]string{"p": {inbox}},
+		Kinds: []int{kind},
+		Tags:  map[string][]string{"p": {pubkey}},
 	})) {
 		cancel()
 		conn.Close()
 		t.Fatal("could not open the observing subscription")
 	}
 
-	var seen atomic.Int64
+	var mu sync.Mutex
+	var seen []*nip01.Event
 	done := make(chan struct{})
 	stopCh := make(chan struct{})
 	go func() {
@@ -84,14 +99,16 @@ func countPrivateRequests(t *testing.T, relayURL, inbox string) (stop func() int
 					return
 				}
 				if m, ok := msg.(*wire.EventSubscriptionResponse); ok && m.SubscriptionID == subID && m.Event != nil {
-					seen.Add(1)
+					mu.Lock()
+					seen = append(seen, m.Event)
+					mu.Unlock()
 				}
 			case <-stopCh:
 				return
 			}
 		}
 	}()
-	return func() int64 {
+	return func() []*nip01.Event {
 		// A moment for anything still in flight, so the count cannot be low
 		// merely because we stopped listening too early.
 		time.Sleep(2 * time.Second)
@@ -101,7 +118,9 @@ func countPrivateRequests(t *testing.T, relayURL, inbox string) (stop func() int
 		<-done
 		conn.Close()
 		cancel()
-		return seen.Load()
+		mu.Lock()
+		defer mu.Unlock()
+		return seen
 	}
 }
 

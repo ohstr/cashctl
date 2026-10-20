@@ -95,10 +95,16 @@ type adminCreateAppRequest struct {
 	CashMaxExpSecs        int   `json:"cashMaxExpSecs,omitempty"`
 	CashRedeemFeePpm      int   `json:"cashRedeemFeePpm,omitempty"`
 	CashMinTransferMloki  int64 `json:"cashMinTransferMloki,omitempty"`
+	// CashSpentRetentionSecs is how long the hub keeps answering "spent" for a
+	// bill it destroyed; a pointer because 0 (fall silent at once) differs
+	// from omitted (the server default).
+	CashSpentRetentionSecs *int `json:"cashSpentRetentionSecs,omitempty"`
 
 	// circle_hub-only fields (Kind == "circle_hub") — CircleIdentityName/
-	// CirclePolicy create a brand-new CircleIdentity; this suite always
-	// uses "allowlist" (no synthetic Nostr follow-graph needed).
+	// CirclePolicy create a brand-new CircleIdentity, "allowlist" or
+	// "follow_set". For follow_set, ProviderPubkey names the set's author
+	// and FollowSetD its d identifier; an empty ProviderPubkey means the
+	// node identity, which then publishes FollowSet before the hub exists.
 	// CircleFeesPpm is the circle's own forwarding fee (0 = none, and never
 	// omitted-as-default the way the other fields here are, since 0 is
 	// itself a meaningful, deliberately-chosen value for most fixtures).
@@ -108,6 +114,19 @@ type adminCreateAppRequest struct {
 	CirclePerWalletMaxMloki int    `json:"circlePerWalletMaxMloki,omitempty"`
 	CircleFeesPpm           int    `json:"circleFeesPpm,omitempty"`
 	CircleMinBudgetRenewal  string `json:"circleMinBudgetRenewal,omitempty"`
+
+	ProviderPubkey string          `json:"providerPubkey,omitempty"`
+	FollowSetD     string          `json:"followSetD,omitempty"`
+	FollowSet      *adminFollowSet `json:"followSet,omitempty"`
+}
+
+// adminFollowSet mirrors lokihub's api.FollowSetRequest: one version of a
+// follow set the node identity publishes.
+type adminFollowSet struct {
+	Title         string   `json:"title"`
+	Description   string   `json:"description"`
+	PublicMembers []string `json:"publicMembers"`
+	HiddenMembers []string `json:"hiddenMembers"`
 }
 
 // adminCreateAppResponse mirrors lokihub's api.CreateAppResponse, including
@@ -206,6 +225,12 @@ func (c *adminClient) deleteCashWallet(hubAppID, walletAppID uint) error {
 	return err
 }
 
+// deleteCashClaim removes one recipient's slice from a bill, as the Hub
+// owner can (DELETE /api/apps/:id/cash-wallets/:walletId/claims/:claimId).
+func (c *adminClient) deleteCashClaim(hubAppID, walletAppID, claimID uint) error {
+	return c.doBody(http.MethodDelete, fmt.Sprintf("/api/apps/%d/cash-wallets/%d/claims/%d", hubAppID, walletAppID, claimID), nil, nil)
+}
+
 type adminCircleChild struct {
 	AppID uint `json:"appId"`
 }
@@ -257,6 +282,59 @@ func (c *adminClient) addCircleAllowlistMember(hubAppID uint, pubkeyHex string) 
 	}
 	body := map[string][]string{"pubkeys": append(current.Pubkeys, pubkeyHex)}
 	return c.doBody(http.MethodPut, fmt.Sprintf("/api/apps/%d/circle/allowlist", hubAppID), body, nil)
+}
+
+// getCircleIdentityID resolves a circle_hub's own CircleIdentity id (GET
+// /api/apps/:id), which createApp's response does not carry.
+func (c *adminClient) getCircleIdentityID(hubAppID uint) (uint, error) {
+	var app struct {
+		CircleIdentity *struct {
+			ID uint `json:"id"`
+		} `json:"circleIdentity"`
+	}
+	if err := c.doBody(http.MethodGet, fmt.Sprintf("/api/apps/%d", hubAppID), nil, &app); err != nil {
+		return 0, err
+	}
+	if app.CircleIdentity == nil {
+		return 0, fmt.Errorf("app %d has no circleIdentity", hubAppID)
+	}
+	return app.CircleIdentity.ID, nil
+}
+
+// deleteCircleIdentity removes a CircleIdentity. Identities outlive their
+// hub by design, and a follow_set one keeps being re-read from relays every
+// few minutes, so every fixture deletes its own once the hub is gone.
+func (c *adminClient) deleteCircleIdentity(id uint) error {
+	return c.doBody(http.MethodDelete, fmt.Sprintf("/api/circle-identities/%d", id), nil, nil)
+}
+
+// publishFollowSet publishes a new version of a follow set the node
+// identity authors (PUT /api/circle-identities/:id/follow-set).
+func (c *adminClient) publishFollowSet(identityID uint, set adminFollowSet) error {
+	return c.doBody(http.MethodPut, fmt.Sprintf("/api/circle-identities/%d/follow-set", identityID), set, nil)
+}
+
+// refreshCircle makes the hub re-read its follow set now instead of at the
+// next background refresh (POST /api/apps/:id/circle/refresh).
+func (c *adminClient) refreshCircle(hubAppID uint) error {
+	return c.doBody(http.MethodPost, fmt.Sprintf("/api/apps/%d/circle/refresh", hubAppID), nil, nil)
+}
+
+// patchApp applies a partial lokihub api.UpdateAppRequest (PATCH
+// /api/apps/:id); fields left out keep their value.
+func (c *adminClient) patchApp(appID uint, fields map[string]any) error {
+	return c.doBody(http.MethodPatch, fmt.Sprintf("/api/apps/%d", appID), fields, nil)
+}
+
+// adminNodeInfo is the subset of GET /api/info this suite reads.
+type adminNodeInfo struct {
+	GeneralRelay string `json:"generalRelay"`
+}
+
+func (c *adminClient) getInfo() (adminNodeInfo, error) {
+	var info adminNodeInfo
+	err := c.doBody(http.MethodGet, "/api/info", nil, &info)
+	return info, err
 }
 
 // liveClaimsForWallet returns a wallet's LIVE slices as the Hub owner sees them,

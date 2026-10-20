@@ -1,9 +1,16 @@
 package cmd
 
 import (
+	"errors"
+	"fmt"
+	"io"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
+
+	"github.com/ohstr/cashctl/internal/output"
 )
 
 // asCredentialEnv is the non-argv way to supply --as.
@@ -33,4 +40,31 @@ func asCredentialValue(cmd *cobra.Command) string {
 		return as
 	}
 	return os.Getenv(asCredentialEnv)
+}
+
+// stdinArg, given in place of a secret-bearing argument (a <token>#<secret>
+// bill, an NWC URI, a Circle Hub connection), reads that value from stdin
+// instead: like CASHCTL_AS, it keeps the secret out of `ps` and shell history.
+const stdinArg = "-"
+
+// argOrStdin returns arg, or the first line of stdin when arg is stdinArg.
+// It reads through the same buffered reader as the prompts, so a later
+// confirmation still gets the lines after it.
+func argOrStdin(cmd *cobra.Command, arg string) (string, error) {
+	if strings.TrimSpace(arg) != stdinArg {
+		return arg, nil
+	}
+	if term.IsTerminal(int(os.Stdin.Fd())) {
+		// Typed rather than piped in: say what is being waited for, on
+		// stderr like every prompt.
+		output.Fprintf(os.Stderr, "Paste the value, then press Enter: ")
+	}
+	line, err := stdin.ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return "", output.RuntimeError(cmd, fmt.Errorf("read the value from stdin: %w", err))
+	}
+	if v := strings.TrimSpace(line); v != "" {
+		return v, nil
+	}
+	return "", output.InvocationError(cmd, errors.New(`"-" reads the value from stdin, but stdin was empty`))
 }
