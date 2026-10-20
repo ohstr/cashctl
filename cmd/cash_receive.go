@@ -166,6 +166,7 @@ func runCashReceive(cmd *cobra.Command, args []string) error {
 		Verified:         true,
 		MinterPubkey:     result.MinterPubkey,
 		ExpiresAt:        result.ExpiresAt,
+		RedeemFeeMillis:  &result.RedeemFeeMillis,
 	}
 	if result.IsCash {
 		// Shared, not yet protected: this is the secret exactly as it

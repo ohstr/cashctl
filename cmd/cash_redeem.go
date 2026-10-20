@@ -1243,7 +1243,11 @@ func resolveAmount(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entry, so
 	}); vErr != nil {
 		return 0, vErr
 	}
+	if dErr := checkQuoteDrift(cmd, entry, result.AmountMillis, result.RedeemFeeMillis); dErr != nil {
+		return 0, dErr
+	}
 	entry.AmountMillis = &result.AmountMillis
+	entry.RedeemFeeMillis = &result.RedeemFeeMillis
 	entry.ExpiresAt = result.ExpiresAt
 	_ = l.SetVerified(entry.ID, true)
 	return result.AmountMillis, nil
@@ -1323,7 +1327,11 @@ func resolveRedeemQuote(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entr
 	if err := validateQuotedAmounts(cmd, tok, result.MinterPubkey, q); err != nil {
 		return redeemQuote{}, err
 	}
+	if err := checkQuoteDrift(cmd, entry, q.AmountMillis, q.RedeemFeeMillis); err != nil {
+		return redeemQuote{}, err
+	}
 	entry.AmountMillis = &result.AmountMillis
+	entry.RedeemFeeMillis = &result.RedeemFeeMillis
 	entry.ExpiresAt = result.ExpiresAt
 	_ = l.SetVerified(entry.ID, true)
 	return q, nil

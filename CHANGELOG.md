@@ -19,6 +19,8 @@
 - Fixes an existing config directory open to group or others (e.g. 0755) being
   left that way; cashctl now makes it 0700 on first use and says so.
   ([#118](https://github.com/ohstr/cashctl/pull/118))
+- Fixes a Hub being able to charge a larger redeem fee, or quote a larger
+  amount, for a bill than it did when you received it; `redeem` now refuses.
 
 ## [0.6.0-rc.16]
 

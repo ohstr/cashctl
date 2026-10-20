@@ -924,3 +924,34 @@ func TestHandoffs_PersistAndOnlyStatusChanges(t *testing.T) {
 		t.Errorf("status change not saved, or the handoff was rewritten: %+v", third.Handoffs)
 	}
 }
+
+// TestSaveAndLoad_RedeemFeeRoundTrip: the receive-time redeem fee survives a
+// reload, and stays nil (not zero, which is a real fee) when never learned.
+func TestSaveAndLoad_RedeemFeeRoundTrip(t *testing.T) {
+	withTempConfigDir(t)
+
+	l, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	fee := uint64(250)
+	if _, err := l.Add(Entry{Token: "lokicash1withfee", RedeemFeeMillis: &fee}); err != nil {
+		t.Fatalf("Add() error = %v", err)
+	}
+	if _, err := l.Add(Entry{Token: "lokicash1nofee"}); err != nil {
+		t.Fatalf("Add() error = %v", err)
+	}
+	if err := l.Save(); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	reloaded, err := Load()
+	if err != nil {
+		t.Fatalf("Load() (reloaded) error = %v", err)
+	}
+	if e, _ := reloaded.FindByToken("lokicash1withfee"); e.RedeemFeeMillis == nil || *e.RedeemFeeMillis != fee {
+		t.Errorf("RedeemFeeMillis = %v, want %d", e.RedeemFeeMillis, fee)
+	}
+	if e, _ := reloaded.FindByToken("lokicash1nofee"); e.RedeemFeeMillis != nil {
+		t.Errorf("RedeemFeeMillis = %d, want nil (never set)", *e.RedeemFeeMillis)
+	}
+}

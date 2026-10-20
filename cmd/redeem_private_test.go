@@ -313,3 +313,30 @@ func TestApplyRedeemResults_IncompleteReplyIsNotAnOmission(t *testing.T) {
 		t.Errorf("code = %q, want indeterminate", ce.Code)
 	}
 }
+
+// A held slice never grows and its redeem fee never rises for the same or a
+// smaller amount; a quote that does either is refused, anything else passes.
+func TestCheckQuoteDrift(t *testing.T) {
+	amount, fee := uint64(10_000), uint64(100)
+	entry := &ledger.Entry{ID: "tok-1", AmountMillis: &amount, RedeemFeeMillis: &fee}
+	c := testCmdWithFlags(true, false)
+	for _, tc := range []struct {
+		name        string
+		amount, fee uint64
+		wantRefused bool
+	}{
+		{"same quote", 10_000, 100, false},
+		{"smaller slice, smaller fee", 6_000, 60, false},
+		{"fee waived", 10_000, 0, false},
+		{"slice grew", 10_001, 100, true},
+		{"fee rose", 10_000, 101, true},
+	} {
+		err := checkQuoteDrift(c, entry, tc.amount, tc.fee)
+		if (err != nil) != tc.wantRefused {
+			t.Errorf("%s: checkQuoteDrift = %v, want refused %v", tc.name, err, tc.wantRefused)
+		}
+	}
+	if err := checkQuoteDrift(c, &ledger.Entry{ID: "tok-2"}, 1<<40, 1<<30); err != nil {
+		t.Errorf("an entry with nothing recorded yet: %v, want no refusal", err)
+	}
+}

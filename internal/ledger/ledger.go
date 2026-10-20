@@ -186,6 +186,12 @@ type Entry struct {
 	// call.
 	ExpiresAt *int64 `json:"expires_at,omitempty"`
 
+	// RedeemFeeMillis is the redeem fee the Hub quoted for this slice at
+	// receive (or at the last accepted quote since), nil if never learned. A
+	// fee never falls as the amount grows, so a later quote charging more
+	// for the same or a smaller amount is refused.
+	RedeemFeeMillis *uint64 `json:"redeem_fee_millis,omitempty"`
+
 	// CashProtection reports whether a cash-mode entry's CashSecret
 	// is exclusively known to this ledger (CashProtected, re-keyed by
 	// cmd/receive_secure.go's protectCashReceipt/protectRekeyOnly or a
@@ -332,7 +338,7 @@ func load() (*Ledger, error) {
 		identity_required, amount_millis, received_at, verified, status, cash_secret,
 		connection_key_platform, connection_key_external_id, attestation_event_id, ia_pubkey,
 		pending_cash_secret, expires_at, cash_protection, pending_destination_cash_secret,
-		throwaway_key, pending_throwaway_key, COALESCE(version, 0)
+		throwaway_key, pending_throwaway_key, COALESCE(version, 0), redeem_fee_millis
 		FROM entries ORDER BY rowid`)
 	if err != nil {
 		return nil, fmt.Errorf("cashctl.db: reading entries: %w", err)
@@ -340,13 +346,13 @@ func load() (*Ledger, error) {
 	for rows.Next() {
 		var e Entry
 		var relayURLs, pendingCashSecret, cashProtection, pendingDestCashSecret, throwawayKey, pendingThrowawayKey sql.NullString
-		var identityRequired, amountMillis, expiresAt sql.NullInt64
+		var identityRequired, amountMillis, expiresAt, redeemFee sql.NullInt64
 		var version int64
 		if err := rows.Scan(&e.ID, &e.Token, &e.WalletPubkey, &e.MinterPubkey, &e.Secret, &relayURLs,
 			&identityRequired, &amountMillis, &e.ReceivedAt, &e.Verified, &e.Status, &e.CashSecret,
 			&e.ConnectionKeyPlatform, &e.ConnectionKeyExternalID, &e.AttestationEventID, &e.IAPubkey,
 			&pendingCashSecret, &expiresAt, &cashProtection, &pendingDestCashSecret,
-			&throwawayKey, &pendingThrowawayKey, &version); err != nil {
+			&throwawayKey, &pendingThrowawayKey, &version, &redeemFee); err != nil {
 			_ = rows.Close()
 			return nil, fmt.Errorf("cashctl.db: reading entries: %w", err)
 		}
@@ -378,6 +384,10 @@ func load() (*Ledger, error) {
 		if expiresAt.Valid {
 			v := expiresAt.Int64
 			e.ExpiresAt = &v
+		}
+		if redeemFee.Valid {
+			v := uint64(redeemFee.Int64)
+			e.RedeemFeeMillis = &v
 		}
 		l.Entries = append(l.Entries, e)
 		versions[e.ID] = version
@@ -529,6 +539,10 @@ func (l *Ledger) save() error {
 		if e.ExpiresAt != nil {
 			expiresAt = sql.NullInt64{Int64: *e.ExpiresAt, Valid: true}
 		}
+		var redeemFee sql.NullInt64
+		if e.RedeemFeeMillis != nil {
+			redeemFee = sql.NullInt64{Int64: int64(*e.RedeemFeeMillis), Valid: true}
+		}
 		// expectedVersion (computed above) is this row's version as of Load, 0 for
 		// a row this process is adding. The WHERE below makes the update
 		// conditional on it, so a row another process changed in between is left
@@ -537,8 +551,8 @@ func (l *Ledger) save() error {
 			identity_required, amount_millis, received_at, verified, status, cash_secret,
 			connection_key_platform, connection_key_external_id, attestation_event_id, ia_pubkey,
 			pending_cash_secret, expires_at, cash_protection, pending_destination_cash_secret,
-			throwaway_key, pending_throwaway_key, version)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+			throwaway_key, pending_throwaway_key, redeem_fee_millis, version)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
 			ON CONFLICT(id) DO UPDATE SET
 				token = excluded.token, wallet_pubkey = excluded.wallet_pubkey,
 				minter_pubkey = excluded.minter_pubkey, secret = excluded.secret,
@@ -555,13 +569,14 @@ func (l *Ledger) save() error {
 				pending_destination_cash_secret = excluded.pending_destination_cash_secret,
 				throwaway_key = excluded.throwaway_key,
 				pending_throwaway_key = excluded.pending_throwaway_key,
+				redeem_fee_millis = excluded.redeem_fee_millis,
 				version = COALESCE(entries.version, 0) + 1
 			WHERE COALESCE(entries.version, 0) = ?`,
 			e.ID, e.Token, e.WalletPubkey, e.MinterPubkey, e.Secret, relayURLs,
 			identityRequired, amountMillis, e.ReceivedAt, e.Verified, e.Status, e.CashSecret,
 			e.ConnectionKeyPlatform, e.ConnectionKeyExternalID, e.AttestationEventID, e.IAPubkey,
 			e.PendingCashSecret, expiresAt, e.CashProtection, e.PendingDestinationCashSecret,
-			e.ThrowawayKey, e.PendingThrowawayKey, expectedVersion)
+			e.ThrowawayKey, e.PendingThrowawayKey, redeemFee, expectedVersion)
 		if err != nil {
 			// entries.id collisions are handled by ON CONFLICT above — the
 			// only other constraint this table has is token's own UNIQUE,
