@@ -206,7 +206,7 @@ func quoteHubGroup(
 	}
 	incomplete := incompleteReply(sendErr)
 
-	myPubHex, _ := localPubKeyHex(cmd)
+	myPubHex, _ := signerPubKeyHex(cmd)
 	byID := map[string]*ledger.Entry{}
 	for _, e := range entries {
 		byID[e.ID] = e

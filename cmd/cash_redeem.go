@@ -1218,7 +1218,7 @@ func resolveAmount(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entry, so
 	if err != nil {
 		return 0, err
 	}
-	myPubHex, _ := localPubKeyHex(cmd)
+	myPubHex, _ := signerPubKeyHex(cmd)
 	result, err := sourceClient.CheckClaim(ctx, cred, tok, myPubHex)
 	if errors.Is(err, nipcash.ErrSpent) {
 		return 0, recordSpent(cmd, l, entry)
@@ -1298,7 +1298,7 @@ func resolveRedeemQuote(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entr
 	if err != nil {
 		return redeemQuote{}, err
 	}
-	myPubHex, _ := localPubKeyHex(cmd)
+	myPubHex, _ := signerPubKeyHex(cmd)
 	result, err := sourceClient.CheckClaim(ctx, cred, tok, myPubHex)
 	if errors.Is(err, nipcash.ErrSpent) {
 		return redeemQuote{}, recordSpent(cmd, l, entry)

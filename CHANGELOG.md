@@ -9,6 +9,8 @@
   goes; it now replaces the link, and refuses a skill directory that is one.
 - Fixes `receive` refusing a signed bill split between several recipients: it
   compared the holder's own share against the whole bill's attested amount.
+- Fixes `redeem --as pubkey:<key>` (and `CASHCTL_AS`) failing with "couldn't
+  determine this token's amount" when that key isn't your stored identity.
 
 ## [0.6.0-rc.16]
 

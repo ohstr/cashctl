@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"errors"
+	"strings"
 
 	"github.com/ohstr/nmilat/nipcash"
 	"github.com/ohstr/nmilat/nipcw"
@@ -38,6 +39,17 @@ func localPubKeyHex(cmd *cobra.Command) (string, error) {
 		return "", err
 	}
 	return utils.GetPublicKey(priv)
+}
+
+// signerPubKeyHex is the pubkey a Hub's reply is matched against when this
+// run spends: the --as credential's when it is pubkey:<privkey>, since that
+// key and not the stored identity signs every request, and the local
+// identity's otherwise.
+func signerPubKeyHex(cmd *cobra.Command) (string, error) {
+	if priv, ok := strings.CutPrefix(asCredentialValue(cmd), "pubkey:"); ok {
+		return utils.GetPublicKey(priv)
+	}
+	return localPubKeyHex(cmd)
 }
 
 // localCashCredential is the default --as for redeeming/transferring a

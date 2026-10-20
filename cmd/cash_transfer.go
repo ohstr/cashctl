@@ -231,7 +231,7 @@ func fetchExpiresAtWithCredential(cmd *cobra.Command, token string, cred nipcash
 		return nil
 	}
 	defer client.Close()
-	myPubHex, _ := localPubKeyHex(cmd)
+	myPubHex, _ := signerPubKeyHex(cmd)
 	result, err := client.CheckClaim(ctx, cred, tok, myPubHex)
 	return expiresAtFromCheck(result, err)
 }

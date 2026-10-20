@@ -2,7 +2,10 @@ package cmd
 
 import (
 	"errors"
+	"strings"
 	"testing"
+
+	"github.com/ohstr/nmilat/utils"
 
 	"github.com/ohstr/cashctl/internal/output"
 )
@@ -44,5 +47,20 @@ func TestArgOrStdin_EmptyStdinIsAUsageError(t *testing.T) {
 	var ce *output.CLIError
 	if !errors.As(err, &ce) || ce.Code != output.CodeUsage {
 		t.Fatalf("err = %v, want a usage error", err)
+	}
+}
+
+// A pubkey:<privkey> --as signs the run's requests, so the Hub's reply is
+// matched against its pubkey, not the stored identity's.
+func TestSignerPubKeyHex_FollowsAPubkeyAsCredential(t *testing.T) {
+	priv := strings.Repeat("11", 32)
+	want, err := utils.GetPublicKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := testCmdWithFlags(true, false)
+	c.Flags().String("as", "pubkey:"+priv, "")
+	if got, err := signerPubKeyHex(c); err != nil || got != want {
+		t.Fatalf("signerPubKeyHex = %q, %v; want %q", got, err, want)
 	}
 }
