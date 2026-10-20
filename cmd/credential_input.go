@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	"github.com/ohstr/cashctl/internal/output"
 )
@@ -52,6 +53,11 @@ const stdinArg = "-"
 func argOrStdin(cmd *cobra.Command, arg string) (string, error) {
 	if strings.TrimSpace(arg) != stdinArg {
 		return arg, nil
+	}
+	if term.IsTerminal(int(os.Stdin.Fd())) {
+		// Typed rather than piped in: say what is being waited for, on
+		// stderr like every prompt.
+		output.Fprintf(os.Stderr, "Paste the value, then press Enter: ")
 	}
 	line, err := stdin.ReadString('\n')
 	if err != nil && !errors.Is(err, io.EOF) {
