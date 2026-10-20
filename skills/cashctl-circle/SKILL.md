@@ -25,6 +25,7 @@ Both forms work identically; prefer `join`.
 | `--expiry` | requested expiry duration (`0` = the Hub's own default) |
 | `--budget-renewal` | `daily`\|`weekly`\|`monthly`\|`yearly`\|`never` (default: the Hub's own) |
 | `--as` | override credential — `pubkey:<privkey>` (the only NIP-CW credential mode); defaults to your local identity |
+| `--private` | `prefer` (default): join privately when the Hub offers it, else over the shared connection, saying so; `require`: refuse instead of joining over the shared connection |
 
 `--hub`/`--max-amount` are kept working exactly as before for
 scripted/agentic use — the positional form above is just the shorter path
@@ -34,9 +35,23 @@ ever dialing the Hub (the Hub would reject it too, just after a
 round-trip).
 
 ```sh
-# {"wallet": "circle:<label-or-n>", "default": true, "response": {"wallet_pubkey", "relays", "connection_pubkey", "expires_at", "max_amount_millis", "max_amount", "fees_ppm", "budget_renewal"}}
+# {"wallet": "circle:<label-or-n>", "default": true, "private": true, "fallback_reason": "", "response": {"wallet_pubkey", "relays", "connection_pubkey", "expires_at", "max_amount_millis", "max_amount", "fees_ppm", "budget_renewal"}}
 cashctl join circlehub1... 100 --json
 ```
+
+**Private join.** When the Hub's `get_info` names a node `identity`, `join`
+sends the request over NIP-CASH's private transport, so the circle's other
+members don't see your pubkey on the shared Hub connection. `private` says
+whether it did. If the Hub offers it but its announcement can't be found or
+verified, `join` falls back to the shared connection and says so:
+`fallback_reason` (`""` otherwise), and a `joined without private transport:
+<reason>` line on stderr in text mode. A failure after such a fallback says
+in its message that it went over the shared connection. With
+`--private=require`, `join` refuses instead and sends nothing:
+`not_found` when the Hub doesn't offer private join, `network` (retryable)
+when its announcement couldn't be fetched or verified. Refusals carry the
+same codes on both transports (table below). `decode --check` shows whether
+a Hub offers private join before you join.
 
 `max_amount_millis` (`max_amount`: the same in loki) is the cap the Hub actually granted, which can be lower
 than the one you asked for (text mode says so); it is `null` if the Hub did

@@ -187,6 +187,7 @@ func newTestJoinCmd() *cobra.Command {
 	c.Flags().Duration("expiry", 0, "")
 	c.Flags().String("budget-renewal", "", "")
 	c.Flags().String("as", "", "")
+	c.Flags().String("private", "", "")
 	return c
 }
 

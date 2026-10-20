@@ -8,6 +8,7 @@ import (
 
 	"github.com/ohstr/nmilat/nip47"
 	"github.com/ohstr/nmilat/nipcw"
+	nipcwclient "github.com/ohstr/nmilat/nipcw/client"
 	relayclient "github.com/ohstr/nmilat/relay/client"
 
 	"github.com/ohstr/cashctl/internal/appdir"
@@ -24,9 +25,13 @@ type fakeJoin struct {
 	err         error
 	sentKey     nipcw.ConnectionKey
 	savedBefore bool
+	opts        nipcwclient.JoinOptions
+	private     bool
+	fallback    error
 }
 
-func (f *fakeJoin) call(_ context.Context, _ string, p nipcw.CreateCircleWalletParams) (*nipcw.CreateCircleWalletResponse, bool, error) {
+func (f *fakeJoin) call(_ context.Context, _ string, p nipcw.CreateCircleWalletParams, opts nipcwclient.JoinOptions) (*nipcwclient.JoinResult, bool, error) {
+	f.opts = opts
 	f.sentKey = p.Connection
 	pending, err := config.PendingJoins()
 	if err != nil {
@@ -37,7 +42,10 @@ func (f *fakeJoin) call(_ context.Context, _ string, p nipcw.CreateCircleWalletP
 			f.savedBefore = true
 		}
 	}
-	return f.resp, f.dialed, f.err
+	if f.err != nil {
+		return nil, f.dialed, f.err
+	}
+	return &nipcwclient.JoinResult{CreateCircleWalletResponse: f.resp, Private: f.private, FallbackReason: f.fallback}, f.dialed, nil
 }
 
 func setUpJoinTest(t *testing.T, f *fakeJoin) {
@@ -76,9 +84,9 @@ func TestJoin_SavesTheKeyFirstAndRegistersTheWalletFromTheReply(t *testing.T) {
 	setUpJoinTest(t, f)
 	f.resp = &nipcw.CreateCircleWalletResponse{WalletPubkey: strings.Repeat("ef", 32), Relays: []string{"wss://w.example"}}
 	// What nmilat builds from the reply and the member's own secret.
-	joinCircleFn = func(ctx context.Context, uri string, p nipcw.CreateCircleWalletParams) (*nipcw.CreateCircleWalletResponse, bool, error) {
+	joinCircleFn = func(ctx context.Context, uri string, p nipcw.CreateCircleWalletParams, opts nipcwclient.JoinOptions) (*nipcwclient.JoinResult, bool, error) {
 		f.resp.PairingURI = nip47.BuildPairingURI(f.resp.WalletPubkey, f.resp.Relays, p.Connection.Secret(), nil)
-		return f.call(ctx, uri, p)
+		return f.call(ctx, uri, p, opts)
 	}
 	if err := runTestJoin(t); err != nil {
 		t.Fatalf("join: %v", err)

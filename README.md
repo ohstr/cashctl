@@ -234,7 +234,10 @@ or via `--hub`/`--max-amount`. A cap is required — there's no "unlimited"
 option.
 
 `join` calls `create_circle_wallet` on your behalf and saves the resulting
-wallet. If it's your first wallet, it also becomes your default.
+wallet. If it's your first wallet, it also becomes your default. When the
+Hub offers private join, the request goes over NIP-CASH's private transport,
+so the circle's other members don't see your pubkey on the shared connection;
+if that transport can't be used, `join` says it joined without it.
 
 ```sh
 cashctl join circlehub1... --max-amount 100 --budget-renewal monthly
@@ -247,6 +250,7 @@ cashctl join circlehub1... --max-amount 100 --budget-renewal monthly
 | `--expiry` | requested expiry duration (default: the Hub's own) |
 | `--budget-renewal` | `daily`\|`weekly`\|`monthly`\|`yearly`\|`never` (default: the Hub's own) |
 | `--as` | override credential (defaults to your local identity) |
+| `--private` | `prefer` (default) or `require`: refuse rather than join over the shared connection |
 
 `join` is a top-level shortcut for `cashctl circle join`.
 
