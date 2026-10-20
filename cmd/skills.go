@@ -149,6 +149,12 @@ func installSkill(dir string, s skills.Skill) (installResult, error) {
 			return r, err
 		}
 		path := filepath.Join(root, filepath.FromSlash(rel))
+		// Checked before MkdirAll as well as after: MkdirAll itself follows a
+		// symlinked directory, and would create the rest of the path wherever
+		// it points.
+		if err := refuseSymlinkedDirs(dir, filepath.Dir(path)); err != nil {
+			return r, err
+		}
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			return r, err
 		}
@@ -174,7 +180,7 @@ func installSkill(dir string, s skills.Skill) (installResult, error) {
 
 // refuseSymlinkedDirs fails when sub, or any directory between dir and sub,
 // is a symlink: writing through one would put the skill's files wherever it
-// points instead of under dir.
+// points instead of under dir. Components that don't exist yet are fine.
 func refuseSymlinkedDirs(dir, sub string) error {
 	rel, err := filepath.Rel(dir, sub)
 	if err != nil {
@@ -187,6 +193,9 @@ func refuseSymlinkedDirs(dir, sub string) error {
 		}
 		cur = filepath.Join(cur, part)
 		fi, err := os.Lstat(cur)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
 		if err != nil {
 			return err
 		}

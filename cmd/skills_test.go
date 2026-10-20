@@ -108,3 +108,18 @@ func TestInstallSkill_RefusesASymlinkedSkillDir(t *testing.T) {
 		t.Errorf("files written through the symlink: %v", entries)
 	}
 }
+
+// A symlinked skill dir is refused before anything is created through it,
+// including a nested file's parent directory.
+func TestRefuseSymlinkedDirs_BeforeAnythingIsCreated(t *testing.T) {
+	dir, elsewhere := t.TempDir(), t.TempDir()
+	if err := os.Symlink(elsewhere, filepath.Join(dir, "cashctl-cash")); err != nil {
+		t.Fatal(err)
+	}
+	if err := refuseSymlinkedDirs(dir, filepath.Join(dir, "cashctl-cash", "refs")); err == nil {
+		t.Fatal("refuseSymlinkedDirs passed a path through a symlink")
+	}
+	if err := refuseSymlinkedDirs(dir, filepath.Join(dir, "not-yet", "refs")); err != nil {
+		t.Errorf("a path that doesn't exist yet was refused: %v", err)
+	}
+}
