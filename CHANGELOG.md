@@ -5,6 +5,8 @@
 - Adds `-` in place of `receive`'s token, `connect add`'s connection and
   `join`'s hub connection, read from stdin so the secret stays out of `ps` and
   shell history.
+- Fixes `skills install` writing through a symlink planted where a skill file
+  goes; it now replaces the link, and refuses a skill directory that is one.
 
 ## [0.6.0-rc.16]
 
