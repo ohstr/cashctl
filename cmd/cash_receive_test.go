@@ -208,3 +208,25 @@ func TestValidateClaimedAmount_RejectsAbsurdlyLargeAmount(t *testing.T) {
 		t.Fatal("validateClaimedAmount() = nil error, want an absurd amount rejected")
 	}
 }
+
+func TestWarnLocalRelays(t *testing.T) {
+	for _, tc := range []struct {
+		relay string
+		warn  bool
+	}{
+		{"ws://127.0.0.1:7777", true},
+		{"ws://localhost:7777", true},
+		{"wss://10.1.2.3", true},
+		{"wss://[::1]:7777", true},
+		{"wss://relay.example.com", false},
+		{"wss://8.8.8.8", false},
+	} {
+		_, errOut := captureStreams(t, func() { warnLocalRelays(false, []string{tc.relay}) })
+		if got := strings.Contains(errOut, "your own machine or network"); got != tc.warn {
+			t.Errorf("%s: warned = %v, want %v (%q)", tc.relay, got, tc.warn, errOut)
+		}
+	}
+	if _, errOut := captureStreams(t, func() { warnLocalRelays(true, []string{"ws://127.0.0.1"}) }); errOut != "" {
+		t.Errorf("--json mode printed a note: %q", errOut)
+	}
+}

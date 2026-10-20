@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net"
+	"net/url"
 	"strings"
 	"time"
 
@@ -144,6 +146,7 @@ func runCashReceive(cmd *cobra.Command, args []string) error {
 
 	printCashBill(jsonMode, tok, isCash)
 
+	warnLocalRelays(jsonMode, tok.RelayURLs)
 	result, err := checkClaimWithCashHub(cmd, input, embeddedSecret, tok)
 	if err != nil {
 		return err
@@ -470,4 +473,24 @@ func checkClaimOnce(cmd *cobra.Command, input, embeddedSecret string, tok nipcas
 		return nil, err
 	}
 	return client.CheckClaim(ctx, cred, tok, nipcash.NoLocalIdentity)
+}
+
+// warnLocalRelays says so when a bill's relay hints point at this machine or
+// its local network. receive dials them as soon as the bill is pasted, and a
+// bill from someone else has no reason to name such a relay: it can be a way
+// to make cashctl connect to a local service. A warning, not a refusal, since
+// a local test Hub legitimately lives there.
+func warnLocalRelays(jsonMode bool, relays []string) {
+	for _, r := range relays {
+		u, err := url.Parse(r)
+		if err != nil {
+			continue
+		}
+		host := u.Hostname()
+		ip := net.ParseIP(host)
+		if host == "localhost" || strings.HasSuffix(host, ".localhost") ||
+			(ip != nil && (ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified())) {
+			output.Notef(jsonMode, "Note: this bill names a relay on your own machine or network (%s); a bill from someone else has no reason to.", output.Sanitize(u.Host))
+		}
+	}
 }
