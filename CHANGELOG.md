@@ -7,6 +7,8 @@
   shell history.
 - Fixes `skills install` writing through a symlink planted where a skill file
   goes; it now replaces the link, and refuses a skill directory that is one.
+- Fixes `receive` refusing a signed bill split between several recipients: it
+  compared the holder's own share against the whole bill's attested amount.
 
 ## [0.6.0-rc.16]
 

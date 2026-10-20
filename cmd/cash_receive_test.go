@@ -142,6 +142,19 @@ func TestValidateClaimedAmount_MatchingProvenanceIsAccepted(t *testing.T) {
 	}
 }
 
+// A multi-recipient bill's signature attests the whole bill; the holder's
+// own slice of it is smaller, and that is no reason to refuse it.
+func TestValidateClaimedAmount_SliceSmallerThanTheWholeBillIsAccepted(t *testing.T) {
+	c := testCmdWithFlags(true, false)
+	whole, slice := uint64(5000), uint64(3000)
+	minter := "minterpubkey"
+	tok := nipcash.Token{AttestedAmountMillis: &whole}
+	result := &nipcash.CheckClaimResult{AmountMillis: slice, MinterPubkey: &minter}
+	if err := validateClaimedAmount(c, tok, result); err != nil {
+		t.Errorf("validateClaimedAmount() error = %v, want a slice under the attested whole accepted", err)
+	}
+}
+
 func TestValidateClaimedAmount_RejectsMismatchAgainstVerifiedProvenance(t *testing.T) {
 	// The regression test for R2-10: a forged/misbehaving Hub reporting an
 	// amount that disagrees with the token's own cryptographically

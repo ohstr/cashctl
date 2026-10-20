@@ -299,9 +299,12 @@ func validateClaimedAmount(cmd *cobra.Command, tok nipcash.Token, result *nipcas
 		return output.InvalidInputError(cmd, "", fmt.Errorf(
 			"the Hub reports an amount (%d mloki) too large to be real — refusing to trust it", result.AmountMillis))
 	}
-	if result.MinterPubkey != nil && tok.AttestedAmountMillis != nil && result.AmountMillis != *tok.AttestedAmountMillis {
+	// The signature attests the whole bill, and the Hub reports only this
+	// holder's slice of it, which on a multi-recipient bill is legitimately
+	// smaller. Only more than the whole bill is impossible.
+	if result.MinterPubkey != nil && tok.AttestedAmountMillis != nil && result.AmountMillis > *tok.AttestedAmountMillis {
 		return output.InvalidInputError(cmd, "", fmt.Errorf(
-			"the Hub reports %s for this token, but its own signed provenance attests to %s — refusing to trust either figure",
+			"the Hub reports %s for your share, but this bill's signed provenance attests only %s for the whole bill — refusing to trust it",
 			output.FormatAmount(int64(result.AmountMillis)), output.FormatAmount(int64(*tok.AttestedAmountMillis))))
 	}
 	return nil
@@ -318,13 +321,10 @@ const maxSaneAmountMillis = uint64(math.MaxInt64)
 // validateQuotedAmounts bounds the three amounts a redeem quote takes from the Hub,
 // before any of them is persisted, rendered, or turned into an invoice.
 //
-// A second validator rather than reusing validateClaimedAmount, for one reason: that
-// one demands EXACT equality with the token's signed provenance, which is right at
-// receive time — the whole bill is being claimed, so the mint signature's amount IS
-// the claim's amount — and wrong here. A redeem quote is for THIS holder's slice, and
-// a slice of a multi-recipient bill is legitimately smaller than what the mint
-// signature commits to. Only the UPPER bound carries over: the Hub may quote less than
-// the bill was minted for, never more.
+// A second validator rather than reusing validateClaimedAmount: both hold a figure
+// for THIS holder's slice to the mint signature's whole-bill amount as an upper
+// bound (a slice of a multi-recipient bill is legitimately smaller, never larger),
+// but a quote carries a fee and a net amount as well.
 //
 // verifiedMinter is the caller's live proof that the provenance signature actually
 // verified (ledger.Entry.MinterPubkey, or CheckClaimResult.MinterPubkey — both set
