@@ -149,9 +149,10 @@ func TestJoin_RejectsAnUnknownPrivateValue(t *testing.T) {
 // unavailable says so, keeps the refusal's own code (SF-6), and keeps the key
 // only when the outcome is unknown.
 func TestJoin_FailureAfterFallbackNamesTheTransport(t *testing.T) {
-	// The shape nmilat rc.28's Join returns (nipcw/client/join.go).
+	// The shape nmilat's Join returns (nipcw/client/join.go).
 	afterFallback := func(err error) error {
-		return fmt.Errorf("%w (after private join was unavailable: %v)", err, errors.New("no announcement on wss://hub.example"))
+		reason := fmt.Errorf("%w: no announcement on wss://hub.example", nipcashclient.ErrNoAnnouncement)
+		return fmt.Errorf("%w (after private join was unavailable: %w)", err, reason)
 	}
 	for _, tc := range []struct {
 		name     string

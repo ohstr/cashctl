@@ -462,37 +462,43 @@ func joinCircle(ctx context.Context, hubURI string, params nipcw.CreateCircleWal
 }
 
 // joinGetInfoErrPrefix starts the error Join returns when its get_info failed,
-// before any join was sent; nmilat rc.28 has no sentinel for it.
+// before any join was sent; nmilat has no sentinel for it.
 const joinGetInfoErrPrefix = "nipcw/client: get_info: "
+
+// wrappedPair returns the two errors err wraps directly, as nmilat's Join
+// builds a failure after a fallback ("%w (after private join was unavailable:
+// %w)") and a --private=require refusal with a reason ("%w: %w").
+func wrappedPair(err error) (first, second error, ok bool) {
+	multi, isMulti := err.(interface{ Unwrap() []error })
+	if !isMulti {
+		return nil, nil, false
+	}
+	if errs := multi.Unwrap(); len(errs) == 2 {
+		return errs[0], errs[1], true
+	}
+	return nil, nil, false
+}
 
 // privateJoinUnavailableErr is --private=require's refusal: nothing was sent.
 // A Hub that does not offer private join won't start to on a retry; one whose
 // announcement could not be fetched or verified might.
 func privateJoinUnavailableErr(cmd *cobra.Command, err error) error {
 	const advice = "nothing was sent. Without --private=require the join goes over the shared Hub connection, where the circle's other members can see your pubkey"
-	if strings.Contains(err.Error(), "the Hub does not offer it") {
+	_, reason, ok := wrappedPair(err)
+	if !ok {
 		return output.NotFoundError(cmd, "", fmt.Errorf("this Hub does not offer private join, so %s", advice))
 	}
-	reason := strings.TrimPrefix(err.Error(), nipcwclient.ErrPrivateJoinUnavailable.Error()+": ")
-	return output.NetworkError(cmd, fmt.Errorf("private join is unavailable (%s), so %s", output.Sanitize(reason), advice))
+	return output.NetworkError(cmd, fmt.Errorf("private join is unavailable (%s), so %s", output.Sanitize(reason.Error()), advice))
 }
-
-// fallbackFailureMarker is how nmilat rc.28 reports a join that failed over
-// the standard transport after the private one was unavailable. It wraps the
-// reason with %v, so only the text carries it.
-// TODO(nmilat): match a wrapped error once nipcw/client/join.go wraps the
-// reason with %w (the follow-up to nmilat #146).
-const fallbackFailureMarker = " (after private join was unavailable: "
 
 // fallbackFailureReason reports why the private join was skipped when err is a
 // join that then failed over the standard transport.
-func fallbackFailureReason(err error) (string, bool) {
-	msg := err.Error()
-	i := strings.LastIndex(msg, fallbackFailureMarker)
-	if i < 0 || !strings.HasSuffix(msg, ")") {
-		return "", false
+func fallbackFailureReason(err error) (error, bool) {
+	if errors.Is(err, nipcwclient.ErrPrivateJoinUnavailable) {
+		return nil, false
 	}
-	return msg[i+len(fallbackFailureMarker) : len(msg)-1], true
+	_, reason, ok := wrappedPair(err)
+	return reason, ok
 }
 
 // withFallbackNote adds to a classified join failure that the attempt went
@@ -503,7 +509,7 @@ func withFallbackNote(classified, joinErr error) error {
 	if !ok || !isCLI {
 		return classified
 	}
-	note := fmt.Sprintf("This join went over the shared Hub connection, not the private transport, which was unavailable: %s.", output.Sanitize(reason))
+	note := fmt.Sprintf("This join went over the shared Hub connection, not the private transport, which was unavailable: %s.", output.Sanitize(reason.Error()))
 	if ce.Hint != "" {
 		note = ce.Hint + " " + note
 	}
