@@ -69,10 +69,10 @@ func tighten(dir string) error {
 		return nil
 	}
 	if err := os.Chmod(dir, 0o700); err != nil {
-		fmt.Fprintf(notices, "Warning: %s is readable by others (%04o) and could not be made private: %v\n", dir, info.Mode().Perm(), err)
+		_, _ = fmt.Fprintf(notices, "Warning: %s is readable by others (%04o) and could not be made private: %v\n", dir, info.Mode().Perm(), err)
 		return nil
 	}
-	fmt.Fprintf(notices, "Made %s private (was %04o, now 0700): it holds spendable secrets.\n", dir, info.Mode().Perm())
+	_, _ = fmt.Fprintf(notices, "Made %s private (was %04o, now 0700): it holds spendable secrets.\n", dir, info.Mode().Perm())
 	return nil
 }
 
