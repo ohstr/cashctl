@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/ohstr/nmilat/nipcash"
@@ -89,7 +90,9 @@ func moveCashNotesToKey(cmd *cobra.Command, l *ledger.Ledger, ids []string, priv
 			if errors.As(err, &notSent) || isDefiniteRefusal(err) {
 				e.PendingThrowawayKey = ""
 				_ = l.Save()
-				undoMoves(cmd, l, moved)
+				if uErr := undoMoves(cmd, l, moved); uErr != nil {
+					return nil, uErr
+				}
 				return nil, classifyCashSpendErr(cmd, err, "merge", id)
 			}
 			// No answer: the move may have happened. Keep the pending key.
@@ -145,25 +148,46 @@ func isDefiniteRefusal(err error) bool {
 	return errors.As(err, &walletErr) || isRejectedBeforeSend(err)
 }
 
-// undoMoves moves the notes of a refused merge back to fresh cash notes.
-func undoMoves(cmd *cobra.Command, l *ledger.Ledger, ids []string) {
-	if toCashNotes(l, ids) > 0 {
+// undoMoves moves the notes of a refused merge back to fresh cash notes. Its
+// error, when not nil, carries the recovery of a note moved but not saved.
+func undoMoves(cmd *cobra.Command, l *ledger.Ledger, ids []string) error {
+	converted, unsaved := toCashNotes(l, ids)
+	if len(unsaved) > 0 {
+		return unsavedNotesError(cmd, unsaved)
+	}
+	if len(converted) > 0 {
 		jsonMode, _ := cmd.Flags().GetBool("json")
 		output.Notef(jsonMode, "The merge was refused, so the notes it had moved are cash notes again.")
 	}
+	return nil
+}
+
+// errNoteNotSaved is the cause reportUnsavedResult names for toCashNotes's
+// unsaved notes: the move landed on the Hub, the local save of it did not.
+var errNoteNotSaved = errors.New("the local save failed")
+
+// unsavedNotesError reports notes toCashNotes moved but could not save, with
+// each one's <token>#<secret> as the recovery.
+func unsavedNotesError(cmd *cobra.Command, unsaved []string) error {
+	return reportUnsavedResult(cmd, errNoteNotSaved, "Turning a note back into a cash note",
+		"Save this now, it will not be shown again: "+strings.Join(unsaved, " "))
 }
 
 // toCashNotes moves bills off their throwaway key onto fresh cash notes, each
 // secret written ahead of its move (PendingCashSecret), so whatever a merge leaves
 // behind — notes it moved before a refusal, a split's change, an interim bill — is
 // an ordinary cash note again. Best-effort: a bill that cannot be moved stays an
-// ordinary held bill its key spends, reported as a merge left midway. Returns how
-// many it converted.
-func toCashNotes(l *ledger.Ledger, ids []string) int {
-	converted := 0
+// ordinary held bill its key spends, reported as a merge left midway. A bill
+// with a move or re-key still pending is skipped even when named: a new secret
+// written over that one could destroy the only secret that spends it.
+//
+// Returns the ids it converted, and the <token>#<secret> of each note the Hub
+// moved but whose save then failed: disk still names the bill's old state, so
+// that string is the only way back to it once the process exits.
+func toCashNotes(l *ledger.Ledger, ids []string) (converted, unsaved []string) {
 	for _, id := range ids {
 		e, ok := l.Find(id)
-		if !ok || e.ThrowawayKey == "" || e.Status != ledger.StatusHeld {
+		if !ok || e.ThrowawayKey == "" || e.Status != ledger.StatusHeld || e.PendingCashSecret != "" || e.PendingThrowawayKey != "" {
 			continue
 		}
 		target := nipcash.NewCashTarget()
@@ -182,10 +206,13 @@ func toCashNotes(l *ledger.Ledger, ids []string) int {
 		}
 		followMove(e, res)
 		promotePendingSecret(e)
-		_ = l.Save()
-		converted++
+		if err := l.Save(); err != nil {
+			unsaved = append(unsaved, entryRecoveryString(e))
+			continue
+		}
+		converted = append(converted, id)
 	}
-	return converted
+	return converted, unsaved
 }
 
 // leftoverKeyBills is every held bill still on a throwaway key with no move
@@ -243,8 +270,9 @@ func probeAmount(e *ledger.Entry, cred nipcash.Credential, asPubkeyHex string) (
 // destination secret parked for a send is dropped once the source shows nothing
 // moved. Otherwise each is left pending for a later run. Never resends anything.
 // Then turns whatever a merge left on a throwaway key back into cash notes: no
-// merge is in progress when a command starts.
-func settlePendingMoves(cmd *cobra.Command, l *ledger.Ledger) {
+// merge is in progress when a command starts. Its error, when not nil, carries
+// the recovery of a note moved but not saved.
+func settlePendingMoves(cmd *cobra.Command, l *ledger.Ledger) error {
 	changed := false
 	for i := range l.Entries {
 		e := &l.Entries[i]
@@ -264,7 +292,10 @@ func settlePendingMoves(cmd *cobra.Command, l *ledger.Ledger) {
 	if changed {
 		_ = l.Save()
 	}
-	toCashNotes(l, leftoverKeyBills(l))
+	if _, unsaved := toCashNotes(l, leftoverKeyBills(l)); len(unsaved) > 0 {
+		return unsavedNotesError(cmd, unsaved)
+	}
+	return nil
 }
 
 // settlePendingKey resolves a move onto a throwaway key, reporting a change.
@@ -299,6 +330,19 @@ func settlePendingSecret(e *ledger.Entry) bool {
 		return true
 	}
 	if e.CashSecret == "" {
+		// A move off a throwaway key: if the key still spends the bill, the
+		// move never happened.
+		if e.ThrowawayKey == "" {
+			return false
+		}
+		pub, err := utils.GetPublicKey(e.ThrowawayKey)
+		if err != nil {
+			return false
+		}
+		if ok, err := probeCredentialFn(e, nipcash.BySigning(e.ThrowawayKey), pub); err == nil && ok {
+			e.PendingCashSecret = ""
+			return true
+		}
 		return false
 	}
 	if ok, err := probeCredentialFn(e, nipcash.BySecret(e.CashSecret), nipcash.NoLocalIdentity); err == nil && ok {
@@ -461,7 +505,10 @@ func mergeThenSend(cmd *cobra.Command, l *ledger.Ledger, tokens []string, source
 		classified := classifyCashSpendErr(cmd, sendErr, "transfer", mergedID)
 		if priv != "" && output.AsCLIError(classified).Code != output.CodeIndeterminate {
 			// Refused, or never sent: the merged bill is still whole and ours.
-			toCashNotes(l, []string{mergedID})
+			if _, unsaved := toCashNotes(l, []string{mergedID}); len(unsaved) > 0 {
+				parked.forgetIfNothingCreated(classified)
+				return unsavedNotesError(cmd, unsaved)
+			}
 		}
 		parked.forgetIfNothingCreated(classified)
 		return classified

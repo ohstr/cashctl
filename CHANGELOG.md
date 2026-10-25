@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.7.0-rc.1]
+
+- Fixes a bill lost when a merge moved it on the Hub but saving that locally
+  failed; cashctl now prints its `<token>#<secret>` to keep.
+
 ## [0.6.0-rc.17]
 
 Refuses a Hub that raises a bill's redeem fee after you received it, and keeps

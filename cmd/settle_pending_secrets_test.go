@@ -163,3 +163,22 @@ func TestSettlePendingMoves_ClearsADestinationParkOnlyWhenNothingMoved(t *testin
 		})
 	}
 }
+
+// T-06 (B3b): a move off a throwaway key whose answer never came, and which
+// did not happen: the key still spends the bill, so the pending secret is
+// dropped instead of stranding the note forever.
+func TestSettlePendingSecret_ProbesTheThrowawayKey(t *testing.T) {
+	h := newFakeBillHub(t)
+	l, id, priv := keyBillLedger(t, h)
+	e, _ := l.Find(id)
+	e.PendingCashSecret = "sn"
+	if !settlePendingSecret(e) {
+		t.Fatal("settlePendingSecret decided nothing although the key still answers")
+	}
+	if e.PendingCashSecret != "" || e.ThrowawayKey != priv {
+		t.Errorf("pending %q key kept %v; want the pending secret dropped, the key kept", e.PendingCashSecret, e.ThrowawayKey == priv)
+	}
+	if len(h.probes) == 0 || h.probes[len(h.probes)-1].cred != nipcash.BySigning(priv) {
+		t.Error("the throwaway key was never probed")
+	}
+}

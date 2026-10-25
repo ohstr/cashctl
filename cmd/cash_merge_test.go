@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/ohstr/nmilat/nipcash"
@@ -11,6 +12,7 @@ import (
 	"github.com/ohstr/cashctl/internal/appdir"
 	"github.com/ohstr/cashctl/internal/credential"
 	"github.com/ohstr/cashctl/internal/ledger"
+	"github.com/ohstr/cashctl/internal/output"
 )
 
 // mergeLedger is a fresh on-disk ledger holding cash notes a, b and a pubkey bill.
@@ -349,5 +351,64 @@ func TestMergeThenSend_ExactSumConsolidatesStraightToTheRecipient(t *testing.T) 
 	}
 	if len(fresh.Held()) != 1 { // only the untouched pubkey bill
 		t.Errorf("held %d, want the merged notes gone", len(fresh.Held()))
+	}
+}
+
+// keyBillLedger is a fresh on-disk ledger holding one bill left on a throwaway
+// key by a merge, registered on h. Returns the ledger, its id and the key.
+func keyBillLedger(t *testing.T, h *fakeBillHub) (*ledger.Ledger, string, string) {
+	t.Helper()
+	appdir.SetOverride(t.TempDir())
+	t.Cleanup(func() { appdir.SetOverride("") })
+	l, err := ledger.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	priv, _, _ := newThrowawayKey()
+	e, err := l.Add(ledger.Entry{Token: "tok-k", WalletPubkey: "pk-k", AmountMillis: ptrTo(uint64(1000)),
+		IdentityRequired: ptrTo(true), ThrowawayKey: priv})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := l.Save(); err != nil {
+		t.Fatal(err)
+	}
+	h.bill("tok-k", nipcash.BySigning(priv), 1000)
+	return l, e.ID, priv
+}
+
+// T-05 (B3a): a note moved off its key whose final save fails is handed over
+// as <token>#<secret>, never swallowed: after a carve, disk names a token the
+// Hub no longer has.
+func TestToCashNotes_ReportsANoteMovedButNotSaved(t *testing.T) {
+	h := newFakeBillHub(t)
+	h.carve = true
+	l, id, _ := keyBillLedger(t, h)
+	h.afterCommit = func() { failSaves(t) }
+
+	err := undoMoves(testCmdWithFlags(true, false), l, []string{id})
+	rec := output.AsCLIError(err).Recovery
+	live := h.liveTokens()
+	if len(live) != 1 || !strings.Contains(rec, live[0]+"#") {
+		t.Fatalf("recovery %q does not name the carved bill %v (err %v)", rec, live, err)
+	}
+	secret := rec[strings.Index(rec, live[0]+"#")+len(live[0])+1:]
+	if h.owner(live[0]) != nipcash.BySecret(secret) {
+		t.Errorf("recovery secret does not spend the carved bill")
+	}
+}
+
+// toCashNotes never moves a bill with a re-key still pending, even when named:
+// the new secret would overwrite the only one that may spend it.
+func TestToCashNotes_SkipsAPendingReKeyEvenWhenNamed(t *testing.T) {
+	h := newFakeBillHub(t)
+	l, id, _ := keyBillLedger(t, h)
+	e, _ := l.Find(id)
+	e.PendingCashSecret = "sn"
+	if converted, unsaved := toCashNotes(l, []string{id}); len(converted)+len(unsaved) != 0 || h.moveCount() != 0 {
+		t.Errorf("converted %v unsaved %v after %d moves; want the bill left alone", converted, unsaved, h.moveCount())
+	}
+	if e.PendingCashSecret != "sn" {
+		t.Errorf("pending secret %q, want sn kept", e.PendingCashSecret)
 	}
 }

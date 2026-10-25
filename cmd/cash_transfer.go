@@ -477,7 +477,10 @@ func transferWithAutoConsolidate(cmd *cobra.Command, l *ledger.Ledger, group []l
 	}
 	err = mergeThenSend(cmd, l, tokens, sources, sourceIDs, sum, sendAmount, throwawayPriv, interimPub, toValue, target)
 	if err != nil && len(movedIDs) > 0 && output.AsCLIError(err).Code != output.CodeIndeterminate {
-		undoMoves(cmd, l, movedIDs) // only bills still held: never ones a landed merge consumed
+		// only bills still held: never ones a landed merge consumed
+		if uErr := undoMoves(cmd, l, movedIDs); uErr != nil {
+			return uErr
+		}
 	}
 	if err != nil && isCrossHubDeclineClassified(err) {
 		// The sources turned out to live under different Cash Hubs. cashctl cannot
@@ -619,8 +622,11 @@ func printAndSaveTransferResult(cmd *cobra.Command, l *ledger.Ledger, transferRe
 	}
 	// Change left on a merge's throwaway key becomes a cash note like any other
 	// (I-26); if that cannot finish now, the next command retries it.
+	var remainderRecovery string
 	if remainderEntry != nil && remainderEntry.ThrowawayKey != "" {
-		toCashNotes(l, []string{remainderEntry.ID})
+		if _, unsaved := toCashNotes(l, []string{remainderEntry.ID}); len(unsaved) > 0 {
+			remainderRecovery = strings.Join(unsaved, " ")
+		}
 	}
 
 	if jsonMode {
@@ -650,9 +656,15 @@ func printAndSaveTransferResult(cmd *cobra.Command, l *ledger.Ledger, transferRe
 		if !isCash && recipientToken != "" {
 			out["recipient_token"] = recipientToken
 		}
+		// The remainder became a cash note on the Hub, but saving that failed:
+		// this string is the only way back to it.
+		if remainderRecovery != "" {
+			out["recovery"] = remainderRecovery
+		}
 		output.PrintJSON(out)
 		return nil
 	}
+	defer printRemainderRecovery(remainderRecovery)
 	// A remainder left over from a split is saved above regardless — never
 	// narrated here. Same reasoning as the pre-transfer confirm message:
 	// this is wallet mechanism, not something the user decided, and it's
@@ -817,7 +829,9 @@ func runCashTransfer(cmd *cobra.Command, args []string) error {
 		return output.RuntimeError(cmd, err)
 	}
 	// A merge interrupted before its move was confirmed is settled first (I-26).
-	settlePendingMoves(cmd, l)
+	if err := settlePendingMoves(cmd, l); err != nil {
+		return err
+	}
 
 	tokenFlag, _ := cmd.Flags().GetString("token")
 	var entry *ledger.Entry
@@ -1012,4 +1026,13 @@ func resolveLiveEntry(l *ledger.Ledger, id string) (*ledger.Entry, error) {
 		return nil, fmt.Errorf("internal: cash-selected entry %q vanished from the ledger", id)
 	}
 	return e, nil
+}
+
+// printRemainderRecovery tells the holder about a remainder that became a cash
+// note on the Hub but could not be saved, on its own line so it can be copied.
+func printRemainderRecovery(recovery string) {
+	if recovery == "" {
+		return
+	}
+	output.Printf("Your remainder became a cash note, but saving it locally failed. Save this now, it will not be shown again:\n%s\n", recovery)
 }

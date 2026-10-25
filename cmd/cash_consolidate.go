@@ -227,7 +227,9 @@ func runCashConsolidate(cmd *cobra.Command, args []string) error {
 		return output.RuntimeError(cmd, err)
 	}
 	// A merge interrupted before its move was confirmed is settled first (I-26).
-	settlePendingMoves(cmd, l)
+	if err := settlePendingMoves(cmd, l); err != nil {
+		return err
+	}
 
 	if len(args) > 0 || sourcesFlag != "" {
 		items, err := resolveConsolidateSources(args, sourcesFlag, l.Held())
@@ -639,7 +641,9 @@ func consolidateItems(cmd *cobra.Command, l *ledger.Ledger, items []string, toFl
 		// being cash notes. No answer: they stay on the key, spendable, and the
 		// next consolidate finishes the merge.
 		if len(movedIDs) > 0 && output.AsCLIError(err).Code != output.CodeIndeterminate {
-			undoMoves(cmd, l, movedIDs)
+			if uErr := undoMoves(cmd, l, movedIDs); uErr != nil {
+				return nil, uErr
+			}
 		}
 		return nil, err
 	}

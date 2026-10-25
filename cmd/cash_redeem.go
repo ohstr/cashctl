@@ -110,7 +110,9 @@ func runCashRedeem(cmd *cobra.Command, args []string) error {
 		return output.RuntimeError(cmd, err)
 	}
 	// A merge interrupted before its move was confirmed is settled first (I-26).
-	settlePendingMoves(cmd, l)
+	if err := settlePendingMoves(cmd, l); err != nil {
+		return err
+	}
 	entries, err := resolveHeldTokensForRedeem(cmd, l)
 	if err != nil {
 		return err
