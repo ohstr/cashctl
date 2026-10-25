@@ -6,4 +6,5 @@ report/*
 .harness/
 .bin/
 .mint-state/
+.state/
 .general-relay.restore
