@@ -88,6 +88,9 @@ or with a real user's own cashctl/ncli state:
   receive (refused, nothing sent), a reply chunk that never comes
   (`indeterminate`, not resent), an announcement signed by another key and a
   stale one listed first (neither used), and a relay on this machine (noted).
+- `fakehub_test.go` (no live node needed) — the fake itself: an honest receive,
+  an error answered with a random message each time (classified by its code
+  alone), and a transfer whose reply is dropped (`indeterminate`, sent once).
 - `TestReceive_PersistsMinterPubkeyForSignedToken` — mints with a mint
   signature requested and confirms `receive` persists the recovered minter
   pubkey onto the held entry (skips cleanly if the Hub doesn't attach one —
