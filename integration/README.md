@@ -83,7 +83,7 @@ or with a real user's own cashctl/ncli state:
   `spent`), a forged newer follow set (ignored), terminal escapes in a hub label
   (never printed raw), and a pre-existing 0755 config directory (made 0700).
 - `hostile_hub_test.go` (no live node needed) — the binary against a Hub that
-  lies, served by `fakehub_test.go`'s relay-plus-hub: a slice larger than the
+  lies, served by the `integration/fakehub` relay-plus-hub: a slice larger than the
   signed bill (refused), the issuing key recorded, a redeem fee raised after
   receive (refused, nothing sent), a reply chunk that never comes
   (`indeterminate`, not resent), an announcement signed by another key and a
