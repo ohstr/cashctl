@@ -340,3 +340,78 @@ func TestCheckQuoteDrift(t *testing.T) {
 		t.Errorf("an entry with nothing recorded yet: %v, want no refusal", err)
 	}
 }
+
+// A redeem the reply never answered, or answered with a contradiction or an
+// unreadable result, may have paid: indeterminate (exit 8), never recorded as
+// redeemed, and its sibling's decided result is kept.
+func TestApplyRedeemResults_UndecidedItemsAreIndeterminate(t *testing.T) {
+	conflict := fmt.Errorf("%w: items [\"tok-b\"] have no single answer", nipcashclient.ErrReplyConflict)
+	for name, tc := range map[string]struct {
+		outcome    nipcashclient.RedeemOutcome
+		incomplete error
+		want       string
+	}{
+		"unanswered, no reply at all": {batchOutcome("tok-b", nipcashclient.OutcomeUnanswered, nil, nil), nil, "incomplete"},
+		"unanswered, a chunk missing": {batchOutcome("tok-b", nipcashclient.OutcomeUnanswered, nil, nil),
+			fmt.Errorf("%w: got 1 of 2 chunks", nipcashclient.ErrIncompleteReply), "incomplete"},
+		"answered twice": {batchOutcome("tok-b", nipcashclient.OutcomeConflict, nil, nil), conflict, "contradicted itself"},
+		"unreadable result": {func() nipcashclient.RedeemOutcome {
+			o := batchOutcome("tok-b", nipcashclient.OutcomeError, nil, &transport.ResultError{Code: "INTERNAL"})
+			o.Undecodable = true
+			return o
+		}(), nil, "could not be read"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			plans := []redeemPlan{planFor("tok-a", "hub-1", "t"), planFor("tok-b", "hub-1", "t")}
+			outcomes := []redeemOutcome{{EntryID: "tok-a"}, {EntryID: "tok-b"}}
+			l := &ledger.Ledger{Entries: []ledger.Entry{{ID: "tok-a", Status: ledger.StatusHeld}, {ID: "tok-b", Status: ledger.StatusHeld}}}
+
+			applyRedeemResults(&cobra.Command{}, l, plans, []nipcashclient.RedeemOutcome{
+				batchOutcome("tok-a", nipcashclient.OutcomeResult, &nipcash.CashRedeemResult{Preimage: "beef01"}, nil),
+				tc.outcome,
+			}, outcomes, "savings", incompleteReply(tc.incomplete))
+
+			if outcomes[0].Result == nil {
+				t.Error("the decided sibling was dropped")
+			}
+			err := outcomes[1].Err
+			if ce := output.AsCLIError(err); err == nil || ce.Code != output.CodeIndeterminate || output.ExitCode(err) != 8 {
+				t.Fatalf("err %v; want indeterminate, exit 8", err)
+			}
+			if !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), "cash status --token tok-b") {
+				t.Errorf("err %q; want it to say %q and name `cash status --token tok-b`", err, tc.want)
+			}
+			if e, _ := l.Find("tok-b"); e.Status != ledger.StatusHeld {
+				t.Errorf("an undecided redeem was recorded as %q", e.Status)
+			}
+		})
+	}
+}
+
+// A quote the reply did not decide is a read: asking again is safe (network,
+// retryable), and nothing says the bill is gone.
+func TestQuoteUndecidedErr_IsAlwaysSafeToAskAgain(t *testing.T) {
+	incomplete := fmt.Errorf("%w: got 1 of 2 chunks", nipcashclient.ErrIncompleteReply)
+	for name, tc := range map[string]struct {
+		state      nipcashclient.OutcomeState
+		undecoded  bool
+		incomplete error
+		want       string
+	}{
+		"unanswered":   {nipcashclient.OutcomeUnanswered, false, nil, "incomplete"},
+		"conflict":     {nipcashclient.OutcomeConflict, false, incomplete, "contradicted itself"},
+		"unreadable":   {nipcashclient.OutcomeError, true, nil, "could not be read"},
+		"chunk missed": {nipcashclient.OutcomeNotServed, false, incomplete, "incomplete"},
+		"omitted":      {nipcashclient.OutcomeNotServed, false, nil, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := quoteUndecidedErr(&cobra.Command{}, nipcashclient.ItemOutcome{ID: "tok-a", State: tc.state, Undecodable: tc.undecoded}, tc.incomplete)
+			if output.AsCLIError(err).Code != output.CodeNetwork {
+				t.Errorf("err %v; want network (retryable)", err)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("err %q; want it to say %q", err, tc.want)
+			}
+		})
+	}
+}

@@ -2,6 +2,9 @@
 
 ## [0.7.0-rc.1]
 
+- Fixes a batched redeem whose Hub reply contradicts itself, or whose result
+  can't be read, being reported as an ordinary failure; it is now
+  `indeterminate`, never resent, and the other bills keep their outcomes.
 - Fixes protecting a holding twice when the first answer was lost, which could
   overwrite the only secret that spends it. `wallet protect` and `receive` now
   settle the first protect with the Hub, and refuse while it can't tell.

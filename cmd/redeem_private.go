@@ -232,23 +232,48 @@ func quoteHubGroup(
 				continue
 			}
 			quotes[r.ID] = q
-		case r.State == nipcashclient.OutcomeError && r.Error != nil:
+		case r.State == nipcashclient.OutcomeError && r.Error != nil && !r.Undecodable:
 			errs[r.ID] = output.NWCErrorForCashToken(cmd, &relayclient.WalletError{
 				Method: "cash_status", Code: r.Error.Code, Message: r.Error.Message,
 			})
-		case incomplete != nil:
-			// In a chunk that never arrived, not omitted: "ask again", not final.
-			errs[r.ID] = output.NetworkError(cmd, fmt.Errorf(
-				"the Hub's reply arrived incomplete and this token's quote was not in it; asking again is safe: %w", incomplete))
 		default:
-			// Omitted. Harmless here in a way it is NOT for a spend: nothing was
-			// executed, so asking again is safe. Not not_found: an omission is
-			// information-free, so it cannot support "this bill is gone".
-			explained, _ := explainNoAnswer(&nipcashclient.NotServedError{Method: "cash_status"})
-			errs[r.ID] = output.NetworkError(cmd, explained)
+			errs[r.ID] = quoteUndecidedErr(cmd, r.ItemOutcome, incomplete)
 		}
 	}
 	return quotes, errs
+}
+
+// quoteUndecidedErr is the error for a fee quote the Hub's reply did not decide:
+// unanswered, contradicted, unreadable or omitted. A quote is a read, so asking
+// again is always safe (network, retryable); none of these says the bill is gone.
+func quoteUndecidedErr(cmd *cobra.Command, o nipcashclient.ItemOutcome, incomplete error) error {
+	switch {
+	case o.State == nipcashclient.OutcomeConflict:
+		return output.NetworkError(cmd, fmt.Errorf(
+			"the Hub's reply contradicted itself about this token's quote; asking again is safe: %w", replyErr(incomplete)))
+	case o.State == nipcashclient.OutcomeError:
+		return output.NetworkError(cmd, errors.New("the Hub's answer to this token's quote could not be read; asking again is safe"))
+	case o.State == nipcashclient.OutcomeUnanswered || incomplete != nil:
+		// In a chunk that never arrived, or no reply at all, not omitted: "ask
+		// again", not final.
+		return output.NetworkError(cmd, fmt.Errorf(
+			"the Hub's reply arrived incomplete and this token's quote was not in it; asking again is safe: %w", replyErr(incomplete)))
+	default:
+		// Omitted. Harmless here in a way it is NOT for a spend: nothing was
+		// executed, so asking again is safe. Not not_found: an omission is
+		// information-free, so it cannot support "this bill is gone".
+		explained, _ := explainNoAnswer(&nipcashclient.NotServedError{Method: "cash_status"})
+		return output.NetworkError(cmd, explained)
+	}
+}
+
+// replyErr is the reply-level error to cite, or a generic one when the SDK
+// returned none (an envelope that got no reply at all).
+func replyErr(incomplete error) error {
+	if incomplete != nil {
+		return incomplete
+	}
+	return nipcashclient.ErrIncompleteReply
 }
 
 // redeemHubGroup spends a whole hub group in one request.
@@ -586,6 +611,12 @@ func applyRedeemResults(
 		case r.Succeeded() && r.Result != nil:
 			outcomes[idx].Result = r.Result
 			recordRedeemed(l, plansEntry(plans, r.ID), destName)
+		case r.State == nipcashclient.OutcomeError && r.Undecodable:
+			// The Hub ran it and said so, but its result could not be read: it
+			// may have paid. Never resent.
+			outcomes[idx].Err = output.IndeterminateError(cmd, r.ID, fmt.Errorf(
+				"the Hub ran this redeem but its answer could not be read, so whether it paid is unknown. "+
+					"Do not resend it: check first with %s", cashStatusHint([]string{r.ID})))
 		case r.State == nipcashclient.OutcomeError && r.Error != nil:
 			// A per-item error mirrors NIP-47's own error shape deliberately, so it
 			// goes through the same classifier a single-bill decline does. The exit
@@ -597,11 +628,20 @@ func applyRedeemResults(
 				Code:    r.Error.Code,
 				Message: r.Error.Message,
 			})
-		case incomplete != nil:
-			// Its answer was in a chunk that never arrived. Reported as that rather
-			// than as an omission, though the action is the same: it may have paid.
+		case r.State == nipcashclient.OutcomeConflict:
+			// Answered twice, beside an envelope-level error, or with a result
+			// naming another method: no single answer, and picking one by
+			// arrival order is forbidden (NIP-CASH §Chunked Replies). It may
+			// have paid. Never resent.
+			outcomes[idx].Err = output.IndeterminateError(cmd, r.ID, fmt.Errorf(
+				"the Hub's reply contradicted itself about this redeem, so whether it paid is unknown. "+
+					"Do not resend it: check first with %s: %w", cashStatusHint([]string{r.ID}), replyErr(incomplete)))
+		case r.State == nipcashclient.OutcomeUnanswered || incomplete != nil:
+			// Its answer was in a chunk that never arrived, or no reply came at
+			// all. Reported as that rather than as an omission, though the action
+			// is the same: it may have paid.
 			outcomes[idx].Err = classifyCashSpendErr(cmd, fmt.Errorf(
-				"the Hub's reply arrived incomplete and this token's answer was not in it: %w", incomplete),
+				"the Hub's reply arrived incomplete and this token's answer was not in it: %w", replyErr(incomplete)),
 				"redeem", r.ID)
 		default:
 			// Not served: the hub said nothing. Deliberately information-free — it is
