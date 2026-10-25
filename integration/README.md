@@ -11,6 +11,11 @@ Excluded from normal `go test`/CI runs by the `integration` build tag:
 go test -tags integration ./integration/...
 ```
 
+The binary it builds carries the `crashpoints` tag (so a test can kill it at a
+named point with `CASHCTL_CRASHPOINT`) and uses `GOWORK=off`, the nmilat
+pinned in `go.mod`; set `CASHCTL_INTEGRATION_GOWORK=<path>` to build it
+against a private `go.work` instead.
+
 ## Setup
 
 1. Copy `config.local.yaml.example` to `config.local.yaml` (gitignored —
