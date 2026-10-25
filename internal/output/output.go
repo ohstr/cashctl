@@ -258,7 +258,7 @@ func EmitError(cmd *cobra.Command, err error) {
 		payload := map[string]any{
 			"error":     SanitizeText(errMessage),
 			"code":      Sanitize(string(ce.Code)),
-			"retryable": retryableCodes[ce.Code],
+			"retryable": retryableCodes[ce.Code] && !ce.Final,
 		}
 		if ce.Input != "" {
 			payload["input"] = Sanitize(ce.Input)

@@ -1,9 +1,11 @@
 package cmd
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
+	"github.com/ohstr/nmilat/nipcash"
 	"github.com/spf13/cobra"
 
 	"github.com/ohstr/cashctl/internal/appdir"
@@ -24,7 +26,7 @@ func TestResolveUnprotectedCashHoldings_NoneEligible(t *testing.T) {
 		{ID: "pubkey-mode", Status: ledger.StatusHeld, AmountMillis: &amt},
 	}}
 	cmd := newTestProtectCmd(false, false)
-	_, err := resolveUnprotectedCashHoldings(cmd, l, nil)
+	_, _, err := resolveUnprotectedCashHoldings(cmd, l, nil)
 	if err == nil {
 		t.Fatal("resolveUnprotectedCashHoldings() = nil error, want rejected (nothing eligible)")
 	}
@@ -40,7 +42,7 @@ func TestResolveUnprotectedCashHoldings_AutoPicksTheOnlyOne(t *testing.T) {
 		{ID: "already-protected", Status: ledger.StatusHeld, AmountMillis: &amt, CashProtection: ledger.CashProtected},
 	}}
 	cmd := newTestProtectCmd(false, false)
-	es, err := resolveUnprotectedCashHoldings(cmd, l, nil)
+	es, _, err := resolveUnprotectedCashHoldings(cmd, l, nil)
 	if err != nil {
 		t.Fatalf("resolveUnprotectedCashHoldings() error = %v", err)
 	}
@@ -58,7 +60,7 @@ func TestResolveUnprotectedCashHoldings_ExplicitTokenAlreadyProtected(t *testing
 	if err := cmd.Flags().Set("token", "already-protected"); err != nil {
 		t.Fatal(err)
 	}
-	_, err := resolveUnprotectedCashHoldings(cmd, l, nil)
+	_, _, err := resolveUnprotectedCashHoldings(cmd, l, nil)
 	if err == nil {
 		t.Fatal("resolveUnprotectedCashHoldings(already protected) = nil error, want rejected")
 	}
@@ -79,7 +81,7 @@ func TestResolveUnprotectedCashHoldings_ExplicitTokenPubkeyMode(t *testing.T) {
 	if err := cmd.Flags().Set("token", "pubkey-mode"); err != nil {
 		t.Fatal(err)
 	}
-	_, err := resolveUnprotectedCashHoldings(cmd, l, nil)
+	_, _, err := resolveUnprotectedCashHoldings(cmd, l, nil)
 	if err == nil {
 		t.Fatal("resolveUnprotectedCashHoldings(pubkey-mode) = nil error, want rejected")
 	}
@@ -94,7 +96,7 @@ func TestResolveUnprotectedCashHoldings_ExplicitTokenNotFound(t *testing.T) {
 	if err := cmd.Flags().Set("token", "nope"); err != nil {
 		t.Fatal(err)
 	}
-	_, err := resolveUnprotectedCashHoldings(cmd, l, nil)
+	_, _, err := resolveUnprotectedCashHoldings(cmd, l, nil)
 	if err == nil {
 		t.Fatal("resolveUnprotectedCashHoldings(nonexistent) = nil error, want rejected")
 	}
@@ -117,7 +119,7 @@ func TestResolveUnprotectedCashHoldings_MultipleEligibleJSONModeReturnsAll(t *te
 		{ID: "shared-b", Status: ledger.StatusHeld, AmountMillis: &amt, CashProtection: ledger.CashShared},
 	}}
 	cmd := newTestProtectCmd(true, false)
-	es, err := resolveUnprotectedCashHoldings(cmd, l, nil)
+	es, _, err := resolveUnprotectedCashHoldings(cmd, l, nil)
 	if err != nil {
 		t.Fatalf("resolveUnprotectedCashHoldings(2 eligible, --json) error = %v, want both resolved", err)
 	}
@@ -138,7 +140,7 @@ func TestResolveUnprotectedCashHoldings_MultipleEligibleYesFlagReturnsAll(t *tes
 		{ID: "shared-b", Status: ledger.StatusHeld, AmountMillis: &amt, CashProtection: ledger.CashShared},
 	}}
 	cmd := newTestProtectCmd(false, true)
-	es, err := resolveUnprotectedCashHoldings(cmd, l, nil)
+	es, _, err := resolveUnprotectedCashHoldings(cmd, l, nil)
 	if err != nil {
 		t.Fatalf("resolveUnprotectedCashHoldings(2 eligible, --yes) error = %v, want both resolved", err)
 	}
@@ -153,7 +155,7 @@ func TestResolveUnprotectedCashHoldings_PositionalArg(t *testing.T) {
 		{ID: "shared-one", Status: ledger.StatusHeld, AmountMillis: &amt, CashProtection: ledger.CashShared},
 	}}
 	cmd := newTestProtectCmd(false, false)
-	es, err := resolveUnprotectedCashHoldings(cmd, l, []string{"shared-one"})
+	es, _, err := resolveUnprotectedCashHoldings(cmd, l, []string{"shared-one"})
 	if err != nil {
 		t.Fatalf("resolveUnprotectedCashHoldings() error = %v", err)
 	}
@@ -292,4 +294,91 @@ func contains(ss []string, s string) bool {
 		}
 	}
 	return false
+}
+
+// T-02: wallet protect settles an earlier unconfirmed re-key before selecting.
+// One that landed is protected with no new call.
+func TestRunWalletProtect_SettlesALandedReKeyFirst(t *testing.T) {
+	h := newFakeBillHub(t)
+	l, ids := protectLedger(t, h)
+	e, _ := l.Find(ids[0])
+	e.PendingCashSecret = "s1"
+	if err := l.Save(); err != nil {
+		t.Fatal(err)
+	}
+	h.bill("tok-a", nipcash.BySecret("s1"), 1000) // the first re-key landed
+
+	if err := runWalletProtect(newTestProtectCmd(true, false), nil); err != nil {
+		t.Fatalf("wallet protect: %v", err)
+	}
+	if n := h.moveCount(); n != 0 {
+		t.Errorf("placed %d calls; the landed re-key needs none", n)
+	}
+	if _, e = reload(t, ids[0]); e.CashSecret != "s1" || e.PendingCashSecret != "" || e.CashProtection != ledger.CashProtected {
+		t.Errorf("got secret %q pending %q protection %q; want s1, none, protected", e.CashSecret, e.PendingCashSecret, e.CashProtection)
+	}
+}
+
+// T-02: one the Hub can't settle is never re-keyed. Named explicitly it is a
+// conflict that retrying as is cannot fix; with nothing named it is left out
+// and listed as unresolved, while the others are protected.
+func TestRunWalletProtect_NeverReKeysAnUnresolvedOne(t *testing.T) {
+	setup := func(t *testing.T) (*fakeBillHub, []string) {
+		h := newFakeBillHub(t)
+		l, ids := protectLedger(t, h, "tok-a", "tok-b")
+		e, _ := l.Find(ids[0])
+		e.PendingCashSecret = "s1"
+		if err := l.Save(); err != nil {
+			t.Fatal(err)
+		}
+		h.bill("tok-a", nil, 1000) // carved away: neither secret answers on tok-a
+		return h, ids
+	}
+
+	t.Run("explicit", func(t *testing.T) {
+		h, ids := setup(t)
+		cmd := newTestProtectCmd(true, false)
+		_ = cmd.Flags().Set("token", ids[0])
+		err := runWalletProtect(cmd, nil)
+		if output.ExitCode(err) != 5 || !output.AsCLIError(err).Final {
+			t.Fatalf("err %v (exit %d); want conflict, exit 5, not retryable", err, output.ExitCode(err))
+		}
+		if h.moveCount() != 0 {
+			t.Error("a call was placed for an unresolved re-key")
+		}
+		if _, e := reload(t, ids[0]); e.PendingCashSecret != "s1" {
+			t.Errorf("pending secret %q, want s1 kept", e.PendingCashSecret)
+		}
+	})
+
+	t.Run("implicit", func(t *testing.T) {
+		h, ids := setup(t)
+		var err error
+		stdout, _ := captureStreams(t, func() { err = runWalletProtect(newTestProtectCmd(true, false), nil) })
+		if output.ExitCode(err) != 5 {
+			t.Errorf("exit %d, want 5", output.ExitCode(err))
+		}
+		var doc struct {
+			Protected []struct {
+				ID     string `json:"id"`
+				Status string `json:"status"`
+			} `json:"protected"`
+		}
+		if jErr := json.Unmarshal([]byte(stdout), &doc); jErr != nil {
+			t.Fatalf("stdout is not the result document: %v\n%s", jErr, stdout)
+		}
+		got := map[string]string{}
+		for _, r := range doc.Protected {
+			got[r.ID] = r.Status
+		}
+		if got[ids[0]] != "unresolved" || got[ids[1]] != "rekeyed" || len(got) != 2 {
+			t.Errorf("rows %v; want %s unresolved and %s rekeyed", got, ids[0], ids[1])
+		}
+		if h.moveCount() != 1 {
+			t.Errorf("%d calls; want one, for %s only", h.moveCount(), ids[1])
+		}
+		if _, e := reload(t, ids[0]); e.PendingCashSecret != "s1" {
+			t.Errorf("pending secret %q, want s1 kept", e.PendingCashSecret)
+		}
+	})
 }

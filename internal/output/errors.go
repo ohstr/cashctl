@@ -117,6 +117,9 @@ type CLIError struct {
 	// in human mode, so it can be copied, and as the "recovery" key under
 	// --json. A cap here would destroy money the same way the redaction did.
 	Recovery string
+	// Final marks an error of a normally retryable code that retrying as is
+	// cannot fix; --json's "retryable" is false for it.
+	Final bool
 }
 
 func (e *CLIError) Error() string { return e.Err.Error() }
@@ -236,6 +239,16 @@ func NotFoundError(cmd *cobra.Command, input string, err error) error {
 func ConflictError(cmd *cobra.Command, input string, err error) error {
 	silence(cmd)
 	return wrapCLIError(CodeConflict, RedactSecretInput(input), err)
+}
+
+// FinalConflictError is ConflictError that retrying as is cannot fix: the
+// conflicting state has to change first, so "retryable" is false.
+func FinalConflictError(cmd *cobra.Command, input string, err error) error {
+	wrapped := ConflictError(cmd, input, err)
+	if ce, ok := wrapped.(*CLIError); ok && ce.Code == CodeConflict {
+		ce.Final = true
+	}
+	return wrapped
 }
 
 // NetworkError classifies err as CodeNetwork (retryable).

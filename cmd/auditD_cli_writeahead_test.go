@@ -372,8 +372,8 @@ func TestWalletShow_ReportsAnUnfinishedCashSendInBothModes(t *testing.T) {
 // TestReKeySites_PersistTheNewSecretBeforeTheirWireCall (F-6): the re-key site
 // behind auto-protect and `wallet protect` generates a cash secret and must
 // write it to disk before the call that can commit it (NIP-CASH §Security
-// Considerations for Cash-Mode Slices). Both dial nipcashclient.Connect
-// themselves, so like the transfer sites above this pins the source order:
+// Considerations for Cash-Mode Slices). Like the transfer sites above, this
+// pins the source order:
 // the pending-secret assignment, then a Save, then the wire call.
 func TestReKeySites_PersistTheNewSecretBeforeTheirWireCall(t *testing.T) {
 	src, err := os.ReadFile("receive_secure.go")
@@ -390,7 +390,7 @@ func TestReKeySites_PersistTheNewSecretBeforeTheirWireCall(t *testing.T) {
 		t.Error("protectCashReceipt no longer delegates to protectRekeyOnly: re-derive which sites re-key")
 	}
 	for _, tc := range []struct{ fn, wireCall string }{
-		{"protectRekeyOnly", "client.CashTransfer("},
+		{"protectRekeyOnly", "moveCashFn("},
 	} {
 		var body string
 		for _, decl := range file.Decls {

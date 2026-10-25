@@ -2,8 +2,11 @@
 
 ## [0.7.0-rc.1]
 
-- Fixes a bill lost when a merge moved it on the Hub but saving that locally
-  failed; cashctl now prints its `<token>#<secret>` to keep.
+- Fixes protecting a holding twice when the first answer was lost, which could
+  overwrite the only secret that spends it. `wallet protect` and `receive` now
+  settle the first protect with the Hub, and refuse while it can't tell.
+- Fixes a bill lost when a protect or merge moved it on the Hub but saving that
+  locally failed; cashctl now prints its `<token>#<secret>` to keep.
 
 ## [0.6.0-rc.17]
 
