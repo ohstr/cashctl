@@ -642,7 +642,7 @@ func consolidateItems(cmd *cobra.Command, l *ledger.Ledger, items []string, toFl
 		// next consolidate finishes the merge.
 		if len(movedIDs) > 0 && output.AsCLIError(err).Code != output.CodeIndeterminate {
 			if uErr := undoMoves(cmd, l, movedIDs); uErr != nil {
-				return nil, uErr
+				return nil, withRecovery(err, uErr)
 			}
 		}
 		return nil, err

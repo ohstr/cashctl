@@ -90,10 +90,11 @@ func moveCashNotesToKey(cmd *cobra.Command, l *ledger.Ledger, ids []string, priv
 			if errors.As(err, &notSent) || isDefiniteRefusal(err) {
 				e.PendingThrowawayKey = ""
 				_ = l.Save()
+				classified := classifyCashSpendErr(cmd, err, "merge", id)
 				if uErr := undoMoves(cmd, l, moved); uErr != nil {
-					return nil, uErr
+					return nil, withRecovery(classified, uErr)
 				}
-				return nil, classifyCashSpendErr(cmd, err, "merge", id)
+				return nil, classified
 			}
 			// No answer: the move may have happened. Keep the pending key.
 			return moved, classifyCashSpendErr(cmd, err, "merge", id)
@@ -160,6 +161,18 @@ func undoMoves(cmd *cobra.Command, l *ledger.Ledger, ids []string) error {
 		output.Notef(jsonMode, "The merge was refused, so the notes it had moved are cash notes again.")
 	}
 	return nil
+}
+
+// withRecovery keeps classified as the error (its code and message still say why
+// the operation failed) and attaches unsaved's recovery to it, so a note moved but
+// not saved is never dropped for the reason it was moved.
+func withRecovery(classified, unsaved error) error {
+	var ce *output.CLIError
+	if !errors.As(classified, &ce) {
+		return unsaved
+	}
+	ce.Recovery = output.AsCLIError(unsaved).Recovery
+	return classified
 }
 
 // errNoteNotSaved is the cause reportUnsavedResult names for toCashNotes's
@@ -507,7 +520,7 @@ func mergeThenSend(cmd *cobra.Command, l *ledger.Ledger, tokens []string, source
 			// Refused, or never sent: the merged bill is still whole and ours.
 			if _, unsaved := toCashNotes(l, []string{mergedID}); len(unsaved) > 0 {
 				parked.forgetIfNothingCreated(classified)
-				return unsavedNotesError(cmd, unsaved)
+				return withRecovery(classified, unsavedNotesError(cmd, unsaved))
 			}
 		}
 		parked.forgetIfNothingCreated(classified)

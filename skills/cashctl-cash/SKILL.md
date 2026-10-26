@@ -71,7 +71,9 @@ protect got no answer is first settled with its Hub; if the Hub can't
 tell yet, it is never re-keyed again (that could overwrite the only
 secret that spends it): named, it is refused `conflict` (exit 5,
 `"retryable": false`); otherwise it is left out and listed as
-`{"id": ..., "status": "unresolved"}`. Try again later. Because the secret is always captured — and kept current
+`{"id": ..., "status": "unresolved"}`. Its new code is in `wallet show`
+(`unconfirmed_rekeys`): keep it, it may be the only one that spends the
+bill. Because the secret is always captured — and kept current
 — up front, `redeem`/`transfer` never *need* a `--as cash:<secret>`
 override for a held token's own call — the one real use is overriding
 the entry's on-disk secret with a fresher one you learned out-of-band

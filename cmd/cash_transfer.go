@@ -479,7 +479,7 @@ func transferWithAutoConsolidate(cmd *cobra.Command, l *ledger.Ledger, group []l
 	if err != nil && len(movedIDs) > 0 && output.AsCLIError(err).Code != output.CodeIndeterminate {
 		// only bills still held: never ones a landed merge consumed
 		if uErr := undoMoves(cmd, l, movedIDs); uErr != nil {
-			return uErr
+			err = withRecovery(err, uErr)
 		}
 	}
 	if err != nil && isCrossHubDeclineClassified(err) {
