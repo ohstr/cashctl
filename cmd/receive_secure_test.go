@@ -245,3 +245,25 @@ func TestPrintProtectAmbiguousFailure_NeverSaysNoActionNeeded(t *testing.T) {
 		}
 	}
 }
+
+// An earlier move onto a merge key that landed means only this wallet's key
+// spends the bill: protect reports it re-keyed and records it protected.
+func TestProtect_ALandedKeyMoveIsProtected(t *testing.T) {
+	h := newFakeBillHub(t)
+	l, ids := protectLedger(t, h)
+	priv, _, _ := newThrowawayKey()
+	e, _ := l.Find(ids[0])
+	e.PendingThrowawayKey = priv
+	if err := l.Save(); err != nil {
+		t.Fatal(err)
+	}
+	h.bill("tok-a", nipcash.BySigning(priv), 1000)
+
+	st, _ := protectRekeyOnly(newTestReceiveCmd(), l, e, true)
+	if st.Status != "rekeyed" || h.moveCount() != 0 {
+		t.Errorf("status %+v after %d moves; want rekeyed, none", st, h.moveCount())
+	}
+	if _, e = reload(t, ids[0]); e.CashProtection != ledger.CashProtected || e.ThrowawayKey != priv {
+		t.Errorf("protection %q key kept %v; want protected on the key", e.CashProtection, e.ThrowawayKey == priv)
+	}
+}

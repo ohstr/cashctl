@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -410,5 +411,17 @@ func TestToCashNotes_SkipsAPendingReKeyEvenWhenNamed(t *testing.T) {
 	}
 	if e.PendingCashSecret != "sn" {
 		t.Errorf("pending secret %q, want sn kept", e.PendingCashSecret)
+	}
+}
+
+// A refusal whose undo then fails to save keeps its own classification and
+// carries the moved note's recovery.
+func TestWithRecovery_KeepsTheClassification(t *testing.T) {
+	cmd := testCmdWithFlags(true, false)
+	classified := output.UsageError(cmd, errors.New("refused"))
+	got := withRecovery(classified, unsavedNotesError(cmd, []string{"tok#sec"}))
+	ce := output.AsCLIError(got)
+	if ce.Code != output.CodeUsage || !strings.Contains(ce.Recovery, "tok#sec") {
+		t.Errorf("code %q recovery %q; want usage, with tok#sec", ce.Code, ce.Recovery)
 	}
 }

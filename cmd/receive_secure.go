@@ -107,14 +107,6 @@ func protectCashReceipt(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entr
 		return protectedStatus{Status: "declined"}, entry
 	}
 
-	// Settle any earlier re-key or move whose answer never came before
-	// writing a new secret anywhere.
-	if err := settlePendingMoves(cmd, l); err != nil {
-		recovery := output.AsCLIError(err).Recovery
-		printProtectUnsaved(jsonMode, errNoteNotSaved, recovery)
-		return protectedStatus{Status: "failed", Error: err.Error(), Recovery: recovery}, entry
-	}
-
 	// Re-key only, never merge: merging tells the Hub the bills share an owner,
 	// which the holder decides explicitly with `consolidate` (NIP-CASH §Privacy).
 	return protectRekeyOnly(cmd, l, entry, jsonMode)
@@ -238,7 +230,7 @@ func protectRekeyOnly(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entry,
 		// not: disk names the old token, whose wallet the carve deleted,
 		// and the new token exists only in this process. So hand it over.
 		if moved {
-			recovery := result.NewWalletToken + "#" + bt.Secret()
+			recovery := entryRecoveryString(entry)
 			printProtectUnsaved(jsonMode, err, recovery)
 			return protectedStatus{Status: "failed", Error: err.Error(), Recovery: recovery}, entry
 		}
@@ -280,8 +272,9 @@ const protectAmbiguousAdvice = "It may have worked. cashctl settles it before yo
 // was never confirmed: protecting it again could overwrite the only secret
 // that spends it.
 func errUnresolvedRekey(id string) error {
-	return fmt.Errorf("an earlier re-key of %s was never confirmed and its Hub couldn't settle it yet; "+
-		"nothing was changed. Try again later — don't hand out the old code again", id)
+	return fmt.Errorf("an earlier re-key of %s was never confirmed and its Hub couldn't settle it, so nothing was changed. "+
+		"`cashctl wallet show` lists its new code, which may be the only one that spends the bill now; "+
+		"don't hand out the old code again", id)
 }
 
 func printProtectUnresolved(jsonMode bool, id string) {
@@ -300,10 +293,12 @@ func printProtectUnsaved(jsonMode bool, err error, recovery string) {
 	output.Printf("Moved on the Hub, but saving that locally failed (%v). Save this now, it will not be shown again:\n%s\n", err, recovery)
 }
 
-// hasPendingSecret reports a re-key, move or send of e whose outcome was never
-// recorded.
+// hasPendingSecret reports a re-key or move of e whose outcome was never
+// recorded: a new secret written over it could destroy the only one that
+// spends the bill. A parked destination secret is not one: protect never
+// writes it, and a send that left a remainder can keep it for good.
 func hasPendingSecret(e *ledger.Entry) bool {
-	return e.PendingCashSecret != "" || e.PendingThrowawayKey != "" || e.PendingDestinationCashSecret != ""
+	return e.PendingCashSecret != "" || e.PendingThrowawayKey != ""
 }
 
 // settleBeforeRekey resolves whatever earlier call left e pending, before
@@ -329,6 +324,14 @@ func settleBeforeRekey(cmd *cobra.Command, l *ledger.Ledger, e *ledger.Entry) (l
 	if changed {
 		if err := l.Save(); err != nil {
 			// Disk still holds the pending state, which the next run settles.
+			return false, true
+		}
+	}
+	if e.ThrowawayKey != prevKey {
+		// The earlier move onto a merge key landed: only this wallet's key
+		// spends the bill now, so the shared code is dead.
+		e.CashProtection = ledger.CashProtected
+		if err := l.Save(); err != nil {
 			return false, true
 		}
 	}

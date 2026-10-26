@@ -382,3 +382,49 @@ func TestRunWalletProtect_NeverReKeysAnUnresolvedOne(t *testing.T) {
 		}
 	})
 }
+
+// An unresolved re-key's new code may be the only one that spends the bill
+// (after a carve, on a token this wallet never learned): `wallet show` lists it.
+func TestWalletShow_ListsAnUnconfirmedReKeysCode(t *testing.T) {
+	h := newFakeBillHub(t)
+	l, ids := protectLedger(t, h)
+	e, _ := l.Find(ids[0])
+	e.PendingCashSecret = "s1"
+	if err := l.Save(); err != nil {
+		t.Fatal(err)
+	}
+	for _, jsonMode := range []bool{true, false} {
+		cmd := newWalletShowCmd()
+		cmd.Flags().Bool("json", jsonMode, "")
+		cmd.SetArgs(nil)
+		printed := withCapturedOutput(func() {
+			if err := cmd.Execute(); err != nil {
+				t.Errorf("wallet show (json=%v): %v", jsonMode, err)
+			}
+		})
+		if !strings.Contains(printed, "s1") || !strings.Contains(printed, ids[0]) {
+			t.Errorf("wallet show (json=%v) does not list the unconfirmed re-key:\n%s", jsonMode, printed)
+		}
+	}
+}
+
+// A parked destination secret is not something protect could overwrite, and a
+// send that left a remainder keeps it for good: it never blocks protecting.
+func TestRunWalletProtect_ADestinationParkDoesNotBlock(t *testing.T) {
+	h := newFakeBillHub(t)
+	l, ids := protectLedger(t, h)
+	e, _ := l.Find(ids[0])
+	e.PendingDestinationCashSecret = "dest"
+	if err := l.Save(); err != nil {
+		t.Fatal(err)
+	}
+	h.bill("tok-a", nipcash.BySecret("stok-a"), 600) // a split landed: the park can't be cleared
+	cmd := newTestProtectCmd(true, false)
+	_ = cmd.Flags().Set("token", ids[0])
+	if err := runWalletProtect(cmd, nil); err != nil {
+		t.Fatalf("wallet protect with a parked send: %v", err)
+	}
+	if _, e = reload(t, ids[0]); e.CashProtection != ledger.CashProtected || e.PendingDestinationCashSecret != "dest" {
+		t.Errorf("protection %q park %q; want protected, park kept", e.CashProtection, e.PendingDestinationCashSecret)
+	}
+}

@@ -179,6 +179,25 @@ func unreconciledDestinationParks(l *ledger.Ledger) []string {
 	return lines
 }
 
+// unconfirmedRekey is a re-key whose answer never came: the pending secret may be
+// the only one that now spends the bill (after a carve, on a token this wallet
+// never learned), so it is shown rather than kept where no one can read it.
+type unconfirmedRekey struct {
+	TokenID    string `json:"token_id"`
+	CashSecret string `json:"cash_secret"`
+}
+
+// unconfirmedRekeys is every held row with a pending re-key secret.
+func unconfirmedRekeys(l *ledger.Ledger) []unconfirmedRekey {
+	var out []unconfirmedRekey
+	for _, e := range l.Held() {
+		if e.PendingCashSecret != "" {
+			out = append(out, unconfirmedRekey{TokenID: e.ID, CashSecret: e.PendingCashSecret})
+		}
+	}
+	return out
+}
+
 // unfinishedCashSend is one unreconciled destination secret, as `wallet show
 // --json` reports it: the source row it was parked on, and the secret itself.
 type unfinishedCashSend struct {

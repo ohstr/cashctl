@@ -3,8 +3,9 @@
 ## [0.7.0-rc.1]
 
 - Fixes protecting a holding twice when the first answer was lost, which could
-  overwrite the only secret that spends it. `wallet protect` and `receive` now
-  settle the first protect with the Hub, and refuse while it can't tell.
+  overwrite the only secret that spends it. `wallet protect` now settles the
+  first protect with the Hub, refuses while it can't tell, and `wallet show`
+  lists the new code meanwhile.
   ([#124](https://github.com/ohstr/cashctl/pull/124))
 - Fixes a bill lost when a protect or merge moved it on the Hub but saving that
   locally failed; cashctl now prints its `<token>#<secret>` to keep.

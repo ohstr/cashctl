@@ -66,16 +66,13 @@ func runWalletProtect(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	named, _ := cmd.Flags().GetString("token")
-	if named == "" && len(args) > 0 {
-		named = args[0]
-	}
+	named := protectNamedID(cmd, args)
 	var entries, unresolved []*ledger.Entry
 	if named == "" || !slices.Contains(settled, named) {
 		var err error
 		entries, unresolved, err = resolveUnprotectedCashHoldings(cmd, l, args)
 		// Nothing left to protect is not a failure when settling just did it.
-		if err != nil && !(named == "" && len(settled) > 0 && output.ExitCode(err) == 4) {
+		if err != nil && !(named == "" && len(settled) > 0 && output.AsCLIError(err).Code == output.CodeNotFound) {
 			return err
 		}
 	}
@@ -207,10 +204,7 @@ func printProtectOutcomes(jsonMode bool, outcomes []protectOutcome) {
 // — protecting keeps the value yours either way, so unlike redeem's own
 // resolver there is no ambiguity here worth refusing over.
 func resolveUnprotectedCashHoldings(cmd *cobra.Command, l *ledger.Ledger, args []string) (entries, unresolved []*ledger.Entry, err error) {
-	id, _ := cmd.Flags().GetString("token")
-	if id == "" && len(args) > 0 {
-		id = args[0]
-	}
+	id := protectNamedID(cmd, args)
 	if id != "" {
 		e, ok := l.Find(id)
 		if !ok {
@@ -261,6 +255,16 @@ func resolveUnprotectedCashHoldings(cmd *cobra.Command, l *ledger.Ledger, args [
 		out = append(out, e)
 	}
 	return out, unresolved, nil
+}
+
+// protectNamedID is the holding wallet protect was pointed at: --token, else
+// the positional id, else "".
+func protectNamedID(cmd *cobra.Command, args []string) string {
+	id, _ := cmd.Flags().GetString("token")
+	if id == "" && len(args) > 0 {
+		id = args[0]
+	}
+	return id
 }
 
 func unprotectableReason(e *ledger.Entry) string {

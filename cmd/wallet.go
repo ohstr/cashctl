@@ -94,7 +94,9 @@ call: amounts are as last known.
 --json adds: held_tokens (each with its id and cash_hub — only same-Hub
 tokens merge), unclaimed_handoffs (cash notes still unclaimed and gifts,
 which stay "sent": branch on status), unfinished_cash_sends (an interrupted
-cash send's only secret copy — keep it), pending_joins and pending_merge.`,
+cash send's only secret copy — keep it), unconfirmed_rekeys (a re-key with no
+answer: its new code may be the only one that spends the bill — keep it),
+pending_joins and pending_merge.`,
 		Args: output.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			jsonMode, _ := cmd.Flags().GetBool("json")
@@ -132,6 +134,9 @@ cash send's only secret copy — keep it), pending_joins and pending_merge.`,
 					"held_tokens":     heldTokensJSON(l.Held()),
 					// The only copy of each secret: see unreconciledDestinationParks.
 					"unfinished_cash_sends": output.NonNil(unfinishedCashSends(l)),
+					// Re-keys with no answer: the pending secret may be the only one
+					// that spends the bill now.
+					"unconfirmed_rekeys": output.NonNil(unconfirmedRekeys(l)),
 					// Handed out and not known to be claimed, secrets hidden: `wallet
 					// history --show-secrets` shows them in full to resend.
 					"unclaimed_handoffs": unclaimedHandoffs(l),
@@ -201,6 +206,12 @@ cash send's only secret copy — keep it), pending_joins and pending_merge.`,
 						hub = j.HubPubkey
 					}
 					output.Printf("  %s   connection key %s   %s\n", output.Sanitize(hub), j.ConnectionPubkey, j.At)
+				}
+			}
+			if rekeys := unconfirmedRekeys(l); len(rekeys) > 0 {
+				output.Printf("\nUnconfirmed re-keys: %d — cashctl settles each when its Hub answers; until then keep the new code, it may be the only one that spends the bill\n", len(rekeys))
+				for _, r := range rekeys {
+					output.Printf("  %s   new code %s\n", r.TokenID, r.CashSecret)
 				}
 			}
 			if parks := unreconciledDestinationParks(l); len(parks) > 0 {
