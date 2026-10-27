@@ -471,10 +471,12 @@ func confirmAndSend(cmd *cobra.Command, e *ledger.Entry, q, prev *nipcash.Withdr
 				return nil
 			}
 			if nowFn().Sub(asked) > requoteAfter {
-				_, q2, h2, err := quoteWithdrawal(cmd, q.Address, false)
+				e2, q2, h2, err := quoteWithdrawal(cmd, q.Address, false)
 				if err != nil {
 					return err
 				}
+				// Another bill is another quote, shown for a new "yes" (W-5).
+				e = e2
 				if sameQuote(q, q2) {
 					output.Notef(false, "Quoted again (the prompt was open a while): the same amounts, sent by %s.", time.Unix(q2.SentBy, 0).UTC().Format(time.RFC3339))
 				} else {
@@ -489,17 +491,17 @@ func confirmAndSend(cmd *cobra.Command, e *ledger.Entry, q, prev *nipcash.Withdr
 			return err
 		}
 		output.Notef(false, "The quote expired before the withdrawal reached the Hub; nothing moved. Here is a new quote.")
-		_, q2, h2, qErr := quoteWithdrawal(cmd, q.Address, false)
+		e2, q2, h2, qErr := quoteWithdrawal(cmd, q.Address, false)
 		if qErr != nil {
 			return qErr
 		}
-		prev, q, handle, ask = q, q2, h2, true
+		e, prev, q, handle, ask = e2, q, q2, h2, true
 	}
 }
 
-// sameQuote reports two quotes with the same address and amounts.
+// sameQuote reports two quotes for the same bill, address and amounts.
 func sameQuote(a, b *nipcash.WithdrawQuote) bool {
-	return a.Address == b.Address && a.AmountMillis == b.AmountMillis && a.FeeMillis() == b.FeeMillis() && a.PayoutMillis == b.PayoutMillis
+	return a.Wallet == b.Wallet && a.IdentityValue == b.IdentityValue && a.Address == b.Address && a.AmountMillis == b.AmountMillis && a.FeeMillis() == b.FeeMillis() && a.PayoutMillis == b.PayoutMillis
 }
 
 // withdrawJournal writes a withdrawal's call and its withdrawals row ahead

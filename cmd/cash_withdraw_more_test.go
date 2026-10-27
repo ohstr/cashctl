@@ -335,3 +335,17 @@ func runDecodeArgs(t *testing.T, args []string, flags map[string]string) map[str
 	_ = json.Unmarshal([]byte(stdout), &doc)
 	return doc
 }
+
+// W-5: a re-quote of another bill is never "the same quote", whatever its
+// amounts, so it needs a new yes.
+func TestSameQuote_ComparesTheBill(t *testing.T) {
+	a := &nipcash.WithdrawQuote{QuoteFields: nipcash.QuoteFields{Wallet: "w1", Address: "addr", AmountMillis: 1000, PayoutMillis: 900}}
+	b := *a
+	if !sameQuote(a, &b) {
+		t.Fatal("identical quotes differ")
+	}
+	b.Wallet = "w2"
+	if sameQuote(a, &b) {
+		t.Error("another bill's quote counted as the same")
+	}
+}
