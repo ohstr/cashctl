@@ -38,6 +38,9 @@ type Connection struct {
 	// Kind is what the connection is: KindCircle (made by `join`) or KindNWC
 	// (registered with `connect add`).
 	Kind string `json:"kind"`
+	// WalletPubkey is a circle wallet's wallet_pubkey, the only part of its
+	// stored fields ever shown.
+	WalletPubkey string `json:"wallet_pubkey,omitempty"`
 
 	// LastKnownBalanceMillis/LastKnownBalanceAt cache the most recent
 	// successful live get_balance result — the only way to show a figure
@@ -163,6 +166,9 @@ func Load() (*Store, error) {
 		}
 		c.LastKnownBalanceAt = lastKnownBalanceAt.String
 		c.Value = value.String
+		if w, ok, _ := ParseCircleWallet(c.Value); ok {
+			c.WalletPubkey = w.WalletPubkey
+		}
 		if isDefault {
 			s.Default = c.Name
 		}
@@ -290,7 +296,11 @@ func (s *Store) Add(name, value string) error {
 	if _, ok := s.Find(name); ok {
 		return ErrDuplicateName
 	}
-	s.Connections = append(s.Connections, Connection{Name: name, Value: value, AddedAt: nowRFC3339(), Kind: KindNWC})
+	c := Connection{Name: name, Value: value, AddedAt: nowRFC3339(), Kind: KindNWC}
+	if w, ok, _ := ParseCircleWallet(value); ok {
+		c.WalletPubkey = w.WalletPubkey
+	}
+	s.Connections = append(s.Connections, c)
 	return nil
 }
 

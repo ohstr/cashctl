@@ -73,7 +73,8 @@ An expired one stays listed under `pending_joins` in `wallet show`.
 
 When the Hub can't rotate a lost connection (`rotation_delay_secs` absent),
 `join` warns first (`warnings`): losing the wallet's key loses its balance.
-Pass `--backup-file <path>` to keep a copy.
+Pass `--backup-file <path>` to keep a copy; `cashctl connect add <name>
+<path>` (or `-` with the file on stdin) registers it again on any device.
 
 A `--hub` value that's actually a **Cash Hub** connection (`cashhub1...`)
 gets a specific corrective error (`code: "invalid_input"`) — cashctl can't

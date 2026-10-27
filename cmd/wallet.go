@@ -162,7 +162,7 @@ pending_joins and pending_merge.`,
 					if c.Name == s.Default {
 						marker = " [default]"
 					}
-					output.Printf("  %s (%s)%s\n", c.Name, c.Kind, marker)
+					output.Printf("  %s (%s)%s%s\n", c.Name, c.Kind, walletPubkeySuffix(c), marker)
 				}
 			}
 			held := l.Held()

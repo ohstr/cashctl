@@ -2,6 +2,8 @@
 
 ## [0.7.0-rc.1]
 
+- Adds circle wallet backups to `connect add`: the file `join --backup-file`
+  writes registers the wallet again, shown by its `wallet_pubkey` only.
 - Adds `cash discover list|show|open|relays|curators`, which finds order links
   and circles listed on Nostr relays, checks one with its Hub when you show it,
   and orders from it or joins it.

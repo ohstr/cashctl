@@ -434,6 +434,7 @@ one handed to you from another device:
 
 ```sh
 cashctl connect add work nostr+walletconnect://...
+cashctl connect add circle:family wallet.json   # a circle wallet's backup (join --backup-file)
 cashctl connect list
 cashctl connect use work
 cashctl connect rm work
