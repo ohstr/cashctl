@@ -48,6 +48,25 @@ The token expires (30 days by default). An expired token makes tests fail
 loudly, not skip — that's a config problem for the operator to refresh, not
 a capability gap in cashctl.
 
+### Against lokihub's regtest dev stack
+
+`just dev bootstrap` in lokihub writes `integration/config.local.yaml` with
+`admin_api`, `relay_url` and the regtest chain and payer settings. Point this
+suite at that file (`INTEGRATION_CONFIG=/path/to/lokihub/integration/config.local.yaml`):
+unknown keys are ignored, `relay_url` feeds the discovery test.
+
+The dev stack's backend serves test hooks under `/api/test` (a `testhooks`
+build, regtest only). `testhooks_test.go` wraps them, and the tests in
+`e2e_lokihub_test.go` use them to pay orders from the payer node, mine
+on-chain orders and withdrawals to final, and keep a payout out of blocks.
+Those tests skip when the Hub answers no hooks; `CASHCTL_E2E_HOOKS=0` turns
+them off. The redeem-fee tests take their external invoice from the payer
+node when the hooks are there, instead of `docker exec` on a lab container.
+
+The lost-reply tests kill the crashpoints build (`CASHCTL_CRASHPOINT`)
+right after it wrote a call ahead or sent it, then run `cash settle`. They
+need only the admin API.
+
 ## What it proves
 
 Each test drives the real compiled binary as a subprocess (`binary.go`

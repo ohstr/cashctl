@@ -30,6 +30,7 @@ package integration
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -80,6 +81,17 @@ func jsonErrorNWCCode(t *testing.T, stderr string) string {
 // aren't reachable exactly as this lab has them laid out.
 func mintInvoiceFromFlnd(t *testing.T, amountMloki uint64, memo string) string {
 	t.Helper()
+	// On the regtest dev stack the payer node is a real second node: its
+	// invoice is the external payee this test needs, with no docker access.
+	if os.Getenv("CASHCTL_E2E_HOOKS") != "0" {
+		if cfg, err := LoadConfig(""); err == nil {
+			if admin, ok := newAdminClient(cfg); ok {
+				if inv, err := admin.hookPayerInvoice(amountMloki); err == nil {
+					return inv
+				}
+			}
+		}
+	}
 	out, err := exec.Command("docker", "exec", flndContainerName,
 		"flncli",
 		"--macaroonpath="+flndAdminMacaroonPath,
