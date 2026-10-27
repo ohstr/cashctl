@@ -198,9 +198,14 @@ func decodeCashZap(cmd *cobra.Command, value string, jsonMode, check bool) error
 // zapRule9ReadOnly runs rule 9 for the local identity without changing
 // anything: cash_status mine. A minter not trusted or listed is not contacted.
 func zapRule9ReadOnly(cmd *cobra.Command, ev *nip01.Event, trust nipCZ.Trust) map[string]any {
+	// Rule 8 also trusts what the recipient's own 10522 lists (Z-5).
+	var info *nipCZ.CashZapInfo
+	if z, err := nipCZ.ParseCashZap(ev); err == nil && !z.Recipient.IsConnectionKey() {
+		info, _ = recipientZapInfo(cmd, z.Recipient.Value)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	v := nipCZ.VerifyWallet(ctx, ev, nil, trust, false, func(ctx context.Context, z *nipCZ.CashZap) error {
+	v := nipCZ.VerifyWallet(ctx, ev, info, trust, false, func(ctx context.Context, z *nipCZ.CashZap) error {
 		return zapStatusMine(ctx, cmd, z)
 	})
 	r9, _ := v.Rule(9)
@@ -594,8 +599,10 @@ func findZapFor(cmd *cobra.Command, tok nipcash.Token) (*nip01.Event, string, er
 	}
 	// Also where the local identity reads its zaps: its own 10522 relays, else
 	// its NIP-65 read relays (NIP-CZ IncomingRelays). Never the token's hints.
+	var own *nipCZ.CashZapInfo
 	if mine, err := localPubKeyHex(cmd); err == nil {
-		own, read := recipientZapInfo(cmd, mine)
+		var read []string
+		own, read = recipientZapInfo(cmd, mine)
 		relays = append(relays, nipCZ.IncomingRelays(own, read, nil)...)
 		slices.Sort(relays)
 		relays = slices.Compact(relays)
@@ -615,7 +622,7 @@ func findZapFor(cmd *cobra.Command, tok nipcash.Token) (*nip01.Event, string, er
 	if len(zaps) == 0 {
 		return nil, "", output.NotFoundError(cmd, "", errors.New("no Cash Zap for this bill on those relays"))
 	}
-	z, err := nipCZ.SelectTrustedCopy(zaps, nil, loadMinterTrust())
+	z, err := nipCZ.SelectTrustedCopy(zaps, own, loadMinterTrust())
 	if err != nil {
 		z, err = nipCZ.SelectCopy(zaps)
 		if err != nil {
