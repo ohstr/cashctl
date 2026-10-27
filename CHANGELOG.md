@@ -2,6 +2,10 @@
 
 ## [0.7.0-rc.1]
 
+- Adds `--pow-max` and `cashctl config set pow_max_difficulty`, beside
+  `CASHCTL_POW_MAX`, to cap proof of work. `cash order watch` now reads an
+  order when its notices arrive, and an order's invoice is checked locally
+  (amount, expiry, chain) before it is shown to pay.
 - Adds `cash discover list|show|open|relays|curators`, which finds order links
   and circles listed on Nostr relays, checks one with its Hub when you show it,
   and orders from it or joins it.

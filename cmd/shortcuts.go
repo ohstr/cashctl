@@ -28,6 +28,7 @@ func init() {
 		newConnectCmd(),
 		newDecodeCmd(),
 		newSkillsCmd(),
+		newConfigCmd(),
 		newVersionCmd(),
 	)
 }

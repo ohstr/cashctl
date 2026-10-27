@@ -45,6 +45,7 @@ func init() {
 	RootCmd.PersistentFlags().Bool("json", false, "output machine-readable JSON instead of human-readable text")
 	RootCmd.PersistentFlags().StringP("connection", "c", "", "use this connection/wallet by name (or a raw connection string) instead of the default")
 	RootCmd.PersistentFlags().Bool("yes", false, "skip confirmation prompts")
+	RootCmd.PersistentFlags().Int("pow-max", defaultPowMax, "the most proof of work (NIP-13 difficulty) cashctl does for a Hub's relays; above it nothing is sent (also CASHCTL_POW_MAX, or the pow_max_difficulty setting)")
 	RootCmd.PersistentFlags().String("config-dir", "", "override cashctl's local config directory (default: OS config dir)")
 
 	RootCmd.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
