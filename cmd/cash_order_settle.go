@@ -156,6 +156,7 @@ func showOrders(cmd *cobra.Command, ids []string, local bool) error {
 		fresh, _, _ := ledger.FindOrder(o.OrderID)
 		v := orderView(fresh, nil)
 		v["next_step"] = orderNextStep(fresh)
+		v["warnings"] = output.NonNil(orderWarnings(fresh, storedOrder(fresh)))
 		views = append(views, v)
 	}
 	if jsonMode {
@@ -174,6 +175,7 @@ func showOrders(cmd *cobra.Command, ids []string, local bool) error {
 			line += " (terms changed)"
 		}
 		output.Println(line)
+		printWhatToPay(v)
 		if bills, _ := v["bills"].([]map[string]any); len(bills) > 0 {
 			output.Printf("  bills: %d\n", len(bills))
 		}
@@ -251,13 +253,51 @@ func printOrderState(cmd *cobra.Command, o ledger.Order) error {
 	jsonMode, _ := cmd.Flags().GetBool("json")
 	v := orderView(o, nil)
 	v["next_step"] = orderNextStep(o)
+	v["warnings"] = output.NonNil(orderWarnings(o, storedOrder(o)))
 	if jsonMode {
 		output.PrintJSON(v)
 		return nil
 	}
 	output.Printf("order %s: %s\n", o.OrderID, o.State)
+	printWhatToPay(v)
 	output.Printf("Next: %s\n", orderNextStep(o))
 	return nil
+}
+
+// storedOrder is the order as the Hub last stated it, nil before any answer.
+func storedOrder(o ledger.Order) *nipCO.Order {
+	if o.OrderJSON == "" {
+		return nil
+	}
+	order := &nipCO.Order{}
+	if json.Unmarshal([]byte(o.OrderJSON), order) != nil {
+		return nil
+	}
+	return order
+}
+
+// printWhatToPay prints, for an order not yet finished, what to pay and by
+// when, with the order's warnings: a recovered order shows the same as a
+// placed one (NIP-CO §Client Behavior).
+func printWhatToPay(v map[string]any) {
+	if v["finished"] == true {
+		return
+	}
+	if by, ok := v["pay_by"].(int64); ok && by > 0 {
+		output.Printf("  pay %s by %s\n", output.FormatAmount(int64(v["pay_millis"].(uint64))), //nolint:gosec // amounts fit
+			time.Unix(by, 0).UTC().Format(time.RFC3339))
+	}
+	if inv, ok := v["invoice"]; ok {
+		output.Printf("  %s\n", inv)
+	}
+	if addr, ok := v["address"]; ok {
+		output.Printf("  %s (needs %v confirmation(s))\n", addr, v["confirmations"])
+	}
+	if w, _ := v["warnings"].([]string); len(w) > 0 {
+		for _, line := range w {
+			output.Notef(false, "  Warning: %s.", line)
+		}
+	}
 }
 
 func newCashOrderSettleCmd() *cobra.Command {

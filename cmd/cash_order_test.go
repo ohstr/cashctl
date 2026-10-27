@@ -389,3 +389,40 @@ func TestOrder_LookupAddressChecked(t *testing.T) {
 		t.Errorf("wrong-chain address: call %s/%s, order %s", c.State, c.Detail, o.OrderJSON)
 	}
 }
+
+// O-3: an order recovered after a lost reply shows what to pay, by when, and
+// its warnings, in text and --json.
+func TestOrder_RecoveredShowsWhatToPay(t *testing.T) {
+	f, conn := setUpOrderHub(t)
+	f.answer = func(pc nipcash.PendingCall) error {
+		return &nipcashclient.IndeterminateError{Call: pc, Cause: errors.New("no reply")}
+	}
+	if _, err := placeOrder(t, conn, "100"); output.ExitCode(err) != 8 {
+		t.Fatalf("lost reply: %v", err)
+	}
+	f.lookup = func(nipcash.PendingCall) (nipcashclient.LookupOutcome, *nipCO.Order, error) {
+		return nipcashclient.LookupOutcome{Status: nipcash.LookupDone}, f.open(100_000, time.Now().Unix()+600), nil
+	}
+	stdout, _, err := showAllOrders(t)
+	if err != nil {
+		t.Fatalf("show: %v", err)
+	}
+	var doc struct {
+		Orders []map[string]any `json:"orders"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &doc); err != nil || len(doc.Orders) != 1 {
+		t.Fatalf("show --json %q: %v", stdout, err)
+	}
+	v := doc.Orders[0]
+	if v["invoice"] != "lnfc1invoice" || v["pay_by"] == nil || len(v["warnings"].([]any)) == 0 {
+		t.Errorf("recovered order --json %v", v)
+	}
+	c := newCashOrderShowCmd()
+	c.Flags().Bool("json", false, "")
+	c.Flags().Bool("yes", false, "")
+	c.Flags().String("connection", "", "")
+	text, errText := captureStreams(t, func() { err = showOrders(c, nil, true) })
+	if err != nil || !strings.Contains(text, "lnfc1invoice") || !strings.Contains(text, " by ") || !strings.Contains(errText, "Warning:") {
+		t.Errorf("recovered order text %q / %q (%v)", text, errText, err)
+	}
+}
