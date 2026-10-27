@@ -264,6 +264,27 @@ func TestCashMint_OutcomesAndReplace(t *testing.T) {
 	}
 
 	f.answer = nil
+	// CC-B2: --json alone is no consent, and another copy may not mint again.
+	noYes := newCashSettleCmd()
+	noYes.Flags().Bool("json", true, "")
+	noYes.Flags().Bool("yes", false, "")
+	_ = noYes.Flags().Set("replace", open.CallID)
+	captureStreams(t, func() { err = runCashSettle(noYes, nil) })
+	if output.AsCLIError(err).Code != output.CodeUsage {
+		t.Fatalf("settle --replace --json without --yes: %v, want a usage refusal", err)
+	}
+	origDevice := deviceIDFn
+	deviceIDFn = func() (string, error) { return strings.Repeat("ee", 32), nil }
+	other := newCashSettleCmd()
+	other.Flags().Bool("json", true, "")
+	other.Flags().Bool("yes", true, "")
+	_ = other.Flags().Set("replace", open.CallID)
+	captureStreams(t, func() { err = runCashSettle(other, nil) })
+	deviceIDFn = origDevice
+	if output.AsCLIError(err).Code != output.CodeConflict {
+		t.Fatalf("settle --replace from another copy: %v, want refused", err)
+	}
+
 	cmd := newCashSettleCmd()
 	cmd.Flags().Bool("json", true, "")
 	cmd.Flags().Bool("yes", true, "")

@@ -29,7 +29,8 @@ never twice), one it refused is closed with its reason. Nothing is resent
 under its own id. Exit 0 when nothing placed from this wallet file is still
 open, else 8.
 
---close <call> gives up on one call (its new codes are printed: keep them).
+--close <call> gives up on one call (its new codes are printed: keep them);
+not a withdrawal or an answered order, and under --json only with --yes.
 --wait keeps asking, up to 6 minutes, until nothing is due.`,
 		Example: `  cashctl cash settle
   cashctl cash settle --wait
@@ -80,7 +81,8 @@ func runCashSettle(cmd *cobra.Command, _ []string) error {
 		settled = append(settled, settleCalls(cmd, l, settleOptions{})...)
 	}
 	joins, joinsOpen := settleJoins(cmd, device)
-	return reportSettle(cmd, l, settled, joins, joinsOpen, device, jsonMode)
+	redeems, redeeming := settleRedeeming(cmd, l)
+	return reportSettle(cmd, l, settled, joins, joinsOpen, redeems, redeeming > 0, device, jsonMode)
 }
 
 // nextDue is when the earliest open call becomes worth asking about again.
@@ -145,7 +147,7 @@ func callRecovery(c *ledger.Call) string {
 
 // reportSettle prints every call looked at and every call still open, and exits
 // 8 while anything placed from this file is still open.
-func reportSettle(cmd *cobra.Command, l *ledger.Ledger, settled []settledCall, joins []joinSettleRow, joinsOpen bool, device string, jsonMode bool) error {
+func reportSettle(cmd *cobra.Command, l *ledger.Ledger, settled []settledCall, joins []joinSettleRow, joinsOpen bool, redeems []redeemingSettle, redeemsOpen bool, device string, jsonMode bool) error {
 	rows := map[string]settleRow{}
 	var order []string
 	for _, s := range settled {
@@ -173,10 +175,13 @@ func reportSettle(cmd *cobra.Command, l *ledger.Ledger, settled []settledCall, j
 		list = append(list, rows[id])
 	}
 	if jsonMode {
-		output.PrintJSON(map[string]any{"calls": list, "joins": output.NonNil(joins)})
+		output.PrintJSON(map[string]any{"calls": list, "joins": output.NonNil(joins), "redeems": output.NonNil(redeems)})
 	} else {
-		if len(list) == 0 && len(joins) == 0 {
+		if len(list) == 0 && len(joins) == 0 && len(redeems) == 0 {
 			output.Println("Nothing to settle.")
+		}
+		for _, r := range redeems {
+			output.Printf("redeem of %s: %s — %s\n", r.ID, r.Status, r.Detail)
 		}
 		for _, j := range joins {
 			line := fmt.Sprintf("join %s at Hub %s: %s", shortFingerprint(j.ConnectionPubkey), shortFingerprint(j.HubPubkey), j.State)
@@ -203,7 +208,10 @@ func reportSettle(cmd *cobra.Command, l *ledger.Ledger, settled []settledCall, j
 			}
 		}
 	}
-	if stillOpen || joinsOpen {
+	if redeemsOpen && !stillOpen && !joinsOpen {
+		return output.WithReason(output.IndeterminateError(cmd, "", errors.New("a redeem may still settle; nothing was resent — run `cashctl cash settle` again later")), reasonRedeemInFlight)
+	}
+	if stillOpen || joinsOpen || redeemsOpen {
 		return output.IndeterminateError(cmd, "", errors.New("some calls still have no answer; nothing was resent — run `cashctl cash settle` again later"))
 	}
 	return nil
@@ -211,6 +219,24 @@ func reportSettle(cmd *cobra.Command, l *ledger.Ledger, settled []settledCall, j
 
 // closeCallByUser gives up on one call. Its generated secrets are printed
 // first: once closed, cashctl stops asking about it.
+// refuseUserClose keeps `--close` off calls whose keys are still needed: a
+// withdrawal (its payout is followed, and a cancelled payout is re-minted to
+// its remint secret) and an answered order (later bills are fetched with its
+// buyer key). Those are followed by their own commands.
+func refuseUserClose(cmd *cobra.Command, c *ledger.Call) error {
+	switch {
+	case c.Method == nipcash.MethodCashWithdraw && (c.State == ledger.CallOpenWithdraw || callSecretOf(c, ledger.RoleRemint) != ""):
+		next := "`cashctl cash withdraw settle`"
+		if w, ok, _ := ledger.WithdrawalForCall(c.CallID); ok {
+			next = fmt.Sprintf("`cashctl cash withdraw show %s` (or `cash withdraw cancel %s`)", w.WithdrawalID, w.WithdrawalID)
+		}
+		return output.UsageError(cmd, fmt.Errorf("call %s is a withdrawal: its payout and re-mint code are still needed, so it can't be closed here — follow it with %s", c.CallID, next))
+	case c.Method == nipcash.MethodCashOrder && c.State == ledger.CallOpenOrder:
+		return output.UsageError(cmd, fmt.Errorf("call %s is an order the Hub answered: its key fetches the order's bills, so it can't be closed here — follow it with `cashctl cash order show`", c.CallID))
+	}
+	return nil
+}
+
 func closeCallByUser(cmd *cobra.Command, l *ledger.Ledger, id, device string, jsonMode bool) error {
 	c, ok := l.FindCall(id)
 	if !ok {
@@ -218,6 +244,12 @@ func closeCallByUser(cmd *cobra.Command, l *ledger.Ledger, id, device string, js
 	}
 	if !c.Open() {
 		return output.ConflictError(cmd, id, fmt.Errorf("call %s is already %s", id, c.State))
+	}
+	if err := refuseUserClose(cmd, c); err != nil {
+		return err
+	}
+	if yes, _ := cmd.Flags().GetBool("yes"); jsonMode && !yes {
+		return output.UsageError(cmd, errors.New("closing a call gives up on its answer: pass --yes"))
 	}
 	recovery := callRecovery(c)
 	if !Confirm(cmd, false, fmt.Sprintf("Stop asking about call %s? If it happened, its result is only reachable with the codes printed below.", id)) {
@@ -255,6 +287,15 @@ func replaceMintByUser(cmd *cobra.Command, l *ledger.Ledger, id, device string, 
 	}
 	if c.State != ledger.CallStuck || c.Detail != "confirm_replace" {
 		return output.ConflictError(cmd, id, fmt.Errorf("call %s is %s: only a mint the Hub said it never saw can be placed again — run `cashctl cash settle` first", id, c.State))
+	}
+	// Only the copy of the wallet that placed it may place it again (NIP-CASH
+	// §Looking Up a Call).
+	if c.DeviceID != device {
+		return output.FinalConflictError(cmd, id, fmt.Errorf("mint %s was placed from another copy of this wallet: only that copy may mint it again", id))
+	}
+	// --json alone never consents to minting again.
+	if yes, _ := cmd.Flags().GetBool("yes"); jsonMode && !yes {
+		return output.UsageError(cmd, fmt.Errorf("minting %s again needs your explicit consent: add --yes", id))
 	}
 	if !Confirm(cmd, false, fmt.Sprintf("The Hub says it never saw mint %s. Mint it again (under its derived id, never twice)?", id)) {
 		output.Println("Cancelled.")

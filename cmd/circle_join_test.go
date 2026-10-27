@@ -328,6 +328,22 @@ func TestJoin_RefusalForgetsTheKey(t *testing.T) {
 	}
 }
 
+// CC-C2: REQUEST_REUSED is no failure: the join stays open, its secret kept.
+func TestJoin_RequestReusedKeepsTheJoinOpen(t *testing.T) {
+	f := &fakeCircleHub{answer: func(nipcwclient.PendingJoin) (*nipcwclient.JoinResult, error) {
+		return nil, &relayclient.WalletError{Method: nipcw.MethodCreateCircleWallet, Code: nipcw.ErrRequestReused}
+	}}
+	setUpCircleHub(t, f)
+	_, _, err := runJoinCLI(t, testCircleHub(t), nil)
+	if output.AsCLIError(err).Code != output.CodeIndeterminate {
+		t.Fatalf("err %v, want indeterminate", err)
+	}
+	joins := allJoins(t)
+	if len(joins) != 1 || joins[0].State == config.JoinNotApplied || joins[0].ConnectionSecret == "" {
+		t.Errorf("join row %+v, want still open with its secret", joins)
+	}
+}
+
 // A lost reply is looked up at once; pending is exit 8 with the call; `cash
 // settle` past the deadline registers the wallet the lookup returns.
 func TestJoin_LostReplyIsLookedUpThenSettled(t *testing.T) {
@@ -430,6 +446,25 @@ func TestJoin_UnverifiedStringNeedsOneConfirmation(t *testing.T) {
 	}
 	if ok, _ := config.UnverifiedConfirmed(unverifiedCircleHub(t)); ok {
 		t.Error("another string counts as confirmed")
+	}
+}
+
+// CC-C1: under --json a Hub without rotation is refused before the join, unless
+// --backup-file or --accept-no-rotation says otherwise.
+func TestJoin_NoRotationUnderJSONNeedsBackupOrFlag(t *testing.T) {
+	info := goodCircleInfo()
+	info.CircleWallet.RotationDelaySecs = nil
+	f := &fakeCircleHub{info: info}
+	setUpCircleHub(t, f)
+	_, _, err := runJoinCLI(t, testCircleHub(t), nil)
+	if ce := output.AsCLIError(err); ce == nil || ce.Reason != reasonNoRotation {
+		t.Fatalf("err %v, want refused with no_rotation", err)
+	}
+	if f.joins != 0 {
+		t.Errorf("%d joins sent, want none", f.joins)
+	}
+	if _, _, err := runJoinCLI(t, testCircleHub(t), map[string]string{"accept-no-rotation": "true"}); err != nil {
+		t.Fatalf("join with --accept-no-rotation: %v", err)
 	}
 }
 

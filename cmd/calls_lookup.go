@@ -410,7 +410,14 @@ func replaceCallConfirmed(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, 
 	var mres *nipcash.MintCashResult
 	var wres *nipcash.Payout
 	var sendErr error
-	act, err := nipcashclient.Replace(callContext(ctx), pendingOf(c), j, nipcashclient.ReplaceOptions{
+	pc := pendingOf(c)
+	if c.Method == nipcash.MethodCashWithdraw {
+		// nmilat re-places a withdrawal only with its quote, address and notify.
+		if w, ok, _ := ledger.WithdrawalForCall(c.CallID); ok {
+			pc = withdrawPending(c, w)
+		}
+	}
+	act, err := nipcashclient.Replace(callContext(ctx), pc, j, nipcashclient.ReplaceOptions{
 		Confirmed: confirmed,
 		DerivedEntryExists: func(_ context.Context, id string) (bool, error) {
 			_, ok := l.FindCall(ledger.CallIDFor(id))
@@ -495,6 +502,25 @@ func replaceCallConfirmed(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, 
 	if child := j.call(); child != nil {
 		derivedID = child.CallID
 	}
+	if sendErr != nil && sentNothing(sendErr) {
+		// Nothing reached the Hub: the derived call and its id are dropped, so
+		// a later settle can place it again under the same derived id, and the
+		// parent stays as it was.
+		if derivedID != "" {
+			// A withdrawal's row follows its call: it goes back to the parent.
+			if w, ok, _ := ledger.WithdrawalForCall(derivedID); ok {
+				w.CallID = parentID
+				_ = ledger.PutWithdrawal(w)
+			}
+			l.RemoveCall(derivedID)
+		}
+		for _, id := range j.derived {
+			_ = ledger.RemoveDerived(id)
+		}
+		parent.Detail = "re-placement not sent: " + output.Sanitize(fmt.Sprint(sendErr))
+		_ = l.Save()
+		return "not placed again (" + output.Sanitize(fmt.Sprint(sendErr)) + "); it is tried again at the next settle"
+	}
 	switch {
 	case err == nil && act.Kind == nipcashclient.ActionShow:
 		parent.State, parent.Detail = ledger.CallStuck, act.Reason
@@ -540,6 +566,7 @@ func replaceCallConfirmed(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, 
 	default:
 		// The re-placement's own outcome follows the placement rules.
 		_ = placeErr(cmd, l, j, sendErr, transferVerb(child.Purpose), child.SourceEntryIDs...)
+		finishRefusedWithdrawal(l, derivedID)
 		return "placed again as call " + derivedID
 	}
 }
@@ -581,6 +608,17 @@ func applyTransferResult(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, r
 		return "", fmt.Errorf("call %s: source %s is gone", c.CallID, c.SourceEntryIDs[0])
 	}
 	newSecret := callSecretOf(c, ledger.RoleNewIdentity)
+	// A created bill already destroyed comes back as its tombstone in place of
+	// its token (NIP-CASH §Looking Up a Call): the move happened, but no bill is
+	// left to hold, so none is recorded.
+	if t := res.NewWalletTombstone; t != nil {
+		switch c.Purpose {
+		case purposeProtect, purposeMergeMove, purposeUnmergeMove:
+			_ = l.SetStatus(e.ID, ledger.StatusSpent)
+			l.AppendHistory("spent", fmt.Sprintf("token %s was moved, and its Hub says the moved bill is already spent (%s)", e.ID, tombstoneReason(t)))
+			return "moved, but the moved bill is already spent (" + tombstoneReason(t) + ")", nil
+		}
+	}
 	switch c.Purpose {
 	case purposeZapClaim:
 		if summary, notZap := applyZapClaimResult(l, e, c.AmountMillis, res); notZap != "" {
@@ -621,11 +659,18 @@ func applyTransferResult(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, r
 		}
 		_, _ = l.Add(remainder)
 	}
+	if t := res.RemainderWalletTombstone; t != nil {
+		l.AppendHistory("spent", fmt.Sprintf("the change of token %s is already spent, its Hub says (%s)", e.ID, tombstoneReason(t)))
+	}
+	sent := res.AmountMillis
+	if t := res.NewWalletTombstone; t != nil {
+		l.AppendHistory("transfer", fmt.Sprintf("transferred %s; the recipient's bill is already spent (%s) (settled after its answer was lost)", output.FormatAmount(int64(sent)), tombstoneReason(t))) //nolint:gosec // amounts fit
+		return "transferred; the recipient's bill is already spent (" + tombstoneReason(t) + ")", nil
+	}
 	recipient, err := res.RecipientToken(e.Token)
 	if err != nil {
 		recipient = ""
 	}
-	sent := res.AmountMillis
 	if newSecret != "" && recipient != "" {
 		note := recipient + "#" + newSecret
 		l.AddHandoff(ledger.Handoff{Kind: ledger.HandoffCashNote, Handoff: note, AmountMillis: sent, Target: "cash", WalletPubkey: res.NewWalletPubkey})
@@ -642,8 +687,18 @@ func applyTransferResult(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, r
 // applyConsolidateResult records a cash_consolidate that is known to have
 // happened.
 func applyConsolidateResult(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, res *nipcash.CashConsolidateResult) (string, error) {
+	if res.NewWalletToken == "" && res.NewWalletTombstone == nil {
+		return "", fmt.Errorf("call %s: the merged bill carries no token", c.CallID)
+	}
 	for _, id := range c.SourceEntryIDs {
 		_ = l.SetStatus(id, ledger.StatusConsolidated)
+	}
+	// The merged bill was destroyed since (NIP-CASH §Looking Up a Call: its
+	// tombstone stands in place of its token): the sources are gone, and no bill
+	// is left to hold or hand over.
+	if t := res.NewWalletTombstone; t != nil {
+		l.AppendHistory("consolidate", fmt.Sprintf("consolidated %d tokens; the merged bill is already spent (%s) (settled after its answer was lost)", len(c.SourceEntryIDs), tombstoneReason(t)))
+		return "merged, but the merged bill is already spent (" + tombstoneReason(t) + ")", nil
 	}
 	verified, minter := returnedBillCheck(res.NewWalletToken, sharedMinterOfIDs(l, c.SourceEntryIDs))
 	entry := ledger.Entry{Token: strings.ToLower(res.NewWalletToken), WalletPubkey: res.NewWalletPubkey,
@@ -655,6 +710,9 @@ func applyConsolidateResult(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call
 		entry.CashProtection = ledger.CashProtected
 	case req.NewIdentity.IdentityType == "pubkey" && c.AuthorizerKind == ledger.AuthThrowawayKey && pubOf(c.AuthorizerSecret) == req.NewIdentity.IdentityValue:
 		entry.IdentityRequired, entry.ThrowawayKey = ptrTo(true), c.AuthorizerSecret
+	case req.NewIdentity.IdentityType == "pubkey" && callSecretOf(c, ledger.RoleInterimKey) != "" && pubOf(callSecretOf(c, ledger.RoleInterimKey)) == req.NewIdentity.IdentityValue:
+		// An interim round to the merge key, whatever its first source was.
+		entry.IdentityRequired, entry.ThrowawayKey = ptrTo(true), callSecretOf(c, ledger.RoleInterimKey)
 	case req.NewIdentity.IdentityType == "pubkey" && localPubIs(cmd, req.NewIdentity.IdentityValue):
 		entry.IdentityRequired = ptrTo(true)
 	default:
@@ -666,6 +724,15 @@ func applyConsolidateResult(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call
 	}
 	l.AppendHistory("consolidate", fmt.Sprintf("consolidated %d tokens into one %s note (settled after its answer was lost)", len(c.SourceEntryIDs), output.FormatAmount(int64(res.AmountMillis)))) //nolint:gosec // amounts fit
 	return "merged", nil
+}
+
+// tombstoneReason is a tombstone's reason for people: one of the five, or
+// "no reason".
+func tombstoneReason(t *nipcash.Tombstone) string {
+	if t == nil || t.Reason == "" {
+		return "no reason"
+	}
+	return t.Reason
 }
 
 func pubOf(priv string) string {

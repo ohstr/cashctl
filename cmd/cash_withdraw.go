@@ -566,10 +566,13 @@ func sendWithdrawal(cmd *cobra.Command, e *ledger.Entry, q *nipcash.WithdrawQuot
 		return output.RuntimeError(cmd, err)
 	}
 	e, ok := l.Find(e.ID)
+	if ok && e.Status == ledger.StatusRedeeming {
+		return errRedeemInFlight(cmd, e.ID)
+	}
 	if !ok || e.Status != ledger.StatusHeld {
 		return output.NotFoundError(cmd, "", errors.New("the bill is no longer held"))
 	}
-	if err := refuseOpenCalls(cmd, l, []string{e.ID}); err != nil {
+	if err := refuseLocked(cmd, l, []string{e.ID}); err != nil {
 		return err
 	}
 	if e.ExpiresAt != nil && *e.ExpiresAt > 0 && time.Until(time.Unix(*e.ExpiresAt, 0)) <= 120*time.Second {
@@ -637,7 +640,7 @@ func sendWithdrawal(cmd *cobra.Command, e *ledger.Entry, q *nipcash.WithdrawQuot
 		pErr := placeErr(cmd, l, &j.ledgerJournal, err, "withdrawal", e.ID)
 		if c := j.call(); c != nil && c.State == ledger.CallNotApplied {
 			w := j.w
-			w.State, w.FinishedAt = ledger.WithdrawNotApplied, time.Now().Unix()
+			w.State, w.FinishedAt = refusedWithdrawState(c), time.Now().Unix()
 			_ = ledger.PutWithdrawal(w)
 		}
 		return pErr
@@ -805,6 +808,8 @@ func withdrawalNextStep(w ledger.Withdrawal) string {
 		return "nothing: the amount is back as cash"
 	case ledger.WithdrawNotApplied:
 		return "nothing: not sent, your cash is still yours"
+	case ledger.WithdrawBillGone:
+		return "nothing: the bill was already spent, so nothing was withdrawn"
 	case ledger.WithdrawSending:
 		return "never resend it: `cashctl cash withdraw settle` asks the Hub what happened"
 	}
@@ -818,6 +823,8 @@ func withdrawalText(w ledger.Withdrawal) string {
 		return "Sending your withdrawal… your bill is locked; never resend it"
 	case ledger.WithdrawNotApplied:
 		return "Not sent. Your cash is still yours."
+	case ledger.WithdrawBillGone:
+		return "Nothing withdrawn: the Hub says this bill was already spent."
 	case string(nipcash.PayoutQueued):
 		if time.Now().Unix() > w.SentBy {
 			return fmt.Sprintf("Late. If it isn't sent by %s, your %s comes back as cash.",

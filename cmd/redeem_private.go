@@ -354,6 +354,7 @@ func redeemHubGroup(
 			idx := outcomeIndex(outcomes, it.ID)
 			if idx >= 0 {
 				outcomes[idx].Err = classifyCashSpendErr(cmd, sendErr, "redeem", it.ID)
+				outcomes[idx].undecided = true
 			}
 		}
 		return
@@ -530,9 +531,13 @@ func applyRedeemResults(
 		case r.Succeeded() && r.Result != nil:
 			outcomes[idx].Result = r.Result
 			recordRedeemed(l, plansEntry(plans, r.ID), destName)
+		case r.Gone != nil && plansEntry(plans, r.ID) != nil:
+			// A tombstone: the bill is destroyed and nothing moved here.
+			outcomes[idx].Err = recordSpent(cmd, l, plansEntry(plans, r.ID))
 		case r.State == nipcashclient.OutcomeError && r.Undecodable:
 			// The Hub ran it and said so, but its result could not be read: it
 			// may have paid. Never resent.
+			outcomes[idx].undecided = true
 			outcomes[idx].Err = output.IndeterminateError(cmd, r.ID, fmt.Errorf(
 				"the Hub ran this redeem but its answer could not be read, so whether it paid is unknown. "+
 					"Do not resend it: check first with %s", cashStatusHint([]string{r.ID})))
@@ -547,11 +552,17 @@ func applyRedeemResults(
 				Code:    r.Error.Code,
 				Message: r.Error.Message,
 			})
+			// INTERNAL: the payment has begun and may still settle (NIP-CASH
+			// §Answer or Omit); every other code is definitive.
+			if r.Error.Code == "INTERNAL" {
+				outcomes[idx].undecided, outcomes[idx].coded = true, outcomes[idx].Err
+			}
 		case r.State == nipcashclient.OutcomeConflict:
 			// Answered twice, beside an envelope-level error, or with a result
 			// naming another method: no single answer, and picking one by
 			// arrival order is forbidden (NIP-CASH §Chunked Replies). It may
 			// have paid. Never resent.
+			outcomes[idx].undecided = true
 			outcomes[idx].Err = output.IndeterminateError(cmd, r.ID, fmt.Errorf(
 				"the Hub's reply contradicted itself about this redeem, so whether it paid is unknown. "+
 					"Do not resend it: check first with %s: %w", cashStatusHint([]string{r.ID}), replyErr(incomplete)))
@@ -559,6 +570,7 @@ func applyRedeemResults(
 			// Its answer was in a chunk that never arrived, or no reply came at
 			// all. Reported as that rather than as an omission, though the action
 			// is the same: it may have paid.
+			outcomes[idx].undecided = true
 			outcomes[idx].Err = classifyCashSpendErr(cmd, fmt.Errorf(
 				"the Hub's reply arrived incomplete and this token's answer was not in it: %w", replyErr(incomplete)),
 				"redeem", r.ID)
@@ -570,6 +582,7 @@ func applyRedeemResults(
 			// reported as something to RESOLVE BY ASKING, never as a silent success
 			// and never as safe to resend: an omission is indistinguishable from a
 			// redemption whose reply was lost.
+			outcomes[idx].undecided = true
 			outcomes[idx].Err = classifyCashSpendErr(cmd, &nipcashclient.NotServedError{Method: "cash_redeem"}, "redeem", r.ID)
 		}
 	}

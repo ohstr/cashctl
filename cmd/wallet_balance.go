@@ -99,6 +99,7 @@ func runWalletBalance(cmd *cobra.Command, args []string) error {
 	expiredHeld += heldExpired
 
 	notes, notesAmount := outstandingCashNotes(l.Handoffs)
+	redeemingMillis, redeemingN := redeemingTotal(l)
 
 	if jsonMode {
 		output.PrintJSON(map[string]any{
@@ -110,6 +111,9 @@ func runWalletBalance(cmd *cobra.Command, args []string) error {
 			"breakdown":          output.NonNil(lines),
 			"outstanding_cash_notes": map[string]any{
 				"count": notes, "amount_mloki": notesAmount,
+			},
+			"being_redeemed": map[string]any{
+				"count": redeemingN, "amount_mloki": redeemingMillis,
 			},
 		})
 		return nil
@@ -130,6 +134,10 @@ func runWalletBalance(cmd *cobra.Command, args []string) error {
 		output.Printf("(couldn't reach %s — not counted, may still hold funds)\n", strings.Join(unreachable, ", "))
 	}
 	printPendingMerge(l)
+	if redeemingN > 0 {
+		output.Printf("Being redeemed: %s (%d) — not in the total; `cashctl cash status` shows the outcome\n",
+			output.FormatAmount(int64(redeemingMillis)), redeemingN) //nolint:gosec // amounts fit
+	}
 	if notes > 0 {
 		output.Printf("Handed out, not yet claimed: %d cash note(s), %s — not in the total; `cashctl wallet history` lists them\n",
 			notes, output.FormatAmount(notesAmount))

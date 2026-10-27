@@ -2,6 +2,15 @@
 
 ## [0.7.0-rc.1]
 
+- Adds a wait to `transfer`, `consolidate` and `wallet protect` when the Hub
+  gives no clear answer: they look the call up after its deadline (at most 62
+  s) and finish it, or exit with the refusal's own code; `--no-wait` exits 8 at
+  once.
+- Adds a `redeeming` state for a redeem whose payment may still settle (answered
+  `INTERNAL`, omitted or timed out with the bill still claimed): it is never
+  resent, counts in no balance, is refused by every other command
+  (`redeem_in_flight`), and `cash status` and `cash settle` read it again until
+  it ends.
 - Adds a second try for a join whose lookups all go unanswered: `cash settle`
   asks once over another `circlehub1` held for the same circle, then shows the
   join as `lookup_unanswered`.

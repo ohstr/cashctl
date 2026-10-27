@@ -116,6 +116,13 @@ func runCashRedeem(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	// A bill whose transfer, merge or protect has no answer yet is spoken for:
+	// redeeming it now would race that call (plan I-4).
+	for _, e := range entries {
+		if err := refuseLocked(cmd, l, []string{e.ID}); err != nil {
+			return err
+		}
+	}
 	var skippedSpent []string
 	if all, _ := cmd.Flags().GetBool("all"); all {
 		skippedSpent = reportedSpentIDs(l)
@@ -225,7 +232,11 @@ func runCashRedeem(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	executeRedeems(ctx, cmd, l, plans, outcomes, destName, jsonMode)
+	into := ""
+	if explicitInvoice == "" {
+		into = destName
+	}
+	executeRedeems(ctx, cmd, l, plans, outcomes, destName, into, jsonMode)
 
 	// Unlike consolidate/transfer, there's no new token to lose here — the cash
 	// was paid out for real (each result's Preimage proves it) and no longer
@@ -315,6 +326,12 @@ type redeemOutcome struct {
 	Invoice string
 	Result  *nipcash.CashRedeemResult
 	Err     error
+	// undecided marks a redeem the Hub's answer left open (INTERNAL, an
+	// omission, an incomplete or unreadable reply, no reply): it may still
+	// settle, so its own row is read once before the outcome is final.
+	undecided bool
+	// coded is the error of a coded answer (INTERNAL), nil when none came.
+	coded error
 }
 
 // prepareRedeems dials, quotes and builds an invoice for each selected bill.
@@ -541,7 +558,7 @@ func executeRedeems(
 	l *ledger.Ledger,
 	plans []redeemPlan,
 	outcomes []redeemOutcome,
-	destName string,
+	destName, into string,
 	jsonMode bool,
 ) {
 	for _, p := range plans {
@@ -550,6 +567,15 @@ func executeRedeems(
 	groups, ungrouped := groupPlansByHub(plans)
 	for _, g := range groups {
 		redeemHubGroup(ctx, cmd, l, g, outcomes, destName, jsonMode)
+	}
+	// A redeem the Hub's answer left open is never resent: its own row is read
+	// once, and it ends live, spent or redeeming (plan §10.3).
+	for _, p := range plans {
+		o := &outcomes[p.Index]
+		if !o.undecided {
+			continue
+		}
+		o.Err = resolveUndecidedRedeem(ctx, cmd, l, p.Entry, p.Invoice, into, o.coded)
 	}
 	// Unreachable in practice: a bill with no recoverable minter fails at the quote
 	// stage and never reaches here. Recorded rather than dropped, because silently
@@ -846,9 +872,9 @@ func resolveHeldTokensForRedeem(cmd *cobra.Command, l *ledger.Ledger) ([]*ledger
 		return out, nil
 	}
 
-	held := l.Held()
-	if len(held) == 0 {
-		return nil, output.NotFoundError(cmd, "", fmt.Errorf("you have no held cash tokens — receive one first with `cashctl receive <token>`"))
+	held, err := pickableHeld(cmd, l)
+	if err != nil {
+		return nil, err
 	}
 	if all {
 		out := make([]*ledger.Entry, 0, len(held))
@@ -998,11 +1024,14 @@ func resolveHeldToken(cmd *cobra.Command, l *ledger.Ledger) (*ledger.Entry, erro
 		if spent := spentStatusDescription(e.Status); spent != "" {
 			return nil, alreadySpentError(cmd, id, e.Status)
 		}
+		if e.Status == ledger.StatusRedeeming {
+			return nil, errRedeemInFlight(cmd, id)
+		}
 		return e, nil
 	}
-	held := l.Held()
-	if len(held) == 0 {
-		return nil, output.NotFoundError(cmd, "", fmt.Errorf("you have no held cash tokens — receive one first with `cashctl receive <token>`"))
+	held, err := pickableHeld(cmd, l)
+	if err != nil {
+		return nil, err
 	}
 	var id string
 	if len(held) == 1 {
@@ -1470,9 +1499,9 @@ func entryPointers(entries []ledger.Entry) []*ledger.Entry {
 // quote — not AmountMillis, the cached face value, which a nonzero fee
 // would make wrong.
 func selectHeldTokensForRedeemAmount(cmd *cobra.Command, l *ledger.Ledger, target uint64) ([]*ledger.Entry, error) {
-	held := l.Held()
-	if len(held) == 0 {
-		return nil, output.NotFoundError(cmd, "", fmt.Errorf("you have no held cash tokens — receive one first with `cashctl receive <token>`"))
+	held, err := pickableHeld(cmd, l)
+	if err != nil {
+		return nil, err
 	}
 
 	quotes := make([]quotedEntry, 0, len(held))

@@ -320,3 +320,148 @@ func TestWithdraw_CancelNotDue(t *testing.T) {
 		t.Errorf("cancel: %v", err)
 	}
 }
+
+// W-1: `cash settle --close` never closes a withdrawal (its payout is still
+// followed and its re-mint secret still needed), even with --json --yes; and
+// --close of any other call under --json needs --yes.
+func TestSettleClose_RefusesWithdrawalAndNeedsYes(t *testing.T) {
+	f, _ := setUpWithdraw(t)
+	handle := runWithdrawQuote(t)["quote"].(string)
+	if _, err := runWithdrawSend(t, nil, map[string]string{"quote": handle, "yes": "true"}); err != nil {
+		t.Fatal(err)
+	}
+	l, _ := ledger.Load()
+	c, _ := l.FindCall(ledger.CallIDFor(f.sent[0].RequestID))
+	var err error
+	captureStreams(t, func() { err = closeCallByUser(testCmdWithFlags(true, true), l, c.CallID, "dev", true) })
+	if output.ExitCode(err) != 2 || !strings.Contains(err.Error(), "cash withdraw show") {
+		t.Fatalf("close of an open withdrawal: %v", err)
+	}
+	l, _ = ledger.Load()
+	c, _ = l.FindCall(c.CallID)
+	if c.State != ledger.CallOpenWithdraw || callSecretOf(c, ledger.RoleRemint) == "" {
+		t.Fatalf("withdrawal call changed: %s, remint kept %v", c.State, callSecretOf(c, ledger.RoleRemint) != "")
+	}
+
+	// A plain open call: --json alone is not consent.
+	c2, err := l.AddCall(ledger.Call{RequestID: strings.Repeat("ab", 32), Method: nipcash.MethodCashTransfer,
+		State: ledger.CallLookup, DeviceID: "dev", Deadline: time.Now().Unix() + 60})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := l.Save(); err != nil {
+		t.Fatal(err)
+	}
+	l, _ = ledger.Load()
+	captureStreams(t, func() { err = closeCallByUser(testCmdWithFlags(true, false), l, c2.CallID, "dev", true) })
+	if output.ExitCode(err) != 2 {
+		t.Fatalf("--close under --json without --yes: %v", err)
+	}
+	captureStreams(t, func() { err = closeCallByUser(testCmdWithFlags(true, true), l, c2.CallID, "dev", true) })
+	if err != nil {
+		t.Fatalf("--close --json --yes: %v", err)
+	}
+}
+
+// W-2: a withdraw call whose withdrawal row was never written (a stop between
+// the two writes) never went out: settle closes it and frees the bill.
+func TestWithdraw_CallWithoutRowIsNotSent(t *testing.T) {
+	_, entryID := setUpWithdraw(t)
+	l, _ := ledger.Load()
+	device, _ := deviceIDFn()
+	c, err := l.AddCall(ledger.Call{RequestID: strings.Repeat("cd", 32), Method: nipcash.MethodCashWithdraw,
+		State: ledger.CallLookup, DeviceID: device, Deadline: time.Now().Unix() - 1, SourceEntryIDs: []string{entryID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := l.Save(); err != nil {
+		t.Fatal(err)
+	}
+	l = settleNow(t)
+	got, _ := l.FindCall(c.CallID)
+	if got.State != ledger.CallNotApplied {
+		t.Fatalf("call %s/%s, want not_applied", got.State, got.Detail)
+	}
+	if _, open := l.OpenCallFor(entryID); open {
+		t.Error("the bill is still locked")
+	}
+}
+
+// W-3: a re-placement the Hub refuses ends the withdrawal row, not only the
+// call.
+func TestWithdraw_RefusedReplacementEndsRow(t *testing.T) {
+	f, entryID := setUpWithdraw(t)
+	handle := runWithdrawQuote(t)["quote"].(string)
+	f.answer = func(pc nipcash.PendingCall) (*nipcash.Payout, error) {
+		return nil, &nipcashclient.IndeterminateError{Call: pc, Cause: errors.New("no reply")}
+	}
+	if _, err := runWithdrawSend(t, nil, map[string]string{"quote": handle, "yes": "true"}); output.ExitCode(err) != 8 {
+		t.Fatalf("lost reply: %v", err)
+	}
+	l, _ := ledger.Load()
+	c, _ := l.FindCall(ledger.CallIDFor(f.sent[0].RequestID))
+	c.Deadline = time.Now().Unix() - 1
+	_ = l.Save()
+	f.lookup = func(nipcash.PendingCall) (nipcashclient.LookupOutcome, *nipcash.Payout, error) {
+		return nipcashclient.LookupOutcome{Status: nipcash.LookupUnknown}, nil, nil
+	}
+	f.answer = func(nipcash.PendingCall) (*nipcash.Payout, error) {
+		return nil, &nipcashclient.FinalError{Method: nipcash.MethodCashWithdraw, Code: "BAD_REQUEST", Message: "no"}
+	}
+	l = settleNow(t)
+	if len(f.sent) != 2 {
+		pc, _ := l.FindCall(c.CallID)
+		t.Fatalf("sent %d, want a re-placement; parent %s/%s", len(f.sent), pc.State, pc.Detail)
+	}
+	child, _ := l.FindCall(ledger.CallIDFor(f.sent[1].RequestID))
+	w, ok, _ := ledger.WithdrawalForCall(child.CallID)
+	if child.State != ledger.CallNotApplied || !ok || w.State != ledger.WithdrawNotApplied || w.FinishedAt == 0 {
+		t.Errorf("child %s, withdrawal %+v", child.State, w)
+	}
+	if e, _ := l.Find(entryID); e.Status != ledger.StatusHeld {
+		t.Errorf("source %s, want held", e.Status)
+	}
+}
+
+// W-4: a tombstone answer spends the bill and shows the withdrawal as
+// bill_gone, never "your cash is still yours".
+func TestWithdraw_TombstoneIsBillGone(t *testing.T) {
+	f, entryID := setUpWithdraw(t)
+	handle := runWithdrawQuote(t)["quote"].(string)
+	f.answer = func(nipcash.PendingCall) (*nipcash.Payout, error) {
+		return nil, &nipcash.BillGone{Method: nipcash.MethodCashWithdraw, Tombstone: nipcash.Tombstone{Reason: "transferred"}}
+	}
+	if _, err := runWithdrawSend(t, nil, map[string]string{"quote": handle, "yes": "true"}); output.ExitCode(err) != 10 {
+		t.Fatalf("tombstone: %v", err)
+	}
+	l, _ := ledger.Load()
+	if e, _ := l.Find(entryID); e.Status == ledger.StatusHeld {
+		t.Error("the bill is still held")
+	}
+	w, ok, _ := ledger.WithdrawalForCall(ledger.CallIDFor(f.sent[0].RequestID))
+	if !ok || w.State != ledger.WithdrawBillGone || strings.Contains(withdrawalText(w), "still yours") {
+		t.Errorf("withdrawal %s: %q", w.State, withdrawalText(w))
+	}
+}
+
+// A bill whose redeem may still settle is never withdrawn (redeem_in_flight),
+// named or picked.
+func TestWithdraw_RefusesARedeemingBill(t *testing.T) {
+	_, entryID := setUpWithdraw(t)
+	l, _ := ledger.Load()
+	e, _ := l.Find(entryID)
+	e.Status = ledger.StatusRedeeming
+	_ = l.Save()
+	for _, flags := range []map[string]string{nil, {"token": entryID}} {
+		c := withdrawCmd(newCashWithdrawQuoteCmd(), flags)
+		c.SetArgs([]string{testAddress})
+		var err error
+		captureStreams(t, func() { err = c.Execute() })
+		if output.AsCLIError(err) == nil || output.ExitCode(err) == 0 {
+			t.Errorf("quote of a redeeming bill (%v): %v, want refused", flags, err)
+		}
+		if flags != nil && output.AsCLIError(err).Reason != reasonRedeemInFlight {
+			t.Errorf("named redeeming bill: %v, want redeem_in_flight", err)
+		}
+	}
+}

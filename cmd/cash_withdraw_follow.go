@@ -33,8 +33,15 @@ func settleWithdrawCall(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, de
 // recorded (its ReceivedAt set by the save that made it final).
 func settleWithdrawOne(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, device string) (string, *ledger.Withdrawal) {
 	w, ok, err := ledger.WithdrawalForCall(c.CallID)
-	if err != nil || !ok {
+	if err != nil {
 		return "no withdrawal record", nil
+	}
+	if !ok {
+		// The row is written before anything is sent: a call without one
+		// stopped between its two writes and never went out.
+		closeCall(l, c, ledger.CallNotApplied, detailNotSent)
+		_ = l.Save()
+		return "never sent: the bill is still yours", nil
 	}
 	summary := settleWithdrawInto(cmd, l, c, device, &w)
 	return summary, &w
@@ -92,11 +99,31 @@ func settleWithdrawInto(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, de
 		return withdrawalText(w)
 	}
 	summary := applyAction(cmd, l, c, act, device)
-	if c, ok := l.FindCall(c.CallID); ok && c.State == ledger.CallNotApplied {
-		w.State, w.FinishedAt = ledger.WithdrawNotApplied, time.Now().Unix()
+	finishRefusedWithdrawal(l, c.CallID)
+	return summary
+}
+
+// finishRefusedWithdrawal ends the withdrawal row of call id once that call is
+// closed not applied (a refusal, or a re-placement the Hub refused).
+func finishRefusedWithdrawal(l *ledger.Ledger, id string) {
+	c, ok := l.FindCall(id)
+	if !ok || c.Method != nipcash.MethodCashWithdraw || c.State != ledger.CallNotApplied {
+		return
+	}
+	if w, ok, _ := ledger.WithdrawalForCall(id); ok && w.FinishedAt == 0 {
+		w.State, w.FinishedAt = refusedWithdrawState(c), time.Now().Unix()
 		_ = ledger.PutWithdrawal(w)
 	}
-	return summary
+}
+
+// refusedWithdrawState is the withdrawal state of a call closed not applied:
+// bill_gone when the Hub answered with the bill's tombstone (the bill was
+// already spent), else not_applied (the bill is still yours).
+func refusedWithdrawState(c *ledger.Call) string {
+	if c.Detail == "tombstone" {
+		return ledger.WithdrawBillGone
+	}
+	return ledger.WithdrawNotApplied
 }
 
 func newCashWithdrawShowCmd() *cobra.Command {

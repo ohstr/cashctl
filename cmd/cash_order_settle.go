@@ -78,7 +78,17 @@ func settleOrderCall(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, devic
 			return "ended unpaid: nothing was minted"
 		}
 		o.CheckedAt = now.Unix()
+		if o.FinishedAt != 0 {
+			// A closed on-chain order the Hub no longer knows gains nothing more.
+			closeCall(l, c, ledger.CallDone, o.State)
+			_ = l.Save()
+		}
 		_ = ledger.PutOrder(o)
+		return "no longer answered by the Hub"
+	case act.Kind == nipcashclient.ActionShow && act.Reason == "lookup_unknown" && o.FinishedAt != 0:
+		// A closed on-chain order the Hub no longer knows gains nothing more.
+		closeCall(l, c, ledger.CallDone, o.State)
+		_ = l.Save()
 		return "no longer answered by the Hub"
 	case act.Kind == nipcashclient.ActionShow && act.Reason == "lookup_unknown":
 		c.Detail, c.UpdatedAt = "lookup_unknown", now.Unix()
@@ -149,6 +159,7 @@ func showOrders(cmd *cobra.Command, ids []string, local bool) error {
 		fresh, _, _ := ledger.FindOrder(o.OrderID)
 		v := orderView(fresh, nil)
 		v["next_step"] = orderNextStep(fresh)
+		v["warnings"] = output.NonNil(orderWarnings(fresh, storedOrder(fresh)))
 		views = append(views, v)
 	}
 	if jsonMode {
@@ -167,6 +178,7 @@ func showOrders(cmd *cobra.Command, ids []string, local bool) error {
 			line += " (terms changed)"
 		}
 		output.Println(line)
+		printWhatToPay(v)
 		if bills, _ := v["bills"].([]map[string]any); len(bills) > 0 {
 			output.Printf("  bills: %d\n", len(bills))
 		}
@@ -318,13 +330,51 @@ func printOrderState(cmd *cobra.Command, o ledger.Order) error {
 	jsonMode, _ := cmd.Flags().GetBool("json")
 	v := orderView(o, nil)
 	v["next_step"] = orderNextStep(o)
+	v["warnings"] = output.NonNil(orderWarnings(o, storedOrder(o)))
 	if jsonMode {
 		output.PrintJSON(v)
 		return nil
 	}
 	output.Printf("order %s: %s\n", o.OrderID, o.State)
+	printWhatToPay(v)
 	output.Printf("Next: %s\n", orderNextStep(o))
 	return nil
+}
+
+// storedOrder is the order as the Hub last stated it, nil before any answer.
+func storedOrder(o ledger.Order) *nipCO.Order {
+	if o.OrderJSON == "" {
+		return nil
+	}
+	order := &nipCO.Order{}
+	if json.Unmarshal([]byte(o.OrderJSON), order) != nil {
+		return nil
+	}
+	return order
+}
+
+// printWhatToPay prints, for an order not yet finished, what to pay and by
+// when, with the order's warnings: a recovered order shows the same as a
+// placed one (NIP-CO §Client Behavior).
+func printWhatToPay(v map[string]any) {
+	if v["finished"] == true {
+		return
+	}
+	if by, ok := v["pay_by"].(int64); ok && by > 0 {
+		output.Printf("  pay %s by %s\n", output.FormatAmount(int64(v["pay_millis"].(uint64))), //nolint:gosec // amounts fit
+			time.Unix(by, 0).UTC().Format(time.RFC3339))
+	}
+	if inv, ok := v["invoice"]; ok {
+		output.Printf("  %s\n", inv)
+	}
+	if addr, ok := v["address"]; ok {
+		output.Printf("  %s (needs %v confirmation(s))\n", addr, v["confirmations"])
+	}
+	if w, _ := v["warnings"].([]string); len(w) > 0 {
+		for _, line := range w {
+			output.Notef(false, "  Warning: %s.", line)
+		}
+	}
 }
 
 func newCashOrderSettleCmd() *cobra.Command {
@@ -389,14 +439,13 @@ func replaceOrderByUser(cmd *cobra.Command, l *ledger.Ledger, id, device string)
 	if !ok || c.State != ledger.CallStuck || c.Detail != "confirm_replace" {
 		return output.ConflictError(cmd, id, errors.New("only an order the Hub says was never placed can be placed again — run `cashctl cash order settle` first"))
 	}
+	if c.DeviceID != device {
+		return output.FinalConflictError(cmd, id, errors.New("this order was placed from another copy of this wallet; only that copy can place it again"))
+	}
 	jsonMode, _ := cmd.Flags().GetBool("json")
 	yes, _ := cmd.Flags().GetBool("yes")
 	if jsonMode && !yes {
 		return output.UsageError(cmd, errors.New("placing an order again asks for a new payment: pass --yes"))
-	}
-	if !Confirm(cmd, false, "The Hub says this order was never placed. Place it again? It will ask for a new payment") {
-		output.Println("Cancelled.")
-		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
@@ -405,6 +454,25 @@ func replaceOrderByUser(cmd *cobra.Command, l *ledger.Ledger, id, device string)
 		return output.NetworkError(cmd, err)
 	}
 	defer hub.Close()
+	// The terms are read again and shown before the question.
+	terms, err := hub.Terms(ctx)
+	if err != nil {
+		return output.NetworkError(cmd, fmt.Errorf("couldn't read the Hub's terms; nothing was sent: %w", err))
+	}
+	k := terms.Kind(o.Payment)
+	if k == nil {
+		return output.WithReason(output.AuthError(cmd, errors.New("the Hub no longer sells this kind of order; nothing was sent")), reasonNotSelling)
+	}
+	fee, pay, err := nipCO.OrderFee(o.Payment, *k, o.AmountMillis)
+	if err != nil {
+		return output.InvalidInputError(cmd, id, err)
+	}
+	output.Notef(jsonMode, "Order again: amount %s, order fee %s, you pay %s (%s), within %s", output.FormatAmount(int64(o.AmountMillis)), //nolint:gosec // amounts fit
+		output.FormatAmount(int64(fee)), output.FormatAmount(int64(pay)), o.Payment, (time.Duration(k.Window) * time.Second).String()) //nolint:gosec // amounts fit
+	if !Confirm(cmd, false, "The Hub says this order was never placed. Place it again? It will ask for a new payment") {
+		output.Println("Cancelled.")
+		return nil
+	}
 	notify, err := nipCO.NewNotify()
 	if err != nil {
 		return output.RuntimeError(cmd, err)
@@ -435,7 +503,13 @@ func replaceOrderByUser(cmd *cobra.Command, l *ledger.Ledger, id, device string)
 		_ = l.Save()
 		return printOrderState(cmd, o)
 	case child == nil || child.CallID == parentID:
-		return output.RuntimeError(cmd, fmt.Errorf("not placed again: %v", err))
+		// Nothing went out under the derived id, which is now taken: the order
+		// ends here, never stuck between the two calls.
+		closeCall(l, parent, ledger.CallNotApplied, "not placed again")
+		o.State, o.FinishedAt, o.CheckedAt = ledger.OrderNotPlaced, time.Now().Unix(), time.Now().Unix()
+		_ = l.Save()
+		_ = ledger.PutOrder(o)
+		return output.RuntimeError(cmd, fmt.Errorf("not placed again (%v); nothing was sent and nothing is owed — place a new order with `cashctl cash order place`", err))
 	}
 	parent.State, parent.Detail = ledger.CallReplaced, "replaced by call "+child.CallID
 	_ = l.Save()

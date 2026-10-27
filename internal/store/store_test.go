@@ -202,3 +202,34 @@ func TestOpen_DeviceIDRotatesWhenTheFileIsCopied(t *testing.T) {
 		t.Errorf("history lines for the rotation = %d (%v), want 1", n, err)
 	}
 }
+
+// CC-A4: the same file reached through a symlinked directory, or with another
+// device number, keeps its fingerprint; a copy (another inode) does not.
+func TestFingerprint_StableAcrossPathSpellingsAndDevice(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "cashctl.db")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(dir, link); err != nil {
+		t.Skip("no symlinks here")
+	}
+	origFile := fileIDFn
+	t.Cleanup(func() { fileIDFn = origFile })
+	dev := uint64(1)
+	fileIDFn = func(string) (uint64, uint64, error) { return dev, 42, nil }
+	a, err := fingerprint(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dev = 2
+	b, err := fingerprint(filepath.Join(link, "cashctl.db"))
+	if err != nil || a != b {
+		t.Errorf("fingerprint through a symlink with another device number changed: %s → %s (%v)", a, b, err)
+	}
+	fileIDFn = func(string) (uint64, uint64, error) { return 1, 43, nil }
+	if c, _ := fingerprint(file); c == a {
+		t.Error("a copy (another inode) kept the fingerprint")
+	}
+}

@@ -23,11 +23,12 @@ const defaultPowMax = 28
 // powMaxSetting is the config key of the proof-of-work cap.
 const powMaxSetting = "pow_max_difficulty"
 
-// parsePowMax reads a difficulty between 0 and 64.
+// parsePowMax reads a difficulty between 1 and 64.
 func parsePowMax(source, v string) (int, error) {
 	n, err := strconv.Atoi(v)
-	if err != nil || n < 0 || n > 64 {
-		return 0, fmt.Errorf("%s %q is not a difficulty between 0 and 64", source, v)
+	// 0 is refused: nmilat reads a zero budget as no cap at all.
+	if err != nil || n < 1 || n > 64 {
+		return 0, fmt.Errorf("%s %q is not a difficulty between 1 and 64", source, v)
 	}
 	return n, nil
 }

@@ -48,6 +48,7 @@ note: a <token>#<secret> string to hand anyone.
 	cmd.Flags().String("amount", "", fmt.Sprintf("how much to send, in %s — omitted sends the whole held token", output.CurrencyUnit))
 	cmd.Flags().String("as", "", "override credential")
 	cmd.Flags().String("ia", "", "Identity Authority to trust (hex pubkey or name@domain) for an nconnection1... target that doesn't specify one")
+	cmd.Flags().Bool("no-wait", false, "exit 8 at once when the Hub gives no clear answer, instead of waiting (up to 62 s) to look the call up")
 	return cmd
 }
 
@@ -861,7 +862,7 @@ func runCashTransfer(cmd *cobra.Command, args []string) error {
 		// held: with nothing held at all, resolveHeldToken's own "receive
 		// one first" error below is the clearer message — cash selection
 		// would otherwise report a confusing "not enough funds: you hold 0."
-		plan, err := ledger.SelectForAmount(l.Held(), amountFlag)
+		plan, err := ledger.SelectForAmount(unlockedHeld(l), amountFlag)
 		if err != nil {
 			// Both error types' own Error() states their two amounts as
 			// bare unlabeled numbers (see FundsFragmentedError's own doc
@@ -907,7 +908,7 @@ func runCashTransfer(cmd *cobra.Command, args []string) error {
 		entry = e
 	}
 
-	if err := refuseOpenCalls(cmd, l, []string{entry.ID}); err != nil {
+	if err := refuseLocked(cmd, l, []string{entry.ID}); err != nil {
 		return err
 	}
 	cred, err := resolveCredential(cmd, entry)

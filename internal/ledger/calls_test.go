@@ -207,3 +207,31 @@ func TestPruneCalls(t *testing.T) {
 		}
 	}
 }
+
+// CC-A7: two processes that loaded the ledger before either wrote ahead cannot
+// both open a call on one bill: the second save is refused.
+func TestCalls_NoSecondOpenCallOnABillAcrossProcesses(t *testing.T) {
+	withTempConfigDir(t)
+	a, _ := Load()
+	b, _ := Load()
+	if _, err := a.AddCall(testCall(t, "tok-a")); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Save(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.AddCall(testCall(t, "tok-a")); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Save(); !errors.Is(err, ErrConcurrentUpdate) {
+		t.Fatalf("second process's call on the same bill: %v, want ErrConcurrentUpdate", err)
+	}
+	// Another bill is fine.
+	c, _ := Load()
+	if _, err := c.AddCall(testCall(t, "tok-b")); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Save(); err != nil {
+		t.Fatalf("a call on another bill: %v", err)
+	}
+}

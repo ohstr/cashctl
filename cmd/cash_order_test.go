@@ -33,6 +33,8 @@ type fakeOrderHub struct {
 	placed []nipcash.PendingCall
 	// writtenBeforeSend: the call and its order row were on disk when sent.
 	writtenBeforeSend bool
+	// refuse fails Place before anything is written or sent.
+	refuse error
 }
 
 func (f *fakeOrderHub) Terms(context.Context) (*nipCO.Terms, error) { return &f.terms, nil }
@@ -40,6 +42,9 @@ func (f *fakeOrderHub) Network() string                             { return "ma
 func (f *fakeOrderHub) Close()                                      {}
 
 func (f *fakeOrderHub) Place(ctx context.Context, p nipCO.CashOrderParams, j nipcashclient.Journal, device string) (*nipCO.Order, error) {
+	if f.refuse != nil {
+		return nil, f.refuse
+	}
 	if p.RequestID == "" {
 		p.RequestID, _ = nipcash.NewRequestID()
 	}
@@ -72,7 +77,31 @@ func (f *fakeOrderHub) Place(ctx context.Context, p nipCO.CashOrderParams, j nip
 			return nil, err
 		}
 	}
+	if p.Payment == nipCO.PaymentOnchain {
+		return f.onchain(p.AmountMillis, nipCO.OrderOpen, 0), nil
+	}
 	return f.open(p.AmountMillis, time.Now().Unix()+600), nil
+}
+
+// testOrderAddress is a valid mainnet flokicoin witness address.
+const testOrderAddress = "fc1qqypqxpq9qcrsszg2pvxq6rs0zqg3yyc5nuq0zs"
+
+// onchain is an on-chain order in state, with bills minted for it, each
+// signed by the Hub.
+func (f *fakeOrderHub) onchain(amount uint64, state nipCO.OrderState, bills int) *nipCO.Order {
+	o := &nipCO.Order{State: state, Payment: nipCO.PaymentOnchain, AmountMillis: amount, FeeMillis: 1000,
+		PayMillis: amount + 1000, Address: testOrderAddress, Confirmations: 1, PayBy: time.Now().Unix() + 3600}
+	for i := 0; i < bills; i++ {
+		o.Bills = append(o.Bills, f.billFor(amount))
+	}
+	return o
+}
+
+func (f *fakeOrderHub) billFor(amount uint64) nipCO.OrderBill {
+	wallet := testmint.Hex32(f.t)
+	tok := testmint.Bill(f.t, nipcash.Token{HRP: "lokicash", WalletPubkey: wallet, Secret: testmint.Hex32(f.t),
+		RelayURLs: []string{"wss://hub.example"}, IdentityRequired: ptrTo(false)}, f.hubPriv)
+	return nipCO.OrderBill{WalletPubkey: wallet, Token: nipcash.TokenOrTombstone{Token: tok}, AmountMillis: amount, PaidMillis: amount + 1000}
 }
 
 func (f *fakeOrderHub) open(amount uint64, payBy int64) *nipCO.Order {
@@ -424,5 +453,160 @@ func TestOrderWatch_PollsOnchainOrders(t *testing.T) {
 				t.Errorf("read %d times in 300 ms, want a timer", lookups)
 			}
 		})
+	}
+}
+
+func placeOnchainOrder(t *testing.T, f *fakeOrderHub, conn string) ledger.Order {
+	t.Helper()
+	f.terms.Onchain = &nipCO.KindTerms{MinMillis: 1000, MaxMillis: 1_000_000_000, FeeBase: 1000, Window: 3600,
+		Confirmations: []nipCO.Tier{{N: 1}}}
+	c := orderCmd(newCashOrderPlaceCmd(), map[string]string{"onchain": "true"})
+	var err error
+	captureStreams(t, func() { err = runCashOrderPlace(c, []string{conn, "100"}) })
+	if err != nil {
+		t.Fatalf("place on-chain: %v", err)
+	}
+	o, _ := onlyOrder(t)
+	return o
+}
+
+func showAllOrders(t *testing.T) (string, string, error) {
+	t.Helper()
+	c := orderCmd(newCashOrderShowCmd(), nil)
+	var err error
+	stdout, stderr := captureStreams(t, func() { err = showOrders(c, nil, false) })
+	return stdout, stderr, err
+}
+
+// O-1: a closed on-chain order keeps its call (and the key that collects its
+// bills); a payment minted after it closed is collected by show and settle;
+// once the Hub no longer knows the order, the call is closed.
+func TestOrder_ClosedOnchainCollectsLaterBills(t *testing.T) {
+	f, conn := setUpOrderHub(t)
+	placeOnchainOrder(t, f, conn)
+	bills := []nipCO.OrderBill{f.billFor(100_000)}
+	f.lookup = func(nipcash.PendingCall) (nipcashclient.LookupOutcome, *nipCO.Order, error) {
+		o := f.onchain(100_000, nipCO.OrderClosed, 0)
+		o.Bills = bills
+		return nipcashclient.LookupOutcome{Status: nipcash.LookupDone}, o, nil
+	}
+	if err := settleOrders(t, nil); err != nil {
+		t.Fatalf("settle: %v", err)
+	}
+	o, c := onlyOrder(t)
+	if o.State != string(nipCO.OrderClosed) || o.FinishedAt == 0 || c.State != ledger.CallOpenOrder || len(c.Secrets) == 0 {
+		t.Fatalf("after closed: order %s/%d, call %s, secrets %d", o.State, o.FinishedAt, c.State, len(c.Secrets))
+	}
+	if l, _ := ledger.Load(); len(l.Held()) != 1 {
+		t.Fatalf("held %d, want 1", len(l.Held()))
+	}
+	// A later payment to the closed order's address is minted.
+	bills = append(bills, f.billFor(50_000))
+	if _, _, err := showAllOrders(t); err != nil {
+		t.Fatalf("show: %v", err)
+	}
+	if l, _ := ledger.Load(); len(l.Held()) != 2 {
+		t.Fatalf("held %d after a later bill, want 2", len(l.Held()))
+	}
+	if err := settleOrders(t, nil); err != nil {
+		t.Fatalf("settle again: %v", err)
+	}
+	if l, _ := ledger.Load(); len(l.Held()) != 2 {
+		t.Error("a bill was recorded twice")
+	}
+	// The Hub forgot the order: nothing more can come; the call closes.
+	f.lookup = func(nipcash.PendingCall) (nipcashclient.LookupOutcome, *nipCO.Order, error) {
+		return nipcashclient.LookupOutcome{Status: nipcash.LookupUnknown}, nil, nil
+	}
+	_ = settleOrders(t, nil)
+	if o, c := onlyOrder(t); c.State != ledger.CallDone || o.State != string(nipCO.OrderClosed) {
+		t.Errorf("after unknown: order %s, call %s", o.State, c.State)
+	}
+}
+
+// O-4: an on-chain address that arrives through a lookup is checked against
+// the Hub's chain and network: one for another chain is never shown to pay.
+func TestOrder_LookupAddressChecked(t *testing.T) {
+	f, conn := setUpOrderHub(t)
+	placeOnchainOrder(t, f, conn)
+	f.lookup = func(nipcash.PendingCall) (nipcashclient.LookupOutcome, *nipCO.Order, error) {
+		o := f.onchain(100_000, nipCO.OrderOpen, 0)
+		o.Address = "bc1qqypqxpq9qcrsszg2pvxq6rs0zqg3yyc5fcj4z3"
+		return nipcashclient.LookupOutcome{Status: nipcash.LookupDone}, o, nil
+	}
+	_ = settleOrders(t, nil)
+	o, c := onlyOrder(t)
+	if c.State != ledger.CallStuck || c.Detail != "invalid_result" || strings.Contains(o.OrderJSON, "bc1q") {
+		t.Errorf("wrong-chain address: call %s/%s, order %s", c.State, c.Detail, o.OrderJSON)
+	}
+}
+
+// O-3: an order recovered after a lost reply shows what to pay, by when, and
+// its warnings, in text and --json.
+func TestOrder_RecoveredShowsWhatToPay(t *testing.T) {
+	f, conn := setUpOrderHub(t)
+	f.answer = func(pc nipcash.PendingCall) error {
+		return &nipcashclient.IndeterminateError{Call: pc, Cause: errors.New("no reply")}
+	}
+	if _, err := placeOrder(t, conn, "100"); output.ExitCode(err) != 8 {
+		t.Fatalf("lost reply: %v", err)
+	}
+	f.lookup = func(nipcash.PendingCall) (nipcashclient.LookupOutcome, *nipCO.Order, error) {
+		return nipcashclient.LookupOutcome{Status: nipcash.LookupDone}, f.open(100_000, time.Now().Unix()+600), nil
+	}
+	stdout, _, err := showAllOrders(t)
+	if err != nil {
+		t.Fatalf("show: %v", err)
+	}
+	var doc struct {
+		Orders []map[string]any `json:"orders"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &doc); err != nil || len(doc.Orders) != 1 {
+		t.Fatalf("show --json %q: %v", stdout, err)
+	}
+	v := doc.Orders[0]
+	inv, _ := v["invoice"].(string)
+	if !strings.HasPrefix(inv, "lnfc1") || v["pay_by"] == nil || len(v["warnings"].([]any)) == 0 {
+		t.Errorf("recovered order --json %v", v)
+	}
+	c := newCashOrderShowCmd()
+	c.Flags().Bool("json", false, "")
+	c.Flags().Bool("yes", false, "")
+	c.Flags().String("connection", "", "")
+	text, errText := captureStreams(t, func() { err = showOrders(c, nil, true) })
+	if err != nil || !strings.Contains(text, inv) || !strings.Contains(text, " by ") || !strings.Contains(errText, "Warning:") {
+		t.Errorf("recovered order text %q / %q (%v)", text, errText, err)
+	}
+}
+
+// O-8, O-7: --replace is refused from another copy of the wallet; a
+// re-placement that fails before anything is sent ends the order as
+// not_placed instead of leaving it stuck.
+func TestOrder_ReplaceDeviceAndNotSent(t *testing.T) {
+	f, conn := setUpOrderHub(t)
+	f.answer = func(pc nipcash.PendingCall) error {
+		return &nipcashclient.IndeterminateError{Call: pc, Cause: errors.New("no reply")}
+	}
+	_, _ = placeOrder(t, conn, "100")
+	o, c := onlyOrder(t)
+	l, _ := ledger.Load()
+	call, _ := l.FindCall(c.CallID)
+	call.State, call.Detail = ledger.CallStuck, "confirm_replace"
+	call.DeviceID = "other-device"
+	_ = l.Save()
+	if err := settleOrders(t, map[string]string{"replace": o.OrderID, "yes": "true"}); output.ExitCode(err) != 5 || len(f.placed) != 1 {
+		t.Fatalf("--replace from another device: %v, placed %d", err, len(f.placed))
+	}
+	l, _ = ledger.Load()
+	call, _ = l.FindCall(c.CallID)
+	call.DeviceID, _ = deviceIDFn()
+	_ = l.Save()
+	f.answer, f.refuse = nil, errors.New("relay down")
+	if err := settleOrders(t, map[string]string{"replace": o.OrderID, "yes": "true"}); err == nil {
+		t.Fatal("a failed re-placement reported success")
+	}
+	o, c = onlyOrder(t)
+	if o.State != ledger.OrderNotPlaced || o.FinishedAt == 0 || c.State != ledger.CallNotApplied {
+		t.Errorf("after a failed re-placement: order %s, call %s/%s", o.State, c.State, c.Detail)
 	}
 }

@@ -16,6 +16,9 @@ const (
 	OrderPlacing = "placing"
 	// OrderEndedUnpaid is an order past pay_by that never showed progress.
 	OrderEndedUnpaid = "ended_unpaid"
+	// OrderNotPlaced is an order the Hub never saw whose placement again
+	// failed before it was sent: nothing can be paid or minted for it.
+	OrderNotPlaced = "not_placed"
 )
 
 // Order is one cash_order (NIP-CO) placed from here: its notify, payment and

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -909,5 +910,83 @@ func TestDoCashConsolidate_CashTargetResultIsLabelledProtected(t *testing.T) {
 	}
 	if got := cashModeLabel(*merged); got != "cash (protected)" {
 		t.Errorf("wallet show label = %q, want %q", got, "cash (protected)")
+	}
+}
+
+// XC-1: a tombstone answer to cash_consolidate answers for sources[0] only. The
+// other sources are live bills the Hub never touched: they stay held, unlocked.
+func TestDoCashConsolidate_TombstoneSpendsOnlyTheFirstSource(t *testing.T) {
+	l, ids, sources := consolidateFixture(t)
+	amt := uint64(1500)
+	e, err := l.Add(ledger.Entry{Token: "dial-c", WalletPubkey: hexWallet("dial-c"), AmountMillis: &amt, IdentityRequired: ptrTo(true)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids = append(ids, e.ID)
+	sources = append(sources, nipcash.Source{WalletPubkey: e.WalletPubkey, Amount: amt, Credential: nipcash.BySigning(strings.Repeat("11", 32))})
+	if err := l.Save(); err != nil {
+		t.Fatal(err)
+	}
+	withFakeAttemptCashConsolidate(t, func(string, []nipcash.Source, nipcash.Target) (*nipcash.CashConsolidateResult, error) {
+		return nil, &nipcash.BillGone{Method: nipcash.MethodCashConsolidate, Tombstone: nipcash.Tombstone{Status: "spent", Reason: "redeemed"}}
+	})
+	_, _, err = doCashConsolidate(&cobra.Command{}, l, []string{"dial-a"}, sources, ids, testTarget(), true)
+	if output.AsCLIError(err).Code != output.CodeSpent {
+		t.Fatalf("err %v, want spent", err)
+	}
+	fresh, err := ledger.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, id := range ids {
+		got, _ := fresh.Find(id)
+		want := ledger.StatusHeld
+		if i == 0 {
+			want = ledger.StatusSpent
+		}
+		if got.Status != want {
+			t.Errorf("source %d status %q, want %q", i, got.Status, want)
+		}
+		if _, open := fresh.OpenCallFor(id); open {
+			t.Errorf("source %d still locked by an open call", i)
+		}
+	}
+}
+
+// CC-A5: an interim round to the merge key whose first source is
+// identity-bound keeps the key with its call; a lookup answered done holds the
+// merged bill under that key, never files it as a gift.
+func TestConsolidate_InterimRoundKeepsItsKeyForTheLookup(t *testing.T) {
+	l, ids, sources := consolidateFixture(t)
+	priv, pub, _ := newThrowawayKey()
+	_, err := l.Add(ledger.Entry{Token: "moved-note", WalletPubkey: hexWallet("moved"), AmountMillis: ptrTo(uint64(500)),
+		IdentityRequired: ptrTo(true), ThrowawayKey: priv})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := l.Save(); err != nil {
+		t.Fatal(err)
+	}
+	withFakeAttemptCashConsolidate(t, func(string, []nipcash.Source, nipcash.Target) (*nipcash.CashConsolidateResult, error) {
+		return nil, context.DeadlineExceeded
+	})
+	if _, _, err := doCashConsolidate(&cobra.Command{}, l, []string{"dial-a"}, sources, ids, nipcash.Pubkey(pub), true); output.AsCLIError(err).Code != output.CodeIndeterminate {
+		t.Fatalf("err %v, want indeterminate", err)
+	}
+	l, _ = ledger.Load()
+	c, open := l.OpenCallFor(ids[0])
+	if !open || callSecretOf(c, ledger.RoleInterimKey) != priv {
+		t.Fatalf("open call %+v: want the merge key kept with it", c)
+	}
+	if _, err := applyConsolidateResult(&cobra.Command{}, l, c, &nipcash.CashConsolidateResult{AmountMillis: 3000,
+		NewWalletPubkey: hexWallet("merged"), NewWalletToken: "merged-token"}); err != nil {
+		t.Fatal(err)
+	}
+	merged, ok := l.FindByToken("merged-token")
+	if !ok || merged.ThrowawayKey != priv || merged.Status != ledger.StatusHeld {
+		t.Errorf("merged bill %+v (%v): want held under the merge key", merged, ok)
+	}
+	if len(l.Handoffs) != 0 {
+		t.Errorf("handoffs %+v: the wallet's own merged bill was filed as a gift", l.Handoffs)
 	}
 }

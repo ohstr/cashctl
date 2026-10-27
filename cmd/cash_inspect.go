@@ -53,6 +53,15 @@ func runCashStatus(cmd *cobra.Command, _ []string) error {
 	// Calls whose answer never came are settled first, so the status shown is
 	// the one after them.
 	settleCalls(cmd, l, settleOptions{})
+	// So is every redeem whose payment may still settle.
+	redeems, redeeming := settleRedeeming(cmd, l)
+	for _, r := range redeems {
+		output.Notef(jsonMode, "redeem of %s: %s — %s", r.ID, r.Status, r.Detail)
+	}
+	if tok, _ := cmd.Flags().GetString("token"); tok == "" && redeeming > 0 && len(l.Held()) == 0 {
+		return output.WithReason(output.IndeterminateError(cmd, "", fmt.Errorf(
+			"%d redeem(s) may still settle and nothing else is held: `cashctl cash status` asks again", redeeming)), reasonRedeemInFlight)
+	}
 	entries, err := resolveHeldTokensOrAll(cmd, l)
 	if err != nil {
 		return err
@@ -299,6 +308,9 @@ func resolveHeldTokensOrAll(cmd *cobra.Command, l *ledger.Ledger) ([]*ledger.Ent
 		}
 		if spent := spentStatusDescription(e.Status); spent != "" {
 			return nil, alreadySpentError(cmd, id, e.Status)
+		}
+		if e.Status == ledger.StatusRedeeming {
+			return nil, errRedeemInFlight(cmd, id)
 		}
 		return []*ledger.Entry{e}, nil
 	}
