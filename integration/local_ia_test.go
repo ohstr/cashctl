@@ -89,6 +89,10 @@ func (ia *localIA) Attest(t *testing.T, platform nipIC.WebIdentity, externalID, 
 		ConnectionKey: mustConnKey(t, platform, externalID),
 		UserPubkey:    userPubkey,
 		Platform:      platform,
+		// An IA's own verification method: public_post (the default) now
+		// requires the post's URL, challenge and pre-auth code, which a local
+		// IA never has.
+		AuthType: "integration_test",
 		Evidence: nipIC.Evidence{
 			Platform:   platform,
 			UserID:     externalID,
