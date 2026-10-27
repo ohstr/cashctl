@@ -277,6 +277,21 @@ func unlockedHeld(l *ledger.Ledger) []ledger.Entry {
 	return out
 }
 
+// pickableHeld is what an automatic pick chooses from: the held bills no open
+// call speaks for. With nothing held it is not_found; with every held bill
+// locked, the first one's refusal.
+func pickableHeld(cmd *cobra.Command, l *ledger.Ledger) ([]ledger.Entry, error) {
+	all := l.Held()
+	if len(all) == 0 {
+		return nil, output.NotFoundError(cmd, "", fmt.Errorf("you have no held cash tokens — receive one first with `cashctl receive <token>`"))
+	}
+	held := unlockedHeld(l)
+	if len(held) == 0 {
+		return nil, refuseLocked(cmd, l, []string{all[0].ID})
+	}
+	return held, nil
+}
+
 // closeCall gives a call its final state: the generated secrets have been
 // copied into an entry or a hand-off by the caller, so they and the call's
 // authorizing secrets are wiped. The caller's Save persists it with the

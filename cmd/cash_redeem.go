@@ -116,6 +116,13 @@ func runCashRedeem(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	// A bill whose transfer, merge or protect has no answer yet is spoken for:
+	// redeeming it now would race that call (plan I-4).
+	for _, e := range entries {
+		if err := refuseLocked(cmd, l, []string{e.ID}); err != nil {
+			return err
+		}
+	}
 	var skippedSpent []string
 	if all, _ := cmd.Flags().GetBool("all"); all {
 		skippedSpent = reportedSpentIDs(l)
@@ -846,9 +853,9 @@ func resolveHeldTokensForRedeem(cmd *cobra.Command, l *ledger.Ledger) ([]*ledger
 		return out, nil
 	}
 
-	held := l.Held()
-	if len(held) == 0 {
-		return nil, output.NotFoundError(cmd, "", fmt.Errorf("you have no held cash tokens — receive one first with `cashctl receive <token>`"))
+	held, err := pickableHeld(cmd, l)
+	if err != nil {
+		return nil, err
 	}
 	if all {
 		out := make([]*ledger.Entry, 0, len(held))
@@ -1000,9 +1007,9 @@ func resolveHeldToken(cmd *cobra.Command, l *ledger.Ledger) (*ledger.Entry, erro
 		}
 		return e, nil
 	}
-	held := l.Held()
-	if len(held) == 0 {
-		return nil, output.NotFoundError(cmd, "", fmt.Errorf("you have no held cash tokens — receive one first with `cashctl receive <token>`"))
+	held, err := pickableHeld(cmd, l)
+	if err != nil {
+		return nil, err
 	}
 	var id string
 	if len(held) == 1 {
@@ -1468,9 +1475,9 @@ func entryPointers(entries []ledger.Entry) []*ledger.Entry {
 // quote — not AmountMillis, the cached face value, which a nonzero fee
 // would make wrong.
 func selectHeldTokensForRedeemAmount(cmd *cobra.Command, l *ledger.Ledger, target uint64) ([]*ledger.Entry, error) {
-	held := l.Held()
-	if len(held) == 0 {
-		return nil, output.NotFoundError(cmd, "", fmt.Errorf("you have no held cash tokens — receive one first with `cashctl receive <token>`"))
+	held, err := pickableHeld(cmd, l)
+	if err != nil {
+		return nil, err
 	}
 
 	quotes := make([]quotedEntry, 0, len(held))
