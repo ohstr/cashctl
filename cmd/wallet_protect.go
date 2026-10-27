@@ -56,7 +56,7 @@ func runWalletProtect(cmd *cobra.Command, args []string) error {
 			waiting = append(waiting, e.ID)
 		}
 	}
-	if err := settlePendingMoves(cmd, l); err != nil {
+	if err := settleBeforeSpend(cmd, l); err != nil {
 		return err
 	}
 	var settled []string

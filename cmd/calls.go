@@ -90,7 +90,18 @@ func (j *ledgerJournal) WriteAhead(_ context.Context, calls []nipcash.PendingCal
 		_ = j.l.Save()
 		return err
 	}
+	var rewritten []string
 	for _, pc := range calls {
+		// The same call written again (a re-placement is written ahead before it
+		// is packed, then again with the exact deadline it is sent under):
+		// update it in place.
+		if existing, ok := j.l.FindCall(ledger.CallIDFor(pc.RequestID)); ok {
+			existing.Deadline, existing.SentH, existing.DeviceID = pc.Deadline, pc.MaxRequestAge, pc.Device
+			existing.ParamsJSON = string(pc.Params)
+			existing.UpdatedAt = time.Now().Unix()
+			rewritten = append(rewritten, existing.CallID)
+			continue
+		}
 		c := ledger.Call{
 			RequestID: pc.RequestID, Method: pc.Method, Purpose: j.spec.Purpose,
 			Deadline: pc.Deadline, SentH: pc.MaxRequestAge, HubIdentity: pc.HubIdentity, Target: pc.Target,
@@ -119,13 +130,17 @@ func (j *ledgerJournal) WriteAhead(_ context.Context, calls []nipcash.PendingCal
 	if err := j.l.Save(); err != nil {
 		return undo(err)
 	}
-	for _, id := range written {
+	for _, id := range append(slices.Clone(written), rewritten...) {
 		c, _ := j.l.FindCall(id)
 		if err := ledger.VerifyWritten(*c); err != nil {
 			return undo(err)
 		}
 	}
-	j.callIDs = append(j.callIDs, written...)
+	for _, id := range append(written, rewritten...) {
+		if !slices.Contains(j.callIDs, id) {
+			j.callIDs = append(j.callIDs, id)
+		}
+	}
 	crashpoint.Hit("calls.after_writeahead")
 	return nil
 }
@@ -275,10 +290,13 @@ func callIndeterminateError(cmd *cobra.Command, input string, c *ledger.Call, ve
 	if c.FirstError != "" {
 		answered = "answered " + c.FirstError + ", which does not say whether it was applied"
 	}
-	return output.IndeterminateError(cmd, input, fmt.Errorf(
+	device, _ := deviceIDFn()
+	call := map[string]any{"call": c.CallID, "method": c.Method, "state": c.State, "detail": c.Detail,
+		"deadline": c.Deadline, "settle_after": c.Deadline + 1, "next_step": nextStep(c, device)}
+	return output.WithCall(output.IndeterminateError(cmd, input, fmt.Errorf(
 		"the Hub %s to this %s (call %s), so whether it moved is unknown. "+
-			"Nothing is resent: cashctl asks the Hub what happened before this bill is used again: %w",
-		answered, verb, c.CallID, cause))
+			"Nothing is resent: `cashctl cash settle` asks the Hub what happened, and every money command does before this bill is used again: %w",
+		answered, verb, c.CallID, cause)), call)
 }
 
 // placeTransfer places one cash_transfer on caller, written ahead under spec,

@@ -17,6 +17,7 @@ func init() {
 		shortcutOf(newCashRedeemCmd()),
 		shortcutOf(newCashTransferCmd()),
 		shortcutOf(newCashConsolidateCmd()),
+		shortcutOf(newCashSettleCmd()),
 		shortcutOf(newWalletBalanceCmd()),
 		shortcutOf(newWalletPayCmd()),
 		shortcutOf(newWalletInvoiceCmd()),

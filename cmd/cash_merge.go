@@ -280,6 +280,15 @@ func probeAmount(e *ledger.Entry, cred nipcash.Credential) (uint64, bool, error)
 	return 0, false, err
 }
 
+// settleBeforeSpend runs at the start of every money command: the open calls
+// that are due are looked up and finished (settleCalls), then merge moves are
+// settled. Its error, when not nil, carries the recovery of a note moved but
+// not saved.
+func settleBeforeSpend(cmd *cobra.Command, l *ledger.Ledger) error {
+	settleCalls(cmd, l, settleOptions{})
+	return settlePendingMoves(cmd, l)
+}
+
 // settlePendingMoves finishes the record of a merge move whose answer never
 // came: if the throwaway key now spends the note, the move happened; if its cash
 // secret still does, it did not. Otherwise it is left for a later run. Never

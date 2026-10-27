@@ -50,6 +50,9 @@ func runCashStatus(cmd *cobra.Command, _ []string) error {
 		return output.RuntimeError(cmd, err)
 	}
 
+	// Calls whose answer never came are settled first, so the status shown is
+	// the one after them.
+	settleCalls(cmd, l, settleOptions{})
 	entries, err := resolveHeldTokensOrAll(cmd, l)
 	if err != nil {
 		return err

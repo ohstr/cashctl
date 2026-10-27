@@ -120,6 +120,18 @@ type CLIError struct {
 	// Final marks an error of a normally retryable code that retrying as is
 	// cannot fix; --json's "retryable" is false for it.
 	Final bool
+	// Call, on an indeterminate error, describes the call left open (its
+	// handle, method, state, deadline and next step): --json's "call".
+	Call map[string]any
+}
+
+// WithCall attaches an open call's description to err, a *CLIError.
+func WithCall(err error, call map[string]any) error {
+	var ce *CLIError
+	if errors.As(err, &ce) {
+		ce.Call = call
+	}
+	return err
 }
 
 func (e *CLIError) Error() string { return e.Err.Error() }
