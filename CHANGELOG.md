@@ -2,6 +2,14 @@
 
 ## [0.7.0-rc.1]
 
+- Adds `circle request rotate|freeze|unfreeze`: a member request signed by the
+  key that joined, for the circle's host to submit. A rotate's new key is
+  written down before the request is printed, `cash settle` installs it once
+  the rotation completes, and using the wallet while it is open asks first.
+- Adds `wallet delete` for your own circle wallet at or below its dust
+  threshold, written down before it is sent; `connect rm` now refuses a
+  circle wallet without `--force`. `FROZEN` is `auth` and `ROTATION_PENDING`
+  a final `conflict`.
 - Adds a wait to `transfer`, `consolidate` and `wallet protect` when the Hub
   gives no clear answer: they look the call up after its deadline (at most 62
   s) and finish it, or exit with the refusal's own code; `--no-wait` exits 8 at

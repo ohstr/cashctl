@@ -104,8 +104,52 @@ a growing delay — about 5s, 15s, then 60s — and if it persists past a few
 minutes, it is for the circle's host to fix, not something to keep retrying.
 
 There is no `circle leave`/`circle list` — a circle membership is just an
-ordinary registered wallet from this point on (`cashctl wallet show`,
-`cashctl connect rm <name>` to drop it).
+ordinary registered wallet from this point on (`cashctl wallet show`).
+`cashctl connect rm <name>` refuses a circle wallet without `--force`: its
+key is held only on your devices, so forgetting it can strand the balance.
+
+## `cashctl circle request` — rotate, freeze, unfreeze
+
+A member request is signed by the key that joined and **submitted by the
+circle's host**, never sent by cashctl. It is valid for 24 hours.
+
+```sh
+cashctl circle request freeze circle:1 --json      # a lost or stolen device: the Hub refuses the current key (FROZEN)
+cashctl circle request unfreeze circle:1 --json
+cashctl circle request rotate circle:1 --json      # move the wallet to a new key made here
+cashctl circle request freeze --wallet <wallet_pubkey> --hub circlehub1... --json   # a wallet not held on this device
+# {"event": {…kind 23199…}, "action", "wallet_pubkey", "hub_pubkey", "new_connection_pubkey"?, "submit_within", "next_step", "repeated"?}
+```
+
+- Hand `event` to the host. A wallet whose details carry no
+  `rotation_delay_secs` is refused locally: `usage`, `reason:
+  rotation_not_served`, nothing signed. A key other than the one that joined
+  is refused `auth`, `reason: member_mismatch` (sign with `--as
+  pubkey:<privkey>`).
+- `rotate` writes the new key down before printing the request, and prints
+  the same request again while it is open (`repeated: true`). `cashctl cash
+  settle` follows it: `pending` until the Hub's rotation delay has passed,
+  then the new key replaces the old one in the same wallet. A rotation the
+  Hub never accepted is forgotten (`reason: rotation_not_made`).
+- While a rotation is open, any command that uses the wallet asks first,
+  because a request by the old key cancels the rotation: `--json` alone is
+  refused `usage`, `reason: rotation_open`; `--yes` uses it anyway.
+- Wallet calls answer `FROZEN` (`auth`, exit 7) while frozen, and a second
+  rotate `ROTATION_PENDING` (`conflict`, exit 5, not retryable).
+
+## `cashctl wallet delete` — delete your own circle wallet
+
+```sh
+cashctl wallet delete circle:1 --yes --json   # {"deleted", "wallet_pubkey", "dust_left_millis"}
+```
+
+Sent over the wallet's own connection once it holds at most its dust
+threshold: above it → `conflict`, `reason: above_dust` (pay out first). The
+dust left goes to the host; `--json` needs `--yes` for that (else `usage`,
+`reason: dust_not_accepted`). The deletion is written down before it is
+sent; a lost reply is `indeterminate` (`reason: delete_unknown`, wallet kept),
+and running it again asks the Hub again. `RESTRICTED` means a payment is in
+flight or the balance rose above dust.
 
 To inspect a `circlehub1...` connection locally without joining it, use
 the general-purpose `cashctl decode circlehub1...` (see

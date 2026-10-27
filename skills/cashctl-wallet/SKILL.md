@@ -45,6 +45,7 @@ cashctl connect add circle:family wallet.json   # a circle wallet's backup file 
 cashctl connect list --json    # each connection carries "kind": circle (from join), nwc or cash_token
 cashctl wallet use work    # same as `cashctl connect use work`
 cashctl connect rm work
+cashctl connect rm circle:1 --force   # a circle wallet only with --force; prefer `cashctl wallet delete` (skills/cashctl-circle)
 ```
 
 `connect add`'s first-ever wallet is auto-set as default under `--json`
