@@ -735,7 +735,13 @@ func importRemint(l *ledger.Ledger, c *ledger.Call, w *ledger.Withdrawal, p *nip
 		AmountMillis: &amount, Verified: true, MinterPubkey: &minter, IdentityRequired: ptrTo(true)}
 	if secret := callSecretOf(c, ledger.RoleRemint); secret != "" {
 		entry.IdentityRequired, entry.CashSecret, entry.CashProtection = ptrTo(false), secret, ledger.CashProtected
-	} else if src, ok := l.Find(w.SourceEntryID); ok {
+	} else if src, ok := l.Find(w.SourceEntryID); ok && src.CashSecret != "" {
+		// A cash-mode bill is re-minted to the withdrawal's remint commitment,
+		// never to the old secret, and this device (which recovered the
+		// withdrawal) doesn't have it (W-7): nothing here can spend it.
+		l.AppendHistory("withdraw", fmt.Sprintf("withdrawal %s cancelled by the Hub; %s re-minted to a secret only the copy of this wallet that sent it holds", w.WithdrawalID, output.FormatAmount(int64(amount)))) //nolint:gosec // amounts fit
+		return "", nil
+	} else if ok {
 		mode := credentialModeOf(*src)
 		mode.Token, mode.WalletPubkey, mode.Secret, mode.RelayURLs = token, tok.WalletPubkey, tok.Secret, tok.RelayURLs
 		mode.AmountMillis, mode.Verified, mode.MinterPubkey = &amount, true, &minter

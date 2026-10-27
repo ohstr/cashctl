@@ -16,6 +16,7 @@ import (
 	"github.com/ohstr/cashctl/internal/dial"
 	"github.com/ohstr/cashctl/internal/ledger"
 	"github.com/ohstr/cashctl/internal/output"
+	"github.com/ohstr/cashctl/internal/testmint"
 )
 
 // sendQueued quotes and sends the fixture's bill, leaving a queued payout.
@@ -347,5 +348,24 @@ func TestSameQuote_ComparesTheBill(t *testing.T) {
 	b.Wallet = "w2"
 	if sameQuote(a, &b) {
 		t.Error("another bill's quote counted as the same")
+	}
+}
+
+// W-7: a recovered cash-mode withdrawal the Hub cancels is re-minted to a
+// commitment this device has no secret for: it is never held with the old one.
+func TestImportRemint_RecoveredCashNoteIsNotHeld(t *testing.T) {
+	f, entryID := setUpWithdraw(t)
+	wallet := testmint.Hex32(t)
+	tok := testmint.Bill(t, nipcash.Token{HRP: "lokicash", WalletPubkey: wallet, Secret: testmint.Hex32(t),
+		RelayURLs: []string{"wss://hub.example"}, IdentityRequired: ptrTo(false)}, f.hubPriv)
+	l, _ := ledger.Load()
+	w := &ledger.Withdrawal{WithdrawalID: "wd-1", SourceEntryID: entryID, HubIdentity: f.hubXOnly, AmountMillis: 21000}
+	p := &nipcash.Payout{State: nipcash.PayoutCancelled, NewWalletPubkey: wallet, NewWalletToken: nipcash.TokenOrTombstone{Token: tok}}
+	id, err := importRemint(l, &ledger.Call{}, w, p)
+	if err != nil || id != "" {
+		t.Fatalf("importRemint = %q, %v; want nothing held", id, err)
+	}
+	if _, ok := l.FindByToken(strings.ToLower(tok)); ok {
+		t.Error("the re-minted bill was held with the old secret")
 	}
 }
