@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/ohstr/nmilat/nip47"
-	"github.com/ohstr/nmilat/nipcash"
 	"github.com/ohstr/nmilat/nipcw"
 	nipcwclient "github.com/ohstr/nmilat/nipcw/client"
 	relayclient "github.com/ohstr/nmilat/relay/client"
@@ -169,25 +168,12 @@ type liveCircleHub struct {
 	*nipcwclient.Client
 }
 
-// Info reads get_info a second time: nipcw/client runs the online check on
-// its own read but does not hand the result out, and join shows the terms
-// and the network from it. The online check is run again on this read.
-func (h liveCircleHub) Info(ctx context.Context) (*nip47.GetInfoResult, error) {
-	c := h.Connection()
-	nwc, err := relayclient.NewNWCClient(ctx, &nip47.PairingInfo{WalletPubkey: c.Pubkey, RelayURLs: c.Relays, Secret: c.Secret}, nip47.EncryptionNIP44V2)
-	if err != nil {
-		return nil, err
-	}
-	defer nwc.Close()
-	gi, err := nwc.GetInfo(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if gi.CircleWallet == nil {
+// Info is the get_info nipcw/client read and checked (the online check)
+// when it connected: join shows the terms and the network from it.
+func (h liveCircleHub) Info(context.Context) (*nip47.GetInfoResult, error) {
+	gi := h.Client.Info()
+	if gi == nil || gi.CircleWallet == nil {
 		return nil, fmt.Errorf("%w: no circle_wallet block", nipcwclient.ErrHubNonConforming)
-	}
-	if err := (nipcash.OnlineCheck{HubIdentity: c.HubIdentity, Chain: c.Chain}).Check(gi.CircleWallet.Identity, gi.Chain); err != nil {
-		return nil, err
 	}
 	return gi, nil
 }
