@@ -32,7 +32,7 @@ func newWalletCmd() *cobra.Command {
 		&cobra.Command{Use: "use <name>", Short: "Set the default wallet", Args: output.ExactArgs(1), RunE: runWalletUse},
 		newWalletGetInfoCmd(), newWalletBalanceCmd(), newWalletBudgetCmd(),
 		newWalletInvoiceCmd(), newWalletPayCmd(), newWalletListTxCmd(), newWalletSignMessageCmd(),
-		newWalletProtectCmd(),
+		newWalletProtectCmd(), newWalletDeleteCmd(),
 	)
 	return cmd
 }

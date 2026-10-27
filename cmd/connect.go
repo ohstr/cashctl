@@ -184,15 +184,23 @@ func runWalletUse(cmd *cobra.Command, args []string) error {
 }
 
 func newConnectRmCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "rm <name>",
 		Short: "Remove a registered connection",
-		Args:  output.ExactArgs(1),
+		Long: `Forgets a registered connection here. A circle wallet's key is held only on
+your devices, so forgetting it can strand its balance: it is refused unless
+--force; delete the wallet on its Hub with ` + "`cashctl wallet delete`" + ` instead.`,
+		Args: output.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			jsonMode, _ := cmd.Flags().GetBool("json")
+			force, _ := cmd.Flags().GetBool("force")
 			s, err := config.Load()
 			if err != nil {
 				return output.RuntimeError(cmd, err)
+			}
+			if c, ok := s.Find(args[0]); ok && c.Kind == config.KindCircle && !force {
+				return output.UsageError(cmd, fmt.Errorf(
+					"%s is a circle wallet whose key is held only on your devices: removing it here can strand its balance. Pay it out and `cashctl wallet delete %s`, or pass --force", args[0], args[0]))
 			}
 			if !s.Remove(args[0]) {
 				return output.NotFoundError(cmd, args[0], fmt.Errorf("no connection named %q; see `cashctl connect list`", args[0]))
@@ -208,6 +216,8 @@ func newConnectRmCmd() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().Bool("force", false, "remove a circle wallet here even though its balance may be stranded")
+	return cmd
 }
 
 // walletPubkeySuffix names a circle wallet by its wallet_pubkey, never more.
