@@ -193,9 +193,11 @@ func TestReceiveZap_Rule9Failures(t *testing.T) {
 		err  error
 		exit int
 	}{
-		"claimed":   {res: func(f *zapFixture) *nipcash.CashStatusResult { return f.mine(21000, true) }, exit: 3},
-		"shared":    {res: func(f *zapFixture) *nipcash.CashStatusResult { return f.mine(1000, false) }, exit: 3},
-		"gone":      {res: func(*zapFixture) *nipcash.CashStatusResult { return &nipcash.CashStatusResult{Tombstone: &nipcash.Tombstone{}} }, exit: 10},
+		"claimed": {res: func(f *zapFixture) *nipcash.CashStatusResult { return f.mine(21000, true) }, exit: 3},
+		"shared":  {res: func(f *zapFixture) *nipcash.CashStatusResult { return f.mine(1000, false) }, exit: 3},
+		"gone": {res: func(*zapFixture) *nipcash.CashStatusResult {
+			return &nipcash.CashStatusResult{Tombstone: &nipcash.Tombstone{}}
+		}, exit: 10},
 		"no answer": {err: context.DeadlineExceeded, exit: 6},
 	} {
 		t.Run(name, func(t *testing.T) {

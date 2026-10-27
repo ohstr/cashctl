@@ -120,4 +120,3 @@ func heldZapContext(token string) (nipcash.ZapContext, error) {
 var dialZapFn = func(ctx context.Context, token string, zc nipcash.ZapContext) (zapStatusClient, error) {
 	return nipcashclient.ConnectZap(ctx, token, zc, sessionOptions()...)
 }
-
