@@ -431,6 +431,20 @@ func replaceCallConfirmed(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, 
 	if child := j.call(); child != nil {
 		derivedID = child.CallID
 	}
+	if sendErr != nil && sentNothing(sendErr) {
+		// Nothing reached the Hub: the derived call and its id are dropped, so
+		// a later settle can place it again under the same derived id, and the
+		// parent stays as it was.
+		if derivedID != "" {
+			l.RemoveCall(derivedID)
+		}
+		for _, id := range j.derived {
+			_ = ledger.RemoveDerived(id)
+		}
+		parent.Detail = "re-placement not sent: " + output.Sanitize(fmt.Sprint(sendErr))
+		_ = l.Save()
+		return "not placed again (" + output.Sanitize(fmt.Sprint(sendErr)) + "); it is tried again at the next settle"
+	}
 	switch {
 	case err == nil && act.Kind == nipcashclient.ActionShow:
 		parent.State, parent.Detail = ledger.CallStuck, act.Reason

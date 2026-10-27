@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -345,5 +346,43 @@ func TestSettle_ConsolidateDoneWithATombstone(t *testing.T) {
 	}
 	if len(fresh.Handoffs) != 0 {
 		t.Errorf("handoffs %+v, want none", fresh.Handoffs)
+	}
+}
+
+// CC-A6: a re-placement written ahead but never published leaves the parent
+// open (not replaced), drops the derived call and its id, and is placed again
+// under the same derived id at the next settle.
+func TestSettle_ReplacementNotSentLeavesTheParentOpen(t *testing.T) {
+	_, id, c, h := lostProtect(t)
+	h.bill("tok-a", nipcash.BySecret("stok-a"), 1000) // the Hub never saw it
+	withLookup(t, func(*ledger.Call) (nipcashclient.LookupOutcome, error) {
+		return nipcashclient.LookupOutcome{Status: nipcash.LookupUnknown}, nil
+	})
+	hooks := installFakeCaller(t)
+	move := hooks.transfer
+	hooks.transfer = func(*ledger.Entry, nipcash.CashTransferParams) (*nipcash.CashTransferResult, error) {
+		return nil, &notSentError{errors.New("proof of work over the cap")}
+	}
+	l := settleNow(t)
+	parent, _ := l.FindCall(c.CallID)
+	if !parent.Open() || parent.State == ledger.CallReplaced {
+		t.Fatalf("parent %+v; want still open", parent)
+	}
+	derived, _ := nipcash.DerivedRequestID(c.RequestID)
+	if _, ok := l.FindCall(ledger.CallIDFor(derived)); ok {
+		t.Error("the never-sent derived call is still recorded")
+	}
+	if rec, _ := ledger.DerivedRecorded(derived); rec {
+		t.Error("the never-sent derived id is still recorded: no later re-placement could be made")
+	}
+	hooks.transfer = move
+	l = settleNow(t)
+	parent, _ = l.FindCall(c.CallID)
+	child, ok := l.FindCall(ledger.CallIDFor(derived))
+	if parent.State != ledger.CallReplaced || !ok || child.State != ledger.CallDone {
+		t.Fatalf("after the second settle: parent %+v, child %+v (%v); want replaced and done", parent, child, ok)
+	}
+	if e, _ := l.Find(id); e.CashProtection != ledger.CashProtected {
+		t.Error("the re-placed protect did not apply")
 	}
 }

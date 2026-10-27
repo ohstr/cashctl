@@ -26,7 +26,7 @@ import (
 // Its outcome then decides the row: a result applies and closes it, BAD_REQUEST
 // closes it not applied, a tombstone closes it and marks the bill it names spent, any
 // other answer — or none — keeps it open to be looked up, and a call never sent
-// is removed. A bill with an open call is never spent again until that call is
+// is closed as not sent. A bill with an open call is never spent again until that call is
 // settled.
 
 // Call purposes.
@@ -80,6 +80,8 @@ type ledgerJournal struct {
 	l       *ledger.Ledger
 	spec    callSpec
 	callIDs []string
+	// derived is every derived id this journal recorded (a re-placement).
+	derived []string
 }
 
 // WriteAhead records calls, saves and reads each back. Any failure removes
@@ -160,14 +162,22 @@ func (j *ledgerJournal) WriteAhead(_ context.Context, calls []nipcash.PendingCal
 
 // RecordDerived records a derived id placed from here.
 func (j *ledgerJournal) RecordDerived(_ context.Context, id string, keepUntil int64) error {
-	return ledger.InsertDerived(id, "", nil, keepUntil)
+	if err := ledger.InsertDerived(id, "", nil, keepUntil); err != nil {
+		return err
+	}
+	j.derived = append(j.derived, id)
+	return nil
 }
 
 // RecordDerivedFrom records a derived id with the request id it replaces
 // (nipcash/client.DerivedParentRecorder): the derived call's row then names
 // its parent even when it is written once, through the send path.
 func (j *ledgerJournal) RecordDerivedFrom(_ context.Context, id, parent string, keepUntil int64) error {
-	return ledger.InsertDerived(id, parent, nil, keepUntil)
+	if err := ledger.InsertDerived(id, parent, nil, keepUntil); err != nil {
+		return err
+	}
+	j.derived = append(j.derived, id)
+	return nil
 }
 
 var _ nipcashclient.DerivedParentRecorder = (*ledgerJournal)(nil)
@@ -280,6 +290,26 @@ func closeCall(l *ledger.Ledger, c *ledger.Call, state, detail string) {
 	c.AuthorizerSecret, c.TargetCredential = "", ""
 }
 
+// detailNotSent is the detail of a call written ahead and never published.
+const detailNotSent = "not_sent"
+
+// closeNotSent closes a call written ahead that never reached the Hub: kept as
+// a record, final, with its secrets wiped.
+func closeNotSent(l *ledger.Ledger, c *ledger.Call) {
+	if c == nil {
+		return
+	}
+	closeCall(l, c, ledger.CallNotApplied, detailNotSent)
+	_ = l.Save()
+}
+
+// sentNothing reports a placement error that guarantees nothing reached the
+// Hub: the dial failed, or nmilat never published.
+func sentNothing(err error) bool {
+	var notSent *notSentError
+	return errors.As(err, &notSent) || errors.Is(err, nipcashclient.ErrNotSent) || errors.Is(err, nipcashclient.ErrPowTooHard)
+}
+
 // placeErr turns a placed call's failure into its outcome on the ledger and the
 // user's error. j is the journal it was placed with (it knows whether a call
 // was written); verb names the action; ids are the source entries.
@@ -294,20 +324,14 @@ func placeErr(cmd *cobra.Command, l *ledger.Ledger, j *ledgerJournal, err error,
 	var indeterminate *nipcashclient.IndeterminateError
 	switch {
 	case errors.Is(err, nipcashclient.ErrPowTooHard):
-		if c != nil {
-			l.RemoveCall(c.CallID)
-			_ = l.Save()
-		}
+		closeNotSent(l, c)
 		return output.RuntimeError(cmd, fmt.Errorf(
 			"not placed — this Hub's relays ask for more proof of work than cashctl does (%s caps it at difficulty %d); your money has not moved: %w",
 			powMaxEnv, mustPowMax(), err))
 	case errors.Is(err, nipcashclient.ErrNotSent) || (c == nil && errors.Is(err, nipcashclient.ErrNoJournal)):
 		// Written ahead but never published, or never written: nothing reached
 		// the Hub.
-		if c != nil {
-			l.RemoveCall(c.CallID)
-			_ = l.Save()
-		}
+		closeNotSent(l, c)
 		return output.RuntimeError(cmd, fmt.Errorf("not placed — your money has not moved: %w", err))
 	case errors.Is(err, nipcashclient.ErrHubUnusable):
 		return output.RuntimeError(cmd, fmt.Errorf(

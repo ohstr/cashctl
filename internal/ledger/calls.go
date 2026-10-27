@@ -275,6 +275,18 @@ func InsertDerived(requestID, parentRequestID string, deadline *int64, keepUntil
 	return err
 }
 
+// RemoveDerived drops a recorded derived id whose call never reached the Hub,
+// so the same re-placement may be made again.
+func RemoveDerived(requestID string) error {
+	db, err := store.Open()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = db.Close() }()
+	_, err = db.Exec(`DELETE FROM derived_ids WHERE request_id = ?`, requestID)
+	return err
+}
+
 // DerivedParent is the request id a recorded derived id was derived from, or
 // "" when it was recorded without one (or not at all).
 func DerivedParent(requestID string) (string, error) {
