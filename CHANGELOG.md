@@ -5,6 +5,7 @@
 - Adds `cash mint`, which mints a bill over a `cashhub1` connection after the
   online check; a mint whose reply is lost is finished by `cash settle`, and one
   the Hub never saw is minted again only with `cash settle --replace`.
+  ([#133](https://github.com/ohstr/cashctl/pull/133))
 - Changes `join` to take only a `circlehub1` string, check that the Hub answers
   as the identity and chain it names, and go over the private transport every
   time; `--private` is removed. A string whose signature doesn't verify is used
