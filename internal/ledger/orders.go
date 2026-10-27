@@ -44,29 +44,60 @@ type Order struct {
 	FinishedAt     int64    `json:"finished_at,omitempty"`
 }
 
-// PutOrder writes o (insert or replace).
-func PutOrder(o Order) error {
+// execer is a *sql.DB or a *sql.Tx.
+type execer interface {
+	Exec(query string, args ...any) (sql.Result, error)
+}
+
+func putOrder(db execer, o Order) error {
 	if o.CreatedAt == 0 {
 		o.CreatedAt = time.Now().Unix()
 	}
 	relays, _ := json.Marshal(o.AcceptedRelays)
+	_, err := db.Exec(`INSERT OR REPLACE INTO orders (order_id, call_id, notify, payment, amount_millis, recipient_kind,
+		recipient, hub_identity, chain, network, conn_verified, state, saw_progress, terms_changed, pay_by, order_json,
+		accepted_relays, created_at, checked_at, finished_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		o.OrderID, o.CallID, o.Notify, o.Payment, o.AmountMillis, o.RecipientKind, o.Recipient, o.HubIdentity, o.Chain,
+		o.Network, o.ConnVerified, o.State, o.SawProgress, o.TermsChanged, nullInt(o.PayBy), orderNullString(o.OrderJSON),
+		string(relays), o.CreatedAt, nullInt(o.CheckedAt), nullInt(o.FinishedAt))
+	if err != nil {
+		return fmt.Errorf("cashctl.db: saving order %s: %w", o.OrderID, err)
+	}
+	return nil
+}
+
+// PutOrder writes o (insert or replace) on its own.
+func PutOrder(o Order) error {
 	return store.WithBusyRetry(func() error {
 		db, err := store.Open()
 		if err != nil {
 			return err
 		}
 		defer func() { _ = db.Close() }()
-		_, err = db.Exec(`INSERT OR REPLACE INTO orders (order_id, call_id, notify, payment, amount_millis, recipient_kind,
-			recipient, hub_identity, chain, network, conn_verified, state, saw_progress, terms_changed, pay_by, order_json,
-			accepted_relays, created_at, checked_at, finished_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			o.OrderID, o.CallID, o.Notify, o.Payment, o.AmountMillis, o.RecipientKind, o.Recipient, o.HubIdentity, o.Chain,
-			o.Network, o.ConnVerified, o.State, o.SawProgress, o.TermsChanged, nullInt(o.PayBy), orderNullString(o.OrderJSON),
-			string(relays), o.CreatedAt, nullInt(o.CheckedAt), nullInt(o.FinishedAt))
+		return putOrder(db, o)
+	})
+}
+
+// StageOrder has the next Save write o in the same transaction as the calls
+// and entries, so an order and the call that places it are written together.
+func (l *Ledger) StageOrder(o Order) {
+	l.stagedOrders = append(l.stagedOrders, o)
+}
+
+// DropStagedOrders forgets orders staged and not yet saved.
+func (l *Ledger) DropStagedOrders() { l.stagedOrders = nil }
+
+// DeleteOrder removes an order row.
+func DeleteOrder(id string) error {
+	return store.WithBusyRetry(func() error {
+		db, err := store.Open()
 		if err != nil {
-			return fmt.Errorf("cashctl.db: saving order %s: %w", o.OrderID, err)
+			return err
 		}
-		return nil
+		defer func() { _ = db.Close() }()
+		_, err = db.Exec(`DELETE FROM orders WHERE order_id = ?`, id)
+		return err
 	})
 }
 

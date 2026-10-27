@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ohstr/nmilat/nip57/nip57test"
 	"github.com/ohstr/nmilat/nipCO"
 	"github.com/ohstr/nmilat/nipcash"
 	nipcashclient "github.com/ohstr/nmilat/nipcash/client"
@@ -16,6 +17,7 @@ import (
 	"github.com/ohstr/cashctl/internal/appdir"
 	"github.com/ohstr/cashctl/internal/ledger"
 	"github.com/ohstr/cashctl/internal/output"
+	"github.com/ohstr/cashctl/internal/store"
 	"github.com/ohstr/cashctl/internal/testmint"
 )
 
@@ -75,7 +77,20 @@ func (f *fakeOrderHub) Place(ctx context.Context, p nipCO.CashOrderParams, j nip
 
 func (f *fakeOrderHub) open(amount uint64, payBy int64) *nipCO.Order {
 	return &nipCO.Order{State: nipCO.OrderOpen, Payment: nipCO.PaymentLightning, AmountMillis: amount, FeeMillis: 1000,
-		PayMillis: amount + 1000, Invoice: "lnfc1invoice", PayBy: payBy}
+		PayMillis: amount + 1000, Invoice: testInvoice(f.t, f.hubPriv, "fc", amount+1000, payBy), PayBy: payBy}
+}
+
+// testInvoice is a signed BOLT11 invoice of millis on currency that expires
+// at expiresAt.
+func testInvoice(t *testing.T, nodePriv, currency string, millis uint64, expiresAt int64) string {
+	t.Helper()
+	now := time.Now().Unix()
+	inv, err := nip57test.SignedBolt11(nip57test.Invoice{Currency: currency, AmountMillis: millis,
+		PaymentHash: mustHex(t, testmint.Hex32(t)), Timestamp: now, Expiry: expiresAt - now, NodePriv: nodePriv})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return inv
 }
 
 // minted is the order as it stands once paid and minted, its bill signed by
@@ -163,7 +178,7 @@ func TestOrderPlace_WritesAheadAndShowsWhatToPay(t *testing.T) {
 	if !f.writtenBeforeSend {
 		t.Error("the order went out before its call and row were written")
 	}
-	if doc["invoice"] != "lnfc1invoice" || doc["state"] != "open" || len(doc["warnings"].([]any)) == 0 {
+	if inv, _ := doc["invoice"].(string); !strings.HasPrefix(inv, "lnfc") || doc["state"] != "open" || len(doc["warnings"].([]any)) == 0 {
 		t.Errorf("--json %v", doc)
 	}
 	o, c := onlyOrder(t)
@@ -278,5 +293,94 @@ func TestOrder_EndedUnpaid(t *testing.T) {
 	}
 	if o, c := onlyOrder(t); o.State != ledger.OrderEndedUnpaid || c.State != ledger.CallDone {
 		t.Errorf("order %s, call %s", o.State, c.State)
+	}
+}
+
+// The order row is written in the same transaction as its call: when the row
+// can't be written, neither is the call, and nothing is sent.
+func TestOrderPlace_RowAndCallAreOneTransaction(t *testing.T) {
+	f, conn := setUpOrderHub(t)
+	db, err := store.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TRIGGER fail_orders BEFORE INSERT ON orders BEGIN SELECT RAISE(ABORT, 'injected'); END`); err != nil {
+		t.Fatal(err)
+	}
+	_ = db.Close()
+	if _, err := placeOrder(t, conn, "100"); err == nil {
+		t.Fatal("placed with an order row that can't be written")
+	}
+	l, _ := ledger.Load()
+	if len(l.Calls) != 0 || len(f.placed) != 0 {
+		t.Errorf("calls %d, placed %d: want neither", len(l.Calls), len(f.placed))
+	}
+}
+
+// validateOrder decodes the invoice: its amount is pay_millis, it expires by
+// pay_by, and it is on the Hub's chain.
+func TestValidateOrder_ChecksTheInvoice(t *testing.T) {
+	priv, _ := testmint.Key(t)
+	payBy := time.Now().Unix() + 600
+	o := &ledger.Order{Payment: nipCO.PaymentLightning, AmountMillis: 100_000, Chain: "flokicoin"}
+	order := func(inv string) *nipCO.Order {
+		return &nipCO.Order{Payment: nipCO.PaymentLightning, AmountMillis: 100_000, FeeMillis: 1000, PayMillis: 101_000, PayBy: payBy, Invoice: inv}
+	}
+	if err := validateOrder(o, order(testInvoice(t, priv, "fc", 101_000, payBy)), 0); err != nil {
+		t.Fatalf("a good invoice: %v", err)
+	}
+	for name, inv := range map[string]string{
+		"another amount": testInvoice(t, priv, "fc", 100_000, payBy),
+		"amountless":     testInvoice(t, priv, "fc", 0, payBy),
+		"expires late":   testInvoice(t, priv, "fc", 101_000, payBy+60),
+		"another chain":  testInvoice(t, priv, "bc", 101_000, payBy),
+		"not an invoice": "lnfc1invoice",
+	} {
+		if err := validateOrder(o, order(inv), 0); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}
+
+// watch reads the order once, then on each notice (never acting on the notice
+// itself), and stops when the order is finished.
+func TestOrderWatch_ReadsOnNotices(t *testing.T) {
+	f, conn := setUpOrderHub(t)
+	if _, err := placeOrder(t, conn, "100"); err != nil {
+		t.Fatal(err)
+	}
+	o, _ := onlyOrder(t)
+	o.AcceptedRelays = []string{"wss://accepted.example"}
+	_ = ledger.PutOrder(o)
+	prevPoll, prevGap, prevWatch := orderPollEvery, orderNoticeGap, watchNoticesFn
+	orderPollEvery, orderNoticeGap = time.Hour, time.Millisecond
+	notices := make(chan struct{}, 2)
+	var gotNotify string
+	var gotAccepted []string
+	watchNoticesFn = func(_ context.Context, _, notify string, accepted []string) (<-chan struct{}, func(), error) {
+		gotNotify, gotAccepted = notify, accepted
+		return notices, func() {}, nil
+	}
+	t.Cleanup(func() { orderPollEvery, orderNoticeGap, watchNoticesFn = prevPoll, prevGap, prevWatch })
+	lookups := 0
+	f.lookup = func(nipcash.PendingCall) (nipcashclient.LookupOutcome, *nipCO.Order, error) {
+		lookups++
+		if lookups == 1 {
+			notices <- struct{}{}
+			return nipcashclient.LookupOutcome{Status: nipcash.LookupDone}, f.open(100_000, time.Now().Unix()+600), nil
+		}
+		return nipcashclient.LookupOutcome{Status: nipcash.LookupDone}, f.minted(100_000), nil
+	}
+	c := orderCmd(newCashOrderWatchCmd(), nil)
+	var err error
+	captureStreams(t, func() { err = watchOrder(c, o.OrderID, 10*time.Second) })
+	if err != nil {
+		t.Fatalf("watch: %v", err)
+	}
+	if lookups != 2 || gotNotify != o.Notify || len(gotAccepted) != 1 || gotAccepted[0] != "wss://accepted.example" {
+		t.Errorf("lookups %d, notify match %v, accepted %v", lookups, gotNotify == o.Notify, gotAccepted)
+	}
+	if o, _ := onlyOrder(t); o.FinishedAt == 0 {
+		t.Error("the order did not finish")
 	}
 }

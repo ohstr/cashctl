@@ -273,32 +273,31 @@ type orderJournal struct {
 	order ledger.Order
 }
 
+// WriteAhead stages the order row so the ledger writes it in the same
+// transaction as its call, then reads both back.
 func (j *orderJournal) WriteAhead(ctx context.Context, calls []nipcash.PendingCall) error {
-	if err := j.ledgerJournal.WriteAhead(ctx, calls); err != nil {
-		return err
+	if len(calls) == 0 {
+		return errors.New("no order call to write")
 	}
-	c := j.call()
-	if c == nil {
-		return errors.New("the order's call was not written")
-	}
+	callID := ledger.CallIDFor(calls[len(calls)-1].RequestID)
 	o := j.order
-	if existing, ok, _ := ledger.OrderForCall(c.CallID); ok {
+	if existing, ok, _ := ledger.OrderForCall(callID); ok {
 		o = existing
 	} else if o.OrderID == "" {
-		o.OrderID = c.CallID
+		o.OrderID = callID
 	}
-	o.CallID = c.CallID
+	o.CallID = callID
 	if o.State == "" {
 		o.State = ledger.OrderPlacing
 	}
-	if err := ledger.PutOrder(o); err != nil {
-		j.l.RemoveCall(c.CallID)
-		_ = j.l.Save()
+	j.l.StageOrder(o)
+	if err := j.ledgerJournal.WriteAhead(ctx, calls); err != nil {
 		return err
 	}
-	if got, ok, err := ledger.FindOrder(o.OrderID); err != nil || !ok || got.Notify != o.Notify {
-		j.l.RemoveCall(c.CallID)
+	if got, ok, err := ledger.FindOrder(o.OrderID); err != nil || !ok || got.Notify != o.Notify || got.CallID != callID {
+		j.l.RemoveCall(callID)
 		_ = j.l.Save()
+		_ = ledger.DeleteOrder(o.OrderID)
 		return errors.New("cashctl.db: the order's write-ahead did not read back as written")
 	}
 	j.order = o
@@ -375,7 +374,7 @@ func validateOrder(o *ledger.Order, order *nipCO.Order, now int64) error {
 	case order.PayMillis != order.AmountMillis+order.FeeMillis:
 		return errors.New("pay_millis is not amount plus fee")
 	}
-	return nil
+	return checkOrderInvoice(order, o.Chain)
 }
 
 // applyOrderBills records each bill of order not yet held here: a cash note

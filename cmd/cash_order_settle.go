@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ohstr/nmilat/nipCO"
+	orderclient "github.com/ohstr/nmilat/nipCO/client"
 	"github.com/ohstr/nmilat/nipIC"
 	"github.com/ohstr/nmilat/nipcash"
 	nipcashclient "github.com/ohstr/nmilat/nipcash/client"
@@ -188,11 +189,34 @@ func newCashOrderWatchCmd() *cobra.Command {
 	return cmd
 }
 
-// orderPollEvery is how often watch reads an order.
+// orderPollEvery is how often watch reads a Lightning order until pay_by + 60 s.
 var orderPollEvery = 5 * time.Second
 
-// watchOrder reads an order every few seconds until it is finished or the
-// timeout passes; each answer is saved before the next.
+// orderNoticeGap is the least time between two reads a notice triggers.
+var orderNoticeGap = 2 * time.Second
+
+// watchNoticesFn subscribes to an order's notices (NIP-CO §Order Notice) on
+// the relays that accepted it first, then the connection's and the
+// announcement's. Each value on the channel is one verified notice; it says
+// only that something happened. Swapped in tests.
+var watchNoticesFn = func(ctx context.Context, cashorder, notify string, accepted []string) (<-chan struct{}, func(), error) {
+	hub, err := orderclient.Connect(ctx, cashorder, orderclient.Options{Session: sessionOptions()})
+	if err != nil {
+		return nil, func() {}, err
+	}
+	ch, err := hub.Watch(ctx, notify, accepted)
+	if err != nil {
+		hub.Close()
+		return nil, func() {}, err
+	}
+	return ch, hub.Close, nil
+}
+
+// watchOrder reads an order once, then again on each of its notices (one read
+// at a time, at most one per orderNoticeGap) and, for a Lightning order, every
+// orderPollEvery until pay_by + 60 s, since notices can be missed. It stops
+// when the order is finished or ended unpaid, or at the timeout. Each answer
+// is saved before the next; a notice never changes anything by itself.
 func watchOrder(cmd *cobra.Command, id string, timeout time.Duration) error {
 	o, ok, err := ledger.FindOrder(id)
 	if err != nil {
@@ -207,22 +231,65 @@ func watchOrder(cmd *cobra.Command, id string, timeout time.Duration) error {
 			timeout = time.Until(time.Unix(o.PayBy+60, 0))
 		}
 	}
-	stop := time.Now().Add(timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
 	device, _ := deviceIDFn()
-	for {
+	read := func() {
 		l, err := ledger.Load()
 		if err != nil {
-			return output.RuntimeError(cmd, err)
+			return
 		}
 		if c, ok := l.FindCall(o.CallID); ok && c.Open() {
 			settleOrderCall(cmd, l, c, device)
 		}
 		o, _, _ = ledger.FindOrder(id)
-		if o.FinishedAt != 0 || !time.Now().Add(orderPollEvery).Before(stop) {
-			break
-		}
-		time.Sleep(orderPollEvery)
 	}
+	read()
+	var notices <-chan struct{}
+	if o.FinishedAt == 0 {
+		if c, ok := mustCall(o.CallID); ok {
+			ch, closeFn, err := watchNoticesFn(ctx, c.TargetCredential, o.Notify, o.AcceptedRelays)
+			if err == nil {
+				notices = ch
+				defer closeFn()
+			} else {
+				jsonMode, _ := cmd.Flags().GetBool("json")
+				output.Notef(jsonMode, "Couldn't subscribe to the order's notices (%v); reading it on a timer instead.", output.Sanitize(err.Error()))
+			}
+		}
+	}
+	var poll <-chan time.Time
+	if o.Payment == nipCO.PaymentLightning {
+		t := time.NewTicker(orderPollEvery)
+		defer t.Stop()
+		poll = t.C
+	}
+	last := time.Now()
+	for o.FinishedAt == 0 {
+		if o.Payment == nipCO.PaymentLightning && o.PayBy > 0 && time.Now().Unix() > o.PayBy+60 {
+			poll = nil
+		}
+		select {
+		case <-ctx.Done():
+			goto done
+		case _, open := <-notices:
+			if !open {
+				notices = nil
+				continue
+			}
+			if wait := orderNoticeGap - time.Since(last); wait > 0 {
+				select {
+				case <-ctx.Done():
+					goto done
+				case <-time.After(wait):
+				}
+			}
+		case <-poll:
+		}
+		last = time.Now()
+		read()
+	}
+done:
 	if c, ok := mustCall(o.CallID); ok && c.Open() && c.State != ledger.CallOpenOrder {
 		return output.IndeterminateError(cmd, id, errors.New("the order's placement has no answer yet; nothing was resent — run `cashctl cash order settle`"))
 	}
