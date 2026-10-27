@@ -341,6 +341,11 @@ func receiveZap(cmd *cobra.Command, ev *nip01.Event, raw string) error {
 		if cred, err = credential.ParseCash(as); err != nil {
 			return output.InvalidInputError(cmd, output.RedactSecretInput(as), err)
 		}
+		// The key must be the zap's p, attested by its ia (Z-6): nothing is
+		// written ahead or sent for another account.
+		if att, aErr := credential.ConnectionKeyAttestation(as); aErr != nil || !strings.EqualFold(string(att.ConnectionKey), z.Recipient.Value) || !strings.EqualFold(att.PubKey, z.IA) {
+			return output.InvalidInputError(cmd, output.RedactSecretInput(as), errors.New("this --as is not the connection key the zap names, attested by its Identity Authority"))
+		}
 		if idErr != nil {
 			return output.RuntimeError(cmd, fmt.Errorf("a claimed zap moves to your local identity, which isn't set up: %w", idErr))
 		}

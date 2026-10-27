@@ -321,3 +321,22 @@ func TestSettleZapClaim_RefusedFreesTheZap(t *testing.T) {
 		t.Fatalf("receive again: %v", err)
 	}
 }
+
+// Z-6: a claim with another account's connection key is refused before
+// anything is written ahead or sent.
+func TestReceiveZap_ConnectionKeyMustMatchTheZap(t *testing.T) {
+	other := newKeyZapFixture(t)
+	f := newKeyZapFixture(t)
+	hooks := installFakeCaller(t)
+	sent := false
+	hooks.transfer = func(*ledger.Entry, nipcash.CashTransferParams) (*nipcash.CashTransferResult, error) {
+		sent = true
+		return &nipcash.CashTransferResult{AmountMillis: 21000}, nil
+	}
+	if _, err := runReceiveZap(t, []string{f.keyRaw}, map[string]string{"trust-minter": "true", "as": other.as}); output.ExitCode(err) != 3 {
+		t.Fatalf("another key: %v", err)
+	}
+	if l, _ := ledger.Load(); sent || len(l.Calls) != 0 {
+		t.Errorf("sent %v, calls %d", sent, len(l.Calls))
+	}
+}

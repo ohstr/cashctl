@@ -76,6 +76,20 @@ func ParseCash(s string) (nipcash.Credential, error) {
 	}
 }
 
+// ConnectionKeyAttestation is the attestation a connection-key credential
+// string names (its connection key, user and issuer), for checks before use.
+func ConnectionKeyAttestation(s string) (*nipIC.Attestation, error) {
+	rest, ok := strings.CutPrefix(s, "connection-key:")
+	if !ok {
+		return nil, fmt.Errorf("not a connection-key credential")
+	}
+	_, _, _, attestationFile, err := splitConnectionKey(rest)
+	if err != nil {
+		return nil, err
+	}
+	return loadAttestation(attestationFile)
+}
+
 // ParseCircle parses a NIP-CW credential string. NIP-CW has only one mode:
 //
 //	pubkey:<privkey>
