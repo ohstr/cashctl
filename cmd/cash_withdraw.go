@@ -643,6 +643,18 @@ func sendWithdrawal(cmd *cobra.Command, e *ledger.Entry, q *nipcash.WithdrawQuot
 			w.State, w.FinishedAt = refusedWithdrawState(c), time.Now().Unix()
 			_ = ledger.PutWithdrawal(w)
 		}
+		// A tombstone naming a withdrawal: another copy of this wallet withdrew
+		// the bill. That withdrawal is followed from here (XQ-29(2)).
+		var gone *nipcash.BillGone
+		if errors.As(err, &gone) && gone.Tombstone.WithdrawRequestID != "" {
+			if _, known := l.FindCall(ledger.CallIDFor(gone.Tombstone.WithdrawRequestID)); !known {
+				if src, ok := l.Find(e.ID); ok {
+					if w, rErr := recoverWithdrawal(cmd, l, src, gone.Tombstone.WithdrawRequestID); rErr == nil {
+						output.Notef(jsonMode, "This bill was withdrawn from another copy of this wallet (withdrawal %s); `cashctl cash withdraw show %s` follows it.", w.WithdrawalID, w.WithdrawalID)
+					}
+				}
+			}
+		}
 		return pErr
 	}
 	crashpoint.Hit("calls.before_apply")

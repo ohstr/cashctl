@@ -465,3 +465,24 @@ func TestWithdraw_RefusesARedeemingBill(t *testing.T) {
 		}
 	}
 }
+
+// W-4: a tombstone naming another copy's withdrawal recovers that withdrawal,
+// so it is followed from here.
+func TestWithdraw_TombstoneWithAWithdrawalIsRecovered(t *testing.T) {
+	f, entryID := setUpWithdraw(t)
+	handle := runWithdrawQuote(t)["quote"].(string)
+	rid, _ := nipcash.NewRequestID()
+	f.answer = func(nipcash.PendingCall) (*nipcash.Payout, error) {
+		return nil, &nipcash.BillGone{Method: nipcash.MethodCashWithdraw, Tombstone: nipcash.Tombstone{Reason: "redeemed", WithdrawRequestID: rid}}
+	}
+	if _, err := runWithdrawSend(t, nil, map[string]string{"quote": handle, "yes": "true"}); output.ExitCode(err) != 10 {
+		t.Fatalf("tombstone: %v", err)
+	}
+	l, _ := ledger.Load()
+	if e, _ := l.Find(entryID); e.Status != ledger.StatusWithdrawn {
+		t.Errorf("bill %s, want withdrawn", e.Status)
+	}
+	if w, ok, _ := ledger.WithdrawalForCall(ledger.CallIDFor(rid)); !ok || !w.Recovered {
+		t.Errorf("the other copy's withdrawal was not recovered: %+v (%v)", w, ok)
+	}
+}
