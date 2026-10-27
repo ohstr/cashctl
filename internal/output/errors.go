@@ -126,6 +126,18 @@ type CLIError struct {
 	// Reason is cashctl's own finer cause within Code (connection_invalid,
 	// connection_mismatch, not_accepting, ...): --json's "reason".
 	Reason string
+	// Detail is the Hub's own detail on a refusal (one of NIP-CASH's eight wire
+	// values, such as quote_expired): --json's "detail".
+	Detail string
+}
+
+// WithDetail sets the --json "detail" of err, a *CLIError.
+func WithDetail(err error, detail string) error {
+	var ce *CLIError
+	if errors.As(err, &ce) {
+		ce.Detail = detail
+	}
+	return err
 }
 
 // WithReason sets the --json "reason" of err, a *CLIError.

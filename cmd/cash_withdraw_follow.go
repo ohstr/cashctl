@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -24,10 +25,25 @@ func withdrawPending(c *ledger.Call, w ledger.Withdrawal) nipcash.PendingCall {
 
 // settleWithdrawCall reads one withdrawal and records what the Hub says.
 func settleWithdrawCall(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, device string) string {
+	summary, _ := settleWithdrawOne(cmd, l, c, device)
+	return summary
+}
+
+// settleWithdrawOne is settleWithdrawCall, also returning the withdrawal as
+// recorded (its ReceivedAt set by the save that made it final).
+func settleWithdrawOne(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, device string) (string, *ledger.Withdrawal) {
 	w, ok, err := ledger.WithdrawalForCall(c.CallID)
 	if err != nil || !ok {
-		return "no withdrawal record"
+		return "no withdrawal record", nil
 	}
+	summary := settleWithdrawInto(cmd, l, c, device, &w)
+	return summary, &w
+}
+
+func settleWithdrawInto(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, device string, wp *ledger.Withdrawal) string {
+	w := *wp
+	defer func() { *wp = w }()
+	var err error
 	cred, err := callCredential(cmd, c)
 	if err != nil {
 		c.State, c.Detail = ledger.CallStuck, "needs_credential"
@@ -55,7 +71,21 @@ func settleWithdrawCall(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, de
 		_ = l.Save()
 		return ""
 	}
+	if c.FirstDetail == string(nipcash.DetailQuoteExpired) && !w.QuoteExpiredSeen {
+		w.QuoteExpiredSeen = true
+		_ = ledger.PutWithdrawal(w)
+	}
+	if act.Kind == nipcashclient.ActionReplace && w.QuoteExpiredSeen {
+		// A call of this withdrawal was refused quote_expired: its quote can't be
+		// sent again on cashctl's own initiative.
+		c.State, c.Detail, c.UpdatedAt = ledger.CallStuck, "quote_expired", time.Now().Unix()
+		_ = l.Save()
+		return "the quote expired: quote again (`cashctl cash withdraw quote`) and send the new quote"
+	}
 	if act.Kind == nipcashclient.ActionWait && payout != nil {
+		if w.Recovered && w.PayoutMillis == 0 {
+			adoptRecoveredPayout(&w, payout)
+		}
 		if err := applyPayout(cmd, l, c, &w, payout); err != nil {
 			return "the payout doesn't check out; kept"
 		}
@@ -83,7 +113,16 @@ func newCashWithdrawShowCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().Bool("local", false, "print what is stored, with no network")
+	cmd.Flags().Bool("tx", false, "print the payout's raw transaction when it pays exactly this address (cashctl never broadcasts it)")
+	cmd.Flags().Bool("receipt", false, "print the Hub's signed receipt (keep it private)")
 	return cmd
+}
+
+func txCheckText(check string) string {
+	if check == "mismatch" {
+		return "the transaction the Hub sent doesn't pay this address exactly; don't broadcast it"
+	}
+	return "the Hub hasn't sent a signed transaction"
 }
 
 func showWithdrawals(cmd *cobra.Command, ids []string, local bool) error {
@@ -115,16 +154,42 @@ func showWithdrawals(cmd *cobra.Command, ids []string, local bool) error {
 			return output.RuntimeError(cmd, err)
 		}
 		device, _ := deviceIDFn()
-		for _, w := range pick {
+		for i, w := range pick {
 			if c, ok := l.FindCall(w.CallID); ok && c.Open() {
-				settleWithdrawCall(cmd, l, c, device)
+				if _, got := settleWithdrawOne(cmd, l, c, device); got != nil {
+					pick[i].ReceivedAt = got.ReceivedAt
+				}
 			}
 		}
 	}
+	showTx, _ := cmd.Flags().GetBool("tx")
+	showReceipt, _ := cmd.Flags().GetBool("receipt")
 	views := []map[string]any{}
 	for _, w := range pick {
 		fresh, _, _ := ledger.FindWithdrawal(w.WithdrawalID)
-		views = append(views, withdrawalView(fresh))
+		fresh.ReceivedAt = w.ReceivedAt
+		v := withdrawalView(fresh)
+		var p nipcash.Payout
+		_ = json.Unmarshal([]byte(fresh.PayoutJSON), &p)
+		if showTx {
+			if txCheck(fresh, p) == "ok" {
+				v["tx"] = p.Tx
+				if !jsonMode {
+					output.Printf("%s\n", p.Tx)
+					output.Notef(false, "Broadcast it with any node or service you trust; cashctl never broadcasts it.")
+				}
+			} else if !jsonMode {
+				output.Notef(false, "No transaction to broadcast for %s (%s).", fresh.WithdrawalID, txCheckText(txCheck(fresh, p)))
+			}
+		}
+		if showReceipt && p.Receipt != "" {
+			v["receipt"] = p.Receipt
+			if !jsonMode {
+				output.Printf("%s\n", p.Receipt)
+				output.Notef(false, "The Hub's signed promise for this payout; keep it private.")
+			}
+		}
+		views = append(views, v)
 		if !jsonMode {
 			output.Printf("withdrawal %s: %s\n", fresh.WithdrawalID, withdrawalText(fresh))
 		}
@@ -286,4 +351,60 @@ func replaceWithdrawalByUser(cmd *cobra.Command, l *ledger.Ledger, id, device st
 		output.Println(summary)
 	}
 	return printWithdrawal(cmd, fresh, nil)
+}
+
+// adoptRecoveredPayout fills a recovered withdrawal from its first payout: the
+// numbers the Hub states, and the quote id its receipt names.
+func adoptRecoveredPayout(w *ledger.Withdrawal, p *nipcash.Payout) {
+	w.Address, w.AmountMillis, w.FeeMillis, w.PayoutMillis, w.SentBy = p.Address, p.AmountMillis, p.FeeMillis, p.PayoutMillis, p.SentBy
+	if id, err := nipcash.ReceiptQuoteID(p.Receipt); err == nil {
+		w.QuoteID = id
+	}
+}
+
+// withdrawRequestIDOf is the withdraw_request_id a cash_status answer names: on
+// the tombstone of a bill a withdrawal destroyed, or on the row it ended.
+func withdrawRequestIDOf(res *nipcash.CashStatusResult) string {
+	if res == nil {
+		return ""
+	}
+	if res.Tombstone != nil {
+		return res.Tombstone.WithdrawRequestID
+	}
+	for _, r := range res.Recipients {
+		if r.WithdrawRequestID != "" {
+			return r.WithdrawRequestID
+		}
+	}
+	return ""
+}
+
+// recoverWithdrawal records a withdrawal of e that this device has no record
+// of (its data was lost, or it was placed elsewhere): the bill is withdrawn,
+// and a call of device "recovered" is looked up with that request id. It is
+// never re-placed; its receipt is checked against the payout it answers with,
+// and its quote id is taken from the receipt.
+func recoverWithdrawal(cmd *cobra.Command, l *ledger.Ledger, e *ledger.Entry, rid string) (ledger.Withdrawal, error) {
+	kind, pub, secret := authorizerOf(cmd, e, nil)
+	var amount uint64
+	if e.AmountMillis != nil {
+		amount = *e.AmountMillis
+	}
+	c, err := l.AddCall(ledger.Call{RequestID: rid, Method: nipcash.MethodCashWithdraw, Purpose: purposeWithdraw,
+		Deadline: time.Now().Unix(), SentH: 60, HubIdentity: xOnlyMinter(e), Target: e.WalletPubkey, TargetCredential: e.Token,
+		DeviceID: ledger.DeviceRecovered, AmountMillis: amount, Chain: chainOfToken(e.Token), AuthorizerKind: kind,
+		AuthorizerPubkey: pub, AuthorizerSecret: secret, SourceEntryIDs: []string{e.ID}, ParamsJSON: "{}", State: ledger.CallLookup,
+		Detail: "recovered"})
+	if err != nil {
+		return ledger.Withdrawal{}, err
+	}
+	callID := c.CallID
+	_ = l.SetStatus(e.ID, ledger.StatusWithdrawn)
+	l.AppendHistory("withdraw", "found a withdrawal this device has no record of (withdrawal "+callID+")")
+	if err := l.Save(); err != nil {
+		return ledger.Withdrawal{}, err
+	}
+	w := ledger.Withdrawal{WithdrawalID: callID, CallID: callID, SourceEntryID: e.ID, WalletPubkey: e.WalletPubkey,
+		HubIdentity: xOnlyMinter(e), AmountMillis: amount, State: ledger.WithdrawSending, Recovered: true}
+	return w, ledger.PutWithdrawal(w)
 }
