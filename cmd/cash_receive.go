@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ohstr/nmilat/nipCZ"
 	"github.com/ohstr/nmilat/nipcash"
 	"github.com/spf13/cobra"
 
@@ -57,6 +58,10 @@ func runCashReceive(cmd *cobra.Command, args []string) error {
 		ev, evRaw, err := readZapEvent(cmd, zapFlag)
 		if err != nil {
 			return err
+		}
+		// The bill received is the one typed, never another the event carries.
+		if z, zErr := nipCZ.ParseCashZap(ev); zErr == nil && !strings.EqualFold(strings.TrimSpace(raw), z.Cash) {
+			return output.InvalidInputError(cmd, "", errors.New("--zap-event names a different bill than the one given"))
 		}
 		return receiveZap(cmd, ev, evRaw)
 	}

@@ -138,6 +138,10 @@ func decodeCashZap(cmd *cobra.Command, value string, jsonMode, check bool) error
 		if err := json.Unmarshal(b, target); err != nil {
 			return output.InvalidInputError(cmd, tf, fmt.Errorf("not a Nostr event: %w", err))
 		}
+		// Rule 7 trusts the target's tags only after its signature.
+		if err := target.Verify(); err != nil {
+			return output.InvalidInputError(cmd, tf, fmt.Errorf("the target event's signature doesn't check out: %w", err))
+		}
 	}
 	v := nipCZ.VerifyClient(ev, target, nil, trust)
 	out := map[string]any{"type": "cash_zap", "rules": ruleRows(v), "countable": v.Countable, "minter_pubkey": v.Minter}

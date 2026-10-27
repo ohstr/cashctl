@@ -276,3 +276,45 @@ func tagValue(ev *nip01.Event, name string) string {
 	}
 	return ""
 }
+
+// Z-3: --zap-event must name the bill given; Z-4: decode --target verifies the
+// target's signature before rule 7 trusts it.
+func TestZap_EventMustMatchBillAndTargetVerified(t *testing.T) {
+	f := newZapFixture(t)
+	installZapHub(t, &fakeZapHub{res: f.mine(21000, false)})
+	other := newZapFixtureSameDir(t, f)
+	path := filepath.Join(t.TempDir(), "zap.json")
+	_ = os.WriteFile(path, []byte(other.raw), 0o600)
+	if _, err := runReceiveZap(t, []string{f.bill}, map[string]string{"zap-event": path, "trust-minter": "true"}); output.ExitCode(err) != 3 {
+		t.Fatalf("--zap-event of another bill: %v", err)
+	}
+	if l, _ := ledger.Load(); len(l.Held()) != 0 {
+		t.Fatal("a bill was kept from a mismatched event")
+	}
+
+	var note nip01.Event
+	b, _ := os.ReadFile(f.target)
+	_ = json.Unmarshal(b, &note)
+	note.Content = "forged"
+	forged, _ := json.Marshal(note)
+	fp := filepath.Join(t.TempDir(), "forged.json")
+	_ = os.WriteFile(fp, forged, 0o600)
+	c := zapCmd(newDecodeCmd(), map[string]string{"target": fp})
+	c.SetArgs([]string{f.raw})
+	var err error
+	captureStreams(t, func() { err = c.Execute() })
+	if output.ExitCode(err) != 3 {
+		t.Errorf("forged target: %v", err)
+	}
+}
+
+// newZapFixtureSameDir is a second zap to the same identity, from f's minter.
+func newZapFixtureSameDir(t *testing.T, f *zapFixture) *zapFixture {
+	t.Helper()
+	priv, _ := identity.Resolve(nil)
+	sender, _ := testmint.Key(t)
+	note, _ := nip01.NewSignedEvent(1, "another note", priv)
+	ev, bill := testmint.CashZap(t, f.minterPriv, sender, note, 21000)
+	raw, _ := json.Marshal(ev)
+	return &zapFixture{me: f.me, minterPriv: f.minterPriv, minterX: f.minterX, ev: ev, bill: bill, raw: string(raw)}
+}
