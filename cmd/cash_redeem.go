@@ -17,7 +17,6 @@ import (
 
 	"github.com/ohstr/cashctl/internal/config"
 	"github.com/ohstr/cashctl/internal/credential"
-	"github.com/ohstr/cashctl/internal/dial"
 	"github.com/ohstr/cashctl/internal/ledger"
 	"github.com/ohstr/cashctl/internal/output"
 )
@@ -1176,22 +1175,6 @@ func truncateInvoiceForDisplay(invoice string) string {
 // those fall back to naming just the connection kind. A caller that never
 // registers the destination finds out it doesn't dial from the failure
 // that follows, not from what got printed here first.
-
-func safeDestinationLabel(raw string) string {
-	switch dial.Sniff(raw) {
-	case dial.KindNWCURI:
-		if info, err := nip47.ParsePairingURI(raw); err == nil && len(info.WalletPubkey) >= 8 {
-			return "wallet " + info.WalletPubkey[:8] + "…"
-		}
-		return "a wallet connection"
-	case dial.KindCashHub:
-		return "a Cash Hub connection"
-	case dial.KindCircleHub:
-		return "a Circle Hub connection"
-	default:
-		return "the given connection"
-	}
-}
 
 // resolveAmount returns entry's known amount, or discovers it live via
 // CheckClaim if it isn't cached yet — e.g. a cash_transfer split

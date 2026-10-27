@@ -16,6 +16,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/ohstr/cashctl/internal/dial"
+	"github.com/ohstr/cashctl/internal/extwallet"
 	"github.com/ohstr/cashctl/internal/identity"
 	"github.com/ohstr/cashctl/internal/output"
 )
@@ -231,7 +232,7 @@ func decodeNpub(cmd *cobra.Command, value string, jsonMode bool) error {
 }
 
 func decodeNWCURI(cmd *cobra.Command, value string, jsonMode bool) error {
-	pairing, err := nip47.ParsePairingURI(value)
+	pairing, err := extwallet.Parse(value)
 	if err != nil {
 		return output.InvalidInputError(cmd, value, err)
 	}

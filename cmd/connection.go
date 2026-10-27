@@ -14,6 +14,7 @@ import (
 
 	"github.com/ohstr/cashctl/internal/config"
 	"github.com/ohstr/cashctl/internal/dial"
+	"github.com/ohstr/cashctl/internal/extwallet"
 	"github.com/ohstr/cashctl/internal/output"
 )
 
@@ -156,7 +157,7 @@ func ResolveConnectionValue(cmd *cobra.Command) (value string, ok bool, err erro
 // later, on the first command that needed the wallet, as a confusing
 // "not a valid connection string" far from where the mistake was made.
 func validateConnectionValue(value string) error {
-	if _, err := nip47.ParsePairingURI(value); err == nil {
+	if _, err := extwallet.Parse(value); err == nil {
 		return nil
 	}
 	// Classified before decoding: nipcash.Decode accepts any HRP, so a Hub
@@ -190,8 +191,8 @@ func (e *wrongConnectionKindError) Error() string { return e.msg }
 // carries the identical pairing data, just packaged differently — see
 // `connect add`'s own "pairing-uri-or-cash-token" acceptance).
 func DialGeneric(ctx context.Context, value string) (*relayclient.NWCClient, error) {
-	if pairing, err := nip47.ParsePairingURI(value); err == nil {
-		return relayclient.NewNWCClient(ctx, pairing, nip47.EncryptionNIP44V2)
+	if extwallet.IsURI(value) {
+		return extwallet.Dial(ctx, value)
 	}
 	tok, err := nipcash.Decode(value)
 	if err != nil {
@@ -208,4 +209,20 @@ func connectionKindOf(value string) string {
 		return config.KindCashToken
 	}
 	return config.KindNWC
+}
+
+func safeDestinationLabel(raw string) string {
+	switch dial.Sniff(raw) {
+	case dial.KindNWCURI:
+		if label := extwallet.Label(raw); label != "" {
+			return label
+		}
+		return "a wallet connection"
+	case dial.KindCashHub:
+		return "a Cash Hub connection"
+	case dial.KindCircleHub:
+		return "a Circle Hub connection"
+	default:
+		return "the given connection"
+	}
 }
