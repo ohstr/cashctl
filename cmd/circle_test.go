@@ -152,6 +152,7 @@ func newTestJoinCmd() *cobra.Command {
 	c.Flags().String("max-receive", "", "")
 	c.Flags().Bool("allow-unverified", false, "")
 	c.Flags().String("backup-file", "", "")
+	c.Flags().Bool("accept-no-rotation", false, "")
 	return c
 }
 

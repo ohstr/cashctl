@@ -74,6 +74,11 @@ func moveCash(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entry, cred ni
 // answer leaves that note's move open (its key kept on the entry, looked up
 // later) and returns the indeterminate error.
 func moveCashNotesToKey(cmd *cobra.Command, l *ledger.Ledger, ids []string, priv, pub string) ([]string, error) {
+	// Refused before any note is touched: a note whose earlier move is still
+	// open keeps that move's key, which may be all that spends it now.
+	if err := refuseLocked(cmd, l, ids); err != nil {
+		return nil, err
+	}
 	var moved []string
 	for _, id := range ids {
 		e, ok := l.Find(id)
@@ -89,7 +94,11 @@ func moveCashNotesToKey(cmd *cobra.Command, l *ledger.Ledger, ids []string, priv
 			if output.AsCLIError(err).Code == output.CodeIndeterminate {
 				return moved, err
 			}
-			e.PendingThrowawayKey = ""
+			// Only the key this run set is cleared, and only once no call of
+			// this move is left open.
+			if _, open := l.OpenCallFor(id); !open && e.PendingThrowawayKey == priv {
+				e.PendingThrowawayKey = ""
+			}
 			_ = l.Save()
 			if uErr := undoMoves(cmd, l, moved); uErr != nil {
 				return nil, withRecovery(err, uErr)
@@ -302,7 +311,8 @@ func settlePendingMoves(cmd *cobra.Command, l *ledger.Ledger) error {
 		if e.Status != ledger.StatusHeld {
 			continue
 		}
-		if e.PendingThrowawayKey != "" && settlePendingKey(e) {
+		_, open := l.OpenCallFor(e.ID)
+		if e.PendingThrowawayKey != "" && settlePendingKey(e, open) {
 			changed = true
 			if e.PendingThrowawayKey == "" && e.ThrowawayKey != "" {
 				// The key spends the note: its move happened.
@@ -322,13 +332,20 @@ func settlePendingMoves(cmd *cobra.Command, l *ledger.Ledger) error {
 }
 
 // settlePendingKey resolves a move onto a throwaway key, reporting a change.
-func settlePendingKey(e *ledger.Entry) bool {
+// While the move's call is open (open), the probe may only promote: the Hub can
+// still commit the move up to its deadline, so an old secret that spends the
+// note today says nothing final, and the key must survive until the call
+// engine closes the call.
+func settlePendingKey(e *ledger.Entry, open bool) bool {
 	if _, err := utils.GetPublicKey(e.PendingThrowawayKey); err != nil {
 		return false
 	}
 	if ok, err := probeCredentialFn(e, nipcash.BySigning(e.PendingThrowawayKey)); err == nil && ok {
 		promoteThrowaway(e)
 		return true
+	}
+	if open {
+		return false
 	}
 	if ok, err := probeCredentialFn(e, nipcash.BySecret(e.CashSecret)); err == nil && ok {
 		e.PendingThrowawayKey = ""

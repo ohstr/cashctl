@@ -81,7 +81,8 @@ func runCashSettle(cmd *cobra.Command, _ []string) error {
 		settled = append(settled, settleCalls(cmd, l, settleOptions{})...)
 	}
 	joins, joinsOpen := settleJoins(cmd, device)
-	return reportSettle(cmd, l, settled, joins, joinsOpen, device, jsonMode)
+	redeems, redeeming := settleRedeeming(cmd, l)
+	return reportSettle(cmd, l, settled, joins, joinsOpen, redeems, redeeming > 0, device, jsonMode)
 }
 
 // nextDue is when the earliest open call becomes worth asking about again.
@@ -146,7 +147,7 @@ func callRecovery(c *ledger.Call) string {
 
 // reportSettle prints every call looked at and every call still open, and exits
 // 8 while anything placed from this file is still open.
-func reportSettle(cmd *cobra.Command, l *ledger.Ledger, settled []settledCall, joins []joinSettleRow, joinsOpen bool, device string, jsonMode bool) error {
+func reportSettle(cmd *cobra.Command, l *ledger.Ledger, settled []settledCall, joins []joinSettleRow, joinsOpen bool, redeems []redeemingSettle, redeemsOpen bool, device string, jsonMode bool) error {
 	rows := map[string]settleRow{}
 	var order []string
 	for _, s := range settled {
@@ -174,10 +175,13 @@ func reportSettle(cmd *cobra.Command, l *ledger.Ledger, settled []settledCall, j
 		list = append(list, rows[id])
 	}
 	if jsonMode {
-		output.PrintJSON(map[string]any{"calls": list, "joins": output.NonNil(joins)})
+		output.PrintJSON(map[string]any{"calls": list, "joins": output.NonNil(joins), "redeems": output.NonNil(redeems)})
 	} else {
-		if len(list) == 0 && len(joins) == 0 {
+		if len(list) == 0 && len(joins) == 0 && len(redeems) == 0 {
 			output.Println("Nothing to settle.")
+		}
+		for _, r := range redeems {
+			output.Printf("redeem of %s: %s — %s\n", r.ID, r.Status, r.Detail)
 		}
 		for _, j := range joins {
 			line := fmt.Sprintf("join %s at Hub %s: %s", shortFingerprint(j.ConnectionPubkey), shortFingerprint(j.HubPubkey), j.State)
@@ -204,7 +208,10 @@ func reportSettle(cmd *cobra.Command, l *ledger.Ledger, settled []settledCall, j
 			}
 		}
 	}
-	if stillOpen || joinsOpen {
+	if redeemsOpen && !stillOpen && !joinsOpen {
+		return output.WithReason(output.IndeterminateError(cmd, "", errors.New("a redeem may still settle; nothing was resent — run `cashctl cash settle` again later")), reasonRedeemInFlight)
+	}
+	if stillOpen || joinsOpen || redeemsOpen {
 		return output.IndeterminateError(cmd, "", errors.New("some calls still have no answer; nothing was resent — run `cashctl cash settle` again later"))
 	}
 	return nil
@@ -280,6 +287,15 @@ func replaceMintByUser(cmd *cobra.Command, l *ledger.Ledger, id, device string, 
 	}
 	if c.State != ledger.CallStuck || c.Detail != "confirm_replace" {
 		return output.ConflictError(cmd, id, fmt.Errorf("call %s is %s: only a mint the Hub said it never saw can be placed again — run `cashctl cash settle` first", id, c.State))
+	}
+	// Only the copy of the wallet that placed it may place it again (NIP-CASH
+	// §Looking Up a Call).
+	if c.DeviceID != device {
+		return output.FinalConflictError(cmd, id, fmt.Errorf("mint %s was placed from another copy of this wallet: only that copy may mint it again", id))
+	}
+	// --json alone never consents to minting again.
+	if yes, _ := cmd.Flags().GetBool("yes"); jsonMode && !yes {
+		return output.UsageError(cmd, fmt.Errorf("minting %s again needs your explicit consent: add --yes", id))
 	}
 	if !Confirm(cmd, false, fmt.Sprintf("The Hub says it never saw mint %s. Mint it again (under its derived id, never twice)?", id)) {
 		output.Println("Cancelled.")

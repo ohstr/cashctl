@@ -37,6 +37,7 @@ them).`,
 	cmd.Flags().String("sources", "", fmt.Sprintf("comma-separated: local ledger IDs, or <token>:<amount-%s>:<credential>", output.CurrencyUnit))
 	cmd.Flags().String("to", "", "defaults to your own identity")
 	cmd.Flags().String("ia", "", "Identity Authority to trust (hex pubkey or name@domain) for an nconnection1... target that doesn't specify one")
+	cmd.Flags().Bool("no-wait", false, "exit 8 at once when the Hub gives no clear answer, instead of waiting (up to 62 s) to look the call up")
 	return cmd
 }
 
@@ -231,7 +232,7 @@ func runCashConsolidate(cmd *cobra.Command, args []string) error {
 	}
 
 	if len(args) > 0 || sourcesFlag != "" {
-		items, err := resolveConsolidateSources(args, sourcesFlag, l.Held())
+		items, err := resolveConsolidateSources(args, sourcesFlag, unlockedHeld(l))
 		if err != nil {
 			return output.InvocationError(cmd, err)
 		}
@@ -256,8 +257,10 @@ func runCashConsolidate(cmd *cobra.Command, args []string) error {
 	// can actually be merged instead (see mergeableHubGroups) and
 	// process each such group, rather than erroring out and making the
 	// common "tidy up my dust" case require first hunting down IDs.
-	groups := mergeableHubGroups(l.Held())
-	alone := aloneOnTheirHub(l.Held())
+	// A bill with an open call is spoken for until that call ends: never
+	// picked automatically.
+	groups := mergeableHubGroups(unlockedHeld(l))
+	alone := aloneOnTheirHub(unlockedHeld(l))
 	if len(groups) == 0 {
 		if jsonMode {
 			output.PrintJSON(withAlone(map[string]any{"consolidated": []any{}}, alone))
@@ -462,6 +465,9 @@ func consolidateItems(cmd *cobra.Command, l *ledger.Ledger, items []string, toFl
 				// cannot reach this.
 				if spent := spentStatusDescription(e.Status); spent != "" {
 					return alreadySpentError(cmd, e.ID, e.Status)
+				}
+				if err := refuseLocked(cmd, l, []string{e.ID}); err != nil {
+					return err
 				}
 				src, err := sourceFromEntry(cmd, l, e)
 				if err != nil {
@@ -1101,8 +1107,25 @@ func attemptCashConsolidate(cmd *cobra.Command, l *ledger.Ledger, dialToken stri
 	first := firstSourceEntry(l, localIDs, sources[0].WalletPubkey)
 	kind, pub, secret := authorizerOf(cmd, first, sources[0].Credential)
 	spec := callSpec{Purpose: purposeConsolidate, SourceEntryIDs: localIDs, AuthorizerKind: kind,
-		AuthorizerPubkey: pub, AuthorizerSecret: secret, TargetCredential: dialToken}
+		AuthorizerPubkey: pub, AuthorizerSecret: secret, TargetCredential: dialToken,
+		InterimKey: mergeKeyFor(l, target)}
 	return placeConsolidate(ctx, cmd, l, caller, spec, nipcash.CashConsolidateParams{Sources: sources, To: target})
+}
+
+// mergeKeyFor is the merge key in the ledger whose pubkey is target (an interim
+// round's target), or "".
+func mergeKeyFor(l *ledger.Ledger, target nipcash.Target) string {
+	if !nipcash.IsPubkeyTarget(target) {
+		return ""
+	}
+	for _, e := range l.Entries {
+		for _, k := range []string{e.ThrowawayKey, e.PendingThrowawayKey} {
+			if k != "" && nipcash.Pubkey(pubOf(k)) == target {
+				return k
+			}
+		}
+	}
+	return ""
 }
 
 // dialledFirst puts the source whose wallet is dialToken's first.

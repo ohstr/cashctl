@@ -62,6 +62,9 @@ const (
 	// RoleRemint is a cash-mode withdrawal's re-mint secret, used only if the
 	// Hub cancels the payout.
 	RoleRemint = "remint"
+	// RoleInterimKey is the merge key an interim consolidate round targets
+	// (its pubkey is the round's new identity): what spends the merged bill.
+	RoleInterimKey = "interim_key"
 )
 
 // CallSecret is a secret a call generated, with its commitment, which is all
@@ -285,6 +288,18 @@ func InsertDerived(requestID, parentRequestID string, deadline *int64, keepUntil
 	return err
 }
 
+// RemoveDerived drops a recorded derived id whose call never reached the Hub,
+// so the same re-placement may be made again.
+func RemoveDerived(requestID string) error {
+	db, err := store.Open()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = db.Close() }()
+	_, err = db.Exec(`DELETE FROM derived_ids WHERE request_id = ?`, requestID)
+	return err
+}
+
 // DerivedParent is the request id a recorded derived id was derived from, or
 // "" when it was recorded without one (or not at all).
 func DerivedParent(requestID string) (string, error) {
@@ -400,6 +415,38 @@ func loadCalls(db *sql.DB, where string, args ...any) ([]Call, map[string]int64,
 	return calls, versions, nil
 }
 
+// refuseForeignOpenCall is ErrConcurrentUpdate when a call this process never
+// loaded, still open in the database, spends one of c's sources.
+func (l *Ledger) refuseForeignOpenCall(tx *sql.Tx, present map[string]bool, c Call) error {
+	if !c.Open() {
+		return nil
+	}
+	for _, id := range c.SourceEntryIDs {
+		rows, err := tx.Query(`SELECT call_id FROM pending_calls
+			WHERE state NOT IN (?, ?, ?, ?) AND source_entry_ids LIKE ?`,
+			CallDone, CallNotApplied, CallReplaced, CallClosed, `%"`+id+`"%`)
+		if err != nil {
+			return fmt.Errorf("cashctl.db: reading open calls: %w", err)
+		}
+		var foreign string
+		for rows.Next() {
+			var callID string
+			if err := rows.Scan(&callID); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			if _, mine := l.loadedCalls[callID]; !mine && !present[callID] && callID != c.CallID {
+				foreign = callID
+			}
+		}
+		_ = rows.Close()
+		if foreign != "" {
+			return fmt.Errorf("%w (bill %s has an open call %s from another process)", ErrConcurrentUpdate, id, foreign)
+		}
+	}
+	return nil
+}
+
 // saveCalls writes the calls this process changed, inside save's transaction:
 // new ones inserted with their secrets, changed ones updated under the version
 // they were loaded at, removed ones deleted.
@@ -428,6 +475,11 @@ func (l *Ledger) saveCalls(tx *sql.Tx) (map[string]int64, error) {
 			nullStr(c.FirstError), nullStr(c.FirstDetail), c.SawReused, retryAfter, c.CreatedAt, c.UpdatedAt, nullStr(c.ResultJSON),
 			nullStr(c.ZapContext)}
 		if !known {
+			// No new call on a bill another process has an open call on (plan
+			// R-CP-10): the in-memory guard sees only this process's calls.
+			if err := l.refuseForeignOpenCall(tx, present, c); err != nil {
+				return nil, err
+			}
 			_, err := tx.Exec(`INSERT INTO pending_calls (`+callColumns+`)
 				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`, args...)
 			if store.IsUniqueViolation(err) {

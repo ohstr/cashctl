@@ -425,3 +425,69 @@ func TestWithRecovery_KeepsTheClassification(t *testing.T) {
 		t.Errorf("code %q recovery %q; want usage, with tok#sec", ce.Code, ce.Recovery)
 	}
 }
+
+// openMove is a ledger whose merge of tok-a lost its reply: the move's call is
+// open, not yet due, and its key is written on the note.
+func openMove(t *testing.T) (*ledger.Ledger, string) {
+	t.Helper()
+	l := mergeLedger(t)
+	priv, pub, _ := newThrowawayKey()
+	withMoveFn(t, func(*ledger.Entry, nipcash.Credential, nipcash.Target) (*nipcash.CashTransferResult, error) {
+		return nil, context.DeadlineExceeded
+	})
+	if _, err := moveCashNotesToKey(&cobra.Command{}, l, ids(l)[:1], priv, pub); output.AsCLIError(err).Code != output.CodeIndeterminate {
+		t.Fatalf("lost move: err %v, want indeterminate", err)
+	}
+	fresh, _ := ledger.Load()
+	if _, open := fresh.OpenCallFor(fresh.Entries[0].ID); !open || fresh.Entries[0].PendingThrowawayKey != priv {
+		t.Fatalf("no open move with its key: %+v", fresh.Entries[0])
+	}
+	return fresh, priv
+}
+
+// CC-A2: while the move's call is open the Hub may still commit it, so a probe
+// that finds the old secret still spending the note must keep the key.
+func TestSettlePendingMoves_KeepsTheKeyWhileItsCallIsOpen(t *testing.T) {
+	l, priv := openMove(t)
+	orig := probeCredentialFn
+	t.Cleanup(func() { probeCredentialFn = orig })
+	probeCredentialFn = func(_ *ledger.Entry, cred nipcash.Credential) (bool, error) {
+		return cred == nipcash.BySecret("sa"), nil // not committed yet
+	}
+	if err := settlePendingMoves(&cobra.Command{}, l); err != nil {
+		t.Fatal(err)
+	}
+	fresh, _ := ledger.Load()
+	if fresh.Entries[0].PendingThrowawayKey != priv {
+		t.Fatalf("the open move's key was dropped: %+v", fresh.Entries[0])
+	}
+	if _, open := fresh.OpenCallFor(fresh.Entries[0].ID); !open {
+		t.Error("the move's call was closed by a probe")
+	}
+}
+
+// CC-A1: merging a note again while its earlier move is open is refused before
+// anything is touched; the earlier move's key survives, nothing is sent.
+func TestMoveCashNotesToKey_RefusesANoteWithAnOpenMove(t *testing.T) {
+	l, priv := openMove(t)
+	moves := 0
+	withMoveFn(t, func(*ledger.Entry, nipcash.Credential, nipcash.Target) (*nipcash.CashTransferResult, error) {
+		moves++
+		return &nipcash.CashTransferResult{}, nil
+	})
+	priv2, pub2, _ := newThrowawayKey()
+	_, err := moveCashNotesToKey(&cobra.Command{}, l, ids(l), priv2, pub2)
+	if output.AsCLIError(err).Code != output.CodeConflict {
+		t.Fatalf("err %v, want a conflict refusal", err)
+	}
+	if moves != 0 {
+		t.Errorf("%d moves placed, want none", moves)
+	}
+	fresh, _ := ledger.Load()
+	if fresh.Entries[0].PendingThrowawayKey != priv {
+		t.Errorf("the open move's key was overwritten or wiped: %+v", fresh.Entries[0])
+	}
+	if fresh.Entries[1].PendingThrowawayKey != "" || fresh.Entries[1].CashSecret != "sb" {
+		t.Errorf("the other note was touched: %+v", fresh.Entries[1])
+	}
+}

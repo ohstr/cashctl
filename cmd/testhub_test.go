@@ -301,7 +301,12 @@ func answer[T any](ctx context.Context, c *fakeCaller, pc nipcash.PendingCall, r
 	var zero T
 	var notSent *notSentError
 	var walletErr *relayclient.WalletError
+	var gone *nipcash.BillGone
 	switch {
+	case errors.As(err, &gone):
+		// A tombstone answer: definitive, the named bill is destroyed.
+		c.hooks.published++
+		return zero, err
 	case err == nil:
 		c.hooks.published++
 		// What nmilat does right after it publishes the request: run the hook the
@@ -424,3 +429,6 @@ func hexWallet(s string) string {
 	sum := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(sum[:])
 }
+
+// Unit tests never wait for a deadline; the ones about the wait opt in.
+func init() { placementWaitEnabled = false }

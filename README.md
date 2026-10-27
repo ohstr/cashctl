@@ -338,6 +338,7 @@ cashctl join circlehub1... --max-amount 100 --budget-renewal monthly
 | `--max-receive` | requested receive cap, in loki (required unless the Hub sets a default) |
 | `--allow-unverified` | use a string whose signature can't be confirmed (asked once otherwise) |
 | `--backup-file` | where to write the new wallet's connection when the Hub can't rotate a lost one |
+| `--accept-no-rotation` | join a Hub that can't rotate a lost connection without a backup (required under `--json`/`--yes` when there is no `--backup-file`) |
 
 `join` is a top-level shortcut for `cashctl circle join`.
 

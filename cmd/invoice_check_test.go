@@ -123,3 +123,50 @@ func TestAddPaymentRef(t *testing.T) {
 		t.Errorf("addPaymentRef = %v", out)
 	}
 }
+
+// testInvoice is a bech32 string shaped like a BOLT 11 invoice: timestamp, a
+// payment hash, an expiry (when expiry > 0) and a dummy signature.
+func testInvoice(t *testing.T, ts, expiry int64, hash byte) string {
+	t.Helper()
+	words := func(v int64, n int) []byte {
+		out := make([]byte, n)
+		for i := n - 1; i >= 0; i-- {
+			out[i] = byte(v & 31)
+			v >>= 5
+		}
+		return out
+	}
+	data := words(ts, 7)
+	h := make([]byte, 32)
+	for i := range h {
+		h[i] = hash
+	}
+	hw, err := bech32.ConvertBits(h, 8, 5, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data = append(data, 1, byte(len(hw)>>5), byte(len(hw)&31))
+	data = append(data, hw...)
+	if expiry > 0 {
+		data = append(data, 6, 0, 4)
+		data = append(data, words(expiry, 4)...)
+	}
+	data = append(data, make([]byte, 104)...)
+	s, err := bech32.Encode("lnbcrt10u", data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+func TestBolt11ExpiresAt(t *testing.T) {
+	if got, err := bolt11ExpiresAt(testInvoice(t, 1_700_000_000, 600, 7)); err != nil || got != 1_700_000_600 {
+		t.Errorf("with x=600: %d, %v", got, err)
+	}
+	if got, err := bolt11ExpiresAt(testInvoice(t, 1_700_000_000, 0, 7)); err != nil || got != 1_700_003_600 {
+		t.Errorf("without x: %d, %v; want the 3600 s default", got, err)
+	}
+	if h, err := bolt11PaymentHash(testInvoice(t, 1_700_000_000, 600, 7)); err != nil || len(h) != 64 {
+		t.Errorf("payment hash %q, %v", h, err)
+	}
+}
