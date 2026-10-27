@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ohstr/nmilat/nip01"
+	"github.com/ohstr/nmilat/nip44"
 	"github.com/ohstr/nmilat/nipCZ"
 	"github.com/ohstr/nmilat/nipIC"
 	"github.com/ohstr/nmilat/nipcash"
@@ -91,20 +92,24 @@ func TestReceiveZap_ConnectionKeyClaim(t *testing.T) {
 	}
 }
 
-// A claim the Hub answers with a split (not in place) is not received and the
-// call is kept; a refusal leaves nothing held; a lost reply stays open (exit 8)
-// and is applied by the settle engine.
+// A claim the Hub answers with a split (not in place) is not a valid zap, but
+// the bill it returned is kept as an ordinary held bill and the call is done
+// (Z-1); a refusal leaves nothing held; a lost reply stays open (exit 8) and is
+// applied by the settle engine.
 func TestReceiveZap_ConnectionKeyClaimOutcomes(t *testing.T) {
 	f := newKeyZapFixture(t)
 	hooks := installFakeCaller(t)
 	hooks.transfer = func(*ledger.Entry, nipcash.CashTransferParams) (*nipcash.CashTransferResult, error) {
 		return &nipcash.CashTransferResult{AmountMillis: 21000, NewWalletPubkey: strings.Repeat("ab", 32), NewWalletToken: "lokicash1x"}, nil
 	}
-	if _, err := runReceiveZap(t, []string{f.keyRaw}, map[string]string{"trust-minter": "true", "as": f.as}); output.ExitCode(err) != 8 {
-		t.Fatalf("split answer: %v", err)
+	out, err := runReceiveZap(t, []string{f.keyRaw}, map[string]string{"trust-minter": "true", "as": f.as})
+	if err != nil || !strings.Contains(out, "not_a_valid_zap") {
+		t.Fatalf("split answer: %v %s", err, out)
 	}
-	if l, _ := ledger.Load(); len(l.Held()) != 0 {
-		t.Error("a claim that wasn't in place was kept as held")
+	if l, _ := ledger.Load(); len(l.Held()) != 1 || l.Held()[0].Token != "lokicash1x" || *l.Held()[0].AmountMillis != 21000 || l.Held()[0].Verified {
+		t.Errorf("the split's bill was not kept (unverified) as held: %+v", l.Held())
+	} else if c := l.Calls[len(l.Calls)-1]; c.State != ledger.CallDone {
+		t.Errorf("claim call %s, want done", c.State)
 	}
 
 	f = newKeyZapFixture(t)
@@ -122,7 +127,7 @@ func TestReceiveZap_ConnectionKeyClaimOutcomes(t *testing.T) {
 	hooks.transfer = func(*ledger.Entry, nipcash.CashTransferParams) (*nipcash.CashTransferResult, error) {
 		return nil, errors.New("no reply")
 	}
-	_, err := runReceiveZap(t, []string{f.keyRaw}, map[string]string{"trust-minter": "true", "as": f.as})
+	_, err = runReceiveZap(t, []string{f.keyRaw}, map[string]string{"trust-minter": "true", "as": f.as})
 	if output.ExitCode(err) != 8 {
 		t.Fatalf("lost reply: %v", err)
 	}
@@ -223,4 +228,96 @@ func TestCashMinters(t *testing.T) {
 		t.Errorf("after rm: %v %+v", err, list)
 	}
 	_ = utils.GetPublicKey
+}
+
+// Z-1: an in-place move for another amount holds the bill under the local key
+// for the Hub's amount, flagged as no valid zap.
+func TestReceiveZap_ConnectionKeyClaimShortInPlace(t *testing.T) {
+	f := newKeyZapFixture(t)
+	hooks := installFakeCaller(t)
+	hooks.transfer = func(*ledger.Entry, nipcash.CashTransferParams) (*nipcash.CashTransferResult, error) {
+		return &nipcash.CashTransferResult{AmountMillis: 15000}, nil
+	}
+	out, err := runReceiveZap(t, []string{f.keyRaw}, map[string]string{"trust-minter": "true", "as": f.as})
+	if err != nil || !strings.Contains(out, "not_a_valid_zap") {
+		t.Fatalf("short claim: %v %s", err, out)
+	}
+	l, _ := ledger.Load()
+	if held := l.Held(); len(held) != 1 || *held[0].AmountMillis != 15000 || held[0].ConnectionKeyPlatform != "" {
+		t.Fatalf("held %+v", held)
+	}
+}
+
+// openZapClaim leaves a connection-key claim open after a lost reply, due now.
+func openZapClaim(t *testing.T) *keyZapFixture {
+	t.Helper()
+	f := newKeyZapFixture(t)
+	hooks := installFakeCaller(t)
+	hooks.transfer = func(*ledger.Entry, nipcash.CashTransferParams) (*nipcash.CashTransferResult, error) {
+		return nil, errors.New("no reply")
+	}
+	if _, err := runReceiveZap(t, []string{f.keyRaw}, map[string]string{"trust-minter": "true", "as": f.as}); output.ExitCode(err) != 8 {
+		t.Fatalf("lost reply: %v", err)
+	}
+	l, _ := ledger.Load()
+	for i := range l.Calls {
+		l.Calls[i].Deadline = time.Now().Unix() - 1
+	}
+	_ = l.Save()
+	t.Setenv(asCredentialEnv, f.as)
+	return f
+}
+
+// Z-1, lookup path: a lost claim looked up as a split keeps the returned bill
+// and closes the call done, instead of leaving it stuck every settle.
+func TestSettleZapClaim_SplitKeepsTheBill(t *testing.T) {
+	f := openZapClaim(t)
+	ckPriv := strings.Split(strings.TrimPrefix(f.as, "connection-key:"), ",")[0]
+	newPriv, newPub := testmint.Key(t)
+	ckPub, _ := utils.GetPublicKey(ckPriv)
+	sealed, err := nip44.EncryptHex("lokicash1spinoff", newPriv, ckPub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, _ := json.Marshal(map[string]any{"amount_millis": 21000, "identity_type": "pubkey", "identity_value": f.me,
+		"new_wallet_pubkey": newPub, "new_wallet_token": sealed})
+	withLookup(t, func(*ledger.Call) (nipcashclient.LookupOutcome, error) {
+		return nipcashclient.LookupOutcome{Status: nipcash.LookupDone, Result: result}, nil
+	})
+	l := settleNow(t)
+	if held := l.Held(); len(held) != 1 || held[0].Token != "lokicash1spinoff" {
+		t.Errorf("held %+v", held)
+	}
+	for _, c := range l.Calls {
+		if c.State != ledger.CallDone {
+			t.Errorf("call %s/%s, want done", c.State, c.Detail)
+		}
+	}
+}
+
+// Z-2: a claim settle closes as refused leaves its entry not_received, so the
+// zap can be received again.
+func TestSettleZapClaim_RefusedFreesTheZap(t *testing.T) {
+	f := openZapClaim(t)
+	l, _ := ledger.Load()
+	for i := range l.Calls {
+		l.Calls[i].FirstError = "RESTRICTED"
+	}
+	_ = l.Save()
+	withLookup(t, func(*ledger.Call) (nipcashclient.LookupOutcome, error) {
+		return nipcashclient.LookupOutcome{Status: nipcash.LookupUnknown}, nil
+	})
+	l = settleNow(t)
+	for _, e := range l.Entries {
+		if e.Status == ledger.StatusZapClaiming {
+			t.Fatalf("entry %s still zap_claiming after the claim closed", e.ID)
+		}
+	}
+	hooks := installFakeCaller(t)
+	hooks.transfer = func(*ledger.Entry, nipcash.CashTransferParams) (*nipcash.CashTransferResult, error) {
+		return &nipcash.CashTransferResult{AmountMillis: 21000}, nil
+	}
+	if _, err := runReceiveZap(t, []string{f.keyRaw}, map[string]string{"trust-minter": "true", "as": f.as}); err != nil {
+		t.Fatalf("receive again: %v", err)
+	}
 }

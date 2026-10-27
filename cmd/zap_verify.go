@@ -402,6 +402,18 @@ func receiveZap(cmd *cobra.Command, ev *nip01.Event, raw string) error {
 		})
 		return nil
 	})
+	var notZap *zapClaimNotValidError
+	if errors.As(claimErr, &notZap) {
+		if err := l.Save(); err != nil {
+			return output.RuntimeError(cmd, err)
+		}
+		if jsonMode {
+			output.PrintJSON(map[string]any{"received": true, "zap": false, "not_a_valid_zap": notZap.reason})
+			return nil
+		}
+		output.Printf("The Hub's answer to the claim is not a valid zap (%s). What it moved is kept as an ordinary bill; see `cashctl wallet show`.\n", notZap.reason)
+		return nil
+	}
 	if claimErr != nil {
 		var ce *output.CLIError
 		isCLI := errors.As(claimErr, &ce)
@@ -469,17 +481,70 @@ func claimZap(ctx context.Context, cmd *cobra.Command, l *ledger.Ledger, e *ledg
 	if err != nil {
 		return err
 	}
-	if err := nipCZ.CheckInPlaceTransfer(z, res); err != nil {
-		// An answer that doesn't check out keeps the call and the bill.
-		call.State, call.Detail = ledger.CallStuck, "invalid_result"
-		_ = l.Save()
-		return output.IndeterminateError(cmd, "", fmt.Errorf("the Hub's answer to the claim doesn't check out (%v); the claim is kept", err))
-	}
-	if e, ok := l.Find(e.ID); ok {
-		claimedByLocalKey(e)
-	}
+	_, notZap := applyZapClaimResult(l, e, z.Amount, res)
 	closeCall(l, call, ledger.CallDone, "")
+	if notZap != "" {
+		return &zapClaimNotValidError{reason: notZap}
+	}
 	return nil
+}
+
+// zapClaimNotValidError: the claim moved value, which is kept, but not as
+// NIP-CZ rule 9 requires, so it isn't a valid zap.
+type zapClaimNotValidError struct{ reason string }
+
+func (e *zapClaimNotValidError) Error() string { return "not a valid zap: " + e.reason }
+
+// applyZapClaimResult records what a claim's cash_transfer did, whether or not
+// it was the full in-place move rule 9 asks for (Z-1): value the Hub moved is
+// always kept. An in-place move holds the bill under the local key for the
+// Hub's amount; a spin-off is kept as an ordinary held bill (provenance
+// checked), with any remainder still on the connection key. notZap is empty
+// only for an exact in-place move of zapAmount.
+func applyZapClaimResult(l *ledger.Ledger, e *ledger.Entry, zapAmount uint64, res *nipcash.CashTransferResult) (summary, notZap string) {
+	amount := res.AmountMillis
+	switch {
+	case res.NewWalletToken == "" && res.NewWalletTombstone == nil && res.NewWalletPubkey == "":
+		claimedByLocalKey(e)
+		if amount == zapAmount {
+			return "zap claimed", ""
+		}
+		e.AmountMillis = &amount
+		notZap = fmt.Sprintf("the Hub moved %s in place, not the zap's %s", output.FormatAmount(int64(amount)), output.FormatAmount(int64(zapAmount))) //nolint:gosec // amounts fit
+	case res.NewWalletTombstone != nil:
+		_ = l.SetStatus(e.ID, ledger.StatusTransferred)
+		notZap = "the Hub answered with a spin-off that is already spent (" + output.Sanitize(res.NewWalletTombstone.Reason) + ")"
+	case res.NewWalletToken == "":
+		// A spin-off without its token: nothing to keep but the record.
+		_ = l.SetStatus(e.ID, ledger.StatusTransferred)
+		notZap = "the Hub answered with a spin-off but no token"
+	default:
+		verified, minter := returnedBillCheck(res.NewWalletToken, e.MinterPubkey)
+		kept := ledger.Entry{Token: strings.ToLower(res.NewWalletToken), WalletPubkey: res.NewWalletPubkey,
+			IdentityRequired: ptrTo(true), AmountMillis: &amount, Verified: verified, MinterPubkey: minter}
+		if res.ExpiresAt != nil && *res.ExpiresAt > 0 {
+			at := int64(*res.ExpiresAt) //nolint:gosec // unix time
+			kept.ExpiresAt = &at
+		}
+		_, _ = l.Add(kept)
+		if res.RemainderWalletToken != "" {
+			rest := credentialModeOf(*e)
+			rest.Token, rest.WalletPubkey = strings.ToLower(res.RemainderWalletToken), res.RemainderWalletPubkey
+			rest.Verified, rest.MinterPubkey = returnedBillCheck(rest.Token, e.MinterPubkey)
+			rest.AmountMillis = res.RemainingAmountMillis
+			_, _ = l.Add(rest)
+			_ = l.SetStatus(e.ID, ledger.StatusTransferred)
+		} else if res.RemainingAmountMillis != nil && *res.RemainingAmountMillis > 0 {
+			// The rest stays in place, still bound to the connection key.
+			e.AmountMillis = res.RemainingAmountMillis
+			e.Status = ledger.StatusHeld
+		} else {
+			_ = l.SetStatus(e.ID, ledger.StatusTransferred)
+		}
+		notZap = fmt.Sprintf("the Hub split the bill, moving %s to a new bill", output.FormatAmount(int64(amount))) //nolint:gosec // amounts fit
+	}
+	l.AppendHistory("receive", fmt.Sprintf("claimed a Cash Zap to a connection key, kept as an ordinary bill: %s", notZap))
+	return "kept as an ordinary bill, not a valid zap: " + notZap, notZap
 }
 
 func firstFailed(v nipCZ.Verdict) string {

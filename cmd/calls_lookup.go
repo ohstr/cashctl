@@ -354,6 +354,7 @@ func applyAction(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, action ni
 				c.State = ledger.CallExpired
 			}
 			c.Detail = "expired"
+			releaseZapClaim(l, c)
 		case "foreign_device":
 			c.Detail = "placed from another copy of this wallet"
 		default:
@@ -364,13 +365,29 @@ func applyAction(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, action ni
 	case nipcashclient.ActionConfirmReplace:
 		c.State, c.Detail = ledger.CallStuck, "confirm_replace"
 	case nipcashclient.ActionCloseFailed:
+		releaseZapClaim(l, c)
 		closeCall(l, c, ledger.CallNotApplied, "never committed")
 	case nipcashclient.ActionCloseRefused:
+		releaseZapClaim(l, c)
 		closeCall(l, c, ledger.CallNotApplied, action.Reason)
 		summary = fmt.Sprintf("the Hub refused it (%s); nothing moved", action.Reason)
 	}
 	_ = l.Save()
 	return summary
+}
+
+// releaseZapClaim frees the zap bill of a claim settle closed with nothing
+// moved (or whose record the Hub no longer keeps): the entry leaves
+// zap_claiming, so receiving the zap again reads its Hub afresh (Z-2).
+func releaseZapClaim(l *ledger.Ledger, c *ledger.Call) {
+	if c.Purpose != purposeZapClaim {
+		return
+	}
+	for _, id := range c.SourceEntryIDs {
+		if e, ok := l.Find(id); ok && e.Status == ledger.StatusZapClaiming {
+			_ = l.SetStatus(id, ledger.StatusNotReceived)
+		}
+	}
 }
 
 // replaceCall re-places c under its derived id after the Hub said it never saw
@@ -566,10 +583,9 @@ func applyTransferResult(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, r
 	newSecret := callSecretOf(c, ledger.RoleNewIdentity)
 	switch c.Purpose {
 	case purposeZapClaim:
-		if res.NewWalletPubkey != "" || res.NewWalletToken != "" || res.AmountMillis != c.AmountMillis {
-			return "", fmt.Errorf("call %s: the claim was not a full in-place transfer", c.CallID)
+		if summary, notZap := applyZapClaimResult(l, e, c.AmountMillis, res); notZap != "" {
+			return summary, nil
 		}
-		claimedByLocalKey(e)
 		l.AppendHistory("receive", fmt.Sprintf("received a %s Cash Zap to a connection key (settled after its answer was lost)", output.FormatAmount(int64(res.AmountMillis)))) //nolint:gosec // amounts fit
 		return "zap claimed", nil
 	case purposeProtect:
