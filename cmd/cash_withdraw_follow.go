@@ -78,7 +78,7 @@ func settleWithdrawInto(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, de
 		_ = l.Save()
 		return ""
 	}
-	if c.FirstDetail == string(nipcash.DetailQuoteExpired) && !w.QuoteExpiredSeen {
+	if quoteRefused(c.FirstDetail) && !w.QuoteExpiredSeen {
 		w.QuoteExpiredSeen = true
 		_ = ledger.PutWithdrawal(w)
 	}

@@ -617,7 +617,7 @@ func sendWithdrawal(cmd *cobra.Command, e *ledger.Entry, q *nipcash.WithdrawQuot
 			return output.WithReason(pErr, reasonReceiptInvalid)
 		}
 		var ind *nipcashclient.IndeterminateError
-		if c := j.call(); c != nil && errors.As(err, &ind) && ind.Detail == string(nipcash.DetailQuoteExpired) {
+		if c := j.call(); c != nil && errors.As(err, &ind) && quoteRefused(ind.Detail) {
 			pErr := placeErr(cmd, l, &j.ledgerJournal, err, "withdrawal", e.ID)
 			w := j.w
 			w.QuoteExpiredSeen = true
@@ -886,4 +886,10 @@ func txCheck(w ledger.Withdrawal, p nipcash.Payout) string {
 		return "mismatch"
 	}
 	return "ok"
+}
+
+// quoteRefused reports a step-3 refusal of the quote itself (quote_expired,
+// or quote_invalid): nothing moved, and only a new quote can go on.
+func quoteRefused(detail string) bool {
+	return detail == string(nipcash.DetailQuoteExpired) || detail == string(nipcash.DetailQuoteInvalid)
 }

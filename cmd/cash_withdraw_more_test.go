@@ -369,3 +369,28 @@ func TestImportRemint_RecoveredCashNoteIsNotHeld(t *testing.T) {
 		t.Error("the re-minted bill was held with the old secret")
 	}
 }
+
+// W-6: quote_invalid is handled as quote_expired: confirmed not applied, then
+// only a new quote goes on.
+func TestWithdraw_QuoteInvalidIsLikeExpired(t *testing.T) {
+	f, _ := setUpWithdraw(t)
+	f.answer = func(pc nipcash.PendingCall) (*nipcash.Payout, error) {
+		pc.LastCode = "RESTRICTED"
+		return nil, &nipcashclient.IndeterminateError{Call: pc, Code: "RESTRICTED", Detail: string(nipcash.DetailQuoteInvalid)}
+	}
+	f.lookup = func(nipcash.PendingCall) (nipcashclient.LookupOutcome, *nipcash.Payout, error) {
+		return nipcashclient.LookupOutcome{Status: nipcash.LookupUnknown}, nil, nil
+	}
+	prevW := waitFn
+	waitFn = func(time.Duration) {}
+	t.Cleanup(func() { waitFn = prevW })
+	handle := runWithdrawQuote(t)["quote"].(string)
+	_, err := runWithdrawSend(t, nil, map[string]string{"quote": handle, "yes": "true"})
+	if output.ExitCode(err) != 7 {
+		t.Fatalf("quote_invalid: %v, want the quote refused (exit 7)", err)
+	}
+	ws, _ := ledger.Withdrawals()
+	if len(ws) != 1 || !ws[0].QuoteExpiredSeen || ws[0].State != ledger.WithdrawNotApplied {
+		t.Errorf("withdrawal %+v", ws)
+	}
+}
