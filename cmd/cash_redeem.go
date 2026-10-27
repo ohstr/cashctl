@@ -184,6 +184,9 @@ func runCashRedeem(cmd *cobra.Command, args []string) error {
 		if dErr != nil {
 			return dErr
 		}
+		if ctx, dErr = allowRotationUse(cmd, ctx, destValue); dErr != nil {
+			return dErr
+		}
 		var destClient *relayclient.NWCClient
 		err = WithSpinner(jsonMode, "Preparing invoice...", func() error {
 			c, cErr := DialGeneric(ctx, destValue)

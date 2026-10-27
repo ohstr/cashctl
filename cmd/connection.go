@@ -198,6 +198,9 @@ func DialGeneric(ctx context.Context, value string) (*relayclient.NWCClient, err
 		if err != nil {
 			return nil, err
 		}
+		if j, open, _ := config.OpenRotation(w.WalletPubkey); open && !rotationUseAllowed(ctx) {
+			return nil, fmt.Errorf("%w (new key %s); pass --yes to use it anyway", errRotationOpen, j.ConnectionPubkey)
+		}
 		return relayclient.NewNWCClient(ctx, &nip47.PairingInfo{WalletPubkey: w.WalletPubkey, RelayURLs: w.Relays, Secret: w.Secret}, nip47.EncryptionNIP44V2)
 	}
 	if !extwallet.IsURI(value) {

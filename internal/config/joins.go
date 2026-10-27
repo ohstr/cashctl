@@ -2,6 +2,7 @@ package config
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -20,6 +21,20 @@ const (
 	JoinNotApplied = "not_applied" // no wallet was made; the key is forgotten
 	JoinShown      = "shown"       // kept for the member to see (expired, refused lookup, ...)
 )
+
+// JoinPurposeRotation marks a joins row that is a member's own rotate request
+// (NIP-CW §Recovering a Lost Connection) rather than a join: the new
+// connection key is written ahead before the signed request is shown, and the
+// row is looked up with the join lookup naming that key. Its purpose, the
+// wallet it moves and the signed request are kept in the row's terms column.
+const JoinPurposeRotation = "rotation"
+
+// rotationTerms is a rotation row's terms column.
+type rotationTerms struct {
+	Purpose      string          `json:"purpose"`
+	WalletPubkey string          `json:"wallet_pubkey"`
+	Event        json.RawMessage `json:"event,omitempty"`
+}
 
 // Join is one circle join, from its write-ahead to its outcome.
 // ConnectionPubkey is what the Hub knows the wallet by.
@@ -52,7 +67,18 @@ type Join struct {
 	// same circle (R-CW-21), which is tried once.
 	AltLookupTried bool  `json:"-"`
 	CreatedAt      int64 `json:"created_at"`
+	// Purpose is "" for a join and JoinPurposeRotation for a rotate request,
+	// whose WalletPubkey is the wallet it moves to ConnectionPubkey and whose
+	// Event is the member request as signed (WalletName is that wallet's
+	// name here). Its Deadline is the request's created_at plus 24 hours,
+	// the last moment a Hub accepts it.
+	Purpose      string          `json:"purpose,omitempty"`
+	WalletPubkey string          `json:"wallet_pubkey,omitempty"`
+	Event        json.RawMessage `json:"-"`
 }
+
+// IsRotation reports whether j is a rotate request rather than a join.
+func (j Join) IsRotation() bool { return j.Purpose == JoinPurposeRotation }
 
 // Open reports whether the join's outcome is still unknown.
 func (j Join) Open() bool { return j.State == JoinWritten || j.State == JoinPending }
@@ -70,6 +96,15 @@ func WriteJoin(j Join) error {
 	if j.State == "" {
 		j.State = JoinWritten
 	}
+	var walletName sql.NullString
+	if j.IsRotation() {
+		terms, err := json.Marshal(rotationTerms{Purpose: j.Purpose, WalletPubkey: j.WalletPubkey, Event: j.Event})
+		if err != nil {
+			return err
+		}
+		j.Terms = string(terms)
+		walletName = sql.NullString{String: j.WalletName, Valid: j.WalletName != ""}
+	}
 	err := store.WithBusyRetry(func() error {
 		db, err := store.Open()
 		if err != nil {
@@ -77,10 +112,10 @@ func WriteJoin(j Join) error {
 		}
 		defer func() { _ = db.Close() }()
 		_, err = db.Exec(`INSERT INTO joins (connection_pubkey, connection_secret, hub_pubkey, member_pubkey, hub_connection,
-			hub_identity, chain, hub_label, conn_verified, deadline, device_id, terms, state, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			hub_identity, chain, hub_label, conn_verified, deadline, device_id, terms, state, wallet_name, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			j.ConnectionPubkey, j.ConnectionSecret, j.HubPubkey, j.MemberPubkey, j.HubConnection,
-			j.HubIdentity, j.Chain, j.HubLabel, j.ConnVerified, j.Deadline, j.DeviceID, j.Terms, j.State, j.CreatedAt, now)
+			j.HubIdentity, j.Chain, j.HubLabel, j.ConnVerified, j.Deadline, j.DeviceID, j.Terms, j.State, walletName, j.CreatedAt, now)
 		if err != nil {
 			return fmt.Errorf("cashctl.db: saving the join's connection key: %w", err)
 		}
@@ -136,6 +171,10 @@ func scanJoin(row interface{ Scan(...any) error }) (Join, error) {
 		&j.HubIdentity, &j.Chain, &j.HubLabel, &j.ConnVerified, &j.Deadline, &j.DeviceID, &terms, &j.State,
 		&detail, &retry, &wallet, &j.LookupAnswered, &j.AltLookupTried, &j.CreatedAt)
 	j.Terms, j.Detail, j.WalletName, j.RetryAfter = terms.String, detail.String, wallet.String, retry.Int64
+	var rt rotationTerms
+	if err == nil && json.Unmarshal([]byte(j.Terms), &rt) == nil && rt.Purpose == JoinPurposeRotation {
+		j.Purpose, j.WalletPubkey, j.Event = rt.Purpose, rt.WalletPubkey, rt.Event
+	}
 	return j, err
 }
 
@@ -227,4 +266,19 @@ func OtherHubConnections(hubPubkey, except string) ([]string, error) {
 		}
 	}
 	return out, nil
+}
+
+// OpenRotation is the open rotate request of the wallet with walletPubkey, if
+// there is one.
+func OpenRotation(walletPubkey string) (Join, bool, error) {
+	all, err := Joins()
+	if err != nil {
+		return Join{}, false, err
+	}
+	for _, j := range all {
+		if j.IsRotation() && j.Open() && j.WalletPubkey == walletPubkey {
+			return j, true, nil
+		}
+	}
+	return Join{}, false, nil
 }

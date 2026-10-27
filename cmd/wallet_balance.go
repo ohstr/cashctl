@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ohstr/nmilat/nipcw"
 	relayclient "github.com/ohstr/nmilat/relay/client"
 	"github.com/spf13/cobra"
 
@@ -271,7 +272,9 @@ func liveBalanceMloki(c config.Connection) (amount int64, stranded bool, err err
 // classification doesn't need a live Hub to verify.
 func strandedBalanceFallback(err error, c config.Connection) (amount int64, ok bool) {
 	var walletErr *relayclient.WalletError
-	if errors.As(err, &walletErr) && output.NWCErrorCode(walletErr.Code) == output.CodeAuth && c.LastKnownBalanceMillis != nil {
+	// FROZEN is an auth decline that an unfreeze lifts: not stranded.
+	if errors.As(err, &walletErr) && output.NWCErrorCode(walletErr.Code) == output.CodeAuth && walletErr.Code != nipcw.ErrFrozen &&
+		c.LastKnownBalanceMillis != nil {
 		return *c.LastKnownBalanceMillis, true
 	}
 	return 0, false

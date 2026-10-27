@@ -70,7 +70,7 @@ func newCircleCmd() *cobra.Command {
 		Short: "Join a circle to get a personal Lightning wallet",
 		RunE:  groupRunE,
 	}
-	cmd.AddCommand(newCircleJoinCmd())
+	cmd.AddCommand(newCircleJoinCmd(), newCircleRequestCmd())
 	return cmd
 }
 
@@ -564,7 +564,8 @@ func registerJoinWallet(cmd *cobra.Command, j config.Join, resp *nipcw.CreateCir
 	verified := j.ConnVerified
 	r.wallet = config.CircleWallet{WalletPubkey: resp.WalletPubkey, Relays: resp.Relays, Secret: j.ConnectionSecret,
 		HubPubkey: j.HubPubkey, HubIdentity: j.HubIdentity, Chain: j.Chain, HubVerified: &verified,
-		Network: r.request.Network, Label: j.HubLabel}
+		Network: r.request.Network, Label: j.HubLabel, MemberPubkey: j.MemberPubkey, DetailsKnown: true,
+		RotationDelaySecs: resp.RotationDelaySecs, DustThresholdMillis: resp.DustThresholdMillis}
 	value, err := r.wallet.Encode()
 	if err != nil {
 		return r, output.RuntimeError(cmd, err)

@@ -217,6 +217,9 @@ pending_joins and pending_merge.`,
 					if j.Detail != "" {
 						state += ": " + output.Sanitize(j.Detail)
 					}
+					if j.IsRotation() {
+						state = "rotation of wallet " + shortFingerprint(j.WalletPubkey) + ", " + state
+					}
 					output.Printf("  %s   connection key %s   %s   %s\n", hub, j.ConnectionPubkey, state, time.Unix(j.CreatedAt, 0).UTC().Format(time.RFC3339))
 				}
 			}
@@ -293,6 +296,11 @@ func dialForCommand(cmd *cobra.Command) (*nwcHandle, error) {
 		return nil, output.NotFoundError(cmd, "", errors.New(noWalletMessage()))
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, err = allowRotationUse(cmd, ctx, value)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
 	client, err := DialGeneric(ctx, value)
 	if err != nil {
 		cancel()
@@ -326,10 +334,14 @@ func newWalletGetInfoCmd() *cobra.Command {
 			if !ok {
 				return output.NotFoundError(cmd, "", errors.New(noWalletMessage()))
 			}
+			allowed, err := allowRotationUse(cmd, context.Background(), value)
+			if err != nil {
+				return err
+			}
 			var info *nip47.GetInfoResult
 			var dialErr bool
 			err = WithSpinner(jsonMode, "Fetching info...", func() error {
-				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				ctx, cancel := context.WithTimeout(allowed, 30*time.Second)
 				defer cancel()
 				client, cErr := DialGeneric(ctx, value)
 				if cErr != nil {

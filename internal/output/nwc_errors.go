@@ -27,6 +27,10 @@ var nwcErrorCode = map[string]ErrorCode{
 	// NIP-CW join: the identity already holds a wallet under this Hub. Not
 	// retryable, and not RESTRICTED's "not a member" either.
 	nipcw.ErrWalletExists: CodeExists,
+	// NIP-CW member requests: a frozen wallet's key is refused until an
+	// unfreeze or a completed rotation; a second rotation waits for the first.
+	nipcw.ErrFrozen:          CodeAuth,
+	nipcw.ErrRotationPending: CodeConflict,
 	// INSUFFICIENT_BALANCE, QUOTA_EXCEEDED, NOT_IMPLEMENTED,
 	// UNSUPPORTED_ENCRYPTION, PAYMENT_FAILED, INTERNAL, OTHER: no bucket
 	// above fits (they're legitimate wallet-side declines, not an input
@@ -55,6 +59,8 @@ var nwcErrorMessages = map[string]string{
 	"BAD_REQUEST":            "That request wasn't valid.",
 	nipcw.ErrNotReady:        "The Hub isn't ready yet. Wait a moment and try again.",
 	nipcw.ErrWalletExists:    "You already hold a wallet from this circle.",
+	nipcw.ErrFrozen:          "This wallet is frozen by a member request; it moves funds again only after an unfreeze (`cashctl circle request unfreeze`) or a completed rotation.",
+	nipcw.ErrRotationPending: "This wallet already has a rotation pending; wait until it completes or is cancelled.",
 }
 
 // cashTokenNWCErrorMessages overrides nwcErrorMessages' wallet-oriented
@@ -125,6 +131,8 @@ func nwcError(cmd *cobra.Command, err *relayclient.WalletError, overrides map[st
 		Code:       code,
 		NWCCode:    err.Code,
 		RawMessage: rawMessage,
+		// Retrying as is never helps while the first rotation is pending.
+		Final: err.Code == nipcw.ErrRotationPending,
 	}
 }
 

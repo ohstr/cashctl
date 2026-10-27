@@ -67,6 +67,9 @@ type joinOutcome struct {
 
 // lookupJoinOnce asks the Hub about one join and records the answer.
 func lookupJoinOnce(ctx context.Context, cmd *cobra.Command, client circleHub, j config.Join, cred nipcw.Credential, ask bool) joinOutcome {
+	if j.IsRotation() {
+		return lookupRotationOnce(ctx, cmd, client, j, cred)
+	}
 	action, err := client.LookupJoin(ctx, pendingJoinOf(j), cred)
 	if err != nil {
 		return joinOutcome{Join: j, Summary: "no answer", Err: joinStillOpen(cmd, j.ConnectionPubkey, j.Deadline, err)}
@@ -146,6 +149,8 @@ func (f *fixedLookup) LookupJoin(context.Context, nipcwclient.PendingJoin, nipcw
 type joinSettleRow struct {
 	ConnectionPubkey string `json:"connection_pubkey"`
 	HubPubkey        string `json:"hub_pubkey"`
+	Purpose          string `json:"purpose,omitempty"`
+	WalletPubkey     string `json:"wallet_pubkey,omitempty"`
 	Label            string `json:"hub_label,omitempty"`
 	State            string `json:"state"`
 	Detail           string `json:"detail,omitempty"`
@@ -157,7 +162,7 @@ type joinSettleRow struct {
 }
 
 func joinRowOf(j config.Join, summary string) joinSettleRow {
-	return joinSettleRow{ConnectionPubkey: j.ConnectionPubkey, HubPubkey: j.HubPubkey, Label: output.Sanitize(j.HubLabel),
+	return joinSettleRow{ConnectionPubkey: j.ConnectionPubkey, HubPubkey: j.HubPubkey, Purpose: j.Purpose, WalletPubkey: j.WalletPubkey, Label: output.Sanitize(j.HubLabel),
 		State: j.State, Detail: j.Detail, Deadline: j.Deadline, RetryAfter: j.RetryAfter, Wallet: j.WalletName,
 		Summary: summary, HubVerified: j.ConnVerified}
 }
@@ -185,6 +190,11 @@ func settleJoins(cmd *cobra.Command, device string) (rows []joinSettleRow, still
 		if j.State == config.JoinWritten && now < j.Deadline+1 {
 			// The reply may still come to the join that sent it.
 			due = j.Deadline + 1
+		}
+		if j.IsRotation() {
+			// A rotate request is never sent by cashctl: ask whenever the
+			// Hub's last answer allows (its completes_at once accepted).
+			due = j.RetryAfter
 		}
 		if now < due {
 			rows = append(rows, joinRowOf(j, "not due yet"))

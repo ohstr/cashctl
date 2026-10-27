@@ -24,6 +24,20 @@ type CircleWallet struct {
 	HubPubkey    string   `json:"hub_pubkey"`
 	HubIdentity  string   `json:"hub_identity"`
 	Chain        string   `json:"chain"`
+	// MemberPubkey is the pubkey of the join that created the wallet: the
+	// only key whose member requests the Hub acts on.
+	MemberPubkey string `json:"member_pubkey,omitempty"`
+	// DetailsKnown says the wallet's own terms below were read from its
+	// details; a wallet registered from an older backup has none.
+	DetailsKnown bool `json:"details_known,omitempty"`
+	// RotationDelaySecs is the wallet's rotation delay, nil on a wallet that
+	// cannot be rotated (NIP-CW §Recovering a Lost Connection).
+	RotationDelaySecs *uint64 `json:"rotation_delay_secs,omitempty"`
+	// DustThresholdMillis is the most a member deletion leaves to the host.
+	DustThresholdMillis uint64 `json:"dust_threshold_millis,omitempty"`
+	// DeleteSentAt is when a delete_circle_wallet was written ahead for this
+	// wallet; its reply may have been lost (not in a backup file).
+	DeleteSentAt int64 `json:"delete_sent_at,omitempty"`
 	// Circle details kept beside the backup fields (not in a backup file).
 	HubVerified *bool  `json:"hub_verified,omitempty"`
 	Network     string `json:"network,omitempty"`
@@ -42,9 +56,13 @@ func (w CircleWallet) Encode() (string, error) {
 // Backup is w's backup file: the fields `connect add` reads back.
 func (w CircleWallet) Backup() ([]byte, error) {
 	w.Type = CircleWalletType
-	w.HubVerified, w.Network, w.Label = nil, "", ""
+	w.HubVerified, w.Network, w.Label, w.DeleteSentAt = nil, "", "", 0
 	return json.MarshalIndent(w, "", "  ")
 }
+
+// Rotatable reports whether a member request may name w: false only when
+// its details are known and carry no rotation_delay_secs.
+func (w CircleWallet) Rotatable() bool { return !w.DetailsKnown || w.RotationDelaySecs != nil }
 
 // ParseCircleWallet reads a Circle Wallet's stored fields or backup file. ok is
 // false when value is not one at all; err says why one is unusable.
