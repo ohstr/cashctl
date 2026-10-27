@@ -61,6 +61,15 @@ func runCashStatus(cmd *cobra.Command, _ []string) error {
 	outcomes := make([]cashStatusOutcome, len(entries))
 	for i, entry := range entries {
 		result, fetchErr := fetchCashStatusFn(cmd, jsonMode, entry)
+		if rid := withdrawRequestIDOf(result); rid != "" {
+			if _, known := l.FindCall(ledger.CallIDFor(rid)); !known {
+				if w, rErr := recoverWithdrawal(cmd, l, entry, rid); rErr == nil {
+					output.Notef(jsonMode, "Found a withdrawal this device has no record of (withdrawal %s); `cashctl cash withdraw show %s` follows it.", w.WithdrawalID, w.WithdrawalID)
+					outcomes[i] = cashStatusOutcome{ID: entry.ID, Result: result, Err: fetchErr}
+					continue
+				}
+			}
+		}
 		if result != nil && result.Tombstone != nil {
 			// One bill asked about: a fresh tombstone is the same spent error
 			// the next call gets from the stored status, never a result.

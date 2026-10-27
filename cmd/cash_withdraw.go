@@ -50,6 +50,7 @@ type withdrawBill interface {
 	Withdraw(ctx context.Context, p nipcash.CashWithdrawParams, j nipcashclient.Journal, device string) (*nipcash.Payout, error)
 	LookupWithdraw(ctx context.Context, pc nipcash.PendingCall, cred nipcash.Credential) (nipcashclient.LookupOutcome, *nipcash.Payout, error)
 	CancelWithdraw(ctx context.Context, pc nipcash.PendingCall, cred nipcash.Credential) (*nipcash.Payout, error)
+	WatchPayout(ctx context.Context, notify string, accepted []string) (<-chan struct{}, error)
 	Close()
 }
 
@@ -69,7 +70,7 @@ func newCashWithdrawCmd() *cobra.Command {
 		Short: "Pay a bill out on-chain",
 		RunE:  groupRunE,
 	}
-	cmd.AddCommand(newCashWithdrawQuoteCmd(), newCashWithdrawSendCmd(), newCashWithdrawShowCmd(),
+	cmd.AddCommand(newCashWithdrawQuoteCmd(), newCashWithdrawSendCmd(), newCashWithdrawShowCmd(), newCashWithdrawWatchCmd(),
 		newCashWithdrawCancelCmd(), newCashWithdrawSettleCmd())
 	return cmd
 }
@@ -319,13 +320,29 @@ func groupsOf4(s string) string {
 // printWithdrawScreen is the confirmation screen, on stderr, every number from
 // the verified quote; the address in groups and whole.
 func printWithdrawScreen(e *ledger.Entry, q *nipcash.WithdrawQuote, warnings []string) {
+	printWithdrawScreenSince(e, q, nil, warnings)
+}
+
+// printWithdrawScreenSince is printWithdrawScreen marking every number that
+// differs from prev, the quote the user saw before, "(changed)".
+func printWithdrawScreenSince(e *ledger.Entry, q, prev *nipcash.WithdrawQuote, warnings []string) {
+	mark := func(changed bool) string {
+		if prev != nil && changed {
+			return " (changed)"
+		}
+		return ""
+	}
 	f := func(v uint64) string { return output.FormatAmount(int64(v)) } //nolint:gosec // amounts fit
+	if prev == nil {
+		prev = q
+	}
 	output.Fprintf(os.Stderr, "Withdraw on-chain — this cannot be reversed\n\n")
 	output.Fprintf(os.Stderr, "  From bill        %s  (%s)\n", e.ID, f(q.AmountMillis))
 	output.Fprintf(os.Stderr, "  To address       %s\n                   %s\n", groupsOf4(q.Address), q.Address)
-	output.Fprintf(os.Stderr, "  Network fee      %s\n  Hub fee          %s\n", f(q.NetworkFeeMillis), f(q.HubFeeMillis))
-	output.Fprintf(os.Stderr, "  Recipient gets   %s (exact)\n", f(q.PayoutMillis))
-	output.Fprintf(os.Stderr, "  Sent by          %s\n", time.Unix(q.SentBy, 0).UTC().Format(time.RFC3339))
+	output.Fprintf(os.Stderr, "  Network fee      %s%s\n  Hub fee          %s%s\n", f(q.NetworkFeeMillis), mark(q.NetworkFeeMillis != prev.NetworkFeeMillis),
+		f(q.HubFeeMillis), mark(q.HubFeeMillis != prev.HubFeeMillis))
+	output.Fprintf(os.Stderr, "  Recipient gets   %s (exact)%s\n", f(q.PayoutMillis), mark(q.PayoutMillis != prev.PayoutMillis))
+	output.Fprintf(os.Stderr, "  Sent by          %s%s\n", time.Unix(q.SentBy, 0).UTC().Format(time.RFC3339), mark(q.SentBy != prev.SentBy))
 	if 4*q.FeeMillis() > q.AmountMillis {
 		output.Fprintf(os.Stderr, "  On-chain costs %s of %s here.\n", f(q.FeeMillis()), f(q.AmountMillis))
 	}
@@ -349,6 +366,13 @@ func confirmIrreversible() bool {
 	output.Fprintf(os.Stderr, `Type "yes" to send (anything else: not sent): `)
 	line, _ := stdin.ReadString('\n')
 	return strings.EqualFold(strings.TrimSpace(line), "yes")
+}
+
+// waitFn sleeps; swapped in tests.
+var waitFn = func(d time.Duration) {
+	if d > 0 {
+		time.Sleep(d)
+	}
 }
 
 // interactiveWithdraw reports whether this run may ask for "yes"; swapped in tests.
@@ -406,13 +430,76 @@ func runCashWithdrawSend(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			return err
 		}
-		printWithdrawScreen(e, q, nil)
-		if !askYesFn() {
-			output.Println("Not sent. Your cash is still yours.")
-			return nil
-		}
+		return confirmAndSend(cmd, e, q, nil, quoteHandle)
 	}
-	return sendWithdrawal(cmd, e, q, quoteHandle)
+	err := sendWithdrawal(cmd, e, q, quoteHandle)
+	if errors.Is(err, errQuoteExpired) {
+		return quoteExpiredErr(cmd)
+	}
+	return err
+}
+
+// requoteAfter is how long the confirmation prompt may stay open before the
+// quote is asked for again (§10.3 Confirmation).
+const requoteAfter = 120 * time.Second
+
+// nowFn is the clock the prompt is timed with; swapped in tests.
+var nowFn = time.Now
+
+// errQuoteExpired is a withdrawal the Hub refused because its quote expired,
+// confirmed not applied by its lookup: the bill is still held.
+var errQuoteExpired = errors.New("the quote expired before the withdrawal reached the Hub; nothing moved")
+
+func quoteExpiredErr(cmd *cobra.Command) error {
+	err := output.WithDetail(output.AuthError(cmd, errQuoteExpired), string(nipcash.DetailQuoteExpired))
+	return output.WithCall(err, map[string]any{"next_step": "`cashctl cash withdraw quote …`, show the new quote to the user, then `cashctl cash withdraw send --quote … --yes`"})
+}
+
+// confirmAndSend asks for "yes" to q (marking what changed since prev) and
+// sends it. A prompt open longer than requoteAfter quotes again: the same
+// address and amounts are sent without asking again, anything else is shown,
+// marked, for a new "yes". A quote that expires on the way is quoted again
+// the same way, and sent as a new call.
+func confirmAndSend(cmd *cobra.Command, e *ledger.Entry, q, prev *nipcash.WithdrawQuote, handle string) error {
+	ask := true
+	for {
+		if ask {
+			printWithdrawScreenSince(e, q, prev, nil)
+			asked := nowFn()
+			if !askYesFn() {
+				output.Println("Not sent. Your cash is still yours.")
+				return nil
+			}
+			if nowFn().Sub(asked) > requoteAfter {
+				_, q2, h2, err := quoteWithdrawal(cmd, q.Address, false)
+				if err != nil {
+					return err
+				}
+				if sameQuote(q, q2) {
+					output.Notef(false, "Quoted again (the prompt was open a while): the same amounts, sent by %s.", time.Unix(q2.SentBy, 0).UTC().Format(time.RFC3339))
+				} else {
+					prev, q, handle = q, q2, h2
+					continue
+				}
+				q, handle = q2, h2
+			}
+		}
+		err := sendWithdrawal(cmd, e, q, handle)
+		if !errors.Is(err, errQuoteExpired) {
+			return err
+		}
+		output.Notef(false, "The quote expired before the withdrawal reached the Hub; nothing moved. Here is a new quote.")
+		_, q2, h2, qErr := quoteWithdrawal(cmd, q.Address, false)
+		if qErr != nil {
+			return qErr
+		}
+		prev, q, handle, ask = q, q2, h2, true
+	}
+}
+
+// sameQuote reports two quotes with the same address and amounts.
+func sameQuote(a, b *nipcash.WithdrawQuote) bool {
+	return a.Address == b.Address && a.AmountMillis == b.AmountMillis && a.FeeMillis() == b.FeeMillis() && a.PayoutMillis == b.PayoutMillis
 }
 
 // withdrawJournal writes a withdrawal's call and its withdrawals row ahead
@@ -524,6 +611,27 @@ func sendWithdrawal(cmd *cobra.Command, e *ledger.Entry, q *nipcash.WithdrawQuot
 			pErr := placeErr(cmd, l, &j.ledgerJournal, err, "withdrawal", e.ID)
 			return output.WithReason(pErr, reasonReceiptInvalid)
 		}
+		var ind *nipcashclient.IndeterminateError
+		if c := j.call(); c != nil && errors.As(err, &ind) && ind.Detail == string(nipcash.DetailQuoteExpired) {
+			pErr := placeErr(cmd, l, &j.ledgerJournal, err, "withdrawal", e.ID)
+			w := j.w
+			w.QuoteExpiredSeen = true
+			_ = ledger.PutWithdrawal(w)
+			// Confirm with the Hub that nothing moved before quoting again.
+			waitFn(time.Until(time.Unix(c.Deadline+1, 0)))
+			l2, lErr := ledger.Load()
+			if lErr != nil {
+				return pErr
+			}
+			device, _ := deviceIDFn()
+			if c2, ok := l2.FindCall(c.CallID); ok && c2.Open() {
+				settleWithdrawCall(cmd, l2, c2, device)
+			}
+			if c2, ok := l2.FindCall(c.CallID); ok && c2.State == ledger.CallNotApplied {
+				return errQuoteExpired
+			}
+			return pErr
+		}
 		pErr := placeErr(cmd, l, &j.ledgerJournal, err, "withdrawal", e.ID)
 		if c := j.call(); c != nil && c.State == ledger.CallNotApplied {
 			w := j.w
@@ -564,6 +672,7 @@ func applyPayout(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, w *ledger
 	case nipcash.PayoutFinal:
 		w.FinishedAt = now
 		closeCall(l, c, ledger.CallDone, "final")
+		finalRewrite(l, w, p)
 	case nipcash.PayoutCancelled:
 		id, err := importRemint(l, c, w, p)
 		if err != nil {
@@ -581,6 +690,24 @@ func applyPayout(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, w *ledger
 		return output.RuntimeError(cmd, err)
 	}
 	return ledger.PutWithdrawal(*w)
+}
+
+// finalRewrite is the record of a final payout once nothing will look it up
+// again (S-CP-R9): the address, quote, receipt and transaction are dropped,
+// and the source's cash secret is wiped (closeCall wiped the call's). The
+// address is kept on w for the one line that says where it was received.
+func finalRewrite(l *ledger.Ledger, w *ledger.Withdrawal, p *nipcash.Payout) {
+	w.ReceivedAt = w.Address
+	if w.ReceivedAt == "" {
+		w.ReceivedAt = p.Address
+	}
+	stripped := *p
+	stripped.Address, stripped.Receipt, stripped.Tx = "", "", ""
+	raw, _ := json.Marshal(stripped)
+	w.PayoutJSON, w.Address, w.QuoteJSON = string(raw), "", ""
+	if e, ok := l.Find(w.SourceEntryID); ok {
+		e.CashSecret = ""
+	}
 }
 
 // importRemint keeps the bill a cancelled payout re-minted: bound as the
@@ -628,6 +755,11 @@ func withdrawalView(w ledger.Withdrawal) map[string]any {
 		"fee_millis": w.FeeMillis, "payout_millis": w.PayoutMillis, "sent_by": w.SentBy, "finished": w.FinishedAt != 0}
 	if w.Address != "" {
 		v["address"] = w.Address
+	} else if w.ReceivedAt != "" {
+		v["address"] = w.ReceivedAt
+	}
+	if w.Recovered {
+		v["recovered"] = true
 	}
 	var p nipcash.Payout
 	if w.PayoutJSON != "" && json.Unmarshal([]byte(w.PayoutJSON), &p) == nil {
@@ -644,9 +776,11 @@ func withdrawalView(w ledger.Withdrawal) map[string]any {
 		now := time.Now().Unix()
 		if p.State == nipcash.PayoutQueued && now > w.SentBy {
 			v["late"] = true
-			v["tx_available"] = p.Signed && p.Tx != ""
+			v["tx_available"] = p.Signed && txCheck(w, p) == "ok"
 		}
 		v["cancel_available"] = p.State == nipcash.PayoutBroadcast && now >= w.SentBy+604800
+		v["tx_check"] = txCheck(w, p)
+		v["receipt_verified"] = p.Receipt != "" || w.State == string(nipcash.PayoutFinal)
 	}
 	if w.RemintEntryID != "" {
 		v["remint_entry"] = w.RemintEntryID
@@ -687,7 +821,10 @@ func withdrawalText(w ledger.Withdrawal) string {
 	case string(nipcash.PayoutConfirmed):
 		return "Confirmed"
 	case string(nipcash.PayoutFinal):
-		return "Received at " + w.Address
+		if w.ReceivedAt != "" {
+			return "Received at " + w.ReceivedAt
+		}
+		return "Received"
 	case string(nipcash.PayoutCancelled):
 		return fmt.Sprintf("The Hub did not send it. Your %s is back as cash: %s.", f(w.AmountMillis), w.RemintEntryID)
 	}
@@ -705,4 +842,21 @@ func printWithdrawal(cmd *cobra.Command, w ledger.Withdrawal, _ *nipcash.Payout)
 		output.Println("Your bill is spent. Follow it: cashctl cash withdraw show " + w.WithdrawalID)
 	}
 	return nil
+}
+
+// txCheck is ok when the payout's transaction pays exactly the payout to the
+// address (nipcash.VerifyPayoutTx), mismatch when it doesn't, unchecked when
+// there is none.
+func txCheck(w ledger.Withdrawal, p nipcash.Payout) string {
+	if p.Tx == "" || p.Vout == nil {
+		return "unchecked"
+	}
+	addr := w.Address
+	if addr == "" {
+		addr = p.Address
+	}
+	if err := nipcash.VerifyPayoutTx(p.Tx, p.Txid, *p.Vout, addr, "", p.PayoutMillis); err != nil {
+		return "mismatch"
+	}
+	return "ok"
 }

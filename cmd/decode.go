@@ -73,8 +73,19 @@ func newDecodeCmd() *cobra.Command {
 			jsonMode, _ := cmd.Flags().GetBool("json")
 			check, _ := cmd.Flags().GetBool("check")
 			// A Cash Zap (kind 9522): as JSON, a file, or - for stdin.
-			if looksLikeZapEvent(args[0]) || strings.HasSuffix(strings.ToLower(args[0]), ".json") || (args[0] == stdinArg) {
-				return decodeCashZap(cmd, args[0], jsonMode, check)
+			if looksLikeZapEvent(args[0]) || strings.HasPrefix(strings.TrimSpace(args[0]), "{") ||
+				strings.HasSuffix(strings.ToLower(args[0]), ".json") || (args[0] == stdinArg) {
+				raw, err := readJSONArg(cmd, args[0])
+				if err != nil {
+					return err
+				}
+				switch dial.SniffJSON(raw) {
+				case dial.KindWithdrawEvent:
+					return decodeWithdrawEvent(cmd, raw, jsonMode)
+				case dial.KindPayout:
+					return decodePayout(cmd, raw, jsonMode)
+				}
+				return decodeCashZap(cmd, raw, jsonMode, check)
 			}
 			// Split before sniffing: NIP-CASH's "<token>#<cash_secret>"
 			// combined presentation (§Presenting a Cash-Mode Slice as One
@@ -99,6 +110,8 @@ func newDecodeCmd() *cobra.Command {
 				return decodeCashHub(cmd, value, jsonMode, check)
 			case dial.KindCashOrder:
 				return decodeCashOrder(cmd, value, jsonMode, check)
+			case dial.KindWitnessAddress:
+				return decodeWitnessAddress(cmd, value, jsonMode)
 			case dial.KindLightningInvoice:
 				return output.InvalidInputError(cmd, value, errors.New(lightningMessage(value)))
 			case dial.KindNostrEntity:
@@ -114,6 +127,7 @@ func newDecodeCmd() *cobra.Command {
 			}
 		},
 	}
+	cmd.Flags().String("hub", "", "a withdraw quote's Hub identity (x-only hex): also check the quote is its")
 	cmd.Flags().String("target", "", "a Cash Zap's target event (JSON file), which rule 7 checks the zap against")
 	cmd.Flags().Bool("check", false, "also cross-check against the Hub (cash token: matching recipient; cashhub: the online check; circlehub: can we join) — a network call")
 	return cmd

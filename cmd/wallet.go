@@ -124,6 +124,14 @@ pending_joins and pending_merge.`,
 				return output.RuntimeError(cmd, err)
 			}
 			device, _ := deviceIDFn()
+			var recovered []string
+			if ws, err := ledger.Withdrawals(); err == nil {
+				for _, w := range ws {
+					if w.Recovered && w.FinishedAt == 0 {
+						recovered = append(recovered, w.WithdrawalID)
+					}
+				}
+			}
 
 			if jsonMode {
 				output.PrintJSON(map[string]any{
@@ -143,6 +151,9 @@ pending_joins and pending_merge.`,
 					// one): the wallet may exist, known to the Hub by
 					// connection_pubkey. The secret is never shown.
 					"pending_joins": pendingJoins,
+					// Withdrawals found through the Hub that this device has no
+					// record of.
+					"recovered_withdrawals": output.NonNil(recovered),
 				})
 				return nil
 			}
@@ -208,6 +219,9 @@ pending_joins and pending_merge.`,
 					}
 					output.Printf("  %s   connection key %s   %s   %s\n", hub, j.ConnectionPubkey, state, time.Unix(j.CreatedAt, 0).UTC().Format(time.RFC3339))
 				}
+			}
+			for _, id := range recovered {
+				output.Printf("\nFound a withdrawal this device has no record of: %s — `cashctl cash withdraw show %s`\n", id, id)
 			}
 			// Last, and only when there is something to say: calls whose answer
 			// never came, with the secrets they generated — the one place those

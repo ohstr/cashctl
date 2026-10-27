@@ -240,7 +240,8 @@ CREATE TABLE withdrawals (
 	quote_expired_seen INTEGER NOT NULL DEFAULT 0,
 	confirmed_at       INTEGER,
 	checked_at         INTEGER,
-	finished_at        INTEGER
+	finished_at        INTEGER,
+	recovered          INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE unverified_confirmations (

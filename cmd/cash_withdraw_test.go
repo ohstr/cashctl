@@ -34,15 +34,26 @@ type fakeWithdrawHub struct {
 	cancel            func() (*nipcash.Payout, error)
 	sent              []nipcash.PendingCall
 	quotes            int
+	// payoutMillis overrides the quoted payout (0: 19258).
+	payoutMillis uint64
+	notices      chan struct{}
 }
 
 func (f *fakeWithdrawHub) Close() {}
+
+func (f *fakeWithdrawHub) WatchPayout(context.Context, string, []string) (<-chan struct{}, error) {
+	return f.notices, nil
+}
 
 func (f *fakeWithdrawHub) QuoteWithdraw(_ context.Context, p nipcash.CashWithdrawQuoteParams) (*nipcash.WithdrawQuote, error) {
 	f.quotes++
 	fields := nipcash.QuoteFields{Wallet: f.wallet, IdentityValue: strings.Repeat("ee", 32), Address: p.Address,
 		AmountMillis: 21000, NetworkFeeMillis: 1200, HubFeeMillis: 542, PayoutMillis: 19258,
 		SentBy: time.Now().Unix() + 3600, HoldsUntil: 870413}
+	if f.payoutMillis != 0 {
+		fields.PayoutMillis = f.payoutMillis
+		fields.HubFeeMillis = 21000 - 1200 - f.payoutMillis
+	}
 	ev, err := nipcash.NewWithdrawQuoteEvent(fields, time.Now().Unix(), func(ev *nip01.Event) error { return ev.Sign(f.hubPriv) })
 	if err != nil {
 		f.t.Fatal(err)

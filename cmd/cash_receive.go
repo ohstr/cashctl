@@ -79,6 +79,8 @@ func runCashReceive(cmd *cobra.Command, args []string) error {
 	switch dial.Sniff(input) {
 	case dial.KindCircleHub:
 		return output.InvalidInputError(cmd, input, fmt.Errorf("that's a Circle Hub connection — use `cashctl join <connection>` to join it"))
+	case dial.KindWitnessAddress:
+		return output.InvalidInputError(cmd, input, fmt.Errorf("that's an on-chain address — pay a bill out to it with `cashctl cash withdraw quote <address>`"))
 	case dial.KindCashOrder:
 		return output.InvalidInputError(cmd, input, fmt.Errorf("that's an Order connection — buy cash over it with `cashctl cash order place <connection> <amount>`"))
 	case dial.KindCashHub:
