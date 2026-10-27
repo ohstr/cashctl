@@ -990,3 +990,16 @@ func TestConsolidate_InterimRoundKeepsItsKeyForTheLookup(t *testing.T) {
 		t.Errorf("handoffs %+v: the wallet's own merged bill was filed as a gift", l.Handoffs)
 	}
 }
+
+// CC-A5: the merge key never goes to the Hub as a secret of the request, and a
+// re-placement keeps it.
+func TestConsolidate_InterimKeyStaysLocal(t *testing.T) {
+	priv, _, _ := newThrowawayKey()
+	c := &ledger.Call{Secrets: []ledger.CallSecret{{Role: ledger.RoleInterimKey, Secret: priv}}}
+	if pc := pendingOf(c); len(pc.Secrets) != 0 {
+		t.Errorf("pending call secrets %+v, want the merge key left out", pc.Secrets)
+	}
+	if specOf(c).InterimKey != priv {
+		t.Error("a re-placement loses the merge key")
+	}
+}
