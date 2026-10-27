@@ -248,10 +248,10 @@ func TestAuditD_CLI_TwoSavesOnOneLedgerDoNotConflictWithEachOther(t *testing.T) 
 		t.Fatalf("Load: %v", err)
 	}
 
-	// First save: park something on the row, exactly as the write-ahead does.
+	// First save: write a key ahead on the row, as a merge move does.
 	for i := range l.Entries {
 		if l.Entries[i].ID == idA {
-			l.Entries[i].PendingDestinationCashSecret = "parked-secret"
+			l.Entries[i].PendingThrowawayKey = "parked-key"
 		}
 	}
 	if err := l.Save(); err != nil {
@@ -277,7 +277,7 @@ func TestAuditD_CLI_TwoSavesOnOneLedgerDoNotConflictWithEachOther(t *testing.T) 
 	if e.Status != StatusConsolidated {
 		t.Errorf("status = %q, want %q", e.Status, StatusConsolidated)
 	}
-	if e.PendingDestinationCashSecret != "parked-secret" {
-		t.Errorf("parked secret = %q, want it preserved across both saves", e.PendingDestinationCashSecret)
+	if e.PendingThrowawayKey != "parked-key" {
+		t.Errorf("written-ahead key = %q, want it preserved across both saves", e.PendingThrowawayKey)
 	}
 }

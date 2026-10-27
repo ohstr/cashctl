@@ -511,7 +511,7 @@ func TestPrintAndSaveTransferResult_CashTargetAssemblesCashToSend(t *testing.T) 
 	result := &nipcash.CashTransferResult{AmountMillis: 500, NewWalletToken: "new-sent-token"}
 
 	captured := withCapturedStdout(func() {
-		if err := printAndSaveTransferResult(c, l, result, 500, "cash", target, nil, ledger.Entry{}, ""); err != nil {
+		if err := printAndSaveTransferResult(c, l, result, nil, 500, "cash", target, nil, ledger.Entry{}, ""); err != nil {
 			t.Fatalf("printAndSaveTransferResult() error = %v", err)
 		}
 	})
@@ -536,7 +536,7 @@ func TestPrintAndSaveTransferResult_CashTargetHumanModeShowsCashString(t *testin
 	result := &nipcash.CashTransferResult{AmountMillis: 500, NewWalletToken: "new-sent-token"}
 
 	captured := withCapturedStdout(func() {
-		if err := printAndSaveTransferResult(c, l, result, 500, "cash", target, nil, ledger.Entry{}, ""); err != nil {
+		if err := printAndSaveTransferResult(c, l, result, nil, 500, "cash", target, nil, ledger.Entry{}, ""); err != nil {
 			t.Fatalf("printAndSaveTransferResult() error = %v", err)
 		}
 	})
@@ -562,7 +562,7 @@ func TestPrintAndSaveTransferResult_NonCashTargetOmitsCashToSend(t *testing.T) {
 	result := &nipcash.CashTransferResult{AmountMillis: 500, NewWalletToken: "new-sent-token"}
 
 	captured := withCapturedStdout(func() {
-		if err := printAndSaveTransferResult(c, l, result, 500, "alice@example.com", target, nil, ledger.Entry{}, ""); err != nil {
+		if err := printAndSaveTransferResult(c, l, result, nil, 500, "alice@example.com", target, nil, ledger.Entry{}, ""); err != nil {
 			t.Fatalf("printAndSaveTransferResult() error = %v", err)
 		}
 	})
@@ -598,7 +598,7 @@ func TestPrintAndSaveTransferResult_CashTargetNoNewTokenFallsBackToOriginal(t *t
 	result := &nipcash.CashTransferResult{AmountMillis: 500}
 
 	captured := withCapturedStdout(func() {
-		if err := printAndSaveTransferResult(c, l, result, 500, "cash", target, nil, ledger.Entry{}, "original-token"); err != nil {
+		if err := printAndSaveTransferResult(c, l, result, nil, 500, "cash", target, nil, ledger.Entry{}, "original-token"); err != nil {
 			t.Fatalf("printAndSaveTransferResult() error = %v", err)
 		}
 	})
@@ -626,7 +626,7 @@ func TestPrintAndSaveTransferResult_CashTargetNothingToFallBackTo(t *testing.T) 
 	result := &nipcash.CashTransferResult{AmountMillis: 500}
 
 	captured := withCapturedStdout(func() {
-		if err := printAndSaveTransferResult(c, l, result, 500, "cash", target, nil, ledger.Entry{}, ""); err != nil {
+		if err := printAndSaveTransferResult(c, l, result, nil, 500, "cash", target, nil, ledger.Entry{}, ""); err != nil {
 			t.Fatalf("printAndSaveTransferResult() error = %v", err)
 		}
 	})
@@ -662,7 +662,7 @@ func TestPrintAndSaveTransferResult_CashRemainderStaysSpendableWithoutIdentity(t
 	source := ledger.Entry{IdentityRequired: ptrTo(false), CashSecret: strings.Repeat("c3", 32)}
 
 	withCapturedStdout(func() {
-		if err := printAndSaveTransferResult(c, l, result, 1, "cash", target, nil, credentialModeOf(source), ""); err != nil {
+		if err := printAndSaveTransferResult(c, l, result, nil, 1, "cash", target, nil, credentialModeOf(source), ""); err != nil {
 			t.Fatalf("printAndSaveTransferResult() error = %v", err)
 		}
 	})
@@ -702,7 +702,7 @@ func TestPrintAndSaveTransferResult_PubkeyRemainderStaysPubkeyMode(t *testing.T)
 	withCapturedStdout(func() {
 		// The auto-consolidate path's mode: the interim wallet is the
 		// caller's own pubkey identity.
-		if err := printAndSaveTransferResult(c, l, result, 1, "alice@example.com", target, nil, ledger.Entry{IdentityRequired: ptrTo(true)}, ""); err != nil {
+		if err := printAndSaveTransferResult(c, l, result, nil, 1, "alice@example.com", target, nil, ledger.Entry{IdentityRequired: ptrTo(true)}, ""); err != nil {
 			t.Fatalf("printAndSaveTransferResult() error = %v", err)
 		}
 	})
@@ -746,7 +746,7 @@ func TestPrintAndSaveTransferResult_RecipientTokenNeverSavedToLedger(t *testing.
 	}
 
 	withCapturedStdout(func() {
-		if err := printAndSaveTransferResult(c, l, result, 1, "alice@example.com", target, nil, ledger.Entry{IdentityRequired: ptrTo(true)}, ""); err != nil {
+		if err := printAndSaveTransferResult(c, l, result, nil, 1, "alice@example.com", target, nil, ledger.Entry{IdentityRequired: ptrTo(true)}, ""); err != nil {
 			t.Fatalf("printAndSaveTransferResult() error = %v", err)
 		}
 	})

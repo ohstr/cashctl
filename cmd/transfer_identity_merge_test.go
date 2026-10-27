@@ -39,8 +39,8 @@ func identityMergeFixture(t *testing.T, send func(*ledger.Entry, nipcash.CashTra
 	var tokens, ids []string
 	var sources []nipcash.Source
 	for _, e := range []ledger.Entry{
-		{Token: "tok-a", WalletPubkey: "pa", AmountMillis: ptrTo(uint64(1000)), IdentityRequired: ptrTo(true), Verified: true},
-		{Token: "tok-b", WalletPubkey: "pb", AmountMillis: ptrTo(uint64(2000)), IdentityRequired: ptrTo(true), Verified: true},
+		{Token: "tok-a", WalletPubkey: hexWallet("pa"), AmountMillis: ptrTo(uint64(1000)), IdentityRequired: ptrTo(true), Verified: true},
+		{Token: "tok-b", WalletPubkey: hexWallet("pb"), AmountMillis: ptrTo(uint64(2000)), IdentityRequired: ptrTo(true), Verified: true},
 	} {
 		added, err := l.Add(e)
 		if err != nil {
@@ -53,16 +53,16 @@ func identityMergeFixture(t *testing.T, send func(*ledger.Entry, nipcash.CashTra
 		t.Fatal(err)
 	}
 
-	origCap, origMerge, origSend := hubConsolidateCapFn, attemptCashConsolidateFn, sendFromEntryFn
-	t.Cleanup(func() { hubConsolidateCapFn, attemptCashConsolidateFn, sendFromEntryFn = origCap, origMerge, origSend })
+	origCap := hubConsolidateCapFn
+	t.Cleanup(func() { hubConsolidateCapFn = origCap })
 	hubConsolidateCapFn = func(string) int { return 10 }
-	attemptCashConsolidateFn = func(_ string, _ []nipcash.Source, target nipcash.Target) (*nipcash.CashConsolidateResult, error) {
+	withFakeAttemptCashConsolidate(t, func(_ string, _ []nipcash.Source, target nipcash.Target) (*nipcash.CashConsolidateResult, error) {
 		if target != nipcash.Pubkey(myPub) {
 			t.Errorf("merged to %v, want the local identity", target)
 		}
-		return &nipcash.CashConsolidateResult{AmountMillis: 3000, NewWalletToken: "merged-tok", NewWalletPubkey: "pm"}, nil
-	}
-	sendFromEntryFn = send
+		return &nipcash.CashConsolidateResult{AmountMillis: 3000, NewWalletToken: "merged-tok", NewWalletPubkey: hexWallet("pm")}, nil
+	})
+	installFakeCaller(t).transfer = send
 	return l, tokens, sources, ids, priv, myPub
 }
 

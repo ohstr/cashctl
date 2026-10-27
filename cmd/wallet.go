@@ -93,9 +93,8 @@ call: amounts are as last known.
 
 --json adds: held_tokens (each with its id and cash_hub — only same-Hub
 tokens merge), unclaimed_handoffs (cash notes still unclaimed and gifts,
-which stay "sent": branch on status), unfinished_cash_sends (an interrupted
-cash send's only secret copy — keep it), unconfirmed_rekeys (a re-key with no
-answer: its new code may be the only one that spends the bill — keep it),
+which stay "sent": branch on status), open_calls (a transfer, merge or
+re-key with no answer yet, with each new code it generated — keep them),
 pending_joins and pending_merge.`,
 		Args: output.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -124,6 +123,7 @@ pending_joins and pending_merge.`,
 			if err != nil {
 				return output.RuntimeError(cmd, err)
 			}
+			device, _ := deviceIDFn()
 
 			if jsonMode {
 				output.PrintJSON(map[string]any{
@@ -132,11 +132,9 @@ pending_joins and pending_merge.`,
 					"wallets":         output.NonNil(s.Connections),
 					"default_wallet":  s.Default,
 					"held_tokens":     heldTokensJSON(l.Held()),
-					// The only copy of each secret: see unreconciledDestinationParks.
-					"unfinished_cash_sends": output.NonNil(unfinishedCashSends(l)),
-					// Re-keys with no answer: the pending secret may be the only one
-					// that spends the bill now.
-					"unconfirmed_rekeys": output.NonNil(unconfirmedRekeys(l)),
+					// Calls with no answer yet, with every secret they generated:
+					// each may be the only copy of what spends a bill.
+					"open_calls": output.NonNil(openCalls(l, device)),
 					// Handed out and not known to be claimed, secrets hidden: `wallet
 					// history --show-secrets` shows them in full to resend.
 					"unclaimed_handoffs": unclaimedHandoffs(l),
@@ -189,11 +187,6 @@ pending_joins and pending_merge.`,
 				}
 				output.Printf("  %d) %s   received %s   %s\n", i+1, amount, formatReceivedDate(e.ReceivedAt), status)
 			}
-			// Last, and only when there is something to say: an interrupted
-			// `--to cash` send whose destination secret was written ahead of
-			// the call but never reconciled. This is the one place that
-			// secret is ever readable again, so it is worth pushing past the
-			// routine summary above — see unreconciledDestinationParks.
 			printPendingMerge(l)
 			if pending := unclaimedHandoffs(l); len(pending) > 0 {
 				output.Printf("\nHanded out, not yet claimed: %d — `cashctl wallet history --show-secrets` to resend\n", len(pending))
@@ -208,18 +201,10 @@ pending_joins and pending_merge.`,
 					output.Printf("  %s   connection key %s   %s\n", output.Sanitize(hub), j.ConnectionPubkey, j.At)
 				}
 			}
-			if rekeys := unconfirmedRekeys(l); len(rekeys) > 0 {
-				output.Printf("\nUnconfirmed re-keys: %d — cashctl settles each when its Hub answers; until then keep the new code, it may be the only one that spends the bill\n", len(rekeys))
-				for _, r := range rekeys {
-					output.Printf("  %s   new code %s\n", r.TokenID, r.CashSecret)
-				}
-			}
-			if parks := unreconciledDestinationParks(l); len(parks) > 0 {
-				output.Printf("\nUnfinished cash sends: %d\n", len(parks))
-				for _, line := range parks {
-					output.Println(line)
-				}
-			}
+			// Last, and only when there is something to say: calls whose answer
+			// never came, with the secrets they generated — the one place those
+			// are readable again.
+			printOpenCalls(l, device)
 			return nil
 		},
 	}

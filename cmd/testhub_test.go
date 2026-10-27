@@ -2,11 +2,17 @@ package cmd
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/ohstr/nmilat/nipcash"
+	nipcashclient "github.com/ohstr/nmilat/nipcash/client"
 	relayclient "github.com/ohstr/nmilat/relay/client"
 
 	"github.com/ohstr/cashctl/internal/ledger"
@@ -56,14 +62,18 @@ type fakeProbe struct {
 	cred  nipcash.Credential
 }
 
-// newFakeBillHub installs the fake behind moveCashFn and both Hub probes for
+// newFakeBillHub installs the fake behind every bill-creating call (through a
+// fake caller that writes each call ahead like nmilat) and both Hub probes for
 // the rest of the test.
 func newFakeBillHub(t *testing.T) *fakeBillHub {
 	t.Helper()
 	h := &fakeBillHub{t: t, bills: map[string]*fakeBill{}}
-	origMove, origLive, origAmount := moveCashFn, probeCredentialFn, probeAmountFn
-	t.Cleanup(func() { moveCashFn, probeCredentialFn, probeAmountFn = origMove, origLive, origAmount })
-	moveCashFn = h.move
+	hooks := installFakeCaller(t)
+	hooks.transfer = func(e *ledger.Entry, p nipcash.CashTransferParams) (*nipcash.CashTransferResult, error) {
+		return h.move(e, p.Credential, p.To)
+	}
+	origLive, origAmount := probeCredentialFn, probeAmountFn
+	t.Cleanup(func() { probeCredentialFn, probeAmountFn = origLive, origAmount })
 	probeCredentialFn = func(e *ledger.Entry, cred nipcash.Credential) (bool, error) {
 		_, ok, err := h.probe(e, cred)
 		return ok, err
@@ -208,18 +218,154 @@ func failSaves(t *testing.T) (restore func()) {
 			}
 		}
 	}
-	exec(`CREATE TRIGGER fail_update BEFORE UPDATE ON entries BEGIN SELECT RAISE(ABORT, 'injected save failure'); END`,
-		`CREATE TRIGGER fail_insert BEFORE INSERT ON entries BEGIN SELECT RAISE(ABORT, 'injected save failure'); END`)
+	var create, drop []string
+	for _, table := range []string{"entries", "pending_calls"} {
+		for _, op := range []string{"UPDATE", "INSERT"} {
+			name := "fail_" + strings.ToLower(op) + "_" + table
+			create = append(create, `CREATE TRIGGER `+name+` BEFORE `+op+` ON `+table+` BEGIN SELECT RAISE(ABORT, 'injected save failure'); END`)
+			drop = append(drop, `DROP TRIGGER IF EXISTS `+name)
+		}
+	}
+	exec(create...)
 	done := false
 	restore = func() {
 		if done {
 			return
 		}
 		done = true
-		exec(`DROP TRIGGER IF EXISTS fail_update`, `DROP TRIGGER IF EXISTS fail_insert`)
+		exec(drop...)
 	}
 	t.Cleanup(restore)
 	return restore
+}
+
+// fakeCallerHooks answer the bill-creating calls a test's fake caller receives.
+// transfer gets the held entry being spent (found by the dialled token in the
+// ledger the call is written to); consolidate gets the dialled token. Either
+// returning context.DeadlineExceeded is a lost reply; a *relayclient.WalletError
+// is the Hub's coded answer (BAD_REQUEST final, any other kept open); a
+// *notSentError is a call never published.
+type fakeCallerHooks struct {
+	transfer    func(e *ledger.Entry, p nipcash.CashTransferParams) (*nipcash.CashTransferResult, error)
+	consolidate func(dialToken string, p nipcash.CashConsolidateParams) (*nipcash.CashConsolidateResult, error)
+	// published counts calls that reached the "Hub".
+	published int
+	// dialErr fails the dial of these tokens: nothing is sent.
+	dialErr map[string]error
+}
+
+// activeFakeHooks is the fake caller installed for the running test, so two
+// helpers installing one share it.
+var activeFakeHooks *fakeCallerHooks
+
+// installFakeCaller puts a fake behind dialCallerFn for the rest of the test.
+func installFakeCaller(t *testing.T) *fakeCallerHooks {
+	t.Helper()
+	if activeFakeHooks != nil {
+		return activeFakeHooks
+	}
+	hooks := &fakeCallerHooks{}
+	activeFakeHooks = hooks
+	orig := dialCallerFn
+	t.Cleanup(func() { dialCallerFn, activeFakeHooks = orig, nil })
+	dialCallerFn = func(_ context.Context, token string) (billCaller, error) {
+		if err := hooks.dialErr[token]; err != nil {
+			return nil, err
+		}
+		return &fakeCaller{t: t, token: token, hooks: hooks}, nil
+	}
+	return hooks
+}
+
+type fakeCaller struct {
+	t     *testing.T
+	token string
+	hooks *fakeCallerHooks
+}
+
+func (c *fakeCaller) Close() {}
+
+// writeAhead does what nmilat does before publishing: the call, with its
+// deadline and generated secrets, goes to the journal first.
+func (c *fakeCaller) writeAhead(ctx context.Context, j nipcashclient.Journal, device string, pc nipcash.PendingCall) (nipcash.PendingCall, error) {
+	pc.Deadline, pc.HubIdentity, pc.MaxRequestAge, pc.Device = time.Now().Unix()+60, strings.Repeat("ab", 32), 120, device
+	if err := j.WriteAhead(ctx, []nipcash.PendingCall{pc}); err != nil {
+		return pc, fmt.Errorf("%w: write ahead: %v", nipcashclient.ErrNotSent, err)
+	}
+	return pc, nil
+}
+
+// answer maps a hook's result the way nmilat maps a Hub's answer to a call
+// carrying a request_id.
+func answer[T any](c *fakeCaller, pc nipcash.PendingCall, res T, err error) (T, error) {
+	var zero T
+	var notSent *notSentError
+	var walletErr *relayclient.WalletError
+	switch {
+	case err == nil:
+		c.hooks.published++
+		return res, nil
+	case errors.As(err, &notSent):
+		return zero, fmt.Errorf("%w: %v", nipcashclient.ErrNotSent, err)
+	case errors.As(err, &walletErr) && walletErr.Code == "BAD_REQUEST":
+		c.hooks.published++
+		return zero, &nipcashclient.FinalError{Method: pc.Method, Code: walletErr.Code, Message: walletErr.Message}
+	case errors.As(err, &walletErr):
+		c.hooks.published++
+		pc.LastCode = walletErr.Code
+		return zero, &nipcashclient.IndeterminateError{Call: pc, Code: walletErr.Code, Message: walletErr.Message, Cause: err}
+	default:
+		c.hooks.published++
+		return zero, &nipcashclient.IndeterminateError{Call: pc, Cause: err}
+	}
+}
+
+func (c *fakeCaller) CashTransfer(ctx context.Context, p nipcash.CashTransferParams, j nipcashclient.Journal, device string) (*nipcash.CashTransferResult, error) {
+	tok, err := nipcash.Decode(c.token)
+	wallet := strings.Repeat("cd", 32)
+	if err == nil {
+		wallet = tok.WalletPubkey
+	}
+	if p.RequestID == "" {
+		p.RequestID, _ = nipcash.NewRequestID()
+	}
+	pc, err := p.Pending(wallet)
+	if err != nil {
+		return nil, err
+	}
+	if pc, err = c.writeAhead(ctx, j, device, pc); err != nil {
+		return nil, err
+	}
+	var e *ledger.Entry
+	if lj, ok := j.(*ledgerJournal); ok {
+		e, _ = lj.l.FindByToken(c.token)
+	}
+	if e == nil {
+		e = &ledger.Entry{Token: c.token}
+	}
+	if c.hooks.transfer == nil {
+		c.t.Fatalf("fake caller: unexpected cash_transfer on %s", c.token)
+	}
+	res, err := c.hooks.transfer(e, p)
+	return answer(c, pc, res, err)
+}
+
+func (c *fakeCaller) CashConsolidate(ctx context.Context, p nipcash.CashConsolidateParams, j nipcashclient.Journal, device string) (*nipcash.CashConsolidateResult, error) {
+	if p.RequestID == "" {
+		p.RequestID, _ = nipcash.NewRequestID()
+	}
+	pc, err := p.Pending()
+	if err != nil {
+		return nil, err
+	}
+	if pc, err = c.writeAhead(ctx, j, device, pc); err != nil {
+		return nil, err
+	}
+	if c.hooks.consolidate == nil {
+		c.t.Fatalf("fake caller: unexpected cash_consolidate on %s", c.token)
+	}
+	res, err := c.hooks.consolidate(c.token, p)
+	return answer(c, pc, res, err)
 }
 
 // T-07: a probe on bill A never answers for bill B, and a move of A leaves B alone.
@@ -235,7 +381,7 @@ func TestFakeBillHub_AnswersOnlyForTheBillAskedAbout(t *testing.T) {
 	if amt, ok, err := probeAmountFn(a, nipcash.BySecret("sa")); err != nil || !ok || amt != 1000 {
 		t.Errorf("bill A to its own secret: %d %v %v; want 1000 true nil", amt, ok, err)
 	}
-	if _, err := moveCashFn(b, nipcash.BySecret("sa"), mustCashTarget(t)); !isWrongSecretDecline(err) {
+	if _, err := h.move(b, nipcash.BySecret("sa"), mustCashTarget(t)); !isWrongSecretDecline(err) {
 		t.Errorf("moving bill B with bill A's secret: %v; want UNAUTHORIZED", err)
 	}
 	if h.owner("tok-b") != nipcash.BySecret("sb") {
@@ -244,7 +390,7 @@ func TestFakeBillHub_AnswersOnlyForTheBillAskedAbout(t *testing.T) {
 
 	h.carve = true
 	next := mustCashTarget(t)
-	res, err := moveCashFn(a, nipcash.BySecret("sa"), next)
+	res, err := h.move(a, nipcash.BySecret("sa"), next)
 	if err != nil || res.NewWalletToken == "" {
 		t.Fatalf("carving bill A: %+v %v", res, err)
 	}
@@ -264,4 +410,11 @@ func mustCashTarget(t testing.TB) *nipcash.CashTarget {
 		t.Fatal(err)
 	}
 	return ct
+}
+
+// hexWallet is a stable 64-hex wallet key named after s, for fixtures that need
+// a wallet key nmilat accepts.
+func hexWallet(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])
 }

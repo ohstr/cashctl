@@ -358,16 +358,6 @@ func redeemHubGroup(
 		}
 		return
 	}
-	results = retryWithPendingSecrets(g.Plans, items, results, func(retries []nipcashclient.BatchRedeem) []nipcashclient.RedeemOutcome {
-		var out []nipcashclient.RedeemOutcome
-		_ = WithSpinner(jsonMode, fmt.Sprintf("Retrying %d token(s) with a pending secret...", len(retries)), func() error {
-			// A failed retry is not reported: the original decline is the one worth
-			// showing, so the error is deliberately dropped here.
-			out, _ = client.RedeemMany(ctx, retries)
-			return nil
-		})
-		return out
-	})
 	applyRedeemResults(cmd, l, g.Plans, results, outcomes, destName, incompleteReply(sendErr))
 }
 
@@ -504,87 +494,6 @@ func recordRedeemed(l *ledger.Ledger, entry *ledger.Entry, destName string) {
 }
 
 // plansEntry finds a group's plan by ledger id.
-// retryWithPendingSecrets is the pending-secret fallback, in the shape batching
-// needs: per item, and as one extra request rather than one per bill.
-//
-// An interrupted protect step (cmd/receive_secure.go) can leave an entry holding
-// TWO candidate cash secrets — the old one and the rekey's replacement — with no
-// way to know which the hub accepted, because NIP-CASH has no read-only way to
-// ask (nipcashclient.CheckClaim only proves *some* recipient exists, never
-// *which* secret). The only place cashctl can learn the answer is a real spend,
-// which is why this lives on the spend path rather than in a reconcile step
-// nothing calls.
-//
-// spendCashEntry does exactly this for the single-call methods (transfer). Redeem
-// stopped being a single call when it became a batch, and the fallback was simply
-// left behind — a silent regression: a recovery that used to work returned
-// NOT_FOUND instead, telling someone a bill they own cannot be spent.
-//
-// Only genuinely wrong-secret declines are retried. An omission is NOT retried
-// and must not be: it is indistinguishable from a redemption whose reply was
-// lost, so resending could double-spend.
-// send is a parameter rather than a client so the decision logic — which items
-// qualify, and what a failed retry must NOT do — is testable without a relay.
-// Same shape as consolidateItemsFn; no package-level seam.
-func retryWithPendingSecrets(
-	plans []redeemPlan,
-	items []nipcashclient.BatchRedeem,
-	results []nipcashclient.RedeemOutcome,
-	send func([]nipcashclient.BatchRedeem) []nipcashclient.RedeemOutcome,
-) []nipcashclient.RedeemOutcome {
-	itemByID := make(map[string]nipcashclient.BatchRedeem, len(items))
-	for _, it := range items {
-		itemByID[it.ID] = it
-	}
-
-	retries := make([]nipcashclient.BatchRedeem, 0, 1)
-	pendingByID := make(map[string]string, 1)
-	for _, r := range results {
-		if r.State != nipcashclient.OutcomeError || r.Error == nil || !isWrongSecretCode(r.Error.Code) {
-			continue
-		}
-		entry := plansEntry(plans, r.ID)
-		if entry == nil || entry.PendingCashSecret == "" || entry.PendingCashSecret == entry.CashSecret {
-			continue
-		}
-		it, ok := itemByID[r.ID]
-		if !ok {
-			continue
-		}
-		it.Params.Credential = nipcash.BySecret(entry.PendingCashSecret)
-		retries = append(retries, it)
-		pendingByID[r.ID] = entry.PendingCashSecret
-	}
-	if len(retries) == 0 {
-		return results
-	}
-
-	for _, rr := range send(retries) {
-		if !rr.Succeeded() {
-			// The FIRST decline is the one worth reporting — a second guess's own
-			// failure adds nothing, and could itself just be the same wrong-secret
-			// signal for a genuinely-wrong pending value.
-			continue
-		}
-		entry := plansEntry(plans, rr.ID)
-		if entry != nil {
-			// Promote, so the next spend starts from the secret that actually works.
-			// Not Saved here: the caller's own recordRedeemed does that, and picks
-			// these fields up because Entry is a pointer into the ledger's slice —
-			// the same contract spendCashEntry relies on.
-			entry.PendingCashSecret = pendingByID[rr.ID]
-			promotePendingSecret(entry)
-		}
-		for i := range results {
-			if results[i].ID == rr.ID {
-				results[i] = rr
-				break
-			}
-		}
-	}
-	return results
-}
-
 func plansEntry(plans []redeemPlan, id string) *ledger.Entry {
 	for _, p := range plans {
 		if p.Entry.ID == id {

@@ -542,8 +542,13 @@ func isCrossHubSourcesDecline(err error) bool {
 // the remainder entry, if any, is saved with — cash_transfer leaves a
 // split's remainder under the SAME identity the source had, so it has to
 // be spendable the same way the source was.
-func printAndSaveTransferResult(cmd *cobra.Command, l *ledger.Ledger, transferResult *nipcash.CashTransferResult, sentAmount uint64, toValue string, target credential.ResolvedTarget, consolidatedFrom []string, remainderMode ledger.Entry, originalToken string) error {
+//
+// call is the call that produced the result (nil for a merge that sent straight
+// to the recipient, whose call is closed already): it is closed here, in the
+// same Save as the entries and hand-off.
+func printAndSaveTransferResult(cmd *cobra.Command, l *ledger.Ledger, transferResult *nipcash.CashTransferResult, call *ledger.Call, sentAmount uint64, toValue string, target credential.ResolvedTarget, consolidatedFrom []string, remainderMode ledger.Entry, originalToken string) error {
 	jsonMode, _ := cmd.Flags().GetBool("json")
+	closeCall(l, call, ledger.CallDone, "")
 	l.AppendHistory("transfer", fmt.Sprintf("transferred %s %s", output.FormatAmount(int64(sentAmount)), historyTargetClause(toValue, target)))
 
 	var remainderEntry *ledger.Entry
@@ -637,7 +642,7 @@ func printAndSaveTransferResult(cmd *cobra.Command, l *ledger.Ledger, transferRe
 	// (I-26); if that cannot finish now, the next command retries it.
 	var remainderRecovery string
 	if remainderEntry != nil && remainderEntry.ThrowawayKey != "" {
-		if _, unsaved := toCashNotes(l, []string{remainderEntry.ID}); len(unsaved) > 0 {
+		if _, unsaved := toCashNotes(cmd, l, []string{remainderEntry.ID}); len(unsaved) > 0 {
 			remainderRecovery = strings.Join(unsaved, " ")
 		}
 	}
@@ -902,12 +907,15 @@ func runCashTransfer(cmd *cobra.Command, args []string) error {
 		entry = e
 	}
 
+	if err := refuseOpenCalls(cmd, l, []string{entry.ID}); err != nil {
+		return err
+	}
 	cred, err := resolveCredential(cmd, entry)
 	if err != nil {
 		return err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
 	var client *nipcashclient.Client
@@ -972,45 +980,39 @@ func runCashTransfer(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	// After the confirm, immediately before the call: a declined confirm must
-	// not leave a secret for a bill that was never asked for, and the window
-	// this closes opens at the call itself. See parkDestinationCashSecret —
-	// for a `--to cash` gift this write is the only thing standing between a
-	// Ctrl-C during the spinner below and a funded, unspendable bill
-	// (D-CLI-1). A no-op for every other target kind.
-	parked, parkErr := parkDestinationCashSecret(l, []string{entry.ID}, target.Target)
-	if parkErr != nil {
-		return output.RuntimeError(cmd, parkErr)
-	}
-
-	var result *nipcash.CashTransferResult
-	err = WithSpinner(jsonMode, "Transferring...", func() error {
-		r, cErr := spendCashEntry(entry, cred, func(c nipcash.Credential) (*nipcash.CashTransferResult, error) {
-			journal, device := billJournal()
-			return client.CashTransfer(ctx, nipcash.CashTransferParams{
-				Credential: c, To: target.Target, CurrentAmount: amount, SplitAmount: splitAmount,
-			}, journal, device)
-		})
-		if cErr != nil {
-			return cErr
+	// A partial split of a cash note gives the remainder a fresh secret of its
+	// own (remainder_commitment), never the source's, which the sender's past
+	// holders may know. Both secrets are written ahead with the call.
+	var remainderTarget *nipcash.CashTarget
+	if splitAmount != nil && *splitAmount < amount && isCashNote(entry) {
+		if remainderTarget, err = nipcash.NewCashTarget(); err != nil {
+			return output.RuntimeError(cmd, err)
 		}
-		result = r
-		return nil
+	}
+	purpose := purposeTransfer
+	if splitAmount != nil && *splitAmount < amount {
+		purpose = purposeSplit
+	}
+	kind, authPub, authSecret := authorizerOf(cmd, entry, cred)
+	spec := callSpec{Purpose: purpose, SourceEntryIDs: []string{entry.ID}, AuthorizerKind: kind,
+		AuthorizerPubkey: authPub, AuthorizerSecret: authSecret, TargetCredential: entry.Token}
+	entryID := entry.ID
+	var result *nipcash.CashTransferResult
+	var call *ledger.Call
+	err = WithSpinner(jsonMode, "Transferring...", func() error {
+		var cErr error
+		result, call, cErr = placeTransfer(ctx, cmd, l, client, spec, nipcash.CashTransferParams{
+			Credential: cred, To: target.Target, CurrentAmount: amount, SplitAmount: splitAmount,
+			RemainderTarget: remainderTarget,
+		})
+		return cErr
 	})
 	if err != nil {
-		classified := classifyCashSpendErr(cmd, err, "transfer", entry.ID)
-		parked.forgetIfNothingCreated(classified)
-		return classified
+		return err
 	}
+	entry, _ = l.Find(entryID)
 
 	_ = l.SetStatus(entry.ID, ledger.StatusTransferred)
-	// Cleared in memory only — printAndSaveTransferResult's own Save, below,
-	// is what persists it, together with the result it belongs to. If that
-	// Save fails the park stays on disk, which is correct: that is the one
-	// case where it is still the only copy of a secret for a bill the Hub
-	// really did create (reportUnsavedResult prints the handoff string, but
-	// only if this process lives long enough to print it).
-	parked.release()
 	// The remainder is a brand-new wallet the same Hub split off entry, so
 	// it inherits entry's verified minter (see sharedMinter) — without this
 	// a split remainder silently fell out of cash-selection's same-minter
@@ -1018,7 +1020,11 @@ func runCashTransfer(cmd *cobra.Command, args []string) error {
 	// failed as "insufficient" despite the funds being right there.
 	remainderMode := credentialModeOf(*entry)
 	remainderMode.MinterPubkey = entry.MinterPubkey
-	return printAndSaveTransferResult(cmd, l, result, sentAmount, toValue, target, nil, remainderMode, entry.Token)
+	if remainderTarget != nil {
+		remainderMode.CashSecret = remainderTarget.Secret()
+		remainderMode.CashProtection = ledger.CashProtected
+	}
+	return printAndSaveTransferResult(cmd, l, result, call, sentAmount, toValue, target, nil, remainderMode, entry.Token)
 }
 
 // resolveLiveEntry re-resolves id against l itself and returns the result —

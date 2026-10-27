@@ -117,104 +117,48 @@ func protectCashReceipt(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entr
 	return protectRekeyOnly(cmd, l, entry, jsonMode)
 }
 
-// protectRekeyOnly is protectCashReceipt's no-merge path: re-key entry's
-// cash secret in place, without going through nipcashclient.RekeyCashSlice.
+// protectRekeyOnly is protectCashReceipt's no-merge path: re-key entry's cash
+// secret onto a fresh one only this wallet holds.
 //
-// A cash-mode target's secret is generated purely locally — NIP-CASH §Cash-Mode
-// Slices: the caller supplies only a one-way commitment over the wire, the
-// secret itself never crosses it — so there is no reason to let placing the
-// call be the difference between "the new secret exists on disk" and "the
-// new secret exists only in this process's own memory, gone the instant it
-// dies." nipcash.NewCashTarget() is generated here, in cashctl's own
-// code, and entry.PendingCashSecret is saved BEFORE the call — the same
-// write-ahead discipline a database uses for its own log.
-//
-// Once persisted, a kill or lost response can leave the outcome genuinely
-// ambiguous: NIP-CASH has no read-only way to ask the Hub which of two
-// candidate secrets it accepted (nipcashclient.CheckClaim's own doc
-// comment — a cash-mode match only proves *some* recipient exists, never
-// *which* secret). resolveCredential's own fallback resolves that
-// ambiguity the only way the protocol allows: by trying the pending secret
-// on the entry's next real spend attempt if the usual one is declined.
+// The new secret is generated here and only its commitment crosses the wire
+// (NIP-CASH §Cash-Mode Slices). It is written ahead with the call (its
+// call_secrets row) before anything is sent, so a kill or a lost answer never
+// costs it: the call stays open, the bill is not used again until the Hub says
+// what happened, and `wallet show` lists the new code meanwhile.
 func protectRekeyOnly(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entry, jsonMode bool) (protectedStatus, *ledger.Entry) {
-	if hasPendingSecret(entry) {
-		landed, unresolved := settleBeforeRekey(cmd, l, entry)
-		switch {
-		case unresolved:
-			printProtectUnresolved(jsonMode, entry.ID)
-			return protectedStatus{Status: "failed", Error: errUnresolvedRekey(entry.ID).Error(), Unresolved: true}, entry
-		case landed:
-			if !jsonMode {
-				output.Println("Protected.")
-			}
-			return protectedStatus{Status: "rekeyed"}, entry
-		}
+	if _, open := l.OpenCallFor(entry.ID); open {
+		printProtectUnresolved(jsonMode, entry.ID)
+		return protectedStatus{Status: "failed", Error: errUnresolvedRekey(entry.ID).Error(), Unresolved: true}, entry
 	}
-
 	bt, err := nipcash.NewCashTarget()
 	if err != nil {
 		printProtectFailure(jsonMode, err)
 		return protectedStatus{Status: "failed", Error: err.Error()}, entry
 	}
-	entry.PendingCashSecret = bt.Secret()
-	if err := l.Save(); err != nil {
-		// Nothing has been sent to the Hub yet — entry.CashSecret is
-		// still the only real secret, so this is an ordinary failure.
-		entry.PendingCashSecret = ""
+	id := entry.ID
+	var result *nipcash.CashTransferResult
+	var call *ledger.Call
+	err = WithSpinner(jsonMode, "Protecting...", func() error {
+		var cErr error
+		result, call, cErr = moveCash(cmd, l, entry, nipcash.BySecret(entry.CashSecret), bt, purposeProtect)
+		return cErr
+	})
+	entry, _ = l.Find(id)
+	if err != nil {
+		if output.AsCLIError(err).Code == output.CodeIndeterminate {
+			// No decided answer: the call stays open with the new secret, and is
+			// looked up before this bill is used again.
+			printProtectAmbiguousFailure(jsonMode, err)
+			return protectedStatus{Status: "failed", Error: err.Error(), PendingSecretUnresolved: true}, entry
+		}
 		printProtectFailure(jsonMode, err)
 		return protectedStatus{Status: "failed", Error: err.Error()}, entry
 	}
-
-	var result *nipcash.CashTransferResult
-	err = WithSpinner(jsonMode, "Protecting...", func() error {
-		r, cErr := moveCashFn(entry, nipcash.BySecret(entry.CashSecret), bt)
-		if cErr != nil {
-			return cErr
-		}
-		result = r
-		return nil
-	})
-	if err != nil {
-		var notSent *notSentError
-		// A dial failure never reached the Hub at all; a *WalletError is
-		// the Hub actually answering with a real decline. Either way, the
-		// call is DEFINITELY known not to have taken effect — safe to
-		// retract the pending secret and keep reporting the old one.
-		if errors.As(err, &notSent) || isDefiniteRefusal(err) {
-			entry.PendingCashSecret = ""
-			_ = l.Save() // best-effort tidy-up; entry.CashSecret itself is unchanged either way
-			wrongSecret := isWrongSecretDecline(err)
-			if wrongSecret {
-				printProtectFailureWrongSecret(jsonMode, err)
-			} else {
-				printProtectFailure(jsonMode, err)
-			}
-			return protectedStatus{Status: "failed", Error: err.Error(), LikelyWrongSecret: wrongSecret}, entry
-		}
-		// Ambiguous: a transport-level failure (timeout, dropped
-		// connection) with no definitive answer from the Hub. Leave
-		// PendingCashSecret exactly as already saved above — don't
-		// touch it either way — so resolveCredential can try it on the
-		// next real spend of this entry.
-		printProtectAmbiguousFailure(jsonMode, err)
-		return protectedStatus{Status: "failed", Error: err.Error(), PendingSecretUnresolved: true}, entry
-	}
-	// The Hub never returns the secret itself for this call — see
-	// CashTransferResult's own doc comment; bt.Secret() IS the new secret.
-	//
-	// But it does not always re-key IN PLACE. When this bill has changed hands
-	// before, the Hub carves the slice into a brand-new wallet instead, because
-	// re-keying in place would leave the new secret on a connection a previous
-	// holder still reaches — that connection's secret is derived from the app ID
-	// and cannot be rotated, so giving a bill away never gives up access to it.
-	// Carving is what makes this protection real.
-	//
-	// So the bill may have MOVED, and following it is not optional: the carve
-	// drains and deletes the old wallet, so keeping the old token here leaves
-	// every later command addressing a bill that no longer exists — the Hub
-	// answers "no bill with this target wallet_pubkey" and the funds look gone.
-	// The new token arrives inside the private transport's own sealed reply, so
-	// only this caller can read it.
+	// The Hub does not always re-key IN PLACE. When this bill has changed hands
+	// before, it carves the slice into a brand-new wallet, because the old
+	// connection's secret cannot be rotated and a previous holder still reaches
+	// it. So the bill may have MOVED, and following it is not optional: the
+	// carve drains and deletes the old wallet.
 	moved := result != nil && result.NewWalletToken != ""
 	if moved {
 		entry.Token = strings.ToLower(result.NewWalletToken)
@@ -226,22 +170,18 @@ func protectRekeyOnly(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entry,
 			output.Notef(jsonMode, unverifiedReturnNote)
 		}
 	}
-
 	entry.CashSecret = bt.Secret()
-	entry.PendingCashSecret = ""
 	entry.CashProtection = ledger.CashProtected
+	closeCall(l, call, ledger.CallDone, "")
 	if moved {
 		l.AppendHistory("secure", "re-keyed this cash into a new bill so the shared secret can no longer spend it, and the previous holder's connection no longer reaches it")
 	} else {
 		l.AppendHistory("secure", "re-keyed this cash so the shared secret can no longer spend it")
 	}
 	if err := l.Save(); err != nil {
-		// The rekey is CONFIRMED (the call above returned no error), but
-		// the row on disk still holds the write-ahead state: the old
-		// secret, with bt.Secret() pending. In place, that is recoverable:
-		// the next command settles the pending secret. After a carve it is
-		// not: disk names the old token, whose wallet the carve deleted,
-		// and the new token exists only in this process. So hand it over.
+		// The re-key is CONFIRMED, but disk still holds the call open with the
+		// new secret. In place, that is recoverable: the call is looked up. After
+		// a carve the new token exists only in this process, so hand it over.
 		if moved {
 			recovery := entryRecoveryString(entry)
 			printProtectUnsaved(jsonMode, err, recovery)
@@ -281,12 +221,11 @@ func printProtectAmbiguousFailure(jsonMode bool, err error) {
 // token this wallet never learned.
 const protectAmbiguousAdvice = "It may have worked. cashctl settles it before your next spend; don't hand out the old code again."
 
-// errUnresolvedRekey is the refusal for a bill whose earlier re-key or move
-// was never confirmed: protecting it again could overwrite the only secret
-// that spends it.
+// errUnresolvedRekey is the refusal for a bill with a call still open: placing
+// another could act on a bill whose state only the Hub knows.
 func errUnresolvedRekey(id string) error {
-	return fmt.Errorf("an earlier re-key of %s was never confirmed and its Hub couldn't settle it, so nothing was changed. "+
-		"`cashctl wallet show` lists its new code, which may be the only one that spends the bill now; "+
+	return fmt.Errorf("an earlier call on %s has no answer yet, so nothing was changed. "+
+		"`cashctl wallet show` lists it with any new code it carries, which may be the only one that spends the bill now; "+
 		"don't hand out the old code again", id)
 }
 
@@ -304,51 +243,6 @@ func printProtectUnsaved(jsonMode bool, err error, recovery string) {
 		return
 	}
 	output.Printf("Moved on the Hub, but saving that locally failed (%v). Save this now, it will not be shown again:\n%s\n", err, recovery)
-}
-
-// hasPendingSecret reports a re-key or move of e whose outcome was never
-// recorded: a new secret written over it could destroy the only one that
-// spends the bill. A parked destination secret is not one: protect never
-// writes it, and a send that left a remainder can keep it for good.
-func hasPendingSecret(e *ledger.Entry) bool {
-	return e.PendingCashSecret != "" || e.PendingThrowawayKey != ""
-}
-
-// settleBeforeRekey resolves whatever earlier call left e pending, before
-// protect writes a new secret over it (B4). landed: the earlier re-key or move
-// took effect, so the shared code no longer spends the bill and nothing more
-// is sent. unresolved: the Hub couldn't tell, so nothing may be written or
-// sent. Neither: the earlier call didn't happen; protect goes ahead.
-func settleBeforeRekey(cmd *cobra.Command, l *ledger.Ledger, e *ledger.Entry) (landed, unresolved bool) {
-	prevSecret, prevKey := e.CashSecret, e.ThrowawayKey
-	changed := false
-	if e.PendingThrowawayKey != "" && settlePendingKey(e) {
-		changed = true
-	}
-	if e.PendingCashSecret != "" && settlePendingSecret(e) {
-		changed = true
-	}
-	if e.PendingDestinationCashSecret != "" && settleDestinationPark(cmd, e) {
-		changed = true
-	}
-	if hasPendingSecret(e) {
-		return false, true
-	}
-	if changed {
-		if err := l.Save(); err != nil {
-			// Disk still holds the pending state, which the next run settles.
-			return false, true
-		}
-	}
-	if e.ThrowawayKey != prevKey {
-		// The earlier move onto a merge key landed: only this wallet's key
-		// spends the bill now, so the shared code is dead.
-		e.CashProtection = ledger.CashProtected
-		if err := l.Save(); err != nil {
-			return false, true
-		}
-	}
-	return e.CashSecret != prevSecret || e.ThrowawayKey != prevKey, false
 }
 
 // printProtectFailureWrongSecret is printProtectFailure's counterpart for

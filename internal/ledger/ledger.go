@@ -83,54 +83,6 @@ type Entry struct {
 	// strictly worse than leaking Secret.
 	CashSecret string `json:"-"`
 
-	// PendingCashSecret is a not-yet-confirmed replacement for
-	// CashSecret, written BEFORE the wire call that's meant to make it
-	// the real one (see cmd/receive_secure.go's protectCashReceipt) —
-	// generating a cash-mode target's secret is a purely local operation
-	// (NIP-CASH §Cash-Mode Slices: only a commitment ever goes over the
-	// wire), so it's known before the call is even placed. A kill or lost
-	// response during that call leaves this genuinely ambiguous — NIP-CASH
-	// has no read-only way to ask the Hub which of the two secrets it
-	// accepted (nipcashclient.CheckClaim's own doc comment: a cash-mode match
-	// only proves *some* recipient exists, never *which* secret) — so
-	// resolveCredential retries a decline with this value instead of
-	// trusting CashSecret alone. Empty once reconciled either way. Same
-	// leak sensitivity as CashSecret itself.
-	PendingCashSecret string `json:"-"`
-
-	// PendingDestinationCashSecret is the spending secret of a cash-mode
-	// bill that THIS entry's own spend is about to create on the Hub —
-	// `transfer --to cash`'s gift, or `consolidate --to cash`'s merged
-	// result. Like PendingCashSecret it is generated purely locally and
-	// written down BEFORE the wire call (NIP-CASH §Cash-Mode Slices: only a
-	// one-way commitment ever crosses the wire, and the Hub never learns or
-	// returns the preimage), so a kill between the request leaving and the
-	// reply landing costs a reconciliation instead of the money. Without it
-	// that window destroyed the only copy in existence, leaving a bill that
-	// is real, funded and unspendable by anyone — audit finding D-CLI-1.
-	//
-	// Deliberately NOT PendingCashSecret, though the write-ahead discipline
-	// is identical: that field means "a not-yet-confirmed replacement for
-	// THIS entry's CashSecret" and is consumed as exactly that by
-	// spendCashEntry and retryWithPendingSecrets, both of which PROMOTE it
-	// onto CashSecret when a retry with it succeeds. A different bill's
-	// secret is not a candidate for this row's own credential, and storing
-	// it there would make those two paths retry — and on a false positive
-	// adopt — a credential belonging to another wallet.
-	//
-	// Parked on the SOURCE row because at write-ahead time it is the only
-	// row on disk: the destination bill does not exist yet and has no token
-	// until the reply arrives. That is also the honest limit of what this
-	// buys — the secret alone is necessary but not sufficient to spend the
-	// result, since its token comes back only in the reply. Recovering from
-	// a kill therefore still needs the Hub's cooperation to re-furnish the
-	// token; the point is that before this it was impossible even WITH the
-	// Hub's help. Cleared once the outcome is known either way, so a
-	// non-empty value always means "an interrupted spend may have created a
-	// bill whose secret is this" — which is what `wallet show` reports.
-	// Same leak sensitivity as CashSecret itself.
-	PendingDestinationCashSecret string `json:"-"`
-
 	// ThrowawayKey is the private key that now spends this bill, once a merge
 	// moved it off its cash secret onto a key made for that merge alone
 	// (cash_consolidate accepts no cash-mode source). Deleted with the entry
@@ -343,7 +295,7 @@ func load() (*Ledger, error) {
 	rows, err := db.Query(`SELECT id, token, wallet_pubkey, minter_pubkey, secret, relay_urls,
 		identity_required, amount_millis, received_at, verified, status, cash_secret,
 		connection_key_platform, connection_key_external_id, attestation_event_id, ia_pubkey,
-		pending_cash_secret, expires_at, cash_protection, pending_destination_cash_secret,
+		expires_at, cash_protection,
 		throwaway_key, pending_throwaway_key, version, redeem_fee_millis
 		FROM entries ORDER BY rowid`)
 	if err != nil {
@@ -351,26 +303,19 @@ func load() (*Ledger, error) {
 	}
 	for rows.Next() {
 		var e Entry
-		var relayURLs, pendingCashSecret, cashProtection, pendingDestCashSecret, throwawayKey, pendingThrowawayKey sql.NullString
+		var relayURLs, cashProtection, throwawayKey, pendingThrowawayKey sql.NullString
 		var identityRequired, amountMillis, expiresAt, redeemFee sql.NullInt64
 		var version int64
 		if err := rows.Scan(&e.ID, &e.Token, &e.WalletPubkey, &e.MinterPubkey, &e.Secret, &relayURLs,
 			&identityRequired, &amountMillis, &e.ReceivedAt, &e.Verified, &e.Status, &e.CashSecret,
 			&e.ConnectionKeyPlatform, &e.ConnectionKeyExternalID, &e.AttestationEventID, &e.IAPubkey,
-			&pendingCashSecret, &expiresAt, &cashProtection, &pendingDestCashSecret,
+			&expiresAt, &cashProtection,
 			&throwawayKey, &pendingThrowawayKey, &version, &redeemFee); err != nil {
 			_ = rows.Close()
 			return nil, fmt.Errorf("cashctl.db: reading entries: %w", err)
 		}
-		// sql.NullString, not a plain string like CashSecret's own scan
-		// above: every row's cash_secret has been through this code's own
-		// Save (never legacy-NULL), but pending_cash_secret/cash_protection
-		// are columns ADDED after rows already existed (store.addColumnsIfMissing)
-		// — those rows genuinely have SQL NULL here, which Scan can't take
-		// directly into a plain string.
-		e.PendingCashSecret = pendingCashSecret.String
+		// Nullable columns, read through sql.NullString.
 		e.CashProtection = cashProtection.String
-		e.PendingDestinationCashSecret = pendingDestCashSecret.String
 		e.ThrowawayKey = throwawayKey.String
 		e.PendingThrowawayKey = pendingThrowawayKey.String
 		if relayURLs.Valid && relayURLs.String != "" {
@@ -563,9 +508,9 @@ func (l *Ledger) save() error {
 		res, err := tx.Exec(`INSERT INTO entries (id, token, wallet_pubkey, minter_pubkey, secret, relay_urls,
 			identity_required, amount_millis, received_at, verified, status, cash_secret,
 			connection_key_platform, connection_key_external_id, attestation_event_id, ia_pubkey,
-			pending_cash_secret, expires_at, cash_protection, pending_destination_cash_secret,
+			expires_at, cash_protection,
 			throwaway_key, pending_throwaway_key, redeem_fee_millis, version)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
 			ON CONFLICT(id) DO UPDATE SET
 				token = excluded.token, wallet_pubkey = excluded.wallet_pubkey,
 				minter_pubkey = excluded.minter_pubkey, secret = excluded.secret,
@@ -576,10 +521,8 @@ func (l *Ledger) save() error {
 				connection_key_platform = excluded.connection_key_platform,
 				connection_key_external_id = excluded.connection_key_external_id,
 				attestation_event_id = excluded.attestation_event_id, ia_pubkey = excluded.ia_pubkey,
-				pending_cash_secret = excluded.pending_cash_secret,
 				expires_at = excluded.expires_at,
 				cash_protection = excluded.cash_protection,
-				pending_destination_cash_secret = excluded.pending_destination_cash_secret,
 				throwaway_key = excluded.throwaway_key,
 				pending_throwaway_key = excluded.pending_throwaway_key,
 				redeem_fee_millis = excluded.redeem_fee_millis,
@@ -588,7 +531,7 @@ func (l *Ledger) save() error {
 			e.ID, e.Token, e.WalletPubkey, e.MinterPubkey, e.Secret, relayURLs,
 			identityRequired, amountMillis, e.ReceivedAt, e.Verified, e.Status, e.CashSecret,
 			e.ConnectionKeyPlatform, e.ConnectionKeyExternalID, e.AttestationEventID, e.IAPubkey,
-			e.PendingCashSecret, expiresAt, e.CashProtection, e.PendingDestinationCashSecret,
+			expiresAt, e.CashProtection,
 			e.ThrowawayKey, e.PendingThrowawayKey, redeemFee, expectedVersion)
 		if err != nil {
 			// entries.id collisions are handled by ON CONFLICT above — the

@@ -296,29 +296,6 @@ func contains(ss []string, s string) bool {
 	return false
 }
 
-// T-02: wallet protect settles an earlier unconfirmed re-key before selecting.
-// One that landed is protected with no new call.
-func TestRunWalletProtect_SettlesALandedReKeyFirst(t *testing.T) {
-	h := newFakeBillHub(t)
-	l, ids := protectLedger(t, h)
-	e, _ := l.Find(ids[0])
-	e.PendingCashSecret = "s1"
-	if err := l.Save(); err != nil {
-		t.Fatal(err)
-	}
-	h.bill("tok-a", nipcash.BySecret("s1"), 1000) // the first re-key landed
-
-	if err := runWalletProtect(newTestProtectCmd(true, false), nil); err != nil {
-		t.Fatalf("wallet protect: %v", err)
-	}
-	if n := h.moveCount(); n != 0 {
-		t.Errorf("placed %d calls; the landed re-key needs none", n)
-	}
-	if _, e = reload(t, ids[0]); e.CashSecret != "s1" || e.PendingCashSecret != "" || e.CashProtection != ledger.CashProtected {
-		t.Errorf("got secret %q pending %q protection %q; want s1, none, protected", e.CashSecret, e.PendingCashSecret, e.CashProtection)
-	}
-}
-
 // T-02: one the Hub can't settle is never re-keyed. Named explicitly it is a
 // conflict that retrying as is cannot fix; with nothing named it is left out
 // and listed as unresolved, while the others are protected.
@@ -326,12 +303,14 @@ func TestRunWalletProtect_NeverReKeysAnUnresolvedOne(t *testing.T) {
 	setup := func(t *testing.T) (*fakeBillHub, []string) {
 		h := newFakeBillHub(t)
 		l, ids := protectLedger(t, h, "tok-a", "tok-b")
-		e, _ := l.Find(ids[0])
-		e.PendingCashSecret = "s1"
+		rid, _ := nipcash.NewRequestID()
+		if _, err := l.AddCall(ledger.Call{RequestID: rid, Method: nipcash.MethodCashTransfer, Purpose: purposeProtect,
+			State: ledger.CallLookup, SourceEntryIDs: []string{ids[0]}}); err != nil {
+			t.Fatal(err)
+		}
 		if err := l.Save(); err != nil {
 			t.Fatal(err)
 		}
-		h.bill("tok-a", nil, 1000) // carved away: neither secret answers on tok-a
 		return h, ids
 	}
 
@@ -346,8 +325,8 @@ func TestRunWalletProtect_NeverReKeysAnUnresolvedOne(t *testing.T) {
 		if h.moveCount() != 0 {
 			t.Error("a call was placed for an unresolved re-key")
 		}
-		if _, e := reload(t, ids[0]); e.PendingCashSecret != "s1" {
-			t.Errorf("pending secret %q, want s1 kept", e.PendingCashSecret)
+		if l, _ := reload(t, ids[0]); func() bool { _, open := l.OpenCallFor(ids[0]); return !open }() {
+			t.Error("the open call was dropped")
 		}
 	})
 
@@ -377,54 +356,8 @@ func TestRunWalletProtect_NeverReKeysAnUnresolvedOne(t *testing.T) {
 		if h.moveCount() != 1 {
 			t.Errorf("%d calls; want one, for %s only", h.moveCount(), ids[1])
 		}
-		if _, e := reload(t, ids[0]); e.PendingCashSecret != "s1" {
-			t.Errorf("pending secret %q, want s1 kept", e.PendingCashSecret)
+		if l, _ := reload(t, ids[0]); func() bool { _, open := l.OpenCallFor(ids[0]); return !open }() {
+			t.Error("the open call was dropped")
 		}
 	})
-}
-
-// An unresolved re-key's new code may be the only one that spends the bill
-// (after a carve, on a token this wallet never learned): `wallet show` lists it.
-func TestWalletShow_ListsAnUnconfirmedReKeysCode(t *testing.T) {
-	h := newFakeBillHub(t)
-	l, ids := protectLedger(t, h)
-	e, _ := l.Find(ids[0])
-	e.PendingCashSecret = "s1"
-	if err := l.Save(); err != nil {
-		t.Fatal(err)
-	}
-	for _, jsonMode := range []bool{true, false} {
-		cmd := newWalletShowCmd()
-		cmd.Flags().Bool("json", jsonMode, "")
-		cmd.SetArgs(nil)
-		printed := withCapturedOutput(func() {
-			if err := cmd.Execute(); err != nil {
-				t.Errorf("wallet show (json=%v): %v", jsonMode, err)
-			}
-		})
-		if !strings.Contains(printed, "s1") || !strings.Contains(printed, ids[0]) {
-			t.Errorf("wallet show (json=%v) does not list the unconfirmed re-key:\n%s", jsonMode, printed)
-		}
-	}
-}
-
-// A parked destination secret is not something protect could overwrite, and a
-// send that left a remainder keeps it for good: it never blocks protecting.
-func TestRunWalletProtect_ADestinationParkDoesNotBlock(t *testing.T) {
-	h := newFakeBillHub(t)
-	l, ids := protectLedger(t, h)
-	e, _ := l.Find(ids[0])
-	e.PendingDestinationCashSecret = "dest"
-	if err := l.Save(); err != nil {
-		t.Fatal(err)
-	}
-	h.bill("tok-a", nipcash.BySecret("stok-a"), 600) // a split landed: the park can't be cleared
-	cmd := newTestProtectCmd(true, false)
-	_ = cmd.Flags().Set("token", ids[0])
-	if err := runWalletProtect(cmd, nil); err != nil {
-		t.Fatalf("wallet protect with a parked send: %v", err)
-	}
-	if _, e = reload(t, ids[0]); e.CashProtection != ledger.CashProtected || e.PendingDestinationCashSecret != "dest" {
-		t.Errorf("protection %q park %q; want protected, park kept", e.CashProtection, e.PendingDestinationCashSecret)
-	}
 }

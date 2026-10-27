@@ -756,44 +756,6 @@ func TestSave_ManyDisjointConcurrentWritersAllSucceed(t *testing.T) {
 	}
 }
 
-// TestSaveAndLoad_PendingCashSecretRoundTrip covers the write-ahead field
-// a rekey/protect step persists before its own wire call (see
-// cmd/receive_secure.go) — must survive a reload exactly like CashSecret
-// itself, and stay empty (not corrupted into some sentinel) when never set.
-func TestSaveAndLoad_PendingCashSecretRoundTrip(t *testing.T) {
-	withTempConfigDir(t)
-
-	l, err := Load()
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-	if _, err := l.Add(Entry{Token: "lokicash1pending", CashSecret: "old-secret", PendingCashSecret: "new-secret"}); err != nil {
-		t.Fatalf("Add() error = %v", err)
-	}
-	if _, err := l.Add(Entry{Token: "lokicash1nopending", CashSecret: "only-secret"}); err != nil {
-		t.Fatalf("Add() error = %v", err)
-	}
-	if err := l.Save(); err != nil {
-		t.Fatalf("Save() error = %v", err)
-	}
-
-	reloaded, err := Load()
-	if err != nil {
-		t.Fatalf("Load() (reloaded) error = %v", err)
-	}
-	pending, _ := reloaded.FindByToken("lokicash1pending")
-	if pending.PendingCashSecret != "new-secret" {
-		t.Errorf("PendingCashSecret = %q, want %q", pending.PendingCashSecret, "new-secret")
-	}
-	if pending.CashSecret != "old-secret" {
-		t.Errorf("CashSecret = %q, want %q (unchanged until reconciled)", pending.CashSecret, "old-secret")
-	}
-	noPending, _ := reloaded.FindByToken("lokicash1nopending")
-	if noPending.PendingCashSecret != "" {
-		t.Errorf("PendingCashSecret = %q, want empty (never set)", noPending.PendingCashSecret)
-	}
-}
-
 // TestSaveAndLoad_ExpiresAtRoundTrip covers the Hub-side redemption
 // deadline cached at receive time (see cmd/wallet_balance.go's
 // summarizeHeldTokens) — must survive a reload exactly, and stay nil (not

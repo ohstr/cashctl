@@ -86,7 +86,6 @@ func TestHostileHub_RedeemRefusesAFeeRaisedAfterReceive(t *testing.T) {
 // happened is unknown, so cashctl must say so (indeterminate) and must not
 // send it again.
 func TestHostileHub_LostReplyChunkIsIndeterminate(t *testing.T) {
-	t.Skip("a transfer is refused before sending until the ledger journal places it (call placement, WP-5)")
 	f, pub := newMember(t)
 	hub := fakehub.New(t, func(item transport.Item) *transport.Result {
 		if item.Method == "cash_status" {

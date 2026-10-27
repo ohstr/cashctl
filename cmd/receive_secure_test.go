@@ -155,11 +155,11 @@ func reload(t *testing.T, id string) (*ledger.Ledger, *ledger.Entry) {
 	return l, e
 }
 
-// T-01 (B4): protect #1 commits on the Hub but its reply is lost. Protect #2
-// must never write a new secret over the pending one: in place, it settles that
-// the first landed and places no call; after a carve (the old token is gone and
-// the new one was never learned), it refuses, so the pending secret, the only
-// one the carved bill answers to, stays on disk.
+// T-01 (B4): protect #1 commits on the Hub but its reply is lost. Its call
+// stays open with the new secret written ahead; protect #2 places no call (no
+// new secret can be written over one that may be the only one spending the
+// bill), and after a carve the carved bill is still reachable from the
+// call's secret.
 func TestProtect_NeverOverwritesAnUnconfirmedReKey(t *testing.T) {
 	for _, carve := range []bool{false, true} {
 		t.Run(fmt.Sprintf("carve=%v", carve), func(t *testing.T) {
@@ -175,35 +175,26 @@ func TestProtect_NeverOverwritesAnUnconfirmedReKey(t *testing.T) {
 				t.Fatalf("protect #1 with its reply lost: %+v; want pending_secret_unresolved", st)
 			}
 			l, e = reload(t, ids[0])
-			s1 := e.PendingCashSecret
-			if s1 == "" || e.CashSecret != "stok-a" {
-				t.Fatalf("after protect #1: secret %q pending %q", e.CashSecret, s1)
+			c, open := l.OpenCallFor(ids[0])
+			if !open || len(c.Secrets) != 1 || e.CashSecret != "stok-a" {
+				t.Fatalf("after protect #1: call %+v open %v, secret %q", c, open, e.CashSecret)
 			}
+			s1 := c.Secrets[0].Secret
 
 			st, _ := protectRekeyOnly(cmd, l, e, true)
 			if n := h.moveCount(); n != 1 {
 				t.Errorf("protect #2 placed a call (%d moves): it may overwrite the only working secret", n)
 			}
-			_, e = reload(t, ids[0])
-			if carve {
-				if st.Status != "failed" || !st.Unresolved {
-					t.Errorf("protect #2 after a carve: %+v; want failed, unresolved", st)
-				}
-				if e.PendingCashSecret != s1 {
-					t.Errorf("pending secret %q, want %q kept", e.PendingCashSecret, s1)
-				}
-				live := h.liveTokens()
-				if len(live) != 1 || h.owner(live[0]) != nipcash.BySecret(s1) {
-					t.Errorf("the carved bill %v is not spent by the kept pending secret", live)
-				}
-				return
+			if st.Status != "failed" || !st.Unresolved {
+				t.Errorf("protect #2: %+v; want failed, unresolved", st)
 			}
-			if st.Status != "rekeyed" {
-				t.Errorf("protect #2 in place: %+v; want rekeyed", st)
+			l, _ = reload(t, ids[0])
+			if c, open := l.OpenCallFor(ids[0]); !open || c.Secrets[0].Secret != s1 {
+				t.Errorf("the first protect's call or its secret is gone: %+v", c)
 			}
-			if e.CashSecret != s1 || e.PendingCashSecret != "" || e.CashProtection != ledger.CashProtected {
-				t.Errorf("after protect #2: secret %q pending %q protection %q; want %q, none, protected",
-					e.CashSecret, e.PendingCashSecret, e.CashProtection, s1)
+			live := h.liveTokens()
+			if len(live) != 1 || h.owner(live[0]) != nipcash.BySecret(s1) {
+				t.Errorf("the bill %v is not spent by the first protect's kept secret", live)
 			}
 		})
 	}
@@ -243,27 +234,5 @@ func TestPrintProtectAmbiguousFailure_NeverSaysNoActionNeeded(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("ambiguous re-key text is missing %q: %q", want, out)
 		}
-	}
-}
-
-// An earlier move onto a merge key that landed means only this wallet's key
-// spends the bill: protect reports it re-keyed and records it protected.
-func TestProtect_ALandedKeyMoveIsProtected(t *testing.T) {
-	h := newFakeBillHub(t)
-	l, ids := protectLedger(t, h)
-	priv, _, _ := newThrowawayKey()
-	e, _ := l.Find(ids[0])
-	e.PendingThrowawayKey = priv
-	if err := l.Save(); err != nil {
-		t.Fatal(err)
-	}
-	h.bill("tok-a", nipcash.BySigning(priv), 1000)
-
-	st, _ := protectRekeyOnly(newTestReceiveCmd(), l, e, true)
-	if st.Status != "rekeyed" || h.moveCount() != 0 {
-		t.Errorf("status %+v after %d moves; want rekeyed, none", st, h.moveCount())
-	}
-	if _, e = reload(t, ids[0]); e.CashProtection != ledger.CashProtected || e.ThrowawayKey != priv {
-		t.Errorf("protection %q key kept %v; want protected on the key", e.CashProtection, e.ThrowawayKey == priv)
 	}
 }

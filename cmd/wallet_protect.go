@@ -52,7 +52,7 @@ func runWalletProtect(cmd *cobra.Command, args []string) error {
 	// landed is protected already, and one still open is never re-keyed.
 	var waiting []string
 	for _, e := range l.Held() {
-		if e.CashProtection == ledger.CashShared && hasPendingSecret(&e) {
+		if _, open := l.OpenCallFor(e.ID); open && e.CashProtection == ledger.CashShared {
 			waiting = append(waiting, e.ID)
 		}
 	}
@@ -194,7 +194,7 @@ func printProtectOutcomes(jsonMode bool, outcomes []protectOutcome) {
 // (already protected, pubkey-mode, not held at all) gets a specific
 // reason, not a generic "not found."
 //
-// A holding with a re-key, move or send still pending is never re-keyed: named
+// A holding with a call still open is never re-keyed: named
 // explicitly, it is refused (conflict, not retryable); with nothing named, it
 // is left out of the pick and returned in unresolved, to be reported.
 //
@@ -213,7 +213,7 @@ func resolveUnprotectedCashHoldings(cmd *cobra.Command, l *ledger.Ledger, args [
 		if e.CashProtection != ledger.CashShared {
 			return nil, nil, output.ConflictError(cmd, id, errors.New(unprotectableReason(e)))
 		}
-		if hasPendingSecret(e) {
+		if _, open := l.OpenCallFor(id); open {
 			return nil, nil, output.FinalConflictError(cmd, id, errUnresolvedRekey(id))
 		}
 		return []*ledger.Entry{e}, nil, nil
@@ -224,7 +224,7 @@ func resolveUnprotectedCashHoldings(cmd *cobra.Command, l *ledger.Ledger, args [
 		if e.CashProtection != ledger.CashShared {
 			continue
 		}
-		if hasPendingSecret(&e) {
+		if _, open := l.OpenCallFor(e.ID); open {
 			if live, ok := l.Find(e.ID); ok {
 				unresolved = append(unresolved, live)
 			}
