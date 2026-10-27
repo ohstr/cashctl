@@ -18,7 +18,7 @@ import (
 const invoiceDefaultExpiry = 3600
 
 // invoiceCurrencies are the BOLT11 currency prefixes of each chain's
-// networks. A prefix no row names isn't checked against the chain.
+// networks. An invoice with a prefix no row names is refused.
 var invoiceCurrencies = map[string][]string{
 	"bitcoin":   {"bc", "tb", "tbs", "bcrt", "sb"},
 	"flokicoin": {"fc", "tfc", "fcrt", "tf"},
@@ -81,14 +81,24 @@ func checkOrderInvoice(order *nipCO.Order, chain string) error {
 	if createdAt+expiry > order.PayBy {
 		return fmt.Errorf("the invoice expires after pay_by (%d > %d)", createdAt+expiry, order.PayBy)
 	}
+	// The user is told to pay by pay_by, so the invoice must last that long
+	// (NIP-CO §Lightning: it expires at pay_by).
+	if createdAt+expiry < order.PayBy-invoicePayByTolerance {
+		return fmt.Errorf("the invoice expires well before pay_by (%d < %d)", createdAt+expiry, order.PayBy)
+	}
 	for c, prefixes := range invoiceCurrencies {
 		for _, p := range prefixes {
 			if p == currency {
 				if c != chain {
 					return fmt.Errorf("the invoice is for %s, the Hub runs on %s", c, chain)
 				}
+				return nil
 			}
 		}
 	}
-	return nil
+	return fmt.Errorf("the invoice's currency %q is not one cashctl knows", currency)
 }
+
+// invoicePayByTolerance is how much earlier than pay_by an order's invoice may
+// expire (clock skew between the Hub and its node).
+const invoicePayByTolerance = 120

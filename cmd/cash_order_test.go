@@ -333,6 +333,8 @@ func TestValidateOrder_ChecksTheInvoice(t *testing.T) {
 		"another amount": testInvoice(t, priv, "fc", 100_000, payBy),
 		"amountless":     testInvoice(t, priv, "fc", 0, payBy),
 		"expires late":   testInvoice(t, priv, "fc", 101_000, payBy+60),
+		"expires early":  testInvoice(t, priv, "fc", 101_000, payBy-400),
+		"unknown prefix": testInvoice(t, priv, "xx", 101_000, payBy),
 		"another chain":  testInvoice(t, priv, "bc", 101_000, payBy),
 		"not an invoice": "lnfc1invoice",
 	} {
