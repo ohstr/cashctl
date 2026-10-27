@@ -5,8 +5,10 @@
 - Adds a second try for a join whose lookups all go unanswered: `cash settle`
   asks once over another `circlehub1` held for the same circle, then shows the
   join as `lookup_unanswered`.
+  ([#141](https://github.com/ohstr/cashctl/pull/141))
 - Adds circle wallet backups to `connect add`: the file `join --backup-file`
   writes registers the wallet again, shown by its `wallet_pubkey` only.
+  ([#141](https://github.com/ohstr/cashctl/pull/141))
 - Adds `cash discover list|show|open|relays|curators`, which finds order links
   and circles listed on Nostr relays, checks one with its Hub when you show it,
   and orders from it or joins it.
