@@ -5,6 +5,7 @@
 - Adds `cash settle` (also `settle`), which asks the Hubs about calls whose
   answer never came and finishes them; every money command does this first. A
   call the Hub never saw is placed again under a derived id, never twice.
+  ([#131](https://github.com/ohstr/cashctl/pull/131))
 - Changes transfers, merges and protects to be written down with their request
   id, deadline and every new secret before they are sent; one that gets no
   clear answer stays open, and its bills are not spent again until the Hub says
