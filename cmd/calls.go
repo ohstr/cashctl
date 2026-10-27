@@ -105,6 +105,16 @@ func (j *ledgerJournal) WriteAhead(_ context.Context, calls []nipcash.PendingCal
 			rewritten = append(rewritten, existing.CallID)
 			continue
 		}
+		if pc.DerivedFrom == "" {
+			// A re-placement written once, through the send path: its parent is
+			// the one Replace recorded with the derived id.
+			if parent, err := ledger.DerivedParent(pc.RequestID); err == nil && parent != "" {
+				pc.DerivedFrom = parent
+				if p, ok := j.l.FindCall(ledger.CallIDFor(parent)); ok && pc.Attempt <= p.Attempt {
+					pc.Attempt = p.Attempt + 1
+				}
+			}
+		}
 		c := ledger.Call{
 			RequestID: pc.RequestID, Method: pc.Method, Purpose: j.spec.Purpose,
 			Deadline: pc.Deadline, SentH: pc.MaxRequestAge, HubIdentity: pc.HubIdentity, Target: pc.Target,
@@ -153,6 +163,15 @@ func (j *ledgerJournal) RecordDerived(_ context.Context, id string, keepUntil in
 	return ledger.InsertDerived(id, "", nil, keepUntil)
 }
 
+// RecordDerivedFrom records a derived id with the request id it replaces
+// (nipcash/client.DerivedParentRecorder): the derived call's row then names
+// its parent even when it is written once, through the send path.
+func (j *ledgerJournal) RecordDerivedFrom(_ context.Context, id, parent string, keepUntil int64) error {
+	return ledger.InsertDerived(id, parent, nil, keepUntil)
+}
+
+var _ nipcashclient.DerivedParentRecorder = (*ledgerJournal)(nil)
+
 // DerivedPlaced reports a derived id recorded here.
 func (j *ledgerJournal) DerivedPlaced(_ context.Context, id string) (bool, error) {
 	return ledger.DerivedRecorded(id)
@@ -180,16 +199,11 @@ func firstNonEmpty(v ...string) string {
 }
 
 // chainOfToken is the chain a bill's HRP belongs to (NIP-CASH §Mint
-// Provenance's table).
+// Provenance's table); "" for a prefix the table does not name.
 func chainOfToken(token string) string {
 	hrp, _, _ := strings.Cut(strings.ToLower(token), "1")
-	switch hrp {
-	case "lokicash":
-		return "flokicoin"
-	case "satscash":
-		return "bitcoin"
-	}
-	return hrp
+	chain, _ := nipcash.ChainForHRP(hrp)
+	return chain
 }
 
 // deviceIDFn is this wallet file's device id. Swapped in tests.

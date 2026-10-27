@@ -275,6 +275,22 @@ func InsertDerived(requestID, parentRequestID string, deadline *int64, keepUntil
 	return err
 }
 
+// DerivedParent is the request id a recorded derived id was derived from, or
+// "" when it was recorded without one (or not at all).
+func DerivedParent(requestID string) (string, error) {
+	db, err := store.Open()
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = db.Close() }()
+	var parent string
+	err = db.QueryRow(`SELECT parent_request_id FROM derived_ids WHERE request_id = ?`, requestID).Scan(&parent)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return parent, err
+}
+
 // DerivedRecorded reports whether a derived id was recorded here.
 func DerivedRecorded(requestID string) (bool, error) {
 	db, err := store.Open()
