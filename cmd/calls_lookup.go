@@ -39,12 +39,17 @@ func pendingOf(c *ledger.Call) nipcash.PendingCall {
 		RequestID: c.RequestID, Deadline: c.Deadline, Method: c.Method, Target: c.Target,
 		HubIdentity: c.HubIdentity, MaxRequestAge: c.SentH, Device: c.DeviceID, Amount: c.AmountMillis,
 		Chain: c.Chain, DerivedFrom: c.Replaces, Attempt: c.Attempt, LastCode: c.FirstError,
-		SawReused: c.SawReused, Params: json.RawMessage(c.ParamsJSON),
+		LastDetail: nipcash.Detail(c.FirstDetail), SawReused: c.SawReused, Params: json.RawMessage(c.ParamsJSON),
 	}
 	if c.AuthorizerKind == ledger.AuthCashSecret {
 		pc.SourceSecret = c.AuthorizerSecret
 	}
 	for _, s := range c.Secrets {
+		if s.Role == ledger.RoleInterimKey {
+			// cashctl's own record, never a secret of the request: it goes to the
+			// re-placement through specOf.
+			continue
+		}
 		role := ""
 		if s.Role == ledger.RoleRemainder {
 			role = "remainder"
@@ -57,7 +62,8 @@ func pendingOf(c *ledger.Call) nipcash.PendingCall {
 // specOf is the context a call was placed with, for its re-placement.
 func specOf(c *ledger.Call) callSpec {
 	return callSpec{Purpose: c.Purpose, SourceEntryIDs: c.SourceEntryIDs, AuthorizerKind: c.AuthorizerKind,
-		AuthorizerPubkey: c.AuthorizerPubkey, AuthorizerSecret: c.AuthorizerSecret, TargetCredential: c.TargetCredential, Chain: c.Chain}
+		AuthorizerPubkey: c.AuthorizerPubkey, AuthorizerSecret: c.AuthorizerSecret, TargetCredential: c.TargetCredential, Chain: c.Chain,
+		InterimKey: callSecretOf(c, ledger.RoleInterimKey)}
 }
 
 // callCredential is the credential that authorized c, which also signs its
