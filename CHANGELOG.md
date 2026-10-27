@@ -2,6 +2,8 @@
 
 ## [0.7.0-rc.1]
 
+- Adds proof of work for Hubs whose relays ask for it, capped by
+  `CASHCTL_POW_MAX` (default 28); above the cap nothing is sent.
 - Adds `cash mint`, which mints a bill over a `cashhub1` connection after the
   online check; a mint whose reply is lost is finished by `cash settle`, and one
   the Hub never saw is minted again only with `cash settle --replace`.

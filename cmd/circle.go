@@ -17,6 +17,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/ohstr/cashctl/internal/config"
+	"github.com/ohstr/cashctl/internal/crashpoint"
 	"github.com/ohstr/cashctl/internal/credential"
 	"github.com/ohstr/cashctl/internal/dial"
 	"github.com/ohstr/cashctl/internal/output"
@@ -193,7 +194,7 @@ func (h liveCircleHub) Info(ctx context.Context) (*nip47.GetInfoResult, error) {
 
 // dialCircleHub connects to a circlehub1 string and runs the online check.
 func dialCircleHub(ctx context.Context, circlehub string) (circleHub, error) {
-	c, err := nipcwclient.Connect(ctx, circlehub, nipcwclient.Options{})
+	c, err := nipcwclient.Connect(ctx, circlehub, nipcwclient.Options{Session: sessionOptions()})
 	if err != nil {
 		return nil, err
 	}
@@ -350,7 +351,7 @@ func runCircleJoin(cmd *cobra.Command, args []string) error {
 	var result *nipcwclient.JoinResult
 	err = WithSpinner(jsonMode, "Joining...", func() error {
 		var jErr error
-		result, jErr = client.Join(ctx, nipcw.CreateCircleWalletParams{
+		result, jErr = client.Join(callContext(ctx), nipcw.CreateCircleWalletParams{
 			Credential: cred, MaxAmountMillis: maxAmount, MaxReceiveMillis: maxReceive,
 			Expiry: expiry, BudgetRenewal: budgetRenewal,
 		}, opts, journal)
@@ -455,6 +456,7 @@ func (j *joinJournal) WriteAhead(_ context.Context, pj nipcwclient.PendingJoin) 
 		return err
 	}
 	j.written = &pj
+	crashpoint.Hit("joins.after_writeahead")
 	return nil
 }
 

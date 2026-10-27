@@ -12,7 +12,9 @@ go test -tags integration ./integration/...
 ```
 
 The binary it builds carries the `crashpoints` tag (so a test can kill it at a
-named point with `CASHCTL_CRASHPOINT`) and uses `GOWORK=off`, the nmilat
+named point with `CASHCTL_CRASHPOINT`, `calls.after_writeahead`,
+`calls.after_send`, `calls.before_apply` or `joins.after_writeahead`, and drop
+its first n request publishes with `CASHCTL_DROP_PUBLISHES=n`) and uses `GOWORK=off`, the nmilat
 pinned in `go.mod`; set `CASHCTL_INTEGRATION_GOWORK=<path>` to build it
 against a private `go.work` instead.
 

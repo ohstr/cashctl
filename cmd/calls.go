@@ -254,6 +254,14 @@ func placeErr(cmd *cobra.Command, l *ledger.Ledger, j *ledgerJournal, err error,
 	var gone *nipcash.BillGone
 	var indeterminate *nipcashclient.IndeterminateError
 	switch {
+	case errors.Is(err, nipcashclient.ErrPowTooHard):
+		if c != nil {
+			l.RemoveCall(c.CallID)
+			_ = l.Save()
+		}
+		return output.RuntimeError(cmd, fmt.Errorf(
+			"not placed — this Hub's relays ask for more proof of work than cashctl does (%s caps it at difficulty %d); your money has not moved: %w",
+			powMaxEnv, mustPowMax(), err))
 	case errors.Is(err, nipcashclient.ErrNotSent) || (c == nil && errors.Is(err, nipcashclient.ErrNoJournal)):
 		// Written ahead but never published, or never written: nothing reached
 		// the Hub.
@@ -337,7 +345,7 @@ func placeTransfer(ctx context.Context, cmd *cobra.Command, l *ledger.Ledger, ca
 		return nil, nil, output.RuntimeError(cmd, err)
 	}
 	j := &ledgerJournal{l: l, spec: spec}
-	res, err := caller.CashTransfer(ctx, p, j, device)
+	res, err := caller.CashTransfer(callContext(ctx), p, j, device)
 	if err != nil {
 		return nil, nil, placeErr(cmd, l, j, err, transferVerb(spec.Purpose), spec.SourceEntryIDs...)
 	}
@@ -355,7 +363,7 @@ func placeConsolidate(ctx context.Context, cmd *cobra.Command, l *ledger.Ledger,
 		return nil, nil, output.RuntimeError(cmd, err)
 	}
 	j := &ledgerJournal{l: l, spec: spec}
-	res, err := caller.CashConsolidate(ctx, p, j, device)
+	res, err := caller.CashConsolidate(callContext(ctx), p, j, device)
 	if err != nil {
 		return nil, nil, placeErr(cmd, l, j, err, "consolidate", spec.SourceEntryIDs...)
 	}

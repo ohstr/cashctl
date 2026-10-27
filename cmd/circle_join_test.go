@@ -19,6 +19,7 @@ import (
 
 	"github.com/ohstr/cashctl/internal/appdir"
 	"github.com/ohstr/cashctl/internal/config"
+	"github.com/ohstr/cashctl/internal/crashpoint"
 	"github.com/ohstr/cashctl/internal/output"
 	"github.com/ohstr/cashctl/internal/testmint"
 )
@@ -78,6 +79,7 @@ func (f *fakeCircleHub) Join(ctx context.Context, p nipcw.CreateCircleWalletPara
 		f.writtenBeforeSend = true
 	}
 	f.joins++
+	crashpoint.Hit("calls.after_send")
 	return f.answer(pj)
 }
 

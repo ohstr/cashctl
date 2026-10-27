@@ -14,6 +14,7 @@ import (
 	nipcashclient "github.com/ohstr/nmilat/nipcash/client"
 	"github.com/spf13/cobra"
 
+	"github.com/ohstr/cashctl/internal/crashpoint"
 	"github.com/ohstr/cashctl/internal/credential"
 	"github.com/ohstr/cashctl/internal/ledger"
 	"github.com/ohstr/cashctl/internal/output"
@@ -36,7 +37,7 @@ type cashHub interface {
 
 // dialCashHubFn dials a cashhub1 string. Swapped in tests.
 var dialCashHubFn = func(ctx context.Context, cashhub string) (cashHub, error) {
-	return nipcashclient.ConnectCashHub(ctx, cashhub)
+	return nipcashclient.ConnectCashHub(ctx, cashhub, sessionOptions()...)
 }
 
 func newCashMintCmd() *cobra.Command {
@@ -157,12 +158,13 @@ func runCashMint(cmd *cobra.Command, args []string) error {
 	var res *nipcash.MintCashResult
 	err = WithSpinner(jsonMode, "Minting...", func() error {
 		var mErr error
-		res, mErr = client.MintCash(ctx, nipcash.MintCashParams{Recipients: []nipcash.Allocation{nipcash.Send(recipient, amount)}, Expiry: expiry}, j, device)
+		res, mErr = client.MintCash(callContext(ctx), nipcash.MintCashParams{Recipients: []nipcash.Allocation{nipcash.Send(recipient, amount)}, Expiry: expiry}, j, device)
 		return mErr
 	})
 	if err != nil {
 		return placeErr(cmd, l, j, err, "mint")
 	}
+	crashpoint.Hit("calls.before_apply")
 	call := j.call()
 	out, err := applyMintResult(cmd, l, call, res)
 	if err != nil {

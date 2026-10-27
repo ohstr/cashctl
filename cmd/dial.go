@@ -56,7 +56,7 @@ func dialBill(ctx context.Context, token string) (*nipcashclient.Client, error) 
 	if err := checkBillProvenance(tok); err != nil {
 		return nil, err
 	}
-	return nipcashclient.Connect(ctx, token)
+	return nipcashclient.Connect(ctx, token, sessionOptions()...)
 }
 
 // isProvenanceRefusal reports dialBill refusing a bill before any network call.

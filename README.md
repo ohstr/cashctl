@@ -420,7 +420,8 @@ State lives under `$XDG_CONFIG_HOME/cashctl` (or `~/.config/cashctl` on
 Linux/macOS) in a single SQLite database, `cashctl.db` (0600 — it can hold
 a plaintext identity key and cash-mode spending secrets). Override the
 location with `--config-dir`. Set `NO_COLOR` to disable ANSI color on
-stderr.
+stderr. `CASHCTL_POW_MAX` caps the proof of work cashctl does when a Hub's
+relays ask for it (default difficulty 28); above it, nothing is sent.
 
 **Breaking, if you used a pre-release build**: `cashctl.db` replaces the
 three flat JSON files (`identity.json`, `connections.json`, `ledger.json`)

@@ -15,8 +15,10 @@ the shell's history file. It is an improvement, not airtight — an
 environment variable is inherited by child processes and readable from
 `/proc/<pid>/environ` by the same user. For the same reason, `-` in place
 of `receive`'s token, `connect add`'s connection or `join`'s hub
-connection reads that value from the first line of stdin. `NO_COLOR` disables ANSI color on
-stderr.
+connection reads that value from the first line of stdin. `CASHCTL_POW_MAX`
+caps the proof of work cashctl does for a Hub's relays (default 28); a call
+whose relays ask for more is not sent (`internal`, "not placed"). `NO_COLOR`
+disables ANSI color on stderr.
 
 ## Commands
 

@@ -376,7 +376,7 @@ func replaceCallConfirmed(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, 
 	var cres *nipcash.CashConsolidateResult
 	var mres *nipcash.MintCashResult
 	var sendErr error
-	act, err := nipcashclient.Replace(ctx, pendingOf(c), j, nipcashclient.ReplaceOptions{
+	act, err := nipcashclient.Replace(callContext(ctx), pendingOf(c), j, nipcashclient.ReplaceOptions{
 		Confirmed: confirmed,
 		DerivedEntryExists: func(_ context.Context, id string) (bool, error) {
 			_, ok := l.FindCall(ledger.CallIDFor(id))

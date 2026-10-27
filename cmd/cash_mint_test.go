@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/ohstr/cashctl/internal/appdir"
+	"github.com/ohstr/cashctl/internal/crashpoint"
 	"github.com/ohstr/cashctl/internal/ledger"
 	"github.com/ohstr/cashctl/internal/output"
 	"github.com/ohstr/cashctl/internal/testmint"
@@ -73,6 +74,7 @@ func (f *fakeCashHub) MintCash(ctx context.Context, p nipcash.MintCashParams, j 
 	}
 	f.mints++
 	f.lastReq = p
+	crashpoint.Hit("calls.after_send")
 	if f.answer != nil {
 		if err := f.answer(pc); err != nil {
 			return nil, err

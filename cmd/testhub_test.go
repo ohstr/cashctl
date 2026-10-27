@@ -15,6 +15,7 @@ import (
 	nipcashclient "github.com/ohstr/nmilat/nipcash/client"
 	relayclient "github.com/ohstr/nmilat/relay/client"
 
+	"github.com/ohstr/cashctl/internal/crashpoint"
 	"github.com/ohstr/cashctl/internal/ledger"
 	"github.com/ohstr/cashctl/internal/store"
 )
@@ -304,6 +305,8 @@ func answer[T any](c *fakeCaller, pc nipcash.PendingCall, res T, err error) (T, 
 	switch {
 	case err == nil:
 		c.hooks.published++
+		// nmilat's post-publish hook (WithAfterPublish).
+		crashpoint.Hit("calls.after_send")
 		return res, nil
 	case errors.As(err, &notSent):
 		return zero, fmt.Errorf("%w: %v", nipcashclient.ErrNotSent, err)

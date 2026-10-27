@@ -735,7 +735,7 @@ func checkCashHubOnline(cmd *cobra.Command, jsonMode bool, c *conn) map[string]a
 	_ = WithSpinner(jsonMode, "Checking the Hub...", func() error {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		hub, err := nipcashclient.ConnectCashHub(ctx, c.Raw)
+		hub, err := nipcashclient.ConnectCashHub(ctx, c.Raw, sessionOptions()...)
 		if err != nil {
 			out["online_check"], out["error"] = "unreachable", output.Sanitize(err.Error())
 			return nil
