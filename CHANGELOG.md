@@ -2,6 +2,9 @@
 
 ## [0.7.0-rc.1]
 
+- Adds `cash discover list|show|open|relays|curators`, which finds order links
+  and circles listed on Nostr relays, checks one with its Hub when you show it,
+  and orders from it or joins it.
 - Adds `cash order place|show|watch|settle`, which buys cash over a
   `cashorder1` Order connection and collects the bills once paid; `decode`
   reads a `cashorder1` string.

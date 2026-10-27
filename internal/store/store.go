@@ -190,6 +190,10 @@ CREATE TABLE orders (
 	finished_at     INTEGER
 );
 
+CREATE TABLE discover_relays (url TEXT PRIMARY KEY, added_at INTEGER NOT NULL);
+CREATE TABLE discover_curators (pubkey TEXT PRIMARY KEY, added_at INTEGER NOT NULL);
+CREATE TABLE discover_state (key TEXT PRIMARY KEY, value BLOB NOT NULL, updated_at INTEGER NOT NULL);
+
 CREATE TABLE unverified_confirmations (
 	conn_sha256  TEXT PRIMARY KEY,
 	hrp          TEXT NOT NULL,

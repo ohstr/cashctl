@@ -16,6 +16,9 @@ and [Circle wallets](https://github.com/ohstr/nips/blob/main/NIP-CW.md).**
 - [`cashctl redeem`](#cashctl-redeem) — Redeem a held cash token into a Lightning wallet
 - [`cashctl consolidate`](#cashctl-consolidate) — Merge several held cash tokens into one
 - [`cashctl cash status`](#cashctl-cash-status) — Check your allocation of a held token, and with `--all` its co-recipients (network)
+- [`cashctl cash mint`](#cashctl-cash-mint) — Mint a bill over a Cash Hub connection you hold
+- [`cashctl cash order`](#cashctl-cash-order) — Buy cash over an Order connection
+- [`cashctl cash discover`](#cashctl-cash-discover) — Find order links and circles others list (ads, checked when you open one)
 - [`cashctl cash settle`](#cashctl-cash-settle) — Finish transfers, merges and re-keys whose answer never came
 - [`cashctl join`](#cashctl-join) — Join a circle to get a personal Lightning wallet
 - [`cashctl init`](#cashctl-init) — Set up your identity and, optionally, a wallet
@@ -26,7 +29,7 @@ and [Circle wallets](https://github.com/ohstr/nips/blob/main/NIP-CW.md).**
 - [`cashctl connect add/list/use/rm`](#cashctl-connect-addlistuserm) — Register an NWC connection: a plain Lightning wallet you already have
 - [`cashctl version`](#cashctl-version) — Print the cashctl version
 
-`cashctl` mints nothing itself — minting is the Cash Hub operator's own tooling.
+`cashctl cash mint` mints only over a Cash Hub connection the Hub's operator gave you.
 
 ## Installation
 
@@ -244,6 +247,19 @@ the terms and returns an invoice (or, with `--onchain`, an address) to pay;
 ```sh
 cashctl cash order place cashorder1... 100
 cashctl cash order watch <order>
+```
+
+## `cashctl cash discover`
+
+Finds order links and circles that others list on Nostr relays. Listings are
+ads, ranked by the curators you choose; `show` checks one with its Hub, and
+`open` orders from it or joins it.
+
+```sh
+cashctl cash discover relays add wss://relay.example
+cashctl cash discover list
+cashctl cash discover show of-1a2b3c4d5e
+cashctl cash discover open of-1a2b3c4d5e 100
 ```
 
 ## `cashctl cash settle`
