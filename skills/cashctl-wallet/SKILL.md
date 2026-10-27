@@ -41,6 +41,7 @@ register one afterward with `cashctl connect add` instead.
 ```sh
 cashctl connect add work nostr+walletconnect://...
 cashctl connect add work - < work.uri     # "-" reads the connection from stdin, out of ps and shell history
+cashctl connect add circle:family wallet.json   # a circle wallet's backup file (join --backup-file); kind circle, shown by wallet_pubkey only
 cashctl connect list --json    # each connection carries "kind": circle (from join), nwc or cash_token
 cashctl wallet use work    # same as `cashctl connect use work`
 cashctl connect rm work

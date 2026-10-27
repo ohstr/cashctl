@@ -80,6 +80,10 @@ func lookupJoinOnce(ctx context.Context, cmd *cobra.Command, client circleHub, j
 		j.State, j.WalletName = config.JoinDone, r.name
 		return joinOutcome{Join: j, Summary: "joined: wallet " + r.name, Wallet: r.name}
 	case nipcwclient.JoinWait:
+		if action.Until != 0 {
+			// pending, with a retry_after: the Hub answered.
+			_ = config.MarkJoinLookup(j.ConnectionPubkey, true, false)
+		}
 		retry := action.Until
 		if retry == 0 {
 			retry = j.Deadline + 1
@@ -227,7 +231,38 @@ func settleJoinCredential(cmd *cobra.Command, j config.Join, asFlag string) (nip
 func settleOneJoin(cmd *cobra.Command, j config.Join, cred nipcw.Credential) joinOutcome {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	client, err := dialCircleHubFn(ctx, j.HubConnection)
+	conn := j.HubConnection
+	unanswered := !j.LookupAnswered && time.Now().Unix() > j.Deadline+joinUnansweredAfter
+	if unanswered && !j.AltLookupTried {
+		// Every lookup omitted: the string it joined with may have been
+		// revoked. Sign the next lookup's bill proof with another string of
+		// the same circle, once (R-CW-21).
+		if others, _ := config.OtherHubConnections(j.HubPubkey, j.HubConnection); len(others) > 0 {
+			conn = others[0]
+			_ = config.MarkJoinLookup(j.ConnectionPubkey, false, true)
+			unanswered = false
+		}
+	}
+	out := lookupJoinVia(ctx, cmd, conn, j, cred)
+	if unanswered && out.Join.Open() {
+		if fresh, ok, _ := config.FindJoin(j.ConnectionPubkey); ok && !fresh.LookupAnswered {
+			_ = config.SetJoinState(j.ConnectionPubkey, config.JoinShown, "lookup_unanswered", 0)
+			out.Join.State, out.Join.Detail = config.JoinShown, "lookup_unanswered"
+			out.Summary = "no lookup was ever answered: the join is kept, shown, and never rejoined with its key"
+		}
+	}
+	return out
+}
+
+// joinUnansweredAfter is how long past a join's deadline its lookups may all
+// go unanswered before another string of the circle is tried, then the join
+// is shown as lookup_unanswered (NIP-CW §Lost Join Reply).
+const joinUnansweredAfter = 360
+
+// lookupJoinVia dials conn (a circlehub1 of the join's circle) and looks the
+// join up once.
+func lookupJoinVia(ctx context.Context, cmd *cobra.Command, conn string, j config.Join, cred nipcw.Credential) joinOutcome {
+	client, err := dialCircleHubFn(ctx, conn)
 	if err != nil {
 		return joinOutcome{Join: j, Summary: "Hub unreachable: " + output.Sanitize(err.Error())}
 	}

@@ -164,6 +164,8 @@ CREATE TABLE joins (
 	detail            TEXT,
 	retry_after       INTEGER,
 	wallet_name       TEXT,
+	lookup_answered   INTEGER NOT NULL DEFAULT 0,
+	alt_lookup_tried  INTEGER NOT NULL DEFAULT 0,
 	created_at        INTEGER NOT NULL,
 	updated_at        INTEGER NOT NULL
 );

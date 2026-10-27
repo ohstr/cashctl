@@ -2,6 +2,7 @@ package config
 
 import (
 	"database/sql"
+	"slices"
 	"errors"
 	"fmt"
 	"time"
@@ -45,6 +46,11 @@ type Join struct {
 	Detail        string `json:"detail,omitempty"`
 	RetryAfter    int64  `json:"retry_after,omitempty"`
 	WalletName    string `json:"wallet,omitempty"`
+	// LookupAnswered is any lookup of this join answered (not omitted).
+	LookupAnswered bool `json:"-"`
+	// AltLookupTried is a lookup already signed with another string of the
+	// same circle (R-CW-21), which is tried once.
+	AltLookupTried bool `json:"-"`
 	CreatedAt     int64  `json:"created_at"`
 }
 
@@ -119,7 +125,8 @@ func SetJoinState(connectionPubkey, state, detail string, retryAfter int64) erro
 }
 
 const joinColumns = `connection_pubkey, connection_secret, hub_pubkey, member_pubkey, hub_connection, hub_identity, chain,
-	hub_label, conn_verified, deadline, device_id, terms, state, detail, retry_after, wallet_name, created_at`
+	hub_label, conn_verified, deadline, device_id, terms, state, detail, retry_after, wallet_name,
+	lookup_answered, alt_lookup_tried, created_at`
 
 func scanJoin(row interface{ Scan(...any) error }) (Join, error) {
 	var j Join
@@ -127,7 +134,7 @@ func scanJoin(row interface{ Scan(...any) error }) (Join, error) {
 	var retry sql.NullInt64
 	err := row.Scan(&j.ConnectionPubkey, &j.ConnectionSecret, &j.HubPubkey, &j.MemberPubkey, &j.HubConnection,
 		&j.HubIdentity, &j.Chain, &j.HubLabel, &j.ConnVerified, &j.Deadline, &j.DeviceID, &terms, &j.State,
-		&detail, &retry, &wallet, &j.CreatedAt)
+		&detail, &retry, &wallet, &j.LookupAnswered, &j.AltLookupTried, &j.CreatedAt)
 	j.Terms, j.Detail, j.WalletName, j.RetryAfter = terms.String, detail.String, wallet.String, retry.Int64
 	return j, err
 }
@@ -184,6 +191,39 @@ func PendingJoins() ([]Join, error) {
 	for _, j := range all {
 		if j.State != JoinDone && j.State != JoinNotApplied {
 			out = append(out, j)
+		}
+	}
+	return out, nil
+}
+
+// MarkJoinLookup records that a lookup of the join was answered, and/or that
+// the once-only lookup over another string of its circle was tried. Flags
+// only ever turn on.
+func MarkJoinLookup(connectionPubkey string, answered, altTried bool) error {
+	return store.WithBusyRetry(func() error {
+		db, err := store.Open()
+		if err != nil {
+			return err
+		}
+		defer func() { _ = db.Close() }()
+		_, err = db.Exec(`UPDATE joins SET lookup_answered = MAX(lookup_answered, ?), alt_lookup_tried = MAX(alt_lookup_tried, ?)
+			WHERE connection_pubkey = ?`, answered, altTried, connectionPubkey)
+		return err
+	})
+}
+
+// OtherHubConnections are the circlehub1 strings this wallet holds for the
+// circle with TLV 0 hubPubkey other than except: a circle is keyed by its TLV
+// 0, whichever string joined it (R-CW-21).
+func OtherHubConnections(hubPubkey, except string) ([]string, error) {
+	all, err := Joins()
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, j := range all {
+		if j.HubPubkey == hubPubkey && j.HubConnection != "" && j.HubConnection != except && !slices.Contains(out, j.HubConnection) {
+			out = append(out, j.HubConnection)
 		}
 	}
 	return out, nil
