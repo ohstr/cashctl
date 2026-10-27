@@ -269,6 +269,9 @@ func EmitError(cmd *cobra.Command, err error) {
 		if ce.Call != nil {
 			payload["call"] = ce.Call
 		}
+		if ce.Reason != "" {
+			payload["reason"] = Sanitize(ce.Reason)
+		}
 		// Sanitized but never capped (see CLIError.Recovery): a truncated
 		// <token>#<secret> is as useless as a redacted one. Sanitize cannot
 		// shorten it — it substitutes rune-for-rune — so this is safe here in a

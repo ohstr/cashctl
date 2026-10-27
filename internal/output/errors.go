@@ -123,6 +123,18 @@ type CLIError struct {
 	// Call, on an indeterminate error, describes the call left open (its
 	// handle, method, state, deadline and next step): --json's "call".
 	Call map[string]any
+	// Reason is cashctl's own finer cause within Code (connection_invalid,
+	// connection_mismatch, not_accepting, ...): --json's "reason".
+	Reason string
+}
+
+// WithReason sets the --json "reason" of err, a *CLIError.
+func WithReason(err error, reason string) error {
+	var ce *CLIError
+	if errors.As(err, &ce) {
+		ce.Reason = reason
+	}
+	return err
 }
 
 // WithCall attaches an open call's description to err, a *CLIError.
