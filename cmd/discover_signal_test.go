@@ -17,6 +17,7 @@ import (
 	"github.com/ohstr/cashctl/internal/identity"
 	"github.com/ohstr/cashctl/internal/ledger"
 	"github.com/ohstr/cashctl/internal/output"
+	"github.com/ohstr/cashctl/internal/testmint"
 )
 
 // signalFixture is a listing fixture whose relays also take what the user
@@ -255,4 +256,30 @@ func TestDiscover_CuratorsPublishPull(t *testing.T) {
 		t.Errorf("after pull: %v %v", got, doc)
 	}
 	_ = json.Marshal
+}
+
+// D-4: a recommendation the user withdrew with a kind 5 carries nothing over.
+func TestOwnWithdrawn(t *testing.T) {
+	newListingFixture(t)
+	priv, self := testmint.Key(t)
+	node := strings.Repeat("ab", 32)
+	rec := listing.NewRecommendation(node, "", []listing.Ref{{Pubkey: "31190:" + node + ":x"}}, "")
+	rec.CreatedAt = uint64(time.Now().Unix() - 10) //nolint:gosec // unix time
+	if err := rec.Sign(priv); err != nil {
+		t.Fatal(err)
+	}
+	if ownWithdrawn(self, rec) {
+		t.Fatal("withdrawn with no deletion")
+	}
+	del := listing.NewRecommendationDeletion("31191:"+self+":"+node, time.Now().Unix())
+	if err := del.Sign(priv); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(del)
+	if err := config.PutDiscoverEvent(del.ID, 5, self, int64(del.CreatedAt), string(raw), config.OriginTrusted); err != nil { //nolint:gosec // unix time
+		t.Fatal(err)
+	}
+	if !ownWithdrawn(self, rec) {
+		t.Error("a withdrawn recommendation still counts")
+	}
 }

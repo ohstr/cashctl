@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -428,13 +429,17 @@ func runDiscoverRecommend(cmd *cobra.Command, args []string) error {
 		}
 	} else {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		failed := fetchIntoCache(ctx, relays, []nip01.SubscriptionFilter{{Kinds: []int{listing.KindRecommendation}, Authors: []string{self},
-			Tags: map[string][]string{"d": {node}}}}, config.OriginTrusted)
+		failed := fetchIntoCache(ctx, relays, []nip01.SubscriptionFilter{
+			{Kinds: []int{listing.KindRecommendation}, Authors: []string{self}, Tags: map[string][]string{"d": {node}}},
+			{Kinds: []int{5}, Authors: []string{self}, Tags: map[string][]string{"k": {strconv.Itoa(listing.KindRecommendation)}}},
+		}, config.OriginTrusted)
 		cancel()
 		if len(relays) > 0 && len(failed) == len(relays) {
 			return output.NetworkError(cmd, errors.New("couldn't read your current recommendation of this node; nothing was queued"))
 		}
-		if prev := ownNewest(self, listing.KindRecommendation, node); prev != nil {
+		// A recommendation the user withdrew (their kind 5) names nothing to
+		// carry over (D-4).
+		if prev := ownNewest(self, listing.KindRecommendation, node); prev != nil && !ownWithdrawn(self, prev) {
 			prevOffers, prevDate = refsOf(prev), int64(prev.CreatedAt) //nolint:gosec // unix time
 		}
 	}
@@ -506,6 +511,24 @@ func ownNewest(self string, kind int, d string) *nip01.Event {
 		}
 	}
 	return best
+}
+
+// ownWithdrawn reports a recommendation of self's that a cached kind 5 of
+// self's withdrew.
+func ownWithdrawn(self string, ev *nip01.Event) bool {
+	r, err := listing.ParseRecommendation(ev)
+	if err != nil {
+		return false
+	}
+	raws, _ := config.DiscoverEvents()
+	var dels []*nip01.Event
+	for _, raw := range raws {
+		var d nip01.Event
+		if json.Unmarshal([]byte(raw), &d) == nil && d.Kind == 5 && d.PubKey == self {
+			dels = append(dels, &d)
+		}
+	}
+	return len(listing.NewestRecommendations([]*listing.Recommendation{r}, dels)) == 0
 }
 
 // queueSignal queues an unsigned draft with a random delay, replacing replace.
