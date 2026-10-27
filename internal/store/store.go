@@ -194,6 +194,27 @@ CREATE TABLE orders (
 CREATE TABLE discover_relays (url TEXT PRIMARY KEY, added_at INTEGER NOT NULL);
 CREATE TABLE discover_curators (pubkey TEXT PRIMARY KEY, added_at INTEGER NOT NULL);
 CREATE TABLE discover_state (key TEXT PRIMARY KEY, value BLOB NOT NULL, updated_at INTEGER NOT NULL);
+CREATE TABLE discover_events (
+	id         TEXT PRIMARY KEY,
+	kind       INTEGER NOT NULL,
+	pubkey     TEXT NOT NULL,
+	created_at INTEGER NOT NULL,
+	raw        TEXT NOT NULL,
+	origin     TEXT NOT NULL,
+	fetched_at INTEGER NOT NULL
+);
+CREATE TABLE discover_outbox (
+	outbox_id     TEXT PRIMARY KEY,
+	kind          INTEGER NOT NULL,
+	node          TEXT NOT NULL,
+	offer         TEXT,
+	draft         TEXT NOT NULL,
+	publish_after INTEGER NOT NULL,
+	state         TEXT NOT NULL,
+	event_id      TEXT,
+	published_to  TEXT,
+	created_at    INTEGER NOT NULL
+);
 
 CREATE TABLE trusted_minters (
 	minter_xonly TEXT NOT NULL,
