@@ -259,6 +259,12 @@ type Ledger struct {
 	Entries  []Entry
 	History  []HistoryEntry
 	Handoffs []Handoff
+	// Calls are the bill-creating calls written ahead (calls.go), saved in the
+	// same transaction as the entries they create or spend.
+	Calls []Call
+
+	loadedCalls  map[string]Call
+	callVersions map[string]int64
 
 	// loaded is what Load actually read, keyed by ID — Save diffs against
 	// it to only touch rows THIS process actually changed (see Save's own
@@ -442,6 +448,13 @@ func load() (*Ledger, error) {
 	if err := hRows.Err(); err != nil {
 		return nil, fmt.Errorf("cashctl.db: reading handoffs: %w", err)
 	}
+
+	calls, callVersions, err := loadCalls(db, "")
+	if err != nil {
+		return nil, err
+	}
+	l.Calls = calls
+	l.snapshotCalls(callVersions)
 
 	l.loadedVersions = versions
 	l.historyLoaded = len(l.History)
@@ -651,9 +664,15 @@ func (l *Ledger) save() error {
 		}
 	}
 
+	callVersions, err := l.saveCalls(tx)
+	if err != nil {
+		return err
+	}
+
 	if err := tx.Commit(); err != nil {
 		return err
 	}
+	l.snapshotCalls(callVersions)
 
 	// Re-baseline against what was just committed. This is NOT hypothetical, and
 	// the comment here used to say it was ("a no-op for every current caller"):
