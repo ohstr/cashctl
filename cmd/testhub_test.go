@@ -15,7 +15,6 @@ import (
 	nipcashclient "github.com/ohstr/nmilat/nipcash/client"
 	relayclient "github.com/ohstr/nmilat/relay/client"
 
-	"github.com/ohstr/cashctl/internal/crashpoint"
 	"github.com/ohstr/cashctl/internal/ledger"
 	"github.com/ohstr/cashctl/internal/store"
 )
@@ -298,15 +297,19 @@ func (c *fakeCaller) writeAhead(ctx context.Context, j nipcashclient.Journal, de
 
 // answer maps a hook's result the way nmilat maps a Hub's answer to a call
 // carrying a request_id.
-func answer[T any](c *fakeCaller, pc nipcash.PendingCall, res T, err error) (T, error) {
+func answer[T any](ctx context.Context, c *fakeCaller, pc nipcash.PendingCall, res T, err error) (T, error) {
 	var zero T
 	var notSent *notSentError
 	var walletErr *relayclient.WalletError
 	switch {
 	case err == nil:
 		c.hooks.published++
-		// nmilat's post-publish hook (WithAfterPublish).
-		crashpoint.Hit("calls.after_send")
+		// What nmilat does right after it publishes the request: run the hook the
+		// caller put on ctx (WithAfterPublish). A call placed without it never
+		// reaches calls.after_send.
+		if f := relayclient.AfterPublishFrom(ctx); f != nil {
+			f()
+		}
 		return res, nil
 	case errors.As(err, &notSent):
 		return zero, fmt.Errorf("%w: %v", nipcashclient.ErrNotSent, err)
@@ -350,7 +353,7 @@ func (c *fakeCaller) CashTransfer(ctx context.Context, p nipcash.CashTransferPar
 		c.t.Fatalf("fake caller: unexpected cash_transfer on %s", c.token)
 	}
 	res, err := c.hooks.transfer(e, p)
-	return answer(c, pc, res, err)
+	return answer(ctx, c, pc, res, err)
 }
 
 func (c *fakeCaller) CashConsolidate(ctx context.Context, p nipcash.CashConsolidateParams, j nipcashclient.Journal, device string) (*nipcash.CashConsolidateResult, error) {
@@ -368,7 +371,7 @@ func (c *fakeCaller) CashConsolidate(ctx context.Context, p nipcash.CashConsolid
 		c.t.Fatalf("fake caller: unexpected cash_consolidate on %s", c.token)
 	}
 	res, err := c.hooks.consolidate(c.token, p)
-	return answer(c, pc, res, err)
+	return answer(ctx, c, pc, res, err)
 }
 
 // T-07: a probe on bill A never answers for bill B, and a move of A leaves B alone.

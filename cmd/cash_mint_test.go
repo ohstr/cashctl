@@ -10,10 +10,10 @@ import (
 
 	"github.com/ohstr/nmilat/nipcash"
 	nipcashclient "github.com/ohstr/nmilat/nipcash/client"
+	relayclient "github.com/ohstr/nmilat/relay/client"
 	"github.com/spf13/cobra"
 
 	"github.com/ohstr/cashctl/internal/appdir"
-	"github.com/ohstr/cashctl/internal/crashpoint"
 	"github.com/ohstr/cashctl/internal/ledger"
 	"github.com/ohstr/cashctl/internal/output"
 	"github.com/ohstr/cashctl/internal/testmint"
@@ -74,7 +74,12 @@ func (f *fakeCashHub) MintCash(ctx context.Context, p nipcash.MintCashParams, j 
 	}
 	f.mints++
 	f.lastReq = p
-	crashpoint.Hit("calls.after_send")
+	// What nmilat does right after it publishes the request: run the hook the
+	// caller put on ctx (WithAfterPublish). A call placed without it never
+	// reaches calls.after_send.
+	if f := relayclient.AfterPublishFrom(ctx); f != nil {
+		f()
+	}
 	if f.answer != nil {
 		if err := f.answer(pc); err != nil {
 			return nil, err
