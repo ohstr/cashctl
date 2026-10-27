@@ -52,7 +52,15 @@ wallet becomes the default.`,
 			}
 			name, value := args[0], strings.TrimSpace(raw)
 			if err := validateConnectionValue(value); err != nil {
-				return output.InvalidInputError(cmd, output.RedactSecretInput(value), err)
+				// A circle wallet backup is never echoed, even redacted: only
+				// its wallet_pubkey names it (C-1).
+				input := output.RedactSecretInput(value)
+				if w, ok, _ := config.ParseCircleWallet(value); ok {
+					input = output.RedactSecretInput(w.WalletPubkey)
+				} else if strings.HasPrefix(value, "{") {
+					input = ""
+				}
+				return output.InvalidInputError(cmd, input, err)
 			}
 			kind := config.KindNWC
 			if w, ok, _ := config.ParseCircleWallet(value); ok {

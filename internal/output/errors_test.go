@@ -131,6 +131,11 @@ func TestRedactSecretInput(t *testing.T) {
 			want:  "connection-key:<redacted>,discord,482910,./attestation.json",
 		},
 		{
+			name:  "a circle wallet backup's JSON secret, malformed or not",
+			input: `{"type":"circle_wallet","wallet_pubkey":"BAD","secret":"5A5A","cash_secret" : "x\"y"}`,
+			want:  `{"type":"circle_wallet","wallet_pubkey":"BAD","secret":"<redacted>","cash_secret" : "<redacted>"}`,
+		},
+		{
 			name:  "an ordinary non-secret value passes through unchanged",
 			input: "circle:family",
 			want:  "circle:family",

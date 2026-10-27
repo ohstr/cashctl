@@ -80,3 +80,33 @@ func TestConnectAdd_CircleWalletBackup(t *testing.T) {
 		t.Errorf("malformed backup: %v", err)
 	}
 }
+
+// C-1: a backup that fails validation is never echoed with its secret, in the
+// error's input or its text.
+func TestConnectAdd_InvalidCircleBackupHidesSecret(t *testing.T) {
+	appdir.SetOverride(t.TempDir())
+	t.Cleanup(func() { appdir.SetOverride("") })
+	secret := strings.Repeat("5a", 32)
+	for name, body := range map[string]string{
+		"bad wallet_pubkey": `{"type":"circle_wallet","wallet_pubkey":"BAD","relays":["wss://w.example"],"secret":"` + secret + `"}`,
+		"no relays":         `{"type":"circle_wallet","wallet_pubkey":"` + strings.Repeat("ef", 32) + `","relays":[],"secret":"` + secret + `"}`,
+		"uppercase secret":  `{"type":"circle_wallet","wallet_pubkey":"` + strings.Repeat("ef", 32) + `","relays":["wss://w.example"],"secret":"` + strings.ToUpper(secret) + `"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "wallet.json")
+			if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, err := runConnectCmd(t, newConnectAddCmd(), []string{"circle:family", path})
+			if err == nil {
+				t.Fatal("connect add accepted an invalid backup")
+			}
+			cliErr := output.AsCLIError(err)
+			for _, s := range []string{cliErr.Input, err.Error(), cliErr.RawMessage} {
+				if strings.Contains(strings.ToLower(s), secret) {
+					t.Fatalf("secret echoed: %q", s)
+				}
+			}
+		})
+	}
+}

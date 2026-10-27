@@ -453,6 +453,11 @@ var nwcSecretPattern = regexp.MustCompile(`(?i)([?&]secret=)[0-9a-f]+`)
 // shape internal/dial's own SplitCashSliceString parses.
 var giftSecretPattern = regexp.MustCompile(`#[0-9a-fA-F]{64}\b`)
 
+// jsonSecretPattern matches the value of any JSON key ending in "secret" (a
+// circle wallet backup's "secret", a "cash_secret"), whatever its shape: a
+// malformed or uppercase secret is still a secret.
+var jsonSecretPattern = regexp.MustCompile(`("[A-Za-z_]*secret"\s*:\s*)"(?:[^"\\]|\\.)*"`)
+
 // RedactSecretInput scrubs every secret-shaped substring it recognizes out
 // of s — a raw nsec1/64-hex value (redacted
 // entirely), a cash:/pubkey:/connection-key: credential (its secret
@@ -482,6 +487,7 @@ func RedactSecretInput(s string) string {
 	})
 	out = nwcSecretPattern.ReplaceAllString(out, "${1}<redacted>")
 	out = giftSecretPattern.ReplaceAllString(out, "#<redacted>")
+	out = jsonSecretPattern.ReplaceAllString(out, `${1}"<redacted>"`)
 	out = secretBearingBech32Pattern.ReplaceAllStringFunc(out, func(m string) string {
 		hrp := secretBearingBech32Pattern.FindStringSubmatch(m)[1]
 		return hrp + "1<redacted>"
