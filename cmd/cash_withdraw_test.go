@@ -411,3 +411,24 @@ func TestWithdraw_RefusedReplacementEndsRow(t *testing.T) {
 		t.Errorf("source %s, want held", e.Status)
 	}
 }
+
+// W-4: a tombstone answer spends the bill and shows the withdrawal as
+// bill_gone, never "your cash is still yours".
+func TestWithdraw_TombstoneIsBillGone(t *testing.T) {
+	f, entryID := setUpWithdraw(t)
+	handle := runWithdrawQuote(t)["quote"].(string)
+	f.answer = func(nipcash.PendingCall) (*nipcash.Payout, error) {
+		return nil, &nipcash.BillGone{Method: nipcash.MethodCashWithdraw, Tombstone: nipcash.Tombstone{Reason: "transferred"}}
+	}
+	if _, err := runWithdrawSend(t, nil, map[string]string{"quote": handle, "yes": "true"}); output.ExitCode(err) != 10 {
+		t.Fatalf("tombstone: %v", err)
+	}
+	l, _ := ledger.Load()
+	if e, _ := l.Find(entryID); e.Status == ledger.StatusHeld {
+		t.Error("the bill is still held")
+	}
+	w, ok, _ := ledger.WithdrawalForCall(ledger.CallIDFor(f.sent[0].RequestID))
+	if !ok || w.State != ledger.WithdrawBillGone || strings.Contains(withdrawalText(w), "still yours") {
+		t.Errorf("withdrawal %s: %q", w.State, withdrawalText(w))
+	}
+}

@@ -81,9 +81,19 @@ func finishRefusedWithdrawal(l *ledger.Ledger, id string) {
 		return
 	}
 	if w, ok, _ := ledger.WithdrawalForCall(id); ok && w.FinishedAt == 0 {
-		w.State, w.FinishedAt = ledger.WithdrawNotApplied, time.Now().Unix()
+		w.State, w.FinishedAt = refusedWithdrawState(c), time.Now().Unix()
 		_ = ledger.PutWithdrawal(w)
 	}
+}
+
+// refusedWithdrawState is the withdrawal state of a call closed not applied:
+// bill_gone when the Hub answered with the bill's tombstone (the bill was
+// already spent), else not_applied (the bill is still yours).
+func refusedWithdrawState(c *ledger.Call) string {
+	if c.Detail == "tombstone" {
+		return ledger.WithdrawBillGone
+	}
+	return ledger.WithdrawNotApplied
 }
 
 func newCashWithdrawShowCmd() *cobra.Command {

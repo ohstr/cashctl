@@ -17,6 +17,9 @@ const (
 	WithdrawSending = "sending"
 	// WithdrawNotApplied is a withdrawal the Hub refused: the bill is still yours.
 	WithdrawNotApplied = "not_applied"
+	// WithdrawBillGone is a withdrawal the Hub answered with the bill's
+	// tombstone: nothing was withdrawn, and the bill was already spent.
+	WithdrawBillGone = "bill_gone"
 )
 
 // Withdrawal is one cash_withdraw placed from here, with the quote the user
