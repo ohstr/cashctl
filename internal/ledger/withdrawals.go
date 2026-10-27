@@ -35,7 +35,7 @@ type Withdrawal struct {
 	ConfirmedAt, CheckedAt, FinishedAt                             int64
 }
 
-func nz(v int64) sql.NullInt64 { return sql.NullInt64{Int64: v, Valid: v != 0} }
+func nz(v int64) sql.NullInt64   { return sql.NullInt64{Int64: v, Valid: v != 0} }
 func ns(v string) sql.NullString { return sql.NullString{String: v, Valid: v != ""} }
 
 // PutWithdrawal writes w (insert or replace).
@@ -101,7 +101,9 @@ func findWithdrawalBy(where, arg string) (Withdrawal, bool, error) {
 }
 
 // FindWithdrawal reads a withdrawal by its id.
-func FindWithdrawal(id string) (Withdrawal, bool, error) { return findWithdrawalBy(`withdrawal_id = ?`, id) }
+func FindWithdrawal(id string) (Withdrawal, bool, error) {
+	return findWithdrawalBy(`withdrawal_id = ?`, id)
+}
 
 // WithdrawalForCall reads the withdrawal a call belongs to.
 func WithdrawalForCall(callID string) (Withdrawal, bool, error) {
@@ -134,9 +136,9 @@ func Withdrawals() ([]Withdrawal, error) {
 // WithdrawQuote is a verified quote kept for `cash withdraw send --quote`.
 type WithdrawQuote struct {
 	Handle, EntryID, WalletPubkey, HubIdentity, Address, QuoteJSON, QuoteID string
-	SendBefore                                                             int64
-	Used                                                                   bool
-	CreatedAt                                                              int64
+	SendBefore                                                              int64
+	Used                                                                    bool
+	CreatedAt                                                               int64
 }
 
 // QuoteMaxAge is how long a stored quote handle may be used.

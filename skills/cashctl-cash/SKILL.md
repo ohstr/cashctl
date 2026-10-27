@@ -134,6 +134,13 @@ you don't trust needs the user's OK before anything is contacted:
 `--trust-minter` only after they agreed (else `usage`,
 `reason: minter_untrusted`). A zap bill without its event is refused; give
 it with `--zap-event`, or let `--find-zap` look on the relays you name.
+A zap to a connection key (`p` with a platform) is claimed with
+`--as connection-key:<privkey>,<platform>,<id>,<attestation-file>`: a full
+in-place transfer to your pubkey, written ahead; exit 8 means the claim is
+open — `cash settle` finishes it, never re-run it. `--relay` also reads your
+own Cash Zap Info (10522) for rule 8. Trust a minter for good only when the
+user asks: `cashctl cash minters add <minter> --chain <chain>`.
+
 Suggest `consolidate` afterwards: it re-issues the bill as an ordinary one,
 unlinking it from the public zap.
 

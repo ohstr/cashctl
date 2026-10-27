@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/ohstr/cashctl/internal/config"
+	"github.com/ohstr/cashctl/internal/credential"
 	"github.com/ohstr/cashctl/internal/ledger"
 	"github.com/ohstr/cashctl/internal/output"
 )
@@ -139,7 +141,11 @@ func decodeCashZap(cmd *cobra.Command, value string, jsonMode, check bool) error
 			return output.InvalidInputError(cmd, tf, fmt.Errorf("not a Nostr event: %w", err))
 		}
 	}
-	v := nipCZ.VerifyClient(ev, target, nil, trust)
+	var info *nipCZ.CashZapInfo
+	if pz, err := nipCZ.ParseCashZap(ev); err == nil && !pz.Recipient.IsConnectionKey() {
+		info, _ = recipientZapInfo(cmd, pz.Recipient.Value)
+	}
+	v := nipCZ.VerifyClient(ev, target, info, trust)
 	out := map[string]any{"type": "cash_zap", "rules": ruleRows(v), "countable": v.Countable, "minter_pubkey": v.Minter}
 	if v.Reason != "" {
 		out["reason"] = v.Reason
@@ -247,26 +253,102 @@ type zapStatusClient interface {
 	Close()
 }
 
+// zapInfoFn reads a pubkey's newest Cash Zap Info (kind 10522) and NIP-65 read
+// relays (kind 10002) from relays. Swapped in tests.
+var zapInfoFn = func(ctx context.Context, relays []string, pubkey string) (*nipCZ.CashZapInfo, []string) {
+	f := &nip01.SubscriptionFilter{Kinds: []int{nipCZ.KindCashZapInfo, 10002}, Authors: []string{pubkey}}
+	var info, nip65 *nip01.Event
+	for _, r := range relays {
+		u, err := url.Parse(r)
+		if err != nil {
+			continue
+		}
+		rctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		evs, err := relayclient.ReadEventsFromRelay(rctx, u, nip01.NewSubscriptionFilterGroup(f))
+		cancel()
+		if err != nil {
+			continue
+		}
+		for _, ev := range evs {
+			if ev.PubKey != pubkey || ev.Verify() != nil {
+				continue
+			}
+			switch {
+			case ev.Kind == nipCZ.KindCashZapInfo && (info == nil || ev.CreatedAt > info.CreatedAt):
+				info = ev
+			case ev.Kind == 10002 && (nip65 == nil || ev.CreatedAt > nip65.CreatedAt):
+				nip65 = ev
+			}
+		}
+	}
+	var parsed *nipCZ.CashZapInfo
+	if info != nil {
+		parsed, _ = nipCZ.ParseCashZapInfo(info)
+	}
+	var read []string
+	if nip65 != nil {
+		for _, t := range nip65.Tags {
+			if len(t) >= 2 && t[0] == "r" && (len(t) == 2 || t[2] == "read") {
+				read = append(read, t[1])
+			}
+		}
+	}
+	return parsed, read
+}
+
+// recipientZapInfo is a recipient's 10522 and NIP-65 read relays, read from
+// --relay; nil without relays (rule 8 then trusts the local list only).
+func recipientZapInfo(cmd *cobra.Command, pubkey string) (*nipCZ.CashZapInfo, []string) {
+	relays, _ := cmd.Flags().GetStringSlice("relay")
+	if len(relays) == 0 || pubkey == "" {
+		return nil, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	return zapInfoFn(ctx, relays, pubkey)
+}
+
 // receiveZap receives the bill a 9522 carries: rules 1-6 and 8 before any
-// network, the user's approval for an untrusted minter, then rule 9. Only a
-// zap to the local pubkey is received here.
+// network but the recipient's 10522, the user's approval for an untrusted
+// minter, then rule 9: for a pubkey p, the Hub's own row for the local
+// identity; for a connection key p, a full in-place transfer to the local
+// pubkey signed with that key (--as connection-key:...), placed through the
+// call engine.
 func receiveZap(cmd *cobra.Command, ev *nip01.Event, raw string) error {
 	jsonMode, _ := cmd.Flags().GetBool("json")
 	trust := loadMinterTrust()
 	approved, _ := cmd.Flags().GetBool("trust-minter")
-	pre := nipCZ.VerifyWallet(context.Background(), ev, nil, trust, approved, nil)
-	if !pre.Valid() {
-		return output.InvalidInputError(cmd, "", fmt.Errorf("this Cash Zap fails %s", firstFailed(pre)))
-	}
 	z, err := nipCZ.ParseCashZap(ev)
 	if err != nil {
-		return output.InvalidInputError(cmd, "", err)
+		pre := nipCZ.VerifyWallet(context.Background(), ev, nil, trust, approved, nil)
+		return output.InvalidInputError(cmd, "", fmt.Errorf("this Cash Zap fails %s", firstFailed(pre)))
 	}
+	mine, idErr := localPubKeyHex(cmd)
+	var cred nipcash.Credential
+	var info *nipCZ.CashZapInfo
 	if z.Recipient.IsConnectionKey() {
-		return output.InvalidInputError(cmd, "", errors.New("this zap is for a connection key; claiming one (a full in-place transfer to your pubkey with its attestation) is not supported yet"))
+		as := asCredentialValue(cmd)
+		if !strings.HasPrefix(as, "connection-key:") {
+			return output.UsageError(cmd, fmt.Errorf(
+				"this zap is for a %s connection key: claim it with --as connection-key:<privkey>,%s,<external-id>,<attestation-file>",
+				output.Sanitize(z.Recipient.Platform), output.Sanitize(z.Recipient.Platform)))
+		}
+		if cred, err = credential.ParseCash(as); err != nil {
+			return output.InvalidInputError(cmd, output.RedactSecretInput(as), err)
+		}
+		if idErr != nil {
+			return output.RuntimeError(cmd, fmt.Errorf("a claimed zap moves to your local identity, which isn't set up: %w", idErr))
+		}
+		output.Notef(jsonMode, "This zap names Identity Authority %s for its connection key.", shortFingerprint(z.IA))
+	} else {
+		if idErr != nil || mine != z.Recipient.Value {
+			return output.InvalidInputError(cmd, "", fmt.Errorf("this zap is for %s, not your identity", shortFingerprint(z.Recipient.Value)))
+		}
+		info, _ = recipientZapInfo(cmd, z.Recipient.Value)
 	}
-	if mine, err := localPubKeyHex(cmd); err != nil || mine != z.Recipient.Value {
-		return output.InvalidInputError(cmd, "", fmt.Errorf("this zap is for %s, not your identity", shortFingerprint(z.Recipient.Value)))
+	pre := nipCZ.VerifyWallet(context.Background(), ev, info, trust, approved, nil)
+	if !pre.Valid() {
+		return output.InvalidInputError(cmd, "", fmt.Errorf("this Cash Zap fails %s", firstFailed(pre)))
 	}
 	if pre.MinterUnlisted && !approved {
 		if jsonMode {
@@ -283,18 +365,57 @@ func receiveZap(cmd *cobra.Command, ev *nip01.Event, raw string) error {
 	if err != nil {
 		return output.RuntimeError(cmd, err)
 	}
-	if held, ok := l.FindByToken(z.Cash); ok && held.Status == ledger.StatusHeld {
+	if held, ok := l.FindByToken(z.Cash); ok && (held.Status == ledger.StatusHeld || held.Status == ledger.StatusZapClaiming) {
 		return output.ConflictError(cmd, "", ledger.ErrAlreadyHeld)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	minter := pre.Minter
+	amount := z.Amount
+	entry := ledger.Entry{Token: strings.ToLower(z.Cash), WalletPubkey: z.W, Secret: z.Token.Secret, RelayURLs: z.Token.RelayURLs,
+		IdentityRequired: ptrTo(true), AmountMillis: &amount, Verified: true, MinterPubkey: &minter, ZapEvent: raw}
+	if z.Recipient.IsConnectionKey() {
+		entry.ConnectionKeyPlatform, entry.IAPubkey = z.Recipient.Platform, z.IA
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	var v nipCZ.Verdict
+	var claimErr error
+	var claimed *ledger.Entry
+	if z.Recipient.IsConnectionKey() {
+		// The claim is a call: its bill is written down first, not held until
+		// the Hub answers.
+		claimed, err = l.Add(entry)
+		if err != nil {
+			return output.RuntimeError(cmd, err)
+		}
+		_ = l.SetStatus(claimed.ID, ledger.StatusZapClaiming)
+		if err := l.Save(); err != nil {
+			return output.RuntimeError(cmd, err)
+		}
+	}
 	_ = WithSpinner(jsonMode, "Checking the zap with its Hub...", func() error {
-		v = nipCZ.VerifyWallet(ctx, ev, nil, trust, approved, func(ctx context.Context, z *nipCZ.CashZap) error {
-			return zapStatusMine(ctx, cmd, z)
+		v = nipCZ.VerifyWallet(ctx, ev, info, trust, approved, func(ctx context.Context, z *nipCZ.CashZap) error {
+			if !z.Recipient.IsConnectionKey() {
+				return zapStatusMine(ctx, cmd, z)
+			}
+			claimErr = claimZap(ctx, cmd, l, claimed, z, cred, mine)
+			return claimErr
 		})
 		return nil
 	})
+	if claimErr != nil {
+		var ce *output.CLIError
+		isCLI := errors.As(claimErr, &ce)
+		if isCLI && ce.Code == output.CodeIndeterminate {
+			return claimErr
+		}
+		if e, ok := l.Find(claimed.ID); ok && e.Status == ledger.StatusZapClaiming {
+			_ = l.SetStatus(e.ID, ledger.StatusNotReceived)
+			_ = l.Save()
+		}
+		if isCLI {
+			return claimErr
+		}
+	}
 	if !v.Received() {
 		r9, _ := v.Rule(9)
 		if r9.Err != nil && (errors.Is(r9.Err, context.DeadlineExceeded) || errors.Is(r9.Err, context.Canceled)) {
@@ -305,17 +426,20 @@ func receiveZap(cmd *cobra.Command, ev *nip01.Event, raw string) error {
 		}
 		return output.InvalidInputError(cmd, "", fmt.Errorf("not received: %s", firstFailed(v)))
 	}
-	minter := v.Minter
-	amount := z.Amount
-	entry := ledger.Entry{Token: strings.ToLower(z.Cash), WalletPubkey: z.W, Secret: z.Token.Secret, RelayURLs: z.Token.RelayURLs,
-		IdentityRequired: ptrTo(true), AmountMillis: &amount, Verified: true, MinterPubkey: &minter, ZapEvent: raw}
+	var expires *int64
 	if v.ExpiresAtTrusted && z.ExpiresAt != nil && *z.ExpiresAt > 0 {
 		at := int64(*z.ExpiresAt) //nolint:gosec // unix time
-		entry.ExpiresAt = &at
+		expires = &at
 	}
-	added, err := l.Add(entry)
-	if err != nil {
-		return output.RuntimeError(cmd, err)
+	added := claimed
+	if added == nil {
+		entry.ExpiresAt = expires
+		if added, err = l.Add(entry); err != nil {
+			return output.RuntimeError(cmd, err)
+		}
+	} else if e, ok := l.Find(added.ID); ok {
+		e.ExpiresAt = expires
+		added = e
 	}
 	l.AppendHistory("receive", fmt.Sprintf("received a %s Cash Zap", output.FormatAmount(int64(amount)))) //nolint:gosec // amounts fit
 	if err := l.Save(); err != nil {
@@ -327,6 +451,34 @@ func receiveZap(cmd *cobra.Command, ev *nip01.Event, raw string) error {
 	}
 	output.Printf("Received a Cash Zap of %s (entry %s).\n", output.FormatAmount(int64(amount)), added.ID) //nolint:gosec // amounts fit
 	output.Println("Tip: `cashctl consolidate` re-issues it as an ordinary bill, which unlinks it from the public zap.")
+	return nil
+}
+
+// claimZap is rule 9 for a connection-key zap: a full in-place cash_transfer
+// of the zap bill to the local pubkey, signed with the connection key, placed
+// through the call engine (written ahead, looked up when lost), and checked
+// to be exactly that (nipCZ.CheckInPlaceTransfer).
+func claimZap(ctx context.Context, cmd *cobra.Command, l *ledger.Ledger, e *ledger.Entry, z *nipCZ.CashZap, cred nipcash.Credential, mine string) error {
+	caller, err := dialCallerFn(ctx, z.Cash)
+	if err != nil {
+		return err
+	}
+	defer caller.Close()
+	spec := callSpec{Purpose: purposeZapClaim, SourceEntryIDs: []string{e.ID}, AuthorizerKind: ledger.AuthAsCredential, TargetCredential: e.Token}
+	res, call, err := placeTransfer(ctx, cmd, l, caller, spec, nipcash.CashTransferParams{Credential: cred, To: nipcash.Pubkey(mine), CurrentAmount: z.Amount})
+	if err != nil {
+		return err
+	}
+	if err := nipCZ.CheckInPlaceTransfer(z, res); err != nil {
+		// An answer that doesn't check out keeps the call and the bill.
+		call.State, call.Detail = ledger.CallStuck, "invalid_result"
+		_ = l.Save()
+		return output.IndeterminateError(cmd, "", fmt.Errorf("the Hub's answer to the claim doesn't check out (%v); the claim is kept", err))
+	}
+	if e, ok := l.Find(e.ID); ok {
+		claimedByLocalKey(e)
+	}
+	closeCall(l, call, ledger.CallDone, "")
 	return nil
 }
 
@@ -375,6 +527,14 @@ func findZapFor(cmd *cobra.Command, tok nipcash.Token) (*nip01.Event, string, er
 	if len(relays) == 0 {
 		return nil, "", output.InvocationError(cmd, errors.New("--find-zap needs --relay <url> (never the token's own relay hints)"))
 	}
+	// Also where the local identity reads its zaps: its own 10522 relays, else
+	// its NIP-65 read relays (NIP-CZ IncomingRelays). Never the token's hints.
+	if mine, err := localPubKeyHex(cmd); err == nil {
+		own, read := recipientZapInfo(cmd, mine)
+		relays = append(relays, nipCZ.IncomingRelays(own, read, nil)...)
+		slices.Sort(relays)
+		relays = slices.Compact(relays)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	evs, err := findZapEvents(ctx, relays, tok.WalletPubkey)
@@ -399,4 +559,12 @@ func findZapFor(cmd *cobra.Command, tok nipcash.Token) (*nip01.Event, string, er
 	}
 	b, _ := json.Marshal(z.Event)
 	return z.Event, string(b), nil
+}
+
+// claimedByLocalKey records a zap bill a claim moved onto the local pubkey: no
+// longer bound to the connection key, held.
+func claimedByLocalKey(e *ledger.Entry) {
+	e.ConnectionKeyPlatform, e.ConnectionKeyExternalID, e.AttestationEventID, e.IAPubkey = "", "", "", ""
+	e.IdentityRequired = ptrTo(true)
+	e.Status = ledger.StatusHeld
 }

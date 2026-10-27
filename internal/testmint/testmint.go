@@ -299,3 +299,24 @@ func CashZap(t testing.TB, minterPriv, senderPriv string, target *nip01.Event, a
 }
 
 func ptrBool(b bool) *bool { return &b }
+
+// CashZapToKey is a kind-9522 Cash Zap from senderPriv to a connection key
+// (ck, platform) whose Identity Authority is ia, carrying a scheme-1 bill of
+// amount on lokicash signed by minterPriv. It returns the event and the bill.
+func CashZapToKey(t testing.TB, minterPriv, senderPriv, ck, platform, ia string, amount uint64) (*nip01.Event, string) {
+	t.Helper()
+	amt := amount
+	s := Bill(t, nipcash.Token{HRP: "lokicash", RelayURLs: []string{"wss://hub.example"}, IdentityRequired: ptrBool(true),
+		AttestedAmountMillis: &amt}, minterPriv)
+	tok, err := nipcash.Decode(s)
+	if err != nil {
+		t.Fatalf("testmint: %v", err)
+	}
+	ev, err := nip01.NewSignedEvent(9522, "zap", senderPriv, []string{"p", ck, platform}, []string{"ia", ia},
+		[]string{"amount", strconv.FormatUint(amount, 10)}, []string{"chain", "flokicoin"},
+		[]string{"cash", s}, []string{"w", tok.WalletPubkey})
+	if err != nil {
+		t.Fatalf("testmint: %v", err)
+	}
+	return ev, s
+}

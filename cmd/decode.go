@@ -114,6 +114,7 @@ func newDecodeCmd() *cobra.Command {
 			}
 		},
 	}
+	cmd.Flags().StringSlice("relay", nil, "a relay to read a Cash Zap recipient's Cash Zap Info (kind 10522) from, for rule 8")
 	cmd.Flags().String("target", "", "a Cash Zap's target event (JSON file), which rule 7 checks the zap against")
 	cmd.Flags().Bool("check", false, "also cross-check against the Hub (cash token: matching recipient; cashhub: the online check; circlehub: can we join) — a network call")
 	return cmd
