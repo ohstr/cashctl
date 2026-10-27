@@ -439,7 +439,19 @@ func placeTransfer(ctx context.Context, cmd *cobra.Command, l *ledger.Ledger, ca
 	j := &ledgerJournal{l: l, spec: spec}
 	res, err := caller.CashTransfer(callContext(ctx), p, j, device)
 	if err != nil {
-		return nil, nil, placeErr(cmd, l, j, err, transferVerb(spec.Purpose), spec.SourceEntryIDs...)
+		perr := placeErr(cmd, l, j, err, transferVerb(spec.Purpose), spec.SourceEntryIDs...)
+		raw, closedErr := awaitPlacement(ctx, cmd, l, j.call())
+		if closedErr != nil {
+			return nil, nil, closedErr
+		}
+		if raw != nil {
+			// Looked up done: applied exactly as the reply would have been.
+			if r, pErr := p.ParseLookupResult(raw); pErr == nil && r.NewWalletTombstone == nil && r.RemainderWalletTombstone == nil {
+				crashpoint.Hit("calls.before_apply")
+				return r, j.call(), nil
+			}
+		}
+		return nil, nil, perr
 	}
 	crashpoint.Hit("calls.before_apply")
 	return res, j.call(), nil
@@ -457,7 +469,18 @@ func placeConsolidate(ctx context.Context, cmd *cobra.Command, l *ledger.Ledger,
 	j := &ledgerJournal{l: l, spec: spec}
 	res, err := caller.CashConsolidate(callContext(ctx), p, j, device)
 	if err != nil {
-		return nil, nil, placeErr(cmd, l, j, err, "consolidate", spec.SourceEntryIDs...)
+		perr := placeErr(cmd, l, j, err, "consolidate", spec.SourceEntryIDs...)
+		raw, closedErr := awaitPlacement(ctx, cmd, l, j.call())
+		if closedErr != nil {
+			return nil, nil, closedErr
+		}
+		if raw != nil {
+			if r, pErr := p.ParseLookupResult(raw); pErr == nil && r.NewWalletTombstone == nil {
+				crashpoint.Hit("calls.before_apply")
+				return r, j.call(), nil
+			}
+		}
+		return nil, nil, perr
 	}
 	crashpoint.Hit("calls.before_apply")
 	return res, j.call(), nil

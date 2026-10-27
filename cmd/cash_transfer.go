@@ -48,6 +48,7 @@ note: a <token>#<secret> string to hand anyone.
 	cmd.Flags().String("amount", "", fmt.Sprintf("how much to send, in %s — omitted sends the whole held token", output.CurrencyUnit))
 	cmd.Flags().String("as", "", "override credential")
 	cmd.Flags().String("ia", "", "Identity Authority to trust (hex pubkey or name@domain) for an nconnection1... target that doesn't specify one")
+	cmd.Flags().Bool("no-wait", false, "exit 8 at once when the Hub gives no clear answer, instead of waiting (up to 62 s) to look the call up")
 	return cmd
 }
 

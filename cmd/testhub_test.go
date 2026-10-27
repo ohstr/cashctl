@@ -426,3 +426,6 @@ func hexWallet(s string) string {
 	sum := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(sum[:])
 }
+
+// Unit tests never wait for a deadline; the ones about the wait opt in.
+func init() { placementWaitEnabled = false }

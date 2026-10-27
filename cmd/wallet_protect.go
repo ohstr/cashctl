@@ -35,6 +35,7 @@ func newWalletProtectCmd() *cobra.Command {
 		RunE: runWalletProtect,
 	}
 	cmd.Flags().String("token", "", "which held token to protect (IDs from: cashctl wallet show --json)")
+	cmd.Flags().Bool("no-wait", false, "exit 8 at once when the Hub gives no clear answer, instead of waiting (up to 62 s) to look the call up")
 	return cmd
 }
 

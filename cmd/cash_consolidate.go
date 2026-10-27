@@ -37,6 +37,7 @@ them).`,
 	cmd.Flags().String("sources", "", fmt.Sprintf("comma-separated: local ledger IDs, or <token>:<amount-%s>:<credential>", output.CurrencyUnit))
 	cmd.Flags().String("to", "", "defaults to your own identity")
 	cmd.Flags().String("ia", "", "Identity Authority to trust (hex pubkey or name@domain) for an nconnection1... target that doesn't specify one")
+	cmd.Flags().Bool("no-wait", false, "exit 8 at once when the Hub gives no clear answer, instead of waiting (up to 62 s) to look the call up")
 	return cmd
 }
 
