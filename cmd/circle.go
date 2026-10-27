@@ -503,13 +503,17 @@ func joinFailed(cmd *cobra.Command, client circleHub, journal *joinJournal, cred
 			return output.RuntimeError(cmd, fmt.Errorf("the join's outcome is unknown and its record could not be read: %v", fErr))
 		}
 		return settleJoinNow(cmd, client, j, cred, joinView{label: label, warnings: warnings, testNetwork: isTest})
+	case errors.As(err, &walletErr) && walletErr.Code == nipcw.ErrRequestReused:
+		// Not a failure (NIP-CW §Errors): the join stays open, its secret kept,
+		// and is looked up.
+		if journal.written != nil {
+			return joinStillOpen(cmd, journal.written.ConnectionPubkey, journal.written.Deadline, err)
+		}
+		return output.IndeterminateError(cmd, "", err)
 	case errors.As(err, &walletErr):
 		// An explicit answer: no wallet was made for this proof.
 		if journal.written != nil {
 			_ = config.SetJoinState(journal.written.ConnectionPubkey, config.JoinNotApplied, walletErr.Code, 0)
-		}
-		if walletErr.Code == nipcw.ErrRequestReused {
-			return output.IndeterminateError(cmd, "", err)
 		}
 		return withHeldWalletHint(classifyNWCErr(cmd, err), label)
 	}

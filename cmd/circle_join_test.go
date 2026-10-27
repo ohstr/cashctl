@@ -324,6 +324,22 @@ func TestJoin_RefusalForgetsTheKey(t *testing.T) {
 	}
 }
 
+// CC-C2: REQUEST_REUSED is no failure: the join stays open, its secret kept.
+func TestJoin_RequestReusedKeepsTheJoinOpen(t *testing.T) {
+	f := &fakeCircleHub{answer: func(nipcwclient.PendingJoin) (*nipcwclient.JoinResult, error) {
+		return nil, &relayclient.WalletError{Method: nipcw.MethodCreateCircleWallet, Code: nipcw.ErrRequestReused}
+	}}
+	setUpCircleHub(t, f)
+	_, _, err := runJoinCLI(t, testCircleHub(t), nil)
+	if output.AsCLIError(err).Code != output.CodeIndeterminate {
+		t.Fatalf("err %v, want indeterminate", err)
+	}
+	joins := allJoins(t)
+	if len(joins) != 1 || joins[0].State == config.JoinNotApplied || joins[0].ConnectionSecret == "" {
+		t.Errorf("join row %+v, want still open with its secret", joins)
+	}
+}
+
 // A lost reply is looked up at once; pending is exit 8 with the call; `cash
 // settle` past the deadline registers the wallet the lookup returns.
 func TestJoin_LostReplyIsLookedUpThenSettled(t *testing.T) {
