@@ -10,6 +10,7 @@
 package integration
 
 import (
+	"github.com/ohstr/cashctl/internal/testmint"
 	"os"
 	"strings"
 	"testing"
@@ -214,15 +215,12 @@ func TestForgedFollowSet_IsIgnored(t *testing.T) {
 // chosen by whoever made the connection string, so it may carry terminal
 // escapes or bidirectional overrides meant to rewrite what the user sees.
 func TestCircleHubLabel_ControlBytesNeverReachTheTerminal(t *testing.T) {
-	conn, err := nipcw.EncodeCircleHubConnection(nipcw.CircleHubConnection{
-		WalletPubkey: fakeHex32(t),
-		Secret:       fakeHex32(t),
-		RelayURLs:    []string{"wss://fake.invalid"},
-		Label:        "Family\x1b[2J\x1b]0;pwned\x07 circle ‮gnp.exe",
+	hubPriv, _ := testmint.Key(t)
+	conn := testmint.SignCircleHub(t, hubPriv, nipcw.CircleHubConnection{
+		Relays:   []string{"wss://fake.invalid"},
+		Label:    "Family\x1b[2J\x1b]0;pwned\x07 circle ‮gnp.exe",
+		HasLabel: true,
 	})
-	if err != nil {
-		t.Fatalf("encode circle hub connection: %v", err)
-	}
 	f := newFixture(t)
 	f.mustJSON("wallet", "init")
 	for name, res := range map[string]result{

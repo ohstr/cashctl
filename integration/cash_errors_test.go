@@ -12,7 +12,6 @@ import (
 	btcec "github.com/flokiorg/go-flokicoin/crypto"
 	"github.com/ohstr/nmilat/nipIC"
 	"github.com/ohstr/nmilat/nipcash"
-	"github.com/ohstr/nmilat/nipcw"
 
 	"github.com/ohstr/cashctl/internal/testmint"
 )
@@ -42,15 +41,8 @@ func fakeCashHubConnection(t *testing.T) string {
 
 func fakeCircleHubConnection(t *testing.T) string {
 	t.Helper()
-	tok, err := nipcw.EncodeCircleHubConnection(nipcw.CircleHubConnection{
-		WalletPubkey: fakeHex32(t),
-		Secret:       fakeHex32(t),
-		RelayURLs:    []string{"wss://fake.invalid"},
-	})
-	if err != nil {
-		t.Fatalf("encode fake circle hub connection: %v", err)
-	}
-	return tok
+	hubPriv, _ := testmint.Key(t)
+	return testmint.CircleHub(t, hubPriv, "", "wss://fake.invalid")
 }
 
 // fakeCashToken encodes a syntactically valid, never-dialed cash token —
@@ -58,16 +50,14 @@ func fakeCircleHubConnection(t *testing.T) string {
 // pubkey-mode, or cash-mode shape without touching any network.
 func fakeCashToken(t *testing.T, identityRequired *bool) string {
 	t.Helper()
-	tok, err := nipcash.Encode(nipcash.Token{
+	// Signed: every encoder refuses a bill without its mint signature.
+	tok := testmint.Bill(t, nipcash.Token{
 		HRP:              "lokicash",
 		WalletPubkey:     fakeHex32(t),
 		Secret:           fakeHex32(t),
 		RelayURLs:        []string{"wss://fake.invalid"},
 		IdentityRequired: identityRequired,
-	})
-	if err != nil {
-		t.Fatalf("encode fake cash token: %v", err)
-	}
+	}, "")
 	return tok
 }
 
@@ -200,15 +190,8 @@ func TestDecode_MintSignatureVerification(t *testing.T) {
 	if got, _ := resp["attested_amount_millis"].(float64); uint64(got) != amountMillis {
 		t.Errorf("decode (signed token): attested_amount_millis = %v, want %d", resp["attested_amount_millis"], amountMillis)
 	}
-
-	cashMode := false
-	unsignedResp := f.mustJSON("decode", fakeCashToken(t, &cashMode))
-	if _, present := unsignedResp["mint_signature_valid"]; present {
-		t.Errorf("decode (unsigned token): must not include mint_signature_valid at all: %v", unsignedResp)
-	}
-	if _, present := unsignedResp["minter_pubkey"]; present {
-		t.Errorf("decode (unsigned token): must not include minter_pubkey at all: %v", unsignedResp)
-	}
+	// An unsigned bill no longer exists: every encoder refuses one, so there is
+	// no unsigned case left to decode here.
 }
 
 // TestDecode_MintSignatureVerification_TextModeDoesNotOverclaimTrust is the

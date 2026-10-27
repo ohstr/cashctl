@@ -3,9 +3,8 @@
 // circle_private_join_test.go checks NIP-CW §Private Join end to end: when the
 // Hub offers it, cashctl's join travels over the private transport, which a
 // listener on the Hub's inbox confirms independently of cashctl's own report.
-// A Hub that offers no private join cannot be provisioned on a live node (it
-// always runs the transport), so the fallback path is covered by the unit
-// tests in cmd/circle_private_join_test.go.
+// Every join is private: a Hub whose announcement can't be found gets no join
+// at all, covered by the unit tests in cmd/circle_join_test.go.
 package integration
 
 import (
@@ -52,8 +51,8 @@ func circleHubInbox(t *testing.T, pairingURI string) (relay, inbox string) {
 }
 
 // TestCircleJoin_PrivateWhenOffered joins a Hub that offers private join,
-// once by default and once with --private=require (through the canonical
-// `circle join`), and confirms each request reached the Hub's private inbox.
+// through the `join` shortcut and the canonical `circle join` (every join is
+// private), and confirms each request reached the Hub's private inbox.
 func TestCircleJoin_PrivateWhenOffered(t *testing.T) {
 	admin := adminOrSkip(t)
 	byDefault, byDefaultPub := newMember(t)
@@ -73,8 +72,8 @@ func TestCircleJoin_PrivateWhenOffered(t *testing.T) {
 		f    *fixture
 		args []string
 	}{
-		{"default prefers private", byDefault, []string{"join", *hub.CircleHubToken, "10"}},
-		{"require", required, []string{"circle", "join", *hub.CircleHubToken, "10", "--private=require"}},
+		{"join", byDefault, []string{"join", *hub.CircleHubToken, "10"}},
+		{"circle join", required, []string{"circle", "join", *hub.CircleHubToken, "10"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			stop := countPrivateRequests(t, relay, inbox)
@@ -84,11 +83,10 @@ func TestCircleJoin_PrivateWhenOffered(t *testing.T) {
 				t.Fatalf("join: exit %d\nstderr: %s", res.ExitCode, res.Stderr)
 			}
 			joined := mustDecodeJSON(t, "join", res.Stdout)
-			if p, _ := joined["private"].(bool); !p {
-				t.Errorf("private = %v, want true", joined["private"])
-			}
-			if reason, _ := joined["fallback_reason"].(string); reason != "" {
-				t.Errorf("fallback_reason = %q, want empty", reason)
+			for _, gone := range []string{"private", "fallback_reason"} {
+				if _, ok := joined[gone]; ok {
+					t.Errorf("--json still carries %q: every join is private", gone)
+				}
 			}
 			if seen == 0 {
 				t.Errorf("no private request reached the Hub's inbox %s, though cashctl reported a private join", inbox)

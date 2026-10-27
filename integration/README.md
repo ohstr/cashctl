@@ -66,9 +66,9 @@ or with a real user's own cashctl/ncli state:
   is `network` (NOT_READY, retryable) until published and refreshed. The
   external-provider test publishes to the node's general relay, read from
   `GET /api/info`.
-- `TestCircleJoin_PrivateWhenOffered` — a join by default and one with
-  `--private=require` both go over the private transport, confirmed by a
-  listener on the Hub's inbox, not just by cashctl's own `private: true`.
+- `TestCircleJoin_PrivateWhenOffered` — a join through `join` and one through
+  `circle join` both go over the private transport, confirmed by a listener
+  on the Hub's inbox.
 - `TestCircleJoin_RefusedTerms` / `TestCircleJoin_ExpiredWalletBlocksRejoinUntilDeleted`
   — each join limit (expiry, minimum cap, per-wallet and hub ceilings) maps to
   its exit code and leaves no pending join, and an expired wallet blocks a
