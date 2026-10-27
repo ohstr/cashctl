@@ -6,7 +6,10 @@
 
 # --- fixtures: one mint "agent" per round, swept per agent at teardown -----
 export GOWORK=off
-(cd "${REPO_ROOT}" && go build -o integration/agent-eval/.bin/mint ./integration/agent-eval/mint)
+(cd "${REPO_ROOT}" && go build -o integration/agent-eval/.bin/mint ./integration/agent-eval/mint \
+  && go build -o integration/agent-eval/.bin/cashctl-mint .)
+# mint token mints through `cashctl cash mint` with this build.
+export MINT_CASHCTL="${REPO_ROOT}/integration/agent-eval/.bin/cashctl-mint"
 export MINT_CONFIG="${REPO_ROOT}/integration/config.local.yaml"
 export MINT_STATE="${PWD}/.mint-state/${RUN_ID}"
 export MINT_RUN="agent-eval-${RUN_ID}"

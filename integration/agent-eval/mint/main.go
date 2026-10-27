@@ -31,8 +31,10 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -43,7 +45,6 @@ import (
 	"github.com/ohstr/nmilat/nipcash"
 
 	"github.com/ohstr/cashctl/internal/testmint"
-	nipcashclient "github.com/ohstr/nmilat/nipcash/client"
 	relayclient "github.com/ohstr/nmilat/relay/client"
 	"gopkg.in/yaml.v3"
 )
@@ -66,6 +67,9 @@ const (
 type appRec struct {
 	AppID   uint   `json:"app_id"`
 	Pairing string `json:"pairing,omitempty"`
+	// CashHub is a cash_hub app's cashhub1 connection, what `cashctl cash
+	// mint` takes.
+	CashHub string `json:"cash_hub,omitempty"`
 	Label   string `json:"label,omitempty"`
 	FeePpm  int    `json:"fee_ppm,omitempty"`
 	MinXfer int64  `json:"min_transfer,omitempty"`
@@ -168,36 +172,33 @@ func cmdToken(a *admin, st *state, args []string) {
 			"cashMinTransferMloki":  *minXfer,
 		})
 		must(err)
-		hub = appRec{AppID: resp.ID, Pairing: resp.PairingUri, Label: *label, FeePpm: *feePpm, MinXfer: *minXfer}
+		if resp.CashHubToken == nil || *resp.CashHubToken == "" {
+			fatalf("token: the cash_hub app %d came back without a cashhub1 connection", resp.ID)
+		}
+		hub = appRec{AppID: resp.ID, Pairing: resp.PairingUri, CashHub: *resp.CashHubToken, Label: *label, FeePpm: *feePpm, MinXfer: *minXfer}
 		ag.Hubs[*label] = hub // recorded before funding so a failed fund is still swept
 		saveState(filepath.Join(envOr("MINT_STATE", defaultStateDir), "state.json"), st)
 		must(a.doBody(http.MethodPost, "/api/transfers", map[string]any{"toAppId": resp.ID, "amountLoki": hubFundLoki}, nil))
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
-	defer cancel()
-	client, err := nipcashclient.ConnectCashHub(ctx, hub.Pairing)
-	must(err)
-	defer client.Close()
-
-	var cashTarget *nipcash.CashTarget
-	var target nipcash.Recipient = nipcash.Pubkey(toHex(*forPub))
-	if *cashMode {
-		cashTarget, err = nipcash.NewCashTarget()
-		must(err)
-		target = cashTarget
+	if hub.CashHub == "" {
+		fatalf("token: hub %q was recorded without its cashhub1 connection; use a new --hub label", *label)
 	}
-	res, err := client.MintCash(ctx, nipcash.MintCashParams{
-		Recipients: []nipcash.Allocation{nipcash.Send(target, *amount)},
-		Expiry:     time.Duration(*expires) * time.Second,
-	}, &memJournal{}, "agent-eval")
-	must(err)
+	to := "cash"
+	if !*cashMode {
+		to = toHex(*forPub)
+	}
+	res := cashMint(hub.CashHub, *amount, to, time.Duration(*expires)*time.Second)
 	ag.MintedMloki += *amount
 
 	out := map[string]any{"cash_token": res.CashToken, "hub": *label, "hub_app_id": hub.AppID, "amount_millis": *amount}
 	if *cashMode {
-		out["cash_secret"] = cashTarget.Secret()
-		out["gift"] = res.CashToken + "#" + cashTarget.Secret()
+		token, secret, ok := strings.Cut(res.Handoff, "#")
+		if !ok || token != res.CashToken {
+			fatalf("token: cashctl cash mint returned no cash note")
+		}
+		out["cash_secret"] = secret
+		out["gift"] = res.Handoff
 	}
 	printJSON(out)
 }
@@ -482,6 +483,7 @@ func cmdSweep(a *admin, st *state, args []string) {
 type createResp struct {
 	ID             uint    `json:"id"`
 	PairingUri     string  `json:"pairingUri"`
+	CashHubToken   *string `json:"cashHubToken,omitempty"`
 	CircleHubToken *string `json:"circleHubToken,omitempty"`
 }
 
@@ -648,20 +650,38 @@ func fatalf(f string, a ...any) {
 	os.Exit(1)
 }
 
-// memJournal keeps the mint written ahead for the life of this one command:
-// the harness never recovers a call across runs.
-type memJournal struct{ derived map[string]bool }
-
-func (j *memJournal) WriteAhead(context.Context, []nipcash.PendingCall) error { return nil }
-
-func (j *memJournal) RecordDerived(_ context.Context, id string, _ int64) error {
-	if j.derived == nil {
-		j.derived = map[string]bool{}
-	}
-	j.derived[id] = true
-	return nil
+// cashMintResult is what `cashctl cash mint --json` answers.
+type cashMintResult struct {
+	CashToken string `json:"cash_token"`
+	Handoff   string `json:"handoff"`
 }
 
-func (j *memJournal) DerivedPlaced(_ context.Context, id string) (bool, error) {
-	return j.derived[id], nil
+// cashMint mints through `cashctl cash mint` (MINT_CASHCTL, else cashctl on
+// PATH), the way a user would: the call is written ahead and the returned bill
+// checked by cashctl, from a wallet of the mint service's own under
+// MINT_STATE. The connection goes in CASHCTL_CASH_HUB, never argv.
+func cashMint(cashHub string, amountMillis uint64, to string, expiry time.Duration) cashMintResult {
+	amount := strconv.FormatUint(amountMillis/1000, 10)
+	if frac := amountMillis % 1000; frac != 0 {
+		amount = strings.TrimRight(fmt.Sprintf("%s.%03d", amount, frac), "0")
+	}
+	args := []string{"--config-dir", filepath.Join(envOr("MINT_STATE", defaultStateDir), "cashctl"),
+		"cash", "mint", amount, "--to", to, "--json"}
+	if expiry > 0 {
+		args = append(args, "--expiry", expiry.String())
+	}
+	cmd := exec.Command(envOr("MINT_CASHCTL", "cashctl"), args...)
+	cmd.Env = append(os.Environ(), "CASHCTL_CASH_HUB="+cashHub)
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	stdout, err := cmd.Output()
+	if err != nil {
+		fatalf("token: cashctl cash mint: %v: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	var res cashMintResult
+	must(json.Unmarshal(stdout, &res))
+	if res.CashToken == "" {
+		fatalf("token: cashctl cash mint answered no cash_token: %s", stdout)
+	}
+	return res
 }

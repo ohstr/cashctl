@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/ohstr/nmilat/nip47"
-	"github.com/ohstr/nmilat/nipcash"
 )
 
 // This file proves cashctl's real-world shape: a "lambda" client never
@@ -306,16 +305,9 @@ func TestMultiParty_MixedIdentityModeCashSelection(t *testing.T) {
 	// excluded purely on identity-mode grounds, not because it's too small
 	// to matter.
 	const cashAmount = uint64(15_000)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	cashClient := dialCash(t, ctx, hub.PairingUri)
-	mintResult, err := cashClient.MintCash(ctx, nipcash.MintCashParams{
-		Recipients: []nipcash.Allocation{nipcash.Send(newCashRecipient(t), cashAmount)},
-	})
-	cancel()
-	if err != nil {
-		t.Fatalf("mint_cash (cash): %v", err)
-	}
-	if res := b.run("receive", mintResult.CashToken+"#"+secretFor(mintResult.Recipients[0])); res.ExitCode != 0 {
+	minter := newMinter(t, hub)
+	mintResultToken, mintResultSecret := minter.MustCash(cashAmount)
+	if res := b.run("receive", mintResultToken+"#"+mintResultSecret); res.ExitCode != 0 {
 		t.Fatalf("B receive (cash): exit %d\nstderr: %s", res.ExitCode, res.Stderr)
 	}
 
