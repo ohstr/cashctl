@@ -393,7 +393,14 @@ func replaceCallConfirmed(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, 
 	var mres *nipcash.MintCashResult
 	var wres *nipcash.Payout
 	var sendErr error
-	act, err := nipcashclient.Replace(callContext(ctx), pendingOf(c), j, nipcashclient.ReplaceOptions{
+	pc := pendingOf(c)
+	if c.Method == nipcash.MethodCashWithdraw {
+		// nmilat re-places a withdrawal only with its quote, address and notify.
+		if w, ok, _ := ledger.WithdrawalForCall(c.CallID); ok {
+			pc = withdrawPending(c, w)
+		}
+	}
+	act, err := nipcashclient.Replace(callContext(ctx), pc, j, nipcashclient.ReplaceOptions{
 		Confirmed: confirmed,
 		DerivedEntryExists: func(_ context.Context, id string) (bool, error) {
 			_, ok := l.FindCall(ledger.CallIDFor(id))
@@ -523,6 +530,7 @@ func replaceCallConfirmed(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, 
 	default:
 		// The re-placement's own outcome follows the placement rules.
 		_ = placeErr(cmd, l, j, sendErr, transferVerb(child.Purpose), child.SourceEntryIDs...)
+		finishRefusedWithdrawal(l, derivedID)
 		return "placed again as call " + derivedID
 	}
 }

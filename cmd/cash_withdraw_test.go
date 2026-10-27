@@ -351,3 +351,63 @@ func TestSettleClose_RefusesWithdrawalAndNeedsYes(t *testing.T) {
 		t.Fatalf("--close --json --yes: %v", err)
 	}
 }
+
+// W-2: a withdraw call whose withdrawal row was never written (a stop between
+// the two writes) never went out: settle closes it and frees the bill.
+func TestWithdraw_CallWithoutRowIsNotSent(t *testing.T) {
+	_, entryID := setUpWithdraw(t)
+	l, _ := ledger.Load()
+	device, _ := deviceIDFn()
+	c, err := l.AddCall(ledger.Call{RequestID: strings.Repeat("cd", 32), Method: nipcash.MethodCashWithdraw,
+		State: ledger.CallLookup, DeviceID: device, Deadline: time.Now().Unix() - 1, SourceEntryIDs: []string{entryID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := l.Save(); err != nil {
+		t.Fatal(err)
+	}
+	l = settleNow(t)
+	got, _ := l.FindCall(c.CallID)
+	if got.State != ledger.CallNotApplied {
+		t.Fatalf("call %s/%s, want not_applied", got.State, got.Detail)
+	}
+	if _, open := l.OpenCallFor(entryID); open {
+		t.Error("the bill is still locked")
+	}
+}
+
+// W-3: a re-placement the Hub refuses ends the withdrawal row, not only the
+// call.
+func TestWithdraw_RefusedReplacementEndsRow(t *testing.T) {
+	f, entryID := setUpWithdraw(t)
+	handle := runWithdrawQuote(t)["quote"].(string)
+	f.answer = func(pc nipcash.PendingCall) (*nipcash.Payout, error) {
+		return nil, &nipcashclient.IndeterminateError{Call: pc, Cause: errors.New("no reply")}
+	}
+	if _, err := runWithdrawSend(t, nil, map[string]string{"quote": handle, "yes": "true"}); output.ExitCode(err) != 8 {
+		t.Fatalf("lost reply: %v", err)
+	}
+	l, _ := ledger.Load()
+	c, _ := l.FindCall(ledger.CallIDFor(f.sent[0].RequestID))
+	c.Deadline = time.Now().Unix() - 1
+	_ = l.Save()
+	f.lookup = func(nipcash.PendingCall) (nipcashclient.LookupOutcome, *nipcash.Payout, error) {
+		return nipcashclient.LookupOutcome{Status: nipcash.LookupUnknown}, nil, nil
+	}
+	f.answer = func(nipcash.PendingCall) (*nipcash.Payout, error) {
+		return nil, &nipcashclient.FinalError{Method: nipcash.MethodCashWithdraw, Code: "BAD_REQUEST", Message: "no"}
+	}
+	l = settleNow(t)
+	if len(f.sent) != 2 {
+		pc, _ := l.FindCall(c.CallID)
+		t.Fatalf("sent %d, want a re-placement; parent %s/%s", len(f.sent), pc.State, pc.Detail)
+	}
+	child, _ := l.FindCall(ledger.CallIDFor(f.sent[1].RequestID))
+	w, ok, _ := ledger.WithdrawalForCall(child.CallID)
+	if child.State != ledger.CallNotApplied || !ok || w.State != ledger.WithdrawNotApplied || w.FinishedAt == 0 {
+		t.Errorf("child %s, withdrawal %+v", child.State, w)
+	}
+	if e, _ := l.Find(entryID); e.Status != ledger.StatusHeld {
+		t.Errorf("source %s, want held", e.Status)
+	}
+}

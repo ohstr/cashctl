@@ -25,8 +25,15 @@ func withdrawPending(c *ledger.Call, w ledger.Withdrawal) nipcash.PendingCall {
 // settleWithdrawCall reads one withdrawal and records what the Hub says.
 func settleWithdrawCall(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, device string) string {
 	w, ok, err := ledger.WithdrawalForCall(c.CallID)
-	if err != nil || !ok {
+	if err != nil {
 		return "no withdrawal record"
+	}
+	if !ok {
+		// The row is written before anything is sent: a call without one
+		// stopped between its two writes and never went out.
+		closeCall(l, c, ledger.CallNotApplied, "not sent")
+		_ = l.Save()
+		return "never sent: the bill is still yours"
 	}
 	cred, err := callCredential(cmd, c)
 	if err != nil {
@@ -62,11 +69,21 @@ func settleWithdrawCall(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, de
 		return withdrawalText(w)
 	}
 	summary := applyAction(cmd, l, c, act, device)
-	if c, ok := l.FindCall(c.CallID); ok && c.State == ledger.CallNotApplied {
+	finishRefusedWithdrawal(l, c.CallID)
+	return summary
+}
+
+// finishRefusedWithdrawal ends the withdrawal row of call id once that call is
+// closed not applied (a refusal, or a re-placement the Hub refused).
+func finishRefusedWithdrawal(l *ledger.Ledger, id string) {
+	c, ok := l.FindCall(id)
+	if !ok || c.Method != nipcash.MethodCashWithdraw || c.State != ledger.CallNotApplied {
+		return
+	}
+	if w, ok, _ := ledger.WithdrawalForCall(id); ok && w.FinishedAt == 0 {
 		w.State, w.FinishedAt = ledger.WithdrawNotApplied, time.Now().Unix()
 		_ = ledger.PutWithdrawal(w)
 	}
-	return summary
 }
 
 func newCashWithdrawShowCmd() *cobra.Command {
