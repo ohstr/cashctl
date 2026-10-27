@@ -911,3 +911,43 @@ func TestDoCashConsolidate_CashTargetResultIsLabelledProtected(t *testing.T) {
 		t.Errorf("wallet show label = %q, want %q", got, "cash (protected)")
 	}
 }
+
+// XC-1: a tombstone answer to cash_consolidate answers for sources[0] only. The
+// other sources are live bills the Hub never touched: they stay held, unlocked.
+func TestDoCashConsolidate_TombstoneSpendsOnlyTheFirstSource(t *testing.T) {
+	l, ids, sources := consolidateFixture(t)
+	amt := uint64(1500)
+	e, err := l.Add(ledger.Entry{Token: "dial-c", WalletPubkey: hexWallet("dial-c"), AmountMillis: &amt, IdentityRequired: ptrTo(true)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids = append(ids, e.ID)
+	sources = append(sources, nipcash.Source{WalletPubkey: e.WalletPubkey, Amount: amt, Credential: nipcash.BySigning(strings.Repeat("11", 32))})
+	if err := l.Save(); err != nil {
+		t.Fatal(err)
+	}
+	withFakeAttemptCashConsolidate(t, func(string, []nipcash.Source, nipcash.Target) (*nipcash.CashConsolidateResult, error) {
+		return nil, &nipcash.BillGone{Method: nipcash.MethodCashConsolidate, Tombstone: nipcash.Tombstone{Status: "spent", Reason: "redeemed"}}
+	})
+	_, _, err = doCashConsolidate(&cobra.Command{}, l, []string{"dial-a"}, sources, ids, testTarget(), true)
+	if output.AsCLIError(err).Code != output.CodeSpent {
+		t.Fatalf("err %v, want spent", err)
+	}
+	fresh, err := ledger.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, id := range ids {
+		got, _ := fresh.Find(id)
+		want := ledger.StatusHeld
+		if i == 0 {
+			want = ledger.StatusSpent
+		}
+		if got.Status != want {
+			t.Errorf("source %d status %q, want %q", i, got.Status, want)
+		}
+		if _, open := fresh.OpenCallFor(id); open {
+			t.Errorf("source %d still locked by an open call", i)
+		}
+	}
+}

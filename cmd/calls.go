@@ -24,7 +24,7 @@ import (
 // the ledger before it is sent: the id, the exact deadline, the target, who
 // authorizes it and every secret it generated, read back on a fresh connection.
 // Its outcome then decides the row: a result applies and closes it, BAD_REQUEST
-// closes it not applied, a tombstone closes it and marks the source spent, any
+// closes it not applied, a tombstone closes it and marks the bill it names spent, any
 // other answer — or none — keeps it open to be looked up, and a call never sent
 // is removed. A bill with an open call is never spent again until that call is
 // settled.
@@ -282,13 +282,21 @@ func placeErr(cmd *cobra.Command, l *ledger.Ledger, j *ledgerJournal, err error,
 		}
 		return output.InvalidInputError(cmd, input, fmt.Errorf("the Hub refused this %s as malformed (%s), so nothing moved", verb, output.Sanitize(msg)))
 	case errors.As(err, &gone):
+		// The tombstone answers for the one bill the item names: a transfer's
+		// source, or a consolidate's sources[0]. Every other source is a live
+		// bill the Hub never touched, so it stays held (NIP-CASH §Answer or Omit).
 		closeCall(l, c, ledger.CallNotApplied, "tombstone")
-		for _, id := range ids {
-			if e, ok := l.Find(id); ok {
-				markSpent(l, e)
-			}
+		if len(ids) == 0 {
+			_ = l.Save()
+			return output.SpentError(cmd, input, errBillSpent)
+		}
+		if e, ok := l.Find(ids[0]); ok {
+			markSpent(l, e)
 		}
 		_ = l.Save()
+		if len(ids) > 1 {
+			return output.SpentError(cmd, ids[0], fmt.Errorf("%w (token %s); nothing was %sd, and your other tokens are still yours", errBillSpent, ids[0], verb))
+		}
 		return output.SpentError(cmd, input, errBillSpent)
 	case c != nil && errors.As(err, &indeterminate):
 		c.State, c.UpdatedAt = ledger.CallLookup, time.Now().Unix()

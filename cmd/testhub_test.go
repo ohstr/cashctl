@@ -302,7 +302,12 @@ func answer[T any](c *fakeCaller, pc nipcash.PendingCall, res T, err error) (T, 
 	var zero T
 	var notSent *notSentError
 	var walletErr *relayclient.WalletError
+	var gone *nipcash.BillGone
 	switch {
+	case errors.As(err, &gone):
+		// A tombstone answer: definitive, the named bill is destroyed.
+		c.hooks.published++
+		return zero, err
 	case err == nil:
 		c.hooks.published++
 		// nmilat's post-publish hook (WithAfterPublish).
