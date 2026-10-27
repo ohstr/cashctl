@@ -46,7 +46,8 @@ code/JSON shape against `AGENTS.md`'s own table.
    fixtures — the **same** `../config.local.yaml` the Go integration suite
    uses (see `../README.md`).
 3. `docker` + `docker compose`, and a Go toolchain on this host (used to
-   build cashctl, decode an npub, and mint fixtures through `mint/`, the
+   build cashctl, decode an npub, and mint fixtures through `mint/` (which
+   mints with `cashctl cash mint`, `MINT_CASHCTL`), the
    campaign's quota-enforcing fixture service, swept at teardown; none of
    these ship with, or are imported by, cashctl itself).
 

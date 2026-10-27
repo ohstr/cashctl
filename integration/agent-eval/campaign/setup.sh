@@ -40,7 +40,8 @@ EOF
   cat > "$D/mint" <<EOF
 #!/usr/bin/env bash
 # --agent is appended last so it wins over anything the caller passes.
-export MINT_CONFIG="$ROOT/integration/config.local.yaml" MINT_STATE="$CAMP/state" MINT_RUN="$(basename "$CAMP")"
+export MINT_CONFIG="$ROOT/integration/config.local.yaml" MINT_STATE="$CAMP/state" MINT_RUN="$(basename "$CAMP")" \
+       MINT_CASHCTL="$CAMP/bin/cashctl-real"
 sub="\${1:?usage: mint token|invoice|nwc-wallet|circle-hub|status|sweep ...}"; shift
 exec "$CAMP/bin/mint-real" "\$sub" "\$@" --agent "$A"
 EOF
