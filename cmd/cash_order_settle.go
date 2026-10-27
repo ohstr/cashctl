@@ -71,8 +71,10 @@ func settleOrderCall(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, devic
 		if !o.SawProgress {
 			o.State, o.FinishedAt, o.CheckedAt = ledger.OrderEndedUnpaid, now.Unix(), now.Unix()
 			closeCall(l, c, ledger.CallDone, ledger.OrderEndedUnpaid)
-			_ = l.Save()
-			_ = ledger.PutOrder(o)
+			l.StageOrder(o)
+			if l.Save() != nil {
+				l.DropStagedOrders()
+			}
 			return "ended unpaid: nothing was minted"
 		}
 		o.CheckedAt = now.Unix()

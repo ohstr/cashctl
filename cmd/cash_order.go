@@ -350,10 +350,10 @@ func recordOrder(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, o *ledger
 	} else {
 		c.State, c.Detail, c.UpdatedAt = ledger.CallOpenOrder, string(order.State), now
 	}
+	// The order row commits with the call (O-5).
+	l.StageOrder(*o)
 	if err := l.Save(); err != nil {
-		return false, output.RuntimeError(cmd, err)
-	}
-	if err := ledger.PutOrder(*o); err != nil {
+		l.DropStagedOrders()
 		return false, output.RuntimeError(cmd, err)
 	}
 	return finished, nil
