@@ -80,26 +80,39 @@ func newDeviceID() (string, error) {
 	return hex.EncodeToString(b[:]), nil
 }
 
-// fingerprint is hex sha256(machine id ‖ absolute path ‖ device ‖ inode): it
-// changes when the file is copied, moved to another machine or restored.
+// fingerprint is hex sha256(machine id ‖ resolved path ‖ inode): it changes
+// when the file is copied, moved to another machine or restored, and not when
+// the same file is reached through another spelling of its path (a symlinked
+// $HOME or XDG_CONFIG_HOME). The device number is left out: it can change
+// across container restarts with the file untouched. Where the platform gives
+// no inode, the hostname stands in for it.
 func fingerprint(path string) (string, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return "", err
 	}
-	dev, ino, err := fileIDFn(abs)
+	if real, err := filepath.EvalSymlinks(abs); err == nil {
+		abs = real
+	}
+	_, ino, err := fileIDFn(abs)
 	if err != nil {
 		return "", err
 	}
+	file := fmt.Sprint(ino)
+	if ino == 0 {
+		host, _ := os.Hostname()
+		file = "host:" + host
+	}
 	h := sha256.New()
-	for _, part := range []string{machineIDFn(), abs, fmt.Sprint(dev), fmt.Sprint(ino)} {
+	for _, part := range []string{machineIDFn(), abs, file} {
 		fmt.Fprintf(h, "%d:%s", len(part), part)
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 // machineID names this machine: the systemd or D-Bus machine id where there
-// is one, else the hostname.
+// is one, else nothing. Never the hostname, which changes with the network or
+// each container run while the file stays where it was.
 func machineID() string {
 	for _, p := range []string{"/etc/machine-id", "/var/lib/dbus/machine-id"} {
 		if b, err := os.ReadFile(p); err == nil {
@@ -108,8 +121,7 @@ func machineID() string {
 			}
 		}
 	}
-	host, _ := os.Hostname()
-	return "host:" + host
+	return ""
 }
 
 // machineIDFn and fileIDFn are swapped in tests.
