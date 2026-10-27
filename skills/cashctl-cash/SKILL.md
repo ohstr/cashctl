@@ -534,7 +534,10 @@ print or log `notify`.
 ```sh
 cashctl cash withdraw quote <address> --token <id> --json   # moves nothing: {"quote":"wq-…","payout_millis","fee_millis","sent_by",...}
 cashctl cash withdraw send --quote wq-… --yes --json        # only after the user saw and accepted that quote
-cashctl cash withdraw show --json                            # {"withdrawals":[{"withdrawal","state",...}]}
+cashctl cash withdraw show --json                            # {"withdrawals":[{"withdrawal","state","tx_check",...}]}
+cashctl cash withdraw watch <w> --json                       # until final or cancelled (notices + polling)
+cashctl cash withdraw show <w> --tx --json                   # "tx" only when tx_check is "ok"; never broadcast it yourself unasked
+cashctl decode <quote|receipt|payout JSON or address> --json # withdraw_quote / withdraw_receipt / payout / address
 ```
 
 Never send without showing the quote to the user first: `--json` is not
@@ -544,6 +547,9 @@ protected first (`reason: protect_first`). Exit 8 after `send` means the
 bill is locked and the withdrawal may have happened: never send again —
 `cash withdraw settle` asks the Hub. A payout is never "failed" until it is
 `cancelled`, and then the amount comes back as a new bill (`remint_entry`).
+A refusal with `detail: "quote_expired"` (exit 7) moved nothing: quote
+again and show the new numbers before sending. `recovered: true` is a
+withdrawal found through the Hub that this device had no record of.
 
 ## `cashctl cash settle` — finish what got no answer
 

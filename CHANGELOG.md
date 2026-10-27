@@ -2,6 +2,10 @@
 
 ## [0.7.0-rc.1]
 
+- Adds `cash withdraw watch`, `show --tx` and `--receipt`, re-quoting when a
+  quote expires or the prompt stays open, recovery of a withdrawal this device
+  has no record of, and `decode` of withdraw quotes, receipts, payouts and
+  on-chain addresses; a final withdrawal keeps no address, quote or secret.
 - Adds `cash discover list|show|open|relays|curators`, which finds order links
   and circles listed on Nostr relays, checks one with its Hub when you show it,
   and orders from it or joins it.
