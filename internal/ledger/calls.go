@@ -52,6 +52,9 @@ const (
 	RoleNewIdentity   = "new_identity"
 	RoleRemainder     = "remainder"
 	RoleMintRecipient = "mint_recipient"
+	// RoleInterimKey is the merge key an interim consolidate round targets
+	// (its pubkey is the round's new identity): what spends the merged bill.
+	RoleInterimKey = "interim_key"
 )
 
 // CallSecret is a secret a call generated, with its commitment, which is all

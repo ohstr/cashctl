@@ -1107,8 +1107,25 @@ func attemptCashConsolidate(cmd *cobra.Command, l *ledger.Ledger, dialToken stri
 	first := firstSourceEntry(l, localIDs, sources[0].WalletPubkey)
 	kind, pub, secret := authorizerOf(cmd, first, sources[0].Credential)
 	spec := callSpec{Purpose: purposeConsolidate, SourceEntryIDs: localIDs, AuthorizerKind: kind,
-		AuthorizerPubkey: pub, AuthorizerSecret: secret, TargetCredential: dialToken}
+		AuthorizerPubkey: pub, AuthorizerSecret: secret, TargetCredential: dialToken,
+		InterimKey: mergeKeyFor(l, target)}
 	return placeConsolidate(ctx, cmd, l, caller, spec, nipcash.CashConsolidateParams{Sources: sources, To: target})
+}
+
+// mergeKeyFor is the merge key in the ledger whose pubkey is target (an interim
+// round's target), or "".
+func mergeKeyFor(l *ledger.Ledger, target nipcash.Target) string {
+	if !nipcash.IsPubkeyTarget(target) {
+		return ""
+	}
+	for _, e := range l.Entries {
+		for _, k := range []string{e.ThrowawayKey, e.PendingThrowawayKey} {
+			if k != "" && nipcash.Pubkey(pubOf(k)) == target {
+				return k
+			}
+		}
+	}
+	return ""
 }
 
 // dialledFirst puts the source whose wallet is dialToken's first.

@@ -53,6 +53,9 @@ type callSpec struct {
 	// Chain is the chain the call's Hub runs on, when the target credential is
 	// not a bill whose HRP names it (a mint's cashhub1).
 	Chain string
+	// InterimKey is the merge key whose pubkey the call targets (an interim
+	// consolidate round), kept with the call so a lookup can apply it.
+	InterimKey string
 }
 
 // billCaller places bill-creating calls on one dialled bill. *nipcashclient.Client
@@ -135,6 +138,9 @@ func (j *ledgerJournal) WriteAhead(_ context.Context, calls []nipcash.PendingCal
 				role = ledger.RoleRemainder
 			}
 			c.Secrets = append(c.Secrets, ledger.CallSecret{Role: role, Secret: s.Secret})
+		}
+		if j.spec.InterimKey != "" {
+			c.Secrets = append(c.Secrets, ledger.CallSecret{Role: ledger.RoleInterimKey, Secret: j.spec.InterimKey})
 		}
 		added, err := j.l.AddCall(c)
 		if err != nil {

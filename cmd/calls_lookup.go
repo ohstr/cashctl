@@ -620,6 +620,9 @@ func applyConsolidateResult(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call
 		entry.CashProtection = ledger.CashProtected
 	case req.NewIdentity.IdentityType == "pubkey" && c.AuthorizerKind == ledger.AuthThrowawayKey && pubOf(c.AuthorizerSecret) == req.NewIdentity.IdentityValue:
 		entry.IdentityRequired, entry.ThrowawayKey = ptrTo(true), c.AuthorizerSecret
+	case req.NewIdentity.IdentityType == "pubkey" && callSecretOf(c, ledger.RoleInterimKey) != "" && pubOf(callSecretOf(c, ledger.RoleInterimKey)) == req.NewIdentity.IdentityValue:
+		// An interim round to the merge key, whatever its first source was.
+		entry.IdentityRequired, entry.ThrowawayKey = ptrTo(true), callSecretOf(c, ledger.RoleInterimKey)
 	case req.NewIdentity.IdentityType == "pubkey" && localPubIs(cmd, req.NewIdentity.IdentityValue):
 		entry.IdentityRequired = ptrTo(true)
 	default:
