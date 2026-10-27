@@ -35,20 +35,12 @@ func TestCashReceive_AutoSecuresCashReceipt_NoOtherHoldings(t *testing.T) {
 	hub := setUpCashHub(t, admin)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	cashClient := dialCash(t, ctx, hub.PairingUri)
+	minter := newMinter(t, hub)
 
 	const amountMillis = uint64(60_000)
-	mintResult, err := cashClient.MintCash(ctx, nipcash.MintCashParams{
-		Recipients: []nipcash.Allocation{nipcash.Send(newCashRecipient(t), amountMillis)},
-	})
-	if err != nil {
-		t.Fatalf("mint_cash (cash): %v", err)
-	}
-	if len(mintResult.Recipients) != 1 || secretFor(mintResult.Recipients[0]) == "" {
-		t.Fatalf("mint_cash (cash): expected exactly one recipient with a cash_secret: %+v", mintResult.Recipients)
-	}
-	originalSecret := secretFor(mintResult.Recipients[0])
-	giftString := mintResult.CashToken + "#" + originalSecret
+	mintResultToken, mintResultSecret := minter.MustCash(amountMillis)
+	originalSecret := mintResultSecret
+	giftString := mintResultToken + "#" + originalSecret
 
 	receiveResp := f.mustJSON("receive", giftString)
 	secured, _ := receiveResp["secured"].(map[string]any)
@@ -61,7 +53,7 @@ func TestCashReceive_AutoSecuresCashReceipt_NoOtherHoldings(t *testing.T) {
 
 	// The original secret must now be dead — a direct attempt to spend it
 	// against the Hub must fail.
-	origClient, err := nipcashclient.Connect(ctx, mintResult.CashToken)
+	origClient, err := nipcashclient.Connect(ctx, mintResultToken)
 	if err != nil {
 		t.Fatalf("dial original token: %v", err)
 	}
@@ -114,20 +106,12 @@ func TestWalletProtect_ManuallyProtectsADeclinedCashReceipt(t *testing.T) {
 	hub := setUpCashHub(t, admin)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	cashClient := dialCash(t, ctx, hub.PairingUri)
+	minter := newMinter(t, hub)
 
 	const amountMillis = uint64(45_000)
-	mintResult, err := cashClient.MintCash(ctx, nipcash.MintCashParams{
-		Recipients: []nipcash.Allocation{nipcash.Send(newCashRecipient(t), amountMillis)},
-	})
-	if err != nil {
-		t.Fatalf("mint_cash (cash): %v", err)
-	}
-	if len(mintResult.Recipients) != 1 || secretFor(mintResult.Recipients[0]) == "" {
-		t.Fatalf("mint_cash (cash): expected exactly one recipient with a cash_secret: %+v", mintResult.Recipients)
-	}
-	originalSecret := secretFor(mintResult.Recipients[0])
-	giftString := mintResult.CashToken + "#" + originalSecret
+	mintResultToken, mintResultSecret := minter.MustCash(amountMillis)
+	originalSecret := mintResultSecret
+	giftString := mintResultToken + "#" + originalSecret
 
 	// Decline the automatic protect offer ("n", not a bare Enter — the
 	// prompt's own default is yes; this test is specifically about the
@@ -159,7 +143,7 @@ func TestWalletProtect_ManuallyProtectsADeclinedCashReceipt(t *testing.T) {
 	}
 
 	// The original secret must now be dead.
-	origClient, err := nipcashclient.Connect(ctx, mintResult.CashToken)
+	origClient, err := nipcashclient.Connect(ctx, mintResultToken)
 	if err != nil {
 		t.Fatalf("dial original token: %v", err)
 	}
@@ -236,9 +220,7 @@ func TestCashReceive_AutoSecuresCashReceipt_NeverMergesWithExistingHolding(t *te
 	}
 
 	hub := setUpCashHub(t, admin)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	cashClient := dialCash(t, ctx, hub.PairingUri)
+	minter := newMinter(t, hub)
 
 	const (
 		existingAmount = uint64(30_000)
@@ -256,16 +238,8 @@ func TestCashReceive_AutoSecuresCashReceipt_NeverMergesWithExistingHolding(t *te
 		t.Fatalf("receive (existing pubkey-mode holding): exit %d\nstderr: %s", res.ExitCode, res.Stderr)
 	}
 
-	cashResult, err := cashClient.MintCash(ctx, nipcash.MintCashParams{
-		Recipients: []nipcash.Allocation{nipcash.Send(newCashRecipient(t), cashAmount)},
-	})
-	if err != nil {
-		t.Fatalf("mint_cash (cash, signed): %v", err)
-	}
-	if len(cashResult.Recipients) != 1 || secretFor(cashResult.Recipients[0]) == "" {
-		t.Fatalf("mint_cash (cash, signed): expected exactly one recipient with a cash_secret: %+v", cashResult.Recipients)
-	}
-	decodeResp := f.mustJSON("decode", cashResult.CashToken)
+	cashResultToken, cashResultSecret := minter.MustCash(cashAmount)
+	decodeResp := f.mustJSON("decode", cashResultToken)
 	minter2, valid := decodeResp["minter_pubkey"].(string)
 	if !valid || minter2 == "" {
 		t.Skip("skipping: this Hub did not attach a mint signature to the cash-mode mint")
@@ -274,7 +248,7 @@ func TestCashReceive_AutoSecuresCashReceipt_NeverMergesWithExistingHolding(t *te
 		t.Skipf("skipping: the two tokens' recovered minter pubkeys differ (%s vs %s) — can't exercise same-minter grouping", minter1, minter2)
 	}
 
-	giftString := cashResult.CashToken + "#" + secretFor(cashResult.Recipients[0])
+	giftString := cashResultToken + "#" + cashResultSecret
 	receiveResp := f.mustJSON("receive", giftString)
 	secured, _ := receiveResp["secured"].(map[string]any)
 	if secured == nil {
@@ -320,9 +294,7 @@ func TestCashReceive_AutoSecuresCashReceipt_ExcludesExpiredSiblingFromMerge(t *t
 	}
 
 	hub := setUpCashHub(t, admin) // default 1h ceiling — plenty for the fresh gift
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	cashClient := dialCash(t, ctx, hub.PairingUri)
+	minter := newMinter(t, hub)
 
 	const (
 		existingAmount = uint64(20_000)
@@ -345,16 +317,8 @@ func TestCashReceive_AutoSecuresCashReceipt_ExcludesExpiredSiblingFromMerge(t *t
 
 	// Minted AFTER the wait: the fresh gift itself must stay healthy, only
 	// the existing sibling is expired.
-	cashResult, err := cashClient.MintCash(ctx, nipcash.MintCashParams{
-		Recipients: []nipcash.Allocation{nipcash.Send(newCashRecipient(t), cashAmount)},
-	})
-	if err != nil {
-		t.Fatalf("mint_cash (cash, signed): %v", err)
-	}
-	if len(cashResult.Recipients) != 1 || secretFor(cashResult.Recipients[0]) == "" {
-		t.Fatalf("mint_cash (cash, signed): expected exactly one recipient with a cash_secret: %+v", cashResult.Recipients)
-	}
-	decodeResp := f.mustJSON("decode", cashResult.CashToken)
+	cashResultToken, cashResultSecret := minter.MustCash(cashAmount)
+	decodeResp := f.mustJSON("decode", cashResultToken)
 	minter2, valid := decodeResp["minter_pubkey"].(string)
 	if !valid || minter2 == "" {
 		t.Skip("skipping: this Hub did not attach a mint signature to the cash-mode mint")
@@ -363,7 +327,7 @@ func TestCashReceive_AutoSecuresCashReceipt_ExcludesExpiredSiblingFromMerge(t *t
 		t.Skipf("skipping: the two tokens' recovered minter pubkeys differ (%s vs %s) — can't exercise same-minter grouping", minter1, minter2)
 	}
 
-	giftString := cashResult.CashToken + "#" + secretFor(cashResult.Recipients[0])
+	giftString := cashResultToken + "#" + cashResultSecret
 	receiveResp := f.mustJSON("receive", giftString)
 	secured, _ := receiveResp["secured"].(map[string]any)
 	if secured == nil {

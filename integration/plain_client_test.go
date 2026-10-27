@@ -53,16 +53,25 @@ func newIdentity(t *testing.T) (privHex, pubHex string) {
 
 // mintTwoRecipientBill mints one bill split between two pubkey identities and
 // returns its token. Two recipients is the minimum shape in which "you see your
-// own slice" is distinguishable from "you see everything".
+// own slice" is distinguishable from "you see everything". `cash mint` mints to
+// one recipient, so this one stays on the SDK.
 func mintTwoRecipientBill(t *testing.T, hub adminCreateAppResponse, pubA, pubB string, amountA, amountB uint64) string {
 	t.Helper()
 	return retryEphemeralNWC(t, "mint_cash", func(ctx context.Context) (string, error) {
-		result, err := dialCash(t, ctx, hub.PairingUri).MintCash(ctx, nipcash.MintCashParams{
+		if hub.CashHubToken == nil {
+			t.Fatalf("the cash_hub app %d has no cashhub1 connection", hub.ID)
+		}
+		c, err := nipcashclient.ConnectCashHub(ctx, *hub.CashHubToken)
+		if err != nil {
+			return "", err
+		}
+		defer c.Close()
+		result, err := c.MintCash(ctx, nipcash.MintCashParams{
 			Recipients: []nipcash.Allocation{
 				nipcash.Send(nipcash.Pubkey(pubA), amountA),
 				nipcash.Send(nipcash.Pubkey(pubB), amountB),
 			},
-		})
+		}, &memJournal{}, "integration")
 		if err != nil {
 			return "", err
 		}

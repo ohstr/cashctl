@@ -29,8 +29,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/ohstr/nmilat/nipcash"
 )
 
 // shortCashExpirySecs is short enough to expire mid-test (mint -> receive
@@ -57,16 +55,8 @@ func waitPastCashExpiry() { time.Sleep(9 * time.Second) }
 func mintPubkeyTokenExpiry(t *testing.T, hub adminCreateAppResponse, pubkeyHex string, amountMillis uint64, expirySecs int) string {
 	t.Helper()
 	what := fmt.Sprintf("mint_cash (expiry=%ds)", expirySecs)
-	return retryEphemeralNWC(t, what, func(ctx context.Context) (string, error) {
-		cashClient := dialCash(t, ctx, hub.PairingUri)
-		result, err := cashClient.MintCash(ctx, nipcash.MintCashParams{
-			Recipients: []nipcash.Allocation{nipcash.Send(nipcash.Pubkey(pubkeyHex), amountMillis)},
-			Expiry:     time.Duration(expirySecs) * time.Second,
-		})
-		if err != nil {
-			return "", err
-		}
-		return result.CashToken, nil
+	return retryEphemeralNWC(t, what, func(context.Context) (string, error) {
+		return newMinter(t, hub).To(pubkeyHex, amountMillis, time.Duration(expirySecs)*time.Second)
 	})
 }
 
@@ -80,19 +70,13 @@ func mintPubkeyTokenExpiry(t *testing.T, hub adminCreateAppResponse, pubkeyHex s
 // auto-consolidate path needs MintSignature: true on both mints.
 func mintSignedPubkeyTokenExpiry(t *testing.T, f *fixture, hub adminCreateAppResponse, pubkeyHex string, amountMillis uint64, expirySecs int) (token, minterPubkeyHex string, ok bool) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	cashClient := dialCash(t, ctx, hub.PairingUri)
-	result, err := cashClient.MintCash(ctx, nipcash.MintCashParams{
-		Recipients: []nipcash.Allocation{nipcash.Send(nipcash.Pubkey(pubkeyHex), amountMillis)},
-		Expiry:     time.Duration(expirySecs) * time.Second,
-	})
+	token, err := newMinter(t, hub).To(pubkeyHex, amountMillis, time.Duration(expirySecs)*time.Second)
 	if err != nil {
-		t.Fatalf("mint_cash (expiry=%ds, MintSignature: true): %v", expirySecs, err)
+		t.Fatalf("cash mint (expiry=%ds): %v", expirySecs, err)
 	}
-	decodeResp := f.mustJSON("decode", result.CashToken)
+	decodeResp := f.mustJSON("decode", token)
 	minter, valid := decodeResp["minter_pubkey"].(string)
-	return result.CashToken, minter, valid && minter != ""
+	return token, minter, valid && minter != ""
 }
 
 // nwcCodeFromError parses stderr as cashctl's --json error shape and

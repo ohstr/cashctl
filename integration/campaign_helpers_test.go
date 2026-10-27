@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/ohstr/nmilat/nip47"
-	"github.com/ohstr/nmilat/nipcash"
 )
 
 // adminOrSkip is the standard "needs a live lokihub" preamble: loads the
@@ -33,18 +32,12 @@ func adminOrSkip(t *testing.T) *adminClient {
 // "<token>#<cash_secret>" gift string, the form `cashctl receive` takes.
 func mintCashGift(t *testing.T, hub adminCreateAppResponse, amountMillis uint64) string {
 	t.Helper()
-	return retryEphemeralNWC(t, "mint_cash (cash)", func(ctx context.Context) (string, error) {
-		cashClient := dialCash(t, ctx, hub.PairingUri)
-		result, err := cashClient.MintCash(ctx, nipcash.MintCashParams{
-			Recipients: []nipcash.Allocation{nipcash.Send(newCashRecipient(t), amountMillis)},
-		})
+	return retryEphemeralNWC(t, "cash mint (cash)", func(context.Context) (string, error) {
+		token, secret, err := newMinter(t, hub).Cash(amountMillis)
 		if err != nil {
 			return "", err
 		}
-		if len(result.Recipients) != 1 || secretFor(result.Recipients[0]) == "" {
-			t.Fatalf("mint_cash (cash): expected exactly one recipient with a cash_secret: %+v", result.Recipients)
-		}
-		return result.CashToken + "#" + secretFor(result.Recipients[0]), nil
+		return token + "#" + secret, nil
 	})
 }
 

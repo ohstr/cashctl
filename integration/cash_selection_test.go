@@ -3,11 +3,7 @@
 package integration
 
 import (
-	"context"
 	"testing"
-	"time"
-
-	"github.com/ohstr/nmilat/nipcash"
 )
 
 // mintSignedPubkeyTokenFromHub mints a pubkey-mode token from hub with
@@ -19,18 +15,13 @@ import (
 // was honored.
 func mintSignedPubkeyTokenFromHub(t *testing.T, f *fixture, hub adminCreateAppResponse, pubkeyHex string, amountMillis uint64) (token string, minterPubkeyHex string, ok bool) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	cashClient := dialCash(t, ctx, hub.PairingUri)
-	result, err := cashClient.MintCash(ctx, nipcash.MintCashParams{
-		Recipients: []nipcash.Allocation{nipcash.Send(nipcash.Pubkey(pubkeyHex), amountMillis)},
-	})
+	token, err := newMinter(t, hub).To(pubkeyHex, amountMillis, 0)
 	if err != nil {
-		t.Fatalf("mint_cash (MintSignature: true): %v", err)
+		t.Fatalf("cash mint: %v", err)
 	}
-	decodeResp := f.mustJSON("decode", result.CashToken)
+	decodeResp := f.mustJSON("decode", token)
 	minter, valid := decodeResp["minter_pubkey"].(string)
-	return result.CashToken, minter, valid && minter != ""
+	return token, minter, valid && minter != ""
 }
 
 // TestCashTransfer_CashSelection_ExactMatch covers docs/ux-review.md Part

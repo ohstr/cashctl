@@ -18,6 +18,14 @@ its first n request publishes with `CASHCTL_DROP_PUBLISHES=n`) and uses `GOWORK=
 pinned in `go.mod`; set `CASHCTL_INTEGRATION_GOWORK=<path>` to build it
 against a private `go.work` instead.
 
+Bills are minted the way a user would: `cashctl cash mint` over the test
+Hub's `cashhub1` connection (`cashHubToken` from the admin API, passed in
+`CASHCTL_CASH_HUB`), from a fixture of its own (`newMinter` in
+`live_mint_test.go`: `Cash` for a cash note, `To` for a pubkey bill). Only
+`mintTwoRecipientBill` (`plain_client_test.go`) still mints through the SDK,
+because `cash mint` mints to one recipient; a few tests also drive
+`cash_transfer` through the SDK to set up a state cashctl itself never makes.
+
 ## Setup
 
 1. Copy `config.local.yaml.example` to `config.local.yaml` (gitignored —

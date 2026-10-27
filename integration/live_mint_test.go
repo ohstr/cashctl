@@ -4,26 +4,91 @@ package integration
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/ohstr/nmilat/nipIC"
 	"github.com/ohstr/nmilat/nipcash"
-	nipcashclient "github.com/ohstr/nmilat/nipcash/client"
 )
 
-// liveCashHub mints on a live Hub over its cashhub1 connection. The Hub now
-// takes only caller-made cash secrets and a written-ahead request id, so the
-// suite keeps an in-memory journal and remembers each secret it generated.
-type liveCashHub struct {
+// cliMinter mints on a live Hub the way a user would: `cashctl cash mint`
+// over the Hub's cashhub1 connection (kept out of argv in CASHCTL_CASH_HUB),
+// from a fixture of its own so the minting wallet never mixes with the one
+// under test. cashctl writes each mint ahead and checks the bill it gets back.
+type cliMinter struct {
 	t   *testing.T
-	hub *nipcashclient.HubClient
+	f   *fixture
+	hub string
 }
 
-// MintCash mints p as a test caller would, written ahead to a memory journal.
-func (h *liveCashHub) MintCash(ctx context.Context, p nipcash.MintCashParams) (*nipcash.MintCashResult, error) {
-	h.t.Helper()
-	return h.hub.MintCash(ctx, p, &memJournal{}, "integration")
+// newMinter is a minter for the Hub hub created (its cashHubToken).
+func newMinter(t *testing.T, hub adminCreateAppResponse) *cliMinter {
+	t.Helper()
+	if hub.CashHubToken == nil || *hub.CashHubToken == "" {
+		t.Fatalf("the cash_hub app %d has no cashhub1 connection", hub.ID)
+	}
+	return &cliMinter{t: t, f: newFixture(t), hub: *hub.CashHubToken}
+}
+
+// mint runs `cash mint` and returns its --json answer.
+func (m *cliMinter) mint(millis uint64, to string, expiry time.Duration) (map[string]any, error) {
+	m.t.Helper()
+	args := []string{"cash", "mint", lokiArg(int64(millis)), "--to", to, "--json"} //nolint:gosec // test amounts fit
+	if expiry > 0 {
+		args = append(args, "--expiry", expiry.String())
+	}
+	res := m.f.runWith([]string{"CASHCTL_CASH_HUB=" + m.hub}, "", args...)
+	if res.ExitCode != 0 {
+		return nil, fmt.Errorf("cashctl cash mint: exit %d: %s", res.ExitCode, strings.TrimSpace(res.Stderr))
+	}
+	var out map[string]any
+	if err := json.Unmarshal([]byte(res.Stdout), &out); err != nil {
+		return nil, fmt.Errorf("cashctl cash mint: %v: %s", err, res.Stdout)
+	}
+	return out, nil
+}
+
+// Cash mints a cash note and returns its token and secret.
+func (m *cliMinter) Cash(millis uint64) (token, secret string, err error) {
+	m.t.Helper()
+	out, err := m.mint(millis, "cash", 0)
+	if err != nil {
+		return "", "", err
+	}
+	handoff, _ := out["handoff"].(string)
+	token, secret, ok := strings.Cut(handoff, "#")
+	if !ok || secret == "" {
+		return "", "", fmt.Errorf("cashctl cash mint: no cash note in %v", out)
+	}
+	return token, secret, nil
+}
+
+// MustCash is Cash, failing the test.
+func (m *cliMinter) MustCash(millis uint64) (token, secret string) {
+	m.t.Helper()
+	token, secret, err := m.Cash(millis)
+	if err != nil {
+		m.t.Fatalf("mint a cash note: %v", err)
+	}
+	return token, secret
+}
+
+// To mints a bill for pubkey (hex) and returns its token; expiry 0 is the Hub's.
+func (m *cliMinter) To(pubkey string, millis uint64, expiry time.Duration) (string, error) {
+	m.t.Helper()
+	out, err := m.mint(millis, pubkey, expiry)
+	if err != nil {
+		return "", err
+	}
+	token, _ := out["cash_token"].(string)
+	if token == "" {
+		return "", fmt.Errorf("cashctl cash mint: no cash_token in %v", out)
+	}
+	return token, nil
 }
 
 // memJournal is a Journal that keeps calls for the life of one test: the suite
@@ -57,31 +122,15 @@ func (j *memJournal) DerivedPlaced(_ context.Context, id string) (bool, error) {
 	return j.derived[id], nil
 }
 
-var (
-	cashSecretsMu sync.Mutex
-	cashSecrets   = map[string]string{} // commitment → secret
-)
-
-// newCashRecipient is a cash-mode mint recipient: a secret made here, whose
-// commitment is all the Hub sees. secretFor finds it again from the result.
+// newCashRecipient is a cash-mode target made here, for the SDK-level
+// transfers a few tests drive by hand.
 func newCashRecipient(t *testing.T) *nipcash.CashTarget {
 	t.Helper()
 	ct, err := nipcash.NewCashTarget()
 	if err != nil {
 		t.Fatal(err)
 	}
-	cashSecretsMu.Lock()
-	cashSecrets[ct.Commitment()] = ct.Secret()
-	cashSecretsMu.Unlock()
 	return ct
-}
-
-// secretFor is the secret of a cash-mode recipient row newCashRecipient made,
-// "" for any other row.
-func secretFor(r nipcash.RecipientResult) string {
-	cashSecretsMu.Lock()
-	defer cashSecretsMu.Unlock()
-	return cashSecrets[r.IdentityValue]
 }
 
 // mustConnKey is a canonical ConnectionKey, failing the test for input the
