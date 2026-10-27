@@ -31,6 +31,8 @@ type fakeOrderHub struct {
 	placed []nipcash.PendingCall
 	// writtenBeforeSend: the call and its order row were on disk when sent.
 	writtenBeforeSend bool
+	// refuse fails Place before anything is written or sent.
+	refuse error
 }
 
 func (f *fakeOrderHub) Terms(context.Context) (*nipCO.Terms, error) { return &f.terms, nil }
@@ -38,6 +40,9 @@ func (f *fakeOrderHub) Network() string                             { return "ma
 func (f *fakeOrderHub) Close()                                      {}
 
 func (f *fakeOrderHub) Place(ctx context.Context, p nipCO.CashOrderParams, j nipcashclient.Journal, device string) (*nipCO.Order, error) {
+	if f.refuse != nil {
+		return nil, f.refuse
+	}
 	if p.RequestID == "" {
 		p.RequestID, _ = nipcash.NewRequestID()
 	}
@@ -424,5 +429,37 @@ func TestOrder_RecoveredShowsWhatToPay(t *testing.T) {
 	text, errText := captureStreams(t, func() { err = showOrders(c, nil, true) })
 	if err != nil || !strings.Contains(text, "lnfc1invoice") || !strings.Contains(text, " by ") || !strings.Contains(errText, "Warning:") {
 		t.Errorf("recovered order text %q / %q (%v)", text, errText, err)
+	}
+}
+
+// O-8, O-7: --replace is refused from another copy of the wallet; a
+// re-placement that fails before anything is sent ends the order as
+// not_placed instead of leaving it stuck.
+func TestOrder_ReplaceDeviceAndNotSent(t *testing.T) {
+	f, conn := setUpOrderHub(t)
+	f.answer = func(pc nipcash.PendingCall) error {
+		return &nipcashclient.IndeterminateError{Call: pc, Cause: errors.New("no reply")}
+	}
+	_, _ = placeOrder(t, conn, "100")
+	o, c := onlyOrder(t)
+	l, _ := ledger.Load()
+	call, _ := l.FindCall(c.CallID)
+	call.State, call.Detail = ledger.CallStuck, "confirm_replace"
+	call.DeviceID = "other-device"
+	_ = l.Save()
+	if err := settleOrders(t, map[string]string{"replace": o.OrderID, "yes": "true"}); output.ExitCode(err) != 5 || len(f.placed) != 1 {
+		t.Fatalf("--replace from another device: %v, placed %d", err, len(f.placed))
+	}
+	l, _ = ledger.Load()
+	call, _ = l.FindCall(c.CallID)
+	call.DeviceID, _ = deviceIDFn()
+	_ = l.Save()
+	f.answer, f.refuse = nil, errors.New("relay down")
+	if err := settleOrders(t, map[string]string{"replace": o.OrderID, "yes": "true"}); err == nil {
+		t.Fatal("a failed re-placement reported success")
+	}
+	o, c = onlyOrder(t)
+	if o.State != ledger.OrderNotPlaced || o.FinishedAt == 0 || c.State != ledger.CallNotApplied {
+		t.Errorf("after a failed re-placement: order %s, call %s/%s", o.State, c.State, c.Detail)
 	}
 }

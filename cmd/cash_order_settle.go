@@ -362,14 +362,13 @@ func replaceOrderByUser(cmd *cobra.Command, l *ledger.Ledger, id, device string)
 	if !ok || c.State != ledger.CallStuck || c.Detail != "confirm_replace" {
 		return output.ConflictError(cmd, id, errors.New("only an order the Hub says was never placed can be placed again — run `cashctl cash order settle` first"))
 	}
+	if c.DeviceID != device {
+		return output.FinalConflictError(cmd, id, errors.New("this order was placed from another copy of this wallet; only that copy can place it again"))
+	}
 	jsonMode, _ := cmd.Flags().GetBool("json")
 	yes, _ := cmd.Flags().GetBool("yes")
 	if jsonMode && !yes {
 		return output.UsageError(cmd, errors.New("placing an order again asks for a new payment: pass --yes"))
-	}
-	if !Confirm(cmd, false, "The Hub says this order was never placed. Place it again? It will ask for a new payment") {
-		output.Println("Cancelled.")
-		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
@@ -378,6 +377,25 @@ func replaceOrderByUser(cmd *cobra.Command, l *ledger.Ledger, id, device string)
 		return output.NetworkError(cmd, err)
 	}
 	defer hub.Close()
+	// The terms are read again and shown before the question.
+	terms, err := hub.Terms(ctx)
+	if err != nil {
+		return output.NetworkError(cmd, fmt.Errorf("couldn't read the Hub's terms; nothing was sent: %w", err))
+	}
+	k := terms.Kind(o.Payment)
+	if k == nil {
+		return output.WithReason(output.AuthError(cmd, errors.New("the Hub no longer sells this kind of order; nothing was sent")), reasonNotSelling)
+	}
+	fee, pay, err := nipCO.OrderFee(o.Payment, *k, o.AmountMillis)
+	if err != nil {
+		return output.InvalidInputError(cmd, id, err)
+	}
+	output.Notef(jsonMode, "Order again: amount %s, order fee %s, you pay %s (%s), within %s", output.FormatAmount(int64(o.AmountMillis)), //nolint:gosec // amounts fit
+		output.FormatAmount(int64(fee)), output.FormatAmount(int64(pay)), o.Payment, (time.Duration(k.Window) * time.Second).String()) //nolint:gosec // amounts fit
+	if !Confirm(cmd, false, "The Hub says this order was never placed. Place it again? It will ask for a new payment") {
+		output.Println("Cancelled.")
+		return nil
+	}
 	notify, err := nipCO.NewNotify()
 	if err != nil {
 		return output.RuntimeError(cmd, err)
@@ -408,7 +426,13 @@ func replaceOrderByUser(cmd *cobra.Command, l *ledger.Ledger, id, device string)
 		_ = l.Save()
 		return printOrderState(cmd, o)
 	case child == nil || child.CallID == parentID:
-		return output.RuntimeError(cmd, fmt.Errorf("not placed again: %v", err))
+		// Nothing went out under the derived id, which is now taken: the order
+		// ends here, never stuck between the two calls.
+		closeCall(l, parent, ledger.CallNotApplied, "not placed again")
+		o.State, o.FinishedAt, o.CheckedAt = ledger.OrderNotPlaced, time.Now().Unix(), time.Now().Unix()
+		_ = l.Save()
+		_ = ledger.PutOrder(o)
+		return output.RuntimeError(cmd, fmt.Errorf("not placed again (%v); nothing was sent and nothing is owed — place a new order with `cashctl cash order place`", err))
 	}
 	parent.State, parent.Detail = ledger.CallReplaced, "replaced by call "+child.CallID
 	_ = l.Save()
