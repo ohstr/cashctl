@@ -1,8 +1,10 @@
 // Package store manages cashctl's single local SQLite database, cashctl.db.
 //
-// The schema is version 2, created fresh: there is no migration from any
-// earlier cashctl, and a database without schema_version 2 is refused, never
-// read (nothing earlier was in production).
+// The schema is version 3, created fresh: there is no migration from any
+// earlier cashctl, and a database without schema_version 3 is refused, never
+// read (nothing earlier was in production). Version 2 was only ever written by
+// pre-release builds, which lacked the join, withdrawal and discover columns
+// and tables this version has.
 package store
 
 import (
@@ -20,7 +22,7 @@ import (
 )
 
 // SchemaVersion is the only schema this cashctl reads or writes.
-const SchemaVersion = "2"
+const SchemaVersion = "3"
 
 // schema is created once, in an empty database, together with
 // meta(schema_version).
@@ -353,7 +355,7 @@ func enableWAL(db *sql.DB) {
 }
 
 // Open opens cashctl's single local database, cashctl.db, under appdir.Dir(),
-// creating the version-2 schema in a new or empty file and refusing any other
+// creating the version-3 schema in a new or empty file and refusing any other
 // (ErrOldDatabase). It also checks this file's device record (EnsureDevice).
 // Callers own the returned *sql.DB and must Close it. 0600: it holds a
 // plaintext identity key and cash-mode spending secrets.

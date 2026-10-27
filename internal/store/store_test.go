@@ -128,7 +128,7 @@ func TestOpen_CreatesSchemaVersion2(t *testing.T) {
 	for _, table := range []string{"device", "pending_calls", "call_secrets", "derived_ids", "entries", "connections"} {
 		var n int
 		if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&n); err != nil || n != 1 {
-			t.Errorf("table %s missing from the v2 schema", table)
+			t.Errorf("table %s missing from the v3 schema", table)
 		}
 	}
 }
@@ -139,6 +139,7 @@ func TestOpen_RefusesAnEarlierDatabase(t *testing.T) {
 	for name, setup := range map[string]string{
 		"rc.17 schema, no meta": `CREATE TABLE entries (id TEXT PRIMARY KEY, token TEXT); INSERT INTO entries VALUES ('tok-1', 'lokicash1x')`,
 		"meta of version 1":     `CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL); INSERT INTO meta VALUES ('schema_version', '1')`,
+		"pre-release version 2": `CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL); INSERT INTO meta VALUES ('schema_version', '2')`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			withTempConfigDir(t)
