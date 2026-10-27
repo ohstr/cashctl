@@ -309,3 +309,45 @@ func TestWithdraw_CancelNotDue(t *testing.T) {
 		t.Errorf("cancel: %v", err)
 	}
 }
+
+// W-1: `cash settle --close` never closes a withdrawal (its payout is still
+// followed and its re-mint secret still needed), even with --json --yes; and
+// --close of any other call under --json needs --yes.
+func TestSettleClose_RefusesWithdrawalAndNeedsYes(t *testing.T) {
+	f, _ := setUpWithdraw(t)
+	handle := runWithdrawQuote(t)["quote"].(string)
+	if _, err := runWithdrawSend(t, nil, map[string]string{"quote": handle, "yes": "true"}); err != nil {
+		t.Fatal(err)
+	}
+	l, _ := ledger.Load()
+	c, _ := l.FindCall(ledger.CallIDFor(f.sent[0].RequestID))
+	var err error
+	captureStreams(t, func() { err = closeCallByUser(testCmdWithFlags(true, true), l, c.CallID, "dev", true) })
+	if output.ExitCode(err) != 2 || !strings.Contains(err.Error(), "cash withdraw show") {
+		t.Fatalf("close of an open withdrawal: %v", err)
+	}
+	l, _ = ledger.Load()
+	c, _ = l.FindCall(c.CallID)
+	if c.State != ledger.CallOpenWithdraw || callSecretOf(c, ledger.RoleRemint) == "" {
+		t.Fatalf("withdrawal call changed: %s, remint kept %v", c.State, callSecretOf(c, ledger.RoleRemint) != "")
+	}
+
+	// A plain open call: --json alone is not consent.
+	c2, err := l.AddCall(ledger.Call{RequestID: strings.Repeat("ab", 32), Method: nipcash.MethodCashTransfer,
+		State: ledger.CallLookup, DeviceID: "dev", Deadline: time.Now().Unix() + 60})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := l.Save(); err != nil {
+		t.Fatal(err)
+	}
+	l, _ = ledger.Load()
+	captureStreams(t, func() { err = closeCallByUser(testCmdWithFlags(true, false), l, c2.CallID, "dev", true) })
+	if output.ExitCode(err) != 2 {
+		t.Fatalf("--close under --json without --yes: %v", err)
+	}
+	captureStreams(t, func() { err = closeCallByUser(testCmdWithFlags(true, true), l, c2.CallID, "dev", true) })
+	if err != nil {
+		t.Fatalf("--close --json --yes: %v", err)
+	}
+}

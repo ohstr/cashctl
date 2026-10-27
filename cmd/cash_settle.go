@@ -29,7 +29,8 @@ never twice), one it refused is closed with its reason. Nothing is resent
 under its own id. Exit 0 when nothing placed from this wallet file is still
 open, else 8.
 
---close <call> gives up on one call (its new codes are printed: keep them).
+--close <call> gives up on one call (its new codes are printed: keep them);
+not a withdrawal or an answered order, and under --json only with --yes.
 --wait keeps asking, up to 6 minutes, until nothing is due.`,
 		Example: `  cashctl cash settle
   cashctl cash settle --wait
@@ -211,6 +212,24 @@ func reportSettle(cmd *cobra.Command, l *ledger.Ledger, settled []settledCall, j
 
 // closeCallByUser gives up on one call. Its generated secrets are printed
 // first: once closed, cashctl stops asking about it.
+// refuseUserClose keeps `--close` off calls whose keys are still needed: a
+// withdrawal (its payout is followed, and a cancelled payout is re-minted to
+// its remint secret) and an answered order (later bills are fetched with its
+// buyer key). Those are followed by their own commands.
+func refuseUserClose(cmd *cobra.Command, c *ledger.Call) error {
+	switch {
+	case c.Method == nipcash.MethodCashWithdraw && (c.State == ledger.CallOpenWithdraw || callSecretOf(c, ledger.RoleRemint) != ""):
+		next := "`cashctl cash withdraw settle`"
+		if w, ok, _ := ledger.WithdrawalForCall(c.CallID); ok {
+			next = fmt.Sprintf("`cashctl cash withdraw show %s` (or `cash withdraw cancel %s`)", w.WithdrawalID, w.WithdrawalID)
+		}
+		return output.UsageError(cmd, fmt.Errorf("call %s is a withdrawal: its payout and re-mint code are still needed, so it can't be closed here — follow it with %s", c.CallID, next))
+	case c.Method == nipcash.MethodCashOrder && c.State == ledger.CallOpenOrder:
+		return output.UsageError(cmd, fmt.Errorf("call %s is an order the Hub answered: its key fetches the order's bills, so it can't be closed here — follow it with `cashctl cash order show`", c.CallID))
+	}
+	return nil
+}
+
 func closeCallByUser(cmd *cobra.Command, l *ledger.Ledger, id, device string, jsonMode bool) error {
 	c, ok := l.FindCall(id)
 	if !ok {
@@ -218,6 +237,12 @@ func closeCallByUser(cmd *cobra.Command, l *ledger.Ledger, id, device string, js
 	}
 	if !c.Open() {
 		return output.ConflictError(cmd, id, fmt.Errorf("call %s is already %s", id, c.State))
+	}
+	if err := refuseUserClose(cmd, c); err != nil {
+		return err
+	}
+	if yes, _ := cmd.Flags().GetBool("yes"); jsonMode && !yes {
+		return output.UsageError(cmd, errors.New("closing a call gives up on its answer: pass --yes"))
 	}
 	recovery := callRecovery(c)
 	if !Confirm(cmd, false, fmt.Sprintf("Stop asking about call %s? If it happened, its result is only reachable with the codes printed below.", id)) {
