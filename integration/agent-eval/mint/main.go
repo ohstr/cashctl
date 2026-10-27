@@ -15,7 +15,8 @@
 //	mint sweep       [--agent A]
 //
 // Env: MINT_CONFIG (default integration/config.local.yaml), MINT_STATE
-// (default ./mint-state), MINT_RUN (name prefix tag, default "run").
+// (default integration/agent-eval/.state, gitignored), MINT_RUN (name prefix
+// tag, default "run").
 package main
 
 import (
@@ -86,6 +87,10 @@ type admin struct {
 	base, token string
 }
 
+// defaultStateDir is where the minted fixtures' state lives when MINT_STATE is
+// unset: inside the agent-eval tree, gitignored, never at the repo root.
+const defaultStateDir = "integration/agent-eval/.state"
+
 func main() {
 	if len(os.Args) < 2 {
 		fatalf("usage: mint token|invoice|nwc-wallet|circle-hub|fake|status|sweep [flags]")
@@ -95,7 +100,7 @@ func main() {
 	cfg := loadConfig()
 	a := &admin{base: strings.TrimRight(cfg.AdminAPI.BaseURL, "/"), token: cfg.AdminAPI.Token}
 
-	stateDir := envOr("MINT_STATE", "mint-state")
+	stateDir := envOr("MINT_STATE", defaultStateDir)
 	must(os.MkdirAll(stateDir, 0o700))
 	unlock := lock(filepath.Join(stateDir, "lock"))
 	defer unlock()
@@ -166,7 +171,7 @@ func cmdToken(a *admin, st *state, args []string) {
 		must(err)
 		hub = appRec{AppID: resp.ID, Pairing: resp.PairingUri, Label: *label, FeePpm: *feePpm, MinXfer: *minXfer}
 		ag.Hubs[*label] = hub // recorded before funding so a failed fund is still swept
-		saveState(filepath.Join(envOr("MINT_STATE", "mint-state"), "state.json"), st)
+		saveState(filepath.Join(envOr("MINT_STATE", defaultStateDir), "state.json"), st)
 		must(a.doBody(http.MethodPost, "/api/transfers", map[string]any{"toAppId": resp.ID, "amountLoki": hubFundLoki}, nil))
 	}
 
@@ -254,7 +259,7 @@ func cmdWallet(a *admin, st *state, args []string) {
 	resp, err := a.createApp(req)
 	must(err)
 	ag.Wallets = append(ag.Wallets, appRec{AppID: resp.ID, Pairing: resp.PairingUri, Label: *kind})
-	saveState(filepath.Join(envOr("MINT_STATE", "mint-state"), "state.json"), st)
+	saveState(filepath.Join(envOr("MINT_STATE", defaultStateDir), "state.json"), st)
 	if fund {
 		must(a.doBody(http.MethodPost, "/api/transfers", map[string]any{"toAppId": resp.ID, "amountLoki": 100}, nil))
 	}
@@ -293,7 +298,7 @@ func cmdCircle(a *admin, st *state, args []string) {
 	resp, err := a.createApp(req)
 	must(err)
 	ag.Circles = append(ag.Circles, appRec{AppID: resp.ID, Pairing: resp.PairingUri})
-	saveState(filepath.Join(envOr("MINT_STATE", "mint-state"), "state.json"), st)
+	saveState(filepath.Join(envOr("MINT_STATE", defaultStateDir), "state.json"), st)
 	must(a.doBody(http.MethodPost, "/api/transfers", map[string]any{"toAppId": resp.ID, "amountLoki": circleFundLoki}, nil))
 	if len(allow) > 0 {
 		var cur struct {

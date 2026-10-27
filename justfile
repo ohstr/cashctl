@@ -1,11 +1,9 @@
 set shell := ["bash", "-uc"]
 
-# cashctl isn't a member of the shared ohstr/go.work workspace one directory
-# up, so Go's auto-detection of that file (it walks up from cwd) would
-# otherwise block every command below outright. This also makes go.mod's
-# own `replace github.com/ohstr/nmilat => ...` (local dev, see go.mod's own
-# comment on it) actually take effect instead of being silently shadowed by
-# workspace mode. Harmless to leave once that replace is eventually dropped.
+# cashctl is listed in the parent ohstr/go.work; GOWORK=off makes every
+# recipe build against go.mod's pinned nmilat, as CI and releases do. For a
+# local nmilat, use a private go.work and GOWORK=<path> (the integration
+# suite reads CASHCTL_INTEGRATION_GOWORK for the binary it builds).
 export GOWORK := "off"
 
 # List all available recipes
@@ -20,9 +18,16 @@ build:
 test:
     go test -short -race ./...
 
+# Run the unit tests built with the crashpoints tag, which lets a test kill
+# the process at a named point (internal/crashpoint); never in a release build
+test-crashpoints:
+    go test -short -race -tags crashpoints ./cmd/... ./internal/...
+
 # Run the integration suite against a real, already-running lokihub
 # instance (needs integration/config.local.yaml — see integration/README.md);
 # not run in CI.
+# The binary is built with -tags crashpoints and GOWORK=$CASHCTL_INTEGRATION_GOWORK
+# (default off).
 # -count=1 is NOT optional. The suite builds the CLI binary inside the test run
 # (integration/binary.go, under a sync.Once), so it WOULD pick up a cmd/ change —
 # but Go keys its cache on the test package's own sources. Change only cmd/, run
