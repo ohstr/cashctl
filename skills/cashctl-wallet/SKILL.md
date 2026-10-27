@@ -145,12 +145,18 @@ The one general-purpose local decoder: paste in whichever of the three
 connection/token shapes cashctl accepts elsewhere and it figures out which
 one it is (same sniffing `receive`/`join --hub`/`connect add` already use)
 and dumps its fields. No network call, nothing dialed or held by default —
-safe to run on anything before deciding what to do with it. A cash token's
-optional mint-provenance pair only appears (`mint_signature`,
-`attested_amount_millis`) when the token actually carries one. A **Cash
-Hub** connection (`cashhub1...`) gets a specific corrective error instead
-of a decode — cashctl has no mint capability and there's no local decoder
-for that format. An `npub1...` decodes to its hex `pubkey`. **The pairing secret is never included in the output,
+safe to run on anything before deciding what to do with it. A cash token
+reports its mint signature: `signature_scheme` (`mint_v1`, `zap_v1`,
+`malformed` or `none`), `provenance` (`valid`, `invalid`, `needs_zap_event`
+or `none`) and, for a signed bill, `relay_hash` and `minter_pubkey`. A
+`valid` signature covers this copy's relays and secret; cashctl never
+contacts the relays of a bill that isn't `valid` (`receive` refuses it,
+`invalid_input`) — and a valid signature still isn't a trusted mint: anyone
+can sign a bill. A **Cash Hub** connection (`cashhub1...`) decodes to
+`hub_identity`, `chain`, `relays`, `label` and `signature` (`verified` or
+`unverified` with `signature_reason`), never its secret: it can mint bills,
+so keep it private; `--check` runs its online check. An `npub1...` decodes
+to its hex `pubkey`. **The pairing secret is never included in the output,
 for any of the three shapes** — this is inspection only, never a way to
 extract a working spending/dialing credential. A cash-mode cash token
 MAY arrive as `<token>#<cash_secret>` (NIP-CASH's combined
