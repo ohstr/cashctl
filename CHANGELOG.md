@@ -5,6 +5,7 @@
 - Adds claiming a Cash Zap to a connection key (`receive --as
   connection-key:…`), reading your Cash Zap Info for trusted minters, a wider
   `--find-zap`, and `cash minters` to manage the minters you trust.
+  ([#142](https://github.com/ohstr/cashctl/pull/142))
 - Adds `cash discover list|show|open|relays|curators`, which finds order links
   and circles listed on Nostr relays, checks one with its Hub when you show it,
   and orders from it or joins it.
