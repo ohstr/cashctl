@@ -51,3 +51,16 @@ func TrustMinter(m TrustedMinter) error {
 		return err
 	})
 }
+
+// UntrustMinter removes a trusted minter for chain.
+func UntrustMinter(m TrustedMinter) error {
+	return store.WithBusyRetry(func() error {
+		db, err := store.Open()
+		if err != nil {
+			return err
+		}
+		defer func() { _ = db.Close() }()
+		_, err = db.Exec(`DELETE FROM trusted_minters WHERE minter_xonly = ? AND chain = ?`, strings.ToLower(m.MinterXOnly), m.Chain)
+		return err
+	})
+}

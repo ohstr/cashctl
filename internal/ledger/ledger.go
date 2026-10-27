@@ -33,6 +33,12 @@ const (
 	// StatusWithdrawn: the bill was paid out on-chain (cash_withdraw); its
 	// token and secret stay for the withdrawal's lookups.
 	StatusWithdrawn = "withdrawn"
+	// StatusZapClaiming: a Cash Zap to a connection key whose claim (a full
+	// in-place transfer to the local pubkey) is placed but not answered. It is
+	// not held until the claim is.
+	StatusZapClaiming = "zap_claiming"
+	// StatusNotReceived: a zap claim the Hub refused; nothing is held.
+	StatusNotReceived = "not_received"
 )
 
 // CashProtection values — see Entry.CashProtection's own doc comment.

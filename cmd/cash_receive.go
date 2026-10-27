@@ -32,6 +32,7 @@ func newCashReceiveCmd() *cobra.Command {
 	cmd.Flags().String("zap-event", "", "the Cash Zap (kind 9522) a zap bill came with: a file, - for stdin, or the JSON")
 	cmd.Flags().Bool("find-zap", false, "find a zap bill's Cash Zap on --relay (never on the bill's own relay hints)")
 	cmd.Flags().StringSlice("relay", nil, "a relay to look for the Cash Zap on (with --find-zap)")
+	cmd.Flags().String("as", "", "the connection-key credential that claims a Cash Zap to a connection key")
 	cmd.Flags().Bool("trust-minter", false, "check a zap whose minter you don't trust yet with its Hub (its network can't be verified)")
 	return cmd
 }

@@ -81,7 +81,7 @@ func callCredential(cmd *cobra.Command, c *ledger.Call) (nipcash.Credential, err
 		}
 		return nipcash.BySigning(c.AuthorizerSecret), nil
 	case ledger.AuthAsCredential:
-		as, _ := cmd.Flags().GetString("as")
+		as := asCredentialValue(cmd)
 		if as == "" {
 			return nil, errNeedsCredential
 		}
@@ -565,6 +565,13 @@ func applyTransferResult(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, r
 	}
 	newSecret := callSecretOf(c, ledger.RoleNewIdentity)
 	switch c.Purpose {
+	case purposeZapClaim:
+		if res.NewWalletPubkey != "" || res.NewWalletToken != "" || res.AmountMillis != c.AmountMillis {
+			return "", fmt.Errorf("call %s: the claim was not a full in-place transfer", c.CallID)
+		}
+		claimedByLocalKey(e)
+		l.AppendHistory("receive", fmt.Sprintf("received a %s Cash Zap to a connection key (settled after its answer was lost)", output.FormatAmount(int64(res.AmountMillis)))) //nolint:gosec // amounts fit
+		return "zap claimed", nil
 	case purposeProtect:
 		followMove(e, res)
 		e.CashSecret = newSecret

@@ -38,6 +38,9 @@ const (
 	purposeUnmergeMove = "unmerge_move"
 	purposeMergeRound  = "merge_round"
 	purposeConsolidate = "consolidate"
+	// purposeZapClaim claims a Cash Zap to a connection key: a full in-place
+	// transfer to the local pubkey (NIP-CZ rule 9).
+	purposeZapClaim = "zap_claim"
 )
 
 // callSpec is what cashctl knows about a call that nmilat's PendingCall does
@@ -383,6 +386,8 @@ func transferVerb(purpose string) string {
 		return "protect"
 	case purposeMergeMove, purposeUnmergeMove:
 		return "merge"
+	case purposeZapClaim:
+		return "zap claim"
 	}
 	return "transfer"
 }

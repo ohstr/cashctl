@@ -169,6 +169,8 @@ don't trust yet, and keeps the bill only once its Hub confirms your slice.
 cashctl decode zap.json --target note.json   # rules 1-8, countable or not
 cashctl receive zap.json                      # or: receive <bill> --zap-event zap.json
 cashctl receive <bill> --find-zap --relay wss://relay.example
+cashctl receive zap.json --as connection-key:<privkey>,discord,<id>,<attestation>   # a zap to a connection key
+cashctl cash minters add <minter> --chain flokicoin                              # trust a minter's zaps
 ```
 
 ## `cashctl redeem`
