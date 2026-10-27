@@ -50,6 +50,9 @@ type callSpec struct {
 	AuthorizerPubkey string
 	AuthorizerSecret string
 	TargetCredential string
+	// Chain is the chain the call's Hub runs on, when the target credential is
+	// not a bill whose HRP names it (a mint's cashhub1).
+	Chain string
 }
 
 // billCaller places bill-creating calls on one dialled bill. *nipcashclient.Client
@@ -106,7 +109,7 @@ func (j *ledgerJournal) WriteAhead(_ context.Context, calls []nipcash.PendingCal
 			RequestID: pc.RequestID, Method: pc.Method, Purpose: j.spec.Purpose,
 			Deadline: pc.Deadline, SentH: pc.MaxRequestAge, HubIdentity: pc.HubIdentity, Target: pc.Target,
 			TargetCredential: j.spec.TargetCredential, DeviceID: pc.Device, AmountMillis: pc.Amount,
-			Chain: chainOfToken(j.spec.TargetCredential), AuthorizerKind: j.spec.AuthorizerKind,
+			Chain: firstNonEmpty(pc.Chain, j.spec.Chain, chainOfToken(j.spec.TargetCredential)), AuthorizerKind: j.spec.AuthorizerKind,
 			AuthorizerPubkey: j.spec.AuthorizerPubkey, AuthorizerSecret: j.spec.AuthorizerSecret,
 			SourceEntryIDs: slices.Clone(j.spec.SourceEntryIDs), ParamsJSON: string(pc.Params),
 			Attempt: pc.Attempt, Replaces: pc.DerivedFrom,
@@ -165,6 +168,15 @@ func (j *ledgerJournal) call() *ledger.Call {
 		return nil
 	}
 	return c
+}
+
+func firstNonEmpty(v ...string) string {
+	for _, s := range v {
+		if s != "" {
+			return s
+		}
+	}
+	return ""
 }
 
 // chainOfToken is the chain a bill's HRP belongs to (NIP-CASH §Mint

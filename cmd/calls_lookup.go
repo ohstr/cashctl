@@ -57,7 +57,7 @@ func pendingOf(c *ledger.Call) nipcash.PendingCall {
 // specOf is the context a call was placed with, for its re-placement.
 func specOf(c *ledger.Call) callSpec {
 	return callSpec{Purpose: c.Purpose, SourceEntryIDs: c.SourceEntryIDs, AuthorizerKind: c.AuthorizerKind,
-		AuthorizerPubkey: c.AuthorizerPubkey, AuthorizerSecret: c.AuthorizerSecret, TargetCredential: c.TargetCredential}
+		AuthorizerPubkey: c.AuthorizerPubkey, AuthorizerSecret: c.AuthorizerSecret, TargetCredential: c.TargetCredential, Chain: c.Chain}
 }
 
 // callCredential is the credential that authorized c, which also signs its
@@ -202,6 +202,15 @@ func consolidateParams(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call) (ni
 
 // lookupCallFn looks c up. Swapped in tests.
 var lookupCallFn = func(ctx context.Context, cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call) (nipcashclient.LookupOutcome, error) {
+	if c.Method == nipcash.MethodMintCash {
+		// Looked up over the Hub connection it was placed on, signed with its key.
+		hub, err := dialCashHubFn(ctx, c.TargetCredential)
+		if err != nil {
+			return nipcashclient.LookupOutcome{}, err
+		}
+		defer hub.Close()
+		return hub.LookupMint(ctx, pendingOf(c))
+	}
 	cred, err := callCredential(cmd, c)
 	if err != nil {
 		return nipcashclient.LookupOutcome{}, err
@@ -352,6 +361,12 @@ func applyAction(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, action ni
 // it, with the same target, amounts and secrets, fresh proofs and a new
 // deadline; then c is replaced and the derived call carries on.
 func replaceCall(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call) string {
+	return replaceCallConfirmed(cmd, l, c, false)
+}
+
+// replaceCallConfirmed is replaceCall; confirmed is the user's explicit
+// `cash settle --replace`, which a mint needs.
+func replaceCallConfirmed(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, confirmed bool) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	j := &ledgerJournal{l: l, spec: specOf(c)}
@@ -359,14 +374,32 @@ func replaceCall(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call) string {
 	parentID := c.CallID
 	var tres *nipcash.CashTransferResult
 	var cres *nipcash.CashConsolidateResult
+	var mres *nipcash.MintCashResult
 	var sendErr error
 	act, err := nipcashclient.Replace(ctx, pendingOf(c), j, nipcashclient.ReplaceOptions{
+		Confirmed: confirmed,
 		DerivedEntryExists: func(_ context.Context, id string) (bool, error) {
 			_, ok := l.FindCall(ledger.CallIDFor(id))
 			return ok, nil
 		},
 	}, func(ctx context.Context, next nipcash.PendingCall) error {
 		parent, _ := l.FindCall(parentID)
+		if parent.Method == nipcash.MethodMintCash {
+			hub, err := dialCashHubFn(ctx, parent.TargetCredential)
+			if err != nil {
+				sendErr = &notSentError{err}
+				return sendErr
+			}
+			defer hub.Close()
+			p, err := mintParams(parent)
+			if err != nil {
+				sendErr = err
+				return err
+			}
+			p.RequestID = next.RequestID
+			mres, sendErr = hub.MintCash(ctx, p, j, device)
+			return sendErr
+		}
 		caller, err := dialCallerFn(ctx, parent.TargetCredential)
 		if err != nil {
 			sendErr = &notSentError{err}
@@ -413,12 +446,17 @@ func replaceCall(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call) string {
 	parent.State, parent.Detail = ledger.CallReplaced, "replaced by call "+derivedID
 	child, _ := l.FindCall(derivedID)
 	switch {
-	case sendErr == nil && (tres != nil || cres != nil):
+	case sendErr == nil && (tres != nil || cres != nil || mres != nil):
 		var summary string
 		var aErr error
-		if tres != nil {
+		switch {
+		case tres != nil:
 			summary, aErr = applyTransferResult(cmd, l, child, tres)
-		} else {
+		case mres != nil:
+			var out mintOutcome
+			out, aErr = applyMintResult(cmd, l, child, mres)
+			summary = "minted: " + out.Summary
+		default:
 			summary, aErr = applyConsolidateResult(cmd, l, child, cres)
 		}
 		child, _ = l.FindCall(derivedID)
@@ -437,6 +475,9 @@ func replaceCall(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call) string {
 
 // applyCallResult applies the result a lookup returned for c.
 func applyCallResult(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, raw json.RawMessage) (string, error) {
+	if c.Method == nipcash.MethodMintCash {
+		return applyMintLookup(cmd, l, c, raw)
+	}
 	if c.Method == nipcash.MethodCashConsolidate {
 		p, err := consolidateParams(cmd, l, c)
 		if err != nil {
@@ -571,6 +612,8 @@ func nextStep(c *ledger.Call, device string) string {
 		return "placed from another copy of this wallet: settle it there"
 	case c.Detail == "needs_credential":
 		return "run `cashctl cash settle --as <credential>` with the credential it was placed with"
+	case c.Detail == "confirm_replace":
+		return "the Hub never saw this mint: `cashctl cash settle --replace " + c.CallID + "` mints it again (under its derived id, never twice)"
 	case c.State == ledger.CallStuck:
 		return "run `cashctl cash settle`; if it stays stuck, keep its secrets and contact the Hub"
 	}

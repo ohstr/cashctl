@@ -470,6 +470,29 @@ instead (see `skills/cashctl-wallet/SKILL.md`) — it never touches the
 network, works on any token string held or not, and is the cheapest way to
 inspect one before deciding whether to `receive` it at all.
 
+## `cashctl cash mint` — mint a bill on a Cash Hub you hold
+
+```sh
+CASHCTL_CASH_HUB=cashhub1... cashctl cash mint 100 --json
+# {"cash_token","handoff"?,"entry"?,"wallet_pubkey","amount_millis","expires_at","call","network","chain","test_network","hub_verified","warnings"}
+cashctl cash mint 100 --hub - --to npub1... --json < hub.txt
+```
+
+Needs a `cashhub1...` string (`--hub`, `-` for stdin, or
+`$CASHCTL_CASH_HUB`); the URI form is refused `invalid_input`,
+`reason: connection_invalid`. The Hub must answer as the identity and chain
+the string names (else `auth`, `reason: connection_mismatch`, nothing
+written). A string whose signature doesn't verify needs the user's
+confirmation once (`--allow-unverified` only after they agreed; otherwise
+`usage`, `reason: connection_unverified`). `--to cash` (default) returns a
+`handoff` cash note — secret-bearing, give it once; `--to` your own key
+keeps the bill (`entry`); any other identity gets it as a gift. The returned
+bill must carry the Hub identity's mint signature. A lost reply is exit 8
+with `call.method: mint_cash`; `cash settle` looks it up. If the Hub never
+saw it, the call is `stuck`/`confirm_replace` and only
+`cash settle --replace <call>` mints it again (under its derived id). `-c`
+is refused.
+
 ## `cashctl cash settle` — finish what got no answer
 
 ```sh
@@ -486,7 +509,8 @@ again under a derived id (at most three times); refused → closed with its
 code; no longer remembered (`expired`) → shown with its secrets under
 `recovery`, which you keep. Exit 0 once nothing placed from this wallet
 file is open, else 8. A call placed with `--as` needs the same `--as` to
-settle.
+settle. `joins` lists `join`s whose reply was lost, looked up the same way.
+`--replace <call>` re-places a mint the Hub never saw (only a mint needs it).
 
 ## End-to-end scenarios
 

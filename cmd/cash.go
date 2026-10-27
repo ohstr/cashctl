@@ -5,7 +5,7 @@ import "github.com/spf13/cobra"
 func newCashCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "cash",
-		Short: "Receive, redeem, transfer, and consolidate cash tokens",
+		Short: "Receive, redeem, transfer, consolidate and mint cash tokens",
 		RunE:  groupRunE,
 	}
 	cmd.AddCommand(
@@ -15,6 +15,7 @@ func newCashCmd() *cobra.Command {
 		newCashConsolidateCmd(),
 		newCashStatusCmd(),
 		newCashSettleCmd(),
+		newCashMintCmd(),
 	)
 	return cmd
 }

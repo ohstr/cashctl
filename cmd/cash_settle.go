@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/ohstr/nmilat/nipcash"
 	"github.com/spf13/cobra"
 
 	"github.com/ohstr/cashctl/internal/ledger"
@@ -62,11 +63,7 @@ func runCashSettle(cmd *cobra.Command, _ []string) error {
 	device, _ := deviceIDFn()
 
 	if replaceID != "" {
-		c, ok := l.FindCall(replaceID)
-		if !ok {
-			return output.NotFoundError(cmd, replaceID, fmt.Errorf("no call %q", replaceID))
-		}
-		return output.UsageError(cmd, fmt.Errorf("call %s is a %s, which cashctl re-places on its own when the Hub never saw it; --replace is only for a mint", c.CallID, c.Method))
+		return replaceMintByUser(cmd, l, replaceID, device, jsonMode)
 	}
 	if closeID != "" {
 		return closeCallByUser(cmd, l, closeID, device, jsonMode)
@@ -240,5 +237,39 @@ func closeCallByUser(cmd *cobra.Command, l *ledger.Ledger, id, device string, js
 	if recovery != "" {
 		output.Printf("Keep: %s\n", recovery)
 	}
+	return nil
+}
+
+// replaceMintByUser re-places a mint the Hub said it never saw, under its
+// derived id, after the user asked for it (`cash settle --replace`): a mint is
+// never placed again on cashctl's own initiative.
+func replaceMintByUser(cmd *cobra.Command, l *ledger.Ledger, id, device string, jsonMode bool) error {
+	c, ok := l.FindCall(id)
+	if !ok {
+		return output.NotFoundError(cmd, id, fmt.Errorf("no call %q", id))
+	}
+	if c.Method != nipcash.MethodMintCash {
+		return output.UsageError(cmd, fmt.Errorf("call %s is a %s, which cashctl re-places on its own when the Hub never saw it; --replace is only for a mint", c.CallID, c.Method))
+	}
+	if c.State != ledger.CallStuck || c.Detail != "confirm_replace" {
+		return output.ConflictError(cmd, id, fmt.Errorf("call %s is %s: only a mint the Hub said it never saw can be placed again — run `cashctl cash settle` first", id, c.State))
+	}
+	if !Confirm(cmd, false, fmt.Sprintf("The Hub says it never saw mint %s. Mint it again (under its derived id, never twice)?", id)) {
+		output.Println("Cancelled.")
+		return nil
+	}
+	summary := replaceCallConfirmed(cmd, l, c, true)
+	_ = l.Save()
+	c, _ = l.FindCall(id)
+	row := rowOf(*c, device, summary)
+	if jsonMode {
+		output.PrintJSON(map[string]any{"calls": []settleRow{row}, "joins": []joinSettleRow{}})
+		return nil
+	}
+	output.Printf("call %s: %s", id, c.State)
+	if summary != "" {
+		output.Printf(" — %s", summary)
+	}
+	output.Println()
 	return nil
 }

@@ -221,6 +221,20 @@ cashctl cash status                        # your allocation of a held token
 cashctl cash status --all                  # plus every co-recipient
 ```
 
+## `cashctl cash mint`
+
+Mints a bill over a Cash Hub connection you hold (a `cashhub1...` string,
+from `--hub`, stdin with `--hub -`, or `$CASHCTL_CASH_HUB`). The Hub must
+answer as the identity and chain the string names before anything is sent.
+
+```sh
+CASHCTL_CASH_HUB=cashhub1... cashctl cash mint 100            # a cash note to hand out
+cashctl cash mint 100 --hub - --to npub1... < hub.txt          # a bill for someone
+```
+
+A mint whose reply is lost is finished by `cash settle`; one the Hub never
+saw is minted again only with `cash settle --replace <call>`.
+
 ## `cashctl cash settle`
 
 Asks the Hubs about every transfer, merge or re-key whose answer never came,
@@ -233,6 +247,7 @@ what is due before it starts.
 cashctl cash settle                 # ask once; exit 8 while something stays open
 cashctl cash settle --wait          # keep asking, up to 6 minutes
 cashctl cash settle --close <call>  # give up on one call (its new codes are printed)
+cashctl cash settle --replace <call> # mint again a mint the Hub never saw
 ```
 
 ## `cashctl join`
