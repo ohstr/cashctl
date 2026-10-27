@@ -2,9 +2,9 @@ package config
 
 import (
 	"database/sql"
-	"slices"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/ohstr/cashctl/internal/store"
@@ -50,8 +50,8 @@ type Join struct {
 	LookupAnswered bool `json:"-"`
 	// AltLookupTried is a lookup already signed with another string of the
 	// same circle (R-CW-21), which is tried once.
-	AltLookupTried bool `json:"-"`
-	CreatedAt     int64  `json:"created_at"`
+	AltLookupTried bool  `json:"-"`
+	CreatedAt      int64 `json:"created_at"`
 }
 
 // Open reports whether the join's outcome is still unknown.

@@ -46,7 +46,7 @@ type Withdrawal struct {
 // device, so it is looked up and never re-placed.
 const DeviceRecovered = "recovered"
 
-func nz(v int64) sql.NullInt64 { return sql.NullInt64{Int64: v, Valid: v != 0} }
+func nz(v int64) sql.NullInt64   { return sql.NullInt64{Int64: v, Valid: v != 0} }
 func ns(v string) sql.NullString { return sql.NullString{String: v, Valid: v != ""} }
 
 // PutWithdrawal writes w (insert or replace).
