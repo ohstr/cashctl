@@ -183,3 +183,34 @@ func TestDiscover_OpenPlacesTheOrder(t *testing.T) {
 		t.Errorf("a Hub answering on another network: %v", err)
 	}
 }
+
+// D-1: a global listing's node and the operator it names are never asked for
+// as trusted: only recommendations by follows and curators (and verified
+// operators) seed the trusted requests.
+func TestDiscover_GlobalListingSeedsNothingTrusted(t *testing.T) {
+	f := newListingFixture(t)
+	_, opPub := testmint.Key(t)
+	oc, _ := nipCO.DecodeOrderConnection(f.conn)
+	now := time.Now().Unix()
+	ev, err := listing.NewListing(listing.ListingFields{Order: &oc, Network: "mainnet", Title: "flood", Status: listing.StatusOpen,
+		Expiration: now + 86400, Operator: &listing.Ref{Pubkey: opPub}}, now-5, now,
+		func(ev *nip01.Event) error { return ev.Sign(f.orders.hubPriv) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.events = append(f.events, ev)
+	for range 2 {
+		if _, err := runDiscover(t, discoverCmd(newDiscoverListCmd(), nil), nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, filters := range f.fetched {
+		for _, flt := range filters {
+			for _, a := range flt.Authors {
+				if a == f.orders.hubXOnly || a == opPub {
+					t.Errorf("asked as trusted for %s (kinds %v), named only by a global listing", a, flt.Kinds)
+				}
+			}
+		}
+	}
+}

@@ -118,11 +118,13 @@ func DiscoverEvents() ([]string, error) {
 	return listColumn(`SELECT raw FROM discover_events ORDER BY created_at, id`)
 }
 
-// PruneDiscoverEvents keeps at most max cached events, dropping global ones
-// first and the oldest first.
+// PruneDiscoverEvents keeps at most max global (unreviewed) events, the newest.
+// Trusted events (the user's own, follows', curators' and what they name) are
+// never pruned: a flood of listings must not push them out, and their since
+// has already moved past them (D-1).
 func PruneDiscoverEvents(max int) error {
-	return execDiscover(`DELETE FROM discover_events WHERE id NOT IN (
-		SELECT id FROM discover_events ORDER BY origin = 'trusted' DESC, created_at DESC LIMIT ?)`, max)
+	return execDiscover(`DELETE FROM discover_events WHERE origin != 'trusted' AND id NOT IN (
+		SELECT id FROM discover_events WHERE origin != 'trusted' ORDER BY created_at DESC LIMIT ?)`, max)
 }
 
 // OutboxItem is a recommendation or report waiting to be published (kept

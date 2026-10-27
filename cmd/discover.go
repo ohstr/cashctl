@@ -116,8 +116,58 @@ type discoverWorld struct {
 	operators map[string]*listing.OperatorOffers // newest 11191 per author
 	names     map[string]string                  // kind-0 display names
 	followsOf map[string][]string                // newest kind-3 p tags per author
-	nodes     []string
-	opKeys    []string
+}
+
+// trustedSeeds is who the trusted requests ask for (NIP-CASH §Fetching
+// Listings): node identities named by recommendations from people (follows and
+// curators) and by verified operators' 11191, and the operators those nodes'
+// listings name, plus self's own 11191. Nothing a stranger's listing or
+// recommendation names gets in, so a flood can't steer the trusted fetch (D-1).
+func (w *discoverWorld) trustedSeeds(people []string, self string, now int64) (nodes, ops []string) {
+	trusted := map[string]bool{}
+	for _, p := range people {
+		trusted[p] = true
+	}
+	nodeSet, opSet := map[string]bool{}, map[string]bool{}
+	for _, r := range w.recs {
+		if trusted[r.Author] && r.Node != "" {
+			nodeSet[r.Node] = true
+		}
+	}
+	if self != "" {
+		opSet[self] = true
+	}
+	for range 2 {
+		for _, addr := range w.book.Addresses() {
+			l, ok := w.book.Current(addr, now)
+			if ok && nodeSet[l.NodeIdentity] && l.Operator != nil {
+				opSet[l.Operator.Pubkey] = true
+			}
+		}
+		for op := range opSet {
+			offers := w.operators[op]
+			if offers == nil {
+				continue
+			}
+			for _, addr := range w.book.Addresses() {
+				if l, ok := w.book.Current(addr, now); ok && listing.OperatorVerified(l, offers) {
+					for _, n := range offers.Nodes {
+						nodeSet[n.Pubkey] = true
+					}
+					break
+				}
+			}
+		}
+	}
+	for n := range nodeSet {
+		nodes = append(nodes, n)
+	}
+	for o := range opSet {
+		ops = append(ops, o)
+	}
+	sort.Strings(nodes)
+	sort.Strings(ops)
+	return nodes, ops
 }
 
 // localIdentityHex is the local identity's pubkey without unlocking anything,
@@ -209,10 +259,6 @@ func readWorld(chains []string, testNets bool, now int64) *discoverWorld {
 		case listing.KindListing:
 			if l, err := listing.ParseListing(&e, listing.CheckOptions{Chains: chains, TestNetworks: testNets}); err == nil {
 				w.book.Offer(l, now)
-				w.nodes = append(w.nodes, l.NodeIdentity)
-				if l.Operator != nil {
-					w.opKeys = append(w.opKeys, l.Operator.Pubkey)
-				}
 			}
 		case listing.KindRecommendation:
 			if r, err := listing.ParseRecommendation(&e); err == nil {
@@ -330,17 +376,25 @@ func discoverRun(cmd *cobra.Command) ([]discovered, *listing.VersionBook, []stri
 	if !offline {
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
-		filters := []nip01.SubscriptionFilter{listing.GlobalFilter(chains, 0)}
+		failed = fetchIntoCache(ctx, relays, []nip01.SubscriptionFilter{listing.GlobalFilter(chains, 0)}, config.OriginGlobal)
 		if self != "" {
-			filters = append(filters, nip01.SubscriptionFilter{Kinds: []int{3, 10002}, Authors: []string{self}})
+			// The user's own follows and relays are trusted, never pruned.
+			own := fetchIntoCache(ctx, relays, []nip01.SubscriptionFilter{{Kinds: []int{3, 10002}, Authors: []string{self}}}, config.OriginTrusted)
+			failed = intersect(failed, own)
 		}
-		failed = fetchIntoCache(ctx, relays, filters, config.OriginGlobal)
-		w := readWorld(chains, testNets, now)
-		trusted := listing.TrustedFilters(listing.Trusted{Follows: w.followsOf[self], Curators: curators,
-			Nodes: w.nodes, Operators: w.opKeys})
-		if len(trusted) > 0 {
-			f2 := fetchIntoCache(ctx, relays, trusted, config.OriginTrusted)
-			failed = intersect(failed, f2)
+		// Trusted requests, again while they name more (a recommendation names
+		// a node, whose listing names an operator, whose 11191 names nodes).
+		var asked []nip01.SubscriptionFilter
+		for range 3 {
+			w := readWorld(chains, testNets, now)
+			people := append(slices.Clone(w.followsOf[self]), curators...)
+			nodes, ops := w.trustedSeeds(people, self, now)
+			trusted := listing.TrustedFilters(listing.Trusted{Follows: w.followsOf[self], Curators: curators, Nodes: nodes, Operators: ops})
+			if len(trusted) == 0 || sameFilters(trusted, asked) {
+				break
+			}
+			asked = trusted
+			failed = intersect(failed, fetchIntoCache(ctx, relays, trusted, config.OriginTrusted))
 		}
 		if raws, _ := config.DiscoverEvents(); len(failed) == len(relays) && len(raws) == 0 {
 			return nil, nil, failed, output.NetworkError(cmd, errors.New("no discovery relay answered and nothing is cached"))
@@ -378,6 +432,13 @@ func discoverRun(cmd *cobra.Command) ([]discovered, *listing.VersionBook, []stri
 		return listing.RankLess(out[i].L, out[i].Signals, out[j].L, out[j].Signals, now)
 	})
 	return out, w.book, failed, nil
+}
+
+// sameFilters reports two filter lists as equal (as JSON).
+func sameFilters(a, b []nip01.SubscriptionFilter) bool {
+	ja, _ := json.Marshal(a)
+	jb, _ := json.Marshal(b)
+	return string(ja) == string(jb)
 }
 
 // intersect is the relays in both lists: a relay failed overall only when it
