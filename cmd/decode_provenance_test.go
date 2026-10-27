@@ -24,7 +24,9 @@ import (
 // relay_hash, a hash of this copy's relay hints and secret. A copy whose relays
 // or secret were changed no longer verifies, and is never dialled.
 //
-// The minter key is 0x11 x 32; its compressed public key is the known answer.
+// The bills here are signed in the test with the key 0x11 x 32, to exercise
+// cashctl's behaviour; the known answers (K-TOK-1, K-PAY-*, K-RH-*) come from
+// nmilat's vector files in vectors_test.go.
 const (
 	provMinter = "034f355bdcb7cc0af728ef3cceb9615d90684bb5b2ca5f859ab0f0b704075871aa"
 	provAmount = 21000
@@ -93,7 +95,7 @@ func runDecodeJSON(t *testing.T, value string) map[string]any {
 // below could pass because nothing ever verifies.
 func TestDecode_SchemeOneProvenanceVerifies(t *testing.T) {
 	if pub, _ := utils.GetPublicKey(provPriv); !strings.HasSuffix(provMinter, pub) {
-		t.Fatalf("known answer: x-only %s is not the tail of %s", pub, provMinter)
+		t.Fatalf("the test key's public key %s is not %s", pub, provMinter)
 	}
 	relay := string(tlvRelay.val)
 	out := runDecodeJSON(t, rawBech32(t, "lokicash", signedTLVs(t, relay)))
