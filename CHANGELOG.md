@@ -5,6 +5,7 @@
 - Adds `cash order place|show|watch|settle`, which buys cash over a
   `cashorder1` Order connection and collects the bills once paid; `decode`
   reads a `cashorder1` string.
+  ([#136](https://github.com/ohstr/cashctl/pull/136))
 - Adds proof of work for Hubs whose relays ask for it, capped by
   `CASHCTL_POW_MAX` (default 28); above the cap nothing is sent.
   ([#134](https://github.com/ohstr/cashctl/pull/134))
