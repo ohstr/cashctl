@@ -16,6 +16,7 @@ and [Circle wallets](https://github.com/ohstr/nips/blob/main/NIP-CW.md).**
 - [`cashctl redeem`](#cashctl-redeem) — Redeem a held cash token into a Lightning wallet
 - [`cashctl consolidate`](#cashctl-consolidate) — Merge several held cash tokens into one
 - [`cashctl cash status`](#cashctl-cash-status) — Check your allocation of a held token, and with `--all` its co-recipients (network)
+- [`cashctl cash settle`](#cashctl-cash-settle) — Finish transfers, merges and re-keys whose answer never came
 - [`cashctl join`](#cashctl-join) — Join a circle to get a personal Lightning wallet
 - [`cashctl init`](#cashctl-init) — Set up your identity and, optionally, a wallet
 - [`cashctl wallet show/history/use`](#cashctl-wallet-show) — Show your identity, registered wallets, and local action history
@@ -218,6 +219,20 @@ makes internally to check a token before saving it.
 ```sh
 cashctl cash status                        # your allocation of a held token
 cashctl cash status --all                  # plus every co-recipient
+```
+
+## `cashctl cash settle`
+
+Asks the Hubs about every transfer, merge or re-key whose answer never came,
+and finishes it: one that happened is recorded, one the Hub never saw is
+placed again (under a derived id, never twice), one it refused is closed.
+Nothing is ever resent under its own id. Every money command does this for
+what is due before it starts.
+
+```sh
+cashctl cash settle                 # ask once; exit 8 while something stays open
+cashctl cash settle --wait          # keep asking, up to 6 minutes
+cashctl cash settle --close <call>  # give up on one call (its new codes are printed)
 ```
 
 ## `cashctl join`

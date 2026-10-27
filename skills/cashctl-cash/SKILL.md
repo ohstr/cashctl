@@ -470,6 +470,24 @@ instead (see `skills/cashctl-wallet/SKILL.md`) — it never touches the
 network, works on any token string held or not, and is the cheapest way to
 inspect one before deciding whether to `receive` it at all.
 
+## `cashctl cash settle` — finish what got no answer
+
+```sh
+cashctl cash settle --json          # {"calls":[{"call","method","purpose","state","detail","deadline","next_step",...}],"joins":[]}
+cashctl cash settle --wait --json   # keep asking, up to 6 minutes
+```
+
+A transfer, merge or protect that exits 8 (`indeterminate`) is an open
+call: it was written down before it was sent, with every new secret, and
+its bills are not spent again until it is settled. Never re-run the
+command to "retry" it. `cash settle` (and the start of every money
+command) asks the Hub what happened: done → recorded; never seen → placed
+again under a derived id (at most three times); refused → closed with its
+code; no longer remembered (`expired`) → shown with its secrets under
+`recovery`, which you keep. Exit 0 once nothing placed from this wallet
+file is open, else 8. A call placed with `--as` needs the same `--as` to
+settle.
+
 ## End-to-end scenarios
 
 Each command above in isolation; here's how they chain in practice.
