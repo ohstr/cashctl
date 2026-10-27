@@ -529,6 +529,22 @@ placement whose reply was lost is exit 8: never place it again yourself —
 can be placed again, with `--replace` (it asks for a new payment). Never
 print or log `notify`.
 
+## `cashctl cash withdraw` — pay out on-chain (irreversible)
+
+```sh
+cashctl cash withdraw quote <address> --token <id> --json   # moves nothing: {"quote":"wq-…","payout_millis","fee_millis","sent_by",...}
+cashctl cash withdraw send --quote wq-… --yes --json        # only after the user saw and accepted that quote
+cashctl cash withdraw show --json                            # {"withdrawals":[{"withdrawal","state",...}]}
+```
+
+Never send without showing the quote to the user first: `--json` is not
+consent, and `send <address>` without a terminal is refused (`usage`). A
+quote handle is single-use. A cash note received from someone else must be
+protected first (`reason: protect_first`). Exit 8 after `send` means the
+bill is locked and the withdrawal may have happened: never send again —
+`cash withdraw settle` asks the Hub. A payout is never "failed" until it is
+`cancelled`, and then the amount comes back as a new bill (`remint_entry`).
+
 ## `cashctl cash settle` — finish what got no answer
 
 ```sh

@@ -6,6 +6,10 @@
   and circles listed on Nostr relays, checks one with its Hub when you show it,
   and orders from it or joins it.
   ([#138](https://github.com/ohstr/cashctl/pull/138))
+- Adds `cash withdraw quote|send|show|cancel|settle`, which pays a bill out
+  on-chain after the user confirms the exact quote, then follows the payout; a
+  payout the Hub cancels comes back as a new bill.
+  ([#137](https://github.com/ohstr/cashctl/pull/137))
 - Adds `cash order place|show|watch|settle`, which buys cash over a
   `cashorder1` Order connection and collects the bills once paid; `decode`
   reads a `cashorder1` string.

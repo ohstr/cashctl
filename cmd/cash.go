@@ -18,6 +18,7 @@ func newCashCmd() *cobra.Command {
 		newCashMintCmd(),
 		newCashOrderCmd(),
 		newCashDiscoverCmd(),
+		newCashWithdrawCmd(),
 	)
 	return cmd
 }

@@ -18,6 +18,7 @@ and [Circle wallets](https://github.com/ohstr/nips/blob/main/NIP-CW.md).**
 - [`cashctl cash status`](#cashctl-cash-status) — Check your allocation of a held token, and with `--all` its co-recipients (network)
 - [`cashctl cash mint`](#cashctl-cash-mint) — Mint a bill over a Cash Hub connection you hold
 - [`cashctl cash order`](#cashctl-cash-order) — Buy cash over an Order connection
+- [`cashctl cash withdraw`](#cashctl-cash-withdraw) — Pay a bill out on-chain, after confirming its quote
 - [`cashctl cash discover`](#cashctl-cash-discover) — Find order links and circles others list (ads, checked when you open one)
 - [`cashctl cash settle`](#cashctl-cash-settle) — Finish transfers, merges and re-keys whose answer never came
 - [`cashctl join`](#cashctl-join) — Join a circle to get a personal Lightning wallet
@@ -272,6 +273,19 @@ cashctl cash discover relays add wss://relay.example
 cashctl cash discover list
 cashctl cash discover show of-1a2b3c4d5e
 cashctl cash discover open of-1a2b3c4d5e 100
+```
+
+## `cashctl cash withdraw`
+
+Pays a whole bill out to an on-chain address. `quote` shows exactly what the
+recipient gets and moves nothing; `send` sends only after you type `yes` to
+that quote (or, from a script, `send --quote <wq-…> --yes`). `show` follows
+the payout until it is final; a payout the Hub cancels comes back as cash.
+
+```sh
+cashctl cash withdraw quote fc1q...
+cashctl cash withdraw send fc1q...          # shows the quote, asks for "yes"
+cashctl cash withdraw show
 ```
 
 ## `cashctl cash settle`

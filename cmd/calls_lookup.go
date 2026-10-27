@@ -49,8 +49,11 @@ func pendingOf(c *ledger.Call) nipcash.PendingCall {
 	}
 	for _, s := range c.Secrets {
 		role := ""
-		if s.Role == ledger.RoleRemainder {
+		switch s.Role {
+		case ledger.RoleRemainder:
 			role = "remainder"
+		case ledger.RoleRemint:
+			role = nipcash.SecretRoleRemint
 		}
 		pc.Secrets = append(pc.Secrets, nipcash.PendingSecret{Secret: s.Secret, Role: role})
 	}
@@ -274,9 +277,12 @@ func settleCalls(cmd *cobra.Command, l *ledger.Ledger, opts settleOptions) []set
 			continue
 		}
 		var summary string
-		if c.Method == nipcash.MethodCashOrder {
+		switch c.Method {
+		case nipcash.MethodCashOrder:
 			summary = settleOrderCall(cmd, l, c, device)
-		} else {
+		case nipcash.MethodCashWithdraw:
+			summary = settleWithdrawCall(cmd, l, c, device)
+		default:
 			summary = settleOne(cmd, l, c, device)
 		}
 		if c, ok = l.FindCall(id); ok {
@@ -385,6 +391,7 @@ func replaceCallConfirmed(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, 
 	var tres *nipcash.CashTransferResult
 	var cres *nipcash.CashConsolidateResult
 	var mres *nipcash.MintCashResult
+	var wres *nipcash.Payout
 	var sendErr error
 	act, err := nipcashclient.Replace(callContext(ctx), pendingOf(c), j, nipcashclient.ReplaceOptions{
 		Confirmed: confirmed,
@@ -394,6 +401,36 @@ func replaceCallConfirmed(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, 
 		},
 	}, func(ctx context.Context, next nipcash.PendingCall) error {
 		parent, _ := l.FindCall(parentID)
+		if parent.Method == nipcash.MethodCashWithdraw {
+			w, _, _ := ledger.WithdrawalForCall(parentID)
+			bill, err := dialWithdrawFn(ctx, parent.TargetCredential)
+			if err != nil {
+				sendErr = &notSentError{err}
+				return sendErr
+			}
+			defer bill.Close()
+			q, err := nipcash.ParseWithdrawQuote(w.QuoteJSON)
+			if err != nil {
+				sendErr = err
+				return err
+			}
+			cred, err := callCredential(cmd, parent)
+			if err != nil {
+				sendErr = err
+				return err
+			}
+			p := nipcash.CashWithdrawParams{Quote: q, Credential: cred, RequestID: next.RequestID, Notify: w.Notify}
+			if s := callSecretOf(parent, ledger.RoleRemint); s != "" {
+				if p.Remint, err = nipcash.CashTargetFromSecret(s); err != nil {
+					sendErr = err
+					return err
+				}
+			}
+			wj := &withdrawJournal{ledgerJournal: *j, w: w}
+			wres, sendErr = bill.Withdraw(ctx, p, wj, device)
+			j.callIDs = wj.callIDs
+			return sendErr
+		}
 		if parent.Method == nipcash.MethodMintCash {
 			hub, err := dialCashHubFn(ctx, parent.TargetCredential)
 			if err != nil {
@@ -456,6 +493,13 @@ func replaceCallConfirmed(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, 
 	parent.State, parent.Detail = ledger.CallReplaced, "replaced by call "+derivedID
 	child, _ := l.FindCall(derivedID)
 	switch {
+	case sendErr == nil && wres != nil:
+		w, _, _ := ledger.WithdrawalForCall(derivedID)
+		child, _ = l.FindCall(derivedID)
+		if err := applyPayout(cmd, l, child, &w, wres); err != nil {
+			return "placed again as call " + derivedID
+		}
+		return "sent again as call " + derivedID + ": " + withdrawalText(w)
 	case sendErr == nil && (tres != nil || cres != nil || mres != nil):
 		var summary string
 		var aErr error
@@ -616,6 +660,10 @@ func nextStep(c *ledger.Call, device string) string {
 	switch {
 	case !c.Open():
 		return "nothing"
+	case c.State == ledger.CallOpenWithdraw:
+		return "the payout is followed: `cashctl cash withdraw show`"
+	case c.Method == nipcash.MethodCashWithdraw && c.Detail == "confirm_replace":
+		return "the Hub says this withdrawal never arrived: `cashctl cash withdraw settle --replace <withdrawal> --yes` sends it again"
 	case c.State == ledger.CallOpenOrder:
 		return "pay the order, then `cashctl cash order show` collects its bills"
 	case c.Method == nipcash.MethodCashOrder && c.Detail == "confirm_replace":

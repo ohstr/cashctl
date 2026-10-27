@@ -30,6 +30,9 @@ const (
 	// §Answering About a Destroyed Bill). Set only on that answer, never on
 	// silence, which proves nothing.
 	StatusSpent = "spent"
+	// StatusWithdrawn: the bill was paid out on-chain (cash_withdraw); its
+	// token and secret stay for the withdrawal's lookups.
+	StatusWithdrawn = "withdrawn"
 )
 
 // CashProtection values — see Entry.CashProtection's own doc comment.
