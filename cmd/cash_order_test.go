@@ -341,3 +341,46 @@ func TestValidateOrder_ChecksTheInvoice(t *testing.T) {
 		}
 	}
 }
+
+// watch reads the order once, then on each notice (never acting on the notice
+// itself), and stops when the order is finished.
+func TestOrderWatch_ReadsOnNotices(t *testing.T) {
+	f, conn := setUpOrderHub(t)
+	if _, err := placeOrder(t, conn, "100"); err != nil {
+		t.Fatal(err)
+	}
+	o, _ := onlyOrder(t)
+	o.AcceptedRelays = []string{"wss://accepted.example"}
+	_ = ledger.PutOrder(o)
+	prevPoll, prevGap, prevWatch := orderPollEvery, orderNoticeGap, watchNoticesFn
+	orderPollEvery, orderNoticeGap = time.Hour, time.Millisecond
+	notices := make(chan struct{}, 2)
+	var gotNotify string
+	var gotAccepted []string
+	watchNoticesFn = func(_ context.Context, _, notify string, accepted []string) (<-chan struct{}, func(), error) {
+		gotNotify, gotAccepted = notify, accepted
+		return notices, func() {}, nil
+	}
+	t.Cleanup(func() { orderPollEvery, orderNoticeGap, watchNoticesFn = prevPoll, prevGap, prevWatch })
+	lookups := 0
+	f.lookup = func(nipcash.PendingCall) (nipcashclient.LookupOutcome, *nipCO.Order, error) {
+		lookups++
+		if lookups == 1 {
+			notices <- struct{}{}
+			return nipcashclient.LookupOutcome{Status: nipcash.LookupDone}, f.open(100_000, time.Now().Unix()+600), nil
+		}
+		return nipcashclient.LookupOutcome{Status: nipcash.LookupDone}, f.minted(100_000), nil
+	}
+	c := orderCmd(newCashOrderWatchCmd(), nil)
+	var err error
+	captureStreams(t, func() { err = watchOrder(c, o.OrderID, 10*time.Second) })
+	if err != nil {
+		t.Fatalf("watch: %v", err)
+	}
+	if lookups != 2 || gotNotify != o.Notify || len(gotAccepted) != 1 || gotAccepted[0] != "wss://accepted.example" {
+		t.Errorf("lookups %d, notify match %v, accepted %v", lookups, gotNotify == o.Notify, gotAccepted)
+	}
+	if o, _ := onlyOrder(t); o.FinishedAt == 0 {
+		t.Error("the order did not finish")
+	}
+}
