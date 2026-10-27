@@ -192,6 +192,10 @@ func newCashOrderWatchCmd() *cobra.Command {
 // orderPollEvery is how often watch reads a Lightning order until pay_by + 60 s.
 var orderPollEvery = 5 * time.Second
 
+// orderOnchainPollEvery is how often watch reads an on-chain order while its
+// notices are subscribed: notices can be missed (NIP-CO §Order Notice).
+var orderOnchainPollEvery = time.Minute
+
 // orderNoticeGap is the least time between two reads a notice triggers.
 var orderNoticeGap = 2 * time.Second
 
@@ -213,8 +217,10 @@ var watchNoticesFn = func(ctx context.Context, cashorder, notify string, accepte
 }
 
 // watchOrder reads an order once, then again on each of its notices (one read
-// at a time, at most one per orderNoticeGap) and, for a Lightning order, every
-// orderPollEvery until pay_by + 60 s, since notices can be missed. It stops
+// at a time, at most one per orderNoticeGap) and on a timer, since notices can
+// be missed: a Lightning order every orderPollEvery until pay_by + 60 s, an
+// on-chain one every orderOnchainPollEvery, and either every orderPollEvery
+// when the notices can't be subscribed to. It stops
 // when the order is finished or ended unpaid, or at the timeout. Each answer
 // is saved before the next; a notice never changes anything by itself.
 func watchOrder(cmd *cobra.Command, id string, timeout time.Duration) error {
@@ -246,6 +252,10 @@ func watchOrder(cmd *cobra.Command, id string, timeout time.Duration) error {
 	}
 	read()
 	var notices <-chan struct{}
+	every := orderPollEvery
+	if o.Payment != nipCO.PaymentLightning {
+		every = orderOnchainPollEvery
+	}
 	if o.FinishedAt == 0 {
 		if c, ok := mustCall(o.CallID); ok {
 			ch, closeFn, err := watchNoticesFn(ctx, c.TargetCredential, o.Notify, o.AcceptedRelays)
@@ -254,16 +264,14 @@ func watchOrder(cmd *cobra.Command, id string, timeout time.Duration) error {
 				defer closeFn()
 			} else {
 				jsonMode, _ := cmd.Flags().GetBool("json")
-				output.Notef(jsonMode, "Couldn't subscribe to the order's notices (%v); reading it on a timer instead.", output.Sanitize(err.Error()))
+				every = orderPollEvery
+				output.Notef(jsonMode, "Couldn't subscribe to the order's notices (%v); reading it every %s instead.", output.Sanitize(err.Error()), every)
 			}
 		}
 	}
-	var poll <-chan time.Time
-	if o.Payment == nipCO.PaymentLightning {
-		t := time.NewTicker(orderPollEvery)
-		defer t.Stop()
-		poll = t.C
-	}
+	ticker := time.NewTicker(every)
+	defer ticker.Stop()
+	poll := ticker.C
 	last := time.Now()
 	for o.FinishedAt == 0 {
 		if o.Payment == nipCO.PaymentLightning && o.PayBy > 0 && time.Now().Unix() > o.PayBy+60 {

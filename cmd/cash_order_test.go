@@ -384,3 +384,43 @@ func TestOrderWatch_ReadsOnNotices(t *testing.T) {
 		t.Error("the order did not finish")
 	}
 }
+
+// O-2: watch keeps reading an on-chain order on a timer while subscribed (its
+// notices can be missed), and reads every orderPollEvery when it can't
+// subscribe.
+func TestOrderWatch_PollsOnchainOrders(t *testing.T) {
+	for name, subscribe := range map[string]bool{"subscribed": true, "subscription failed": false} {
+		t.Run(name, func(t *testing.T) {
+			f, conn := setUpOrderHub(t)
+			if _, err := placeOrder(t, conn, "100"); err != nil {
+				t.Fatal(err)
+			}
+			o, _ := onlyOrder(t)
+			o.Payment = nipCO.PaymentOnchain
+			_ = ledger.PutOrder(o)
+			prevPoll, prevChain, prevWatch := orderPollEvery, orderOnchainPollEvery, watchNoticesFn
+			t.Cleanup(func() { orderPollEvery, orderOnchainPollEvery, watchNoticesFn = prevPoll, prevChain, prevWatch })
+			if subscribe {
+				orderPollEvery, orderOnchainPollEvery = time.Hour, 20*time.Millisecond
+				watchNoticesFn = func(context.Context, string, string, []string) (<-chan struct{}, func(), error) {
+					return make(chan struct{}), func() {}, nil
+				}
+			} else {
+				orderPollEvery, orderOnchainPollEvery = 20*time.Millisecond, time.Hour
+				watchNoticesFn = func(context.Context, string, string, []string) (<-chan struct{}, func(), error) {
+					return nil, nil, errors.New("no relay")
+				}
+			}
+			lookups := 0
+			f.lookup = func(nipcash.PendingCall) (nipcashclient.LookupOutcome, *nipCO.Order, error) {
+				lookups++
+				return nipcashclient.LookupOutcome{}, nil, errors.New("unanswered")
+			}
+			c := orderCmd(newCashOrderWatchCmd(), nil)
+			captureStreams(t, func() { _ = watchOrder(c, o.OrderID, 300*time.Millisecond) })
+			if lookups < 3 {
+				t.Errorf("read %d times in 300 ms, want a timer", lookups)
+			}
+		})
+	}
+}
