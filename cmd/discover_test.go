@@ -214,3 +214,27 @@ func TestDiscover_GlobalListingSeedsNothingTrusted(t *testing.T) {
 		}
 	}
 }
+
+// D-3: text output names each recommendation's author and date.
+func TestDiscover_TextNamesEachSignal(t *testing.T) {
+	f := newListingFixture(t)
+	curPriv, curPub := testmint.Key(t)
+	rec := listing.NewRecommendation(f.orders.hubXOnly, "", []listing.Ref{{Pubkey: f.addr}}, "")
+	rec.CreatedAt = uint64(time.Now().Unix()) //nolint:gosec // unix time
+	if err := rec.Sign(curPriv); err != nil {
+		t.Fatal(err)
+	}
+	f.events = append(f.events, rec)
+	if _, err := runDiscover(t, discoverCmd(newDiscoverCuratorsCmd(), nil), []string{"add", curPub}); err != nil {
+		t.Fatal(err)
+	}
+	c := discoverCmd(newDiscoverListCmd(), map[string]string{"json": "false"})
+	var err error
+	stdout, _ := captureStreams(t, func() { err = c.Execute() })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "recommended by " + npubOrHex(curPub) + " on " + time.Now().UTC().Format("2006-01-02"); !strings.Contains(stdout, want) {
+		t.Errorf("stdout %q lacks %q", stdout, want)
+	}
+}

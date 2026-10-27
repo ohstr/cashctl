@@ -459,6 +459,15 @@ func untrusted(s string, maxClusters int) string {
 	return output.Sanitize(listing.SanitizeText(s, maxClusters))
 }
 
+// signalAuthor names a signal's author: their kind-0 name, else their npub.
+func signalAuthor(r map[string]any) string {
+	if n, _ := r["name"].(string); n != "" {
+		return n
+	}
+	by, _ := r["by"].(string)
+	return npubOrHex(by)
+}
+
 func npubOrHex(pub string) string {
 	if n, err := nip19.EncodePublicKey(pub); err == nil {
 		return n
@@ -491,11 +500,17 @@ func listingView(d discovered) map[string]any {
 	}
 	v["hints_as_listed"] = output.NonNil(hints)
 	var recs, reps []map[string]any
+	named := func(m map[string]any, who string) map[string]any {
+		if n := d.Names[who]; n != "" {
+			m["name"] = n
+		}
+		return m
+	}
 	for _, r := range d.Signals.Recommendations {
-		recs = append(recs, map[string]any{"by": r.Author, "at": r.CreatedAt})
+		recs = append(recs, named(map[string]any{"by": r.Author, "at": r.CreatedAt}, r.Author))
 	}
 	for _, r := range d.Signals.Reports {
-		reps = append(reps, map[string]any{"by": r.Author, "reason": string(r.Reason), "other_offer": r.Addr != "" && r.Addr != l.Address()})
+		reps = append(reps, named(map[string]any{"by": r.Author, "reason": string(r.Reason), "other_offer": r.Addr != "" && r.Addr != l.Address()}, r.Author))
 	}
 	v["recommendations"], v["reports"] = output.NonNil(recs), output.NonNil(reps)
 	section := "unreviewed"
@@ -612,11 +627,19 @@ func printListingCard(v map[string]any) {
 	if summary, _ := v["summary"].([]string); len(summary) > 0 {
 		output.Printf("    as listed: %s\n", strings.Join(summary, " · "))
 	}
-	if recs, _ := v["recommendations"].([]map[string]any); len(recs) > 0 {
-		output.Printf("    recommended by %d curator(s)\n", len(recs))
+	// Each signal by its author, a recommendation with its date (D-3).
+	recs, _ := v["recommendations"].([]map[string]any)
+	for _, r := range recs {
+		at, _ := r["at"].(int64)
+		output.Printf("    recommended by %s on %s\n", signalAuthor(r), time.Unix(at, 0).UTC().Format("2006-01-02"))
 	}
-	for _, r := range v["reports"].([]map[string]any) {
-		output.Printf("    reported (%v)\n", r["reason"])
+	reps, _ := v["reports"].([]map[string]any)
+	for _, r := range reps {
+		about := ""
+		if r["other_offer"] == true {
+			about = ", about another offer of this node"
+		}
+		output.Printf("    reported by %s (%v)%s\n", signalAuthor(r), r["reason"], about)
 	}
 }
 
