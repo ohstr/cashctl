@@ -26,8 +26,9 @@ func powMax() (int, error) {
 		return defaultPowMax, nil
 	}
 	n, err := strconv.Atoi(v)
-	if err != nil || n < 0 || n > 64 {
-		return 0, fmt.Errorf("%s=%q is not a difficulty between 0 and 64", powMaxEnv, v)
+	// 0 is refused: nmilat reads a zero budget as no cap at all.
+	if err != nil || n < 1 || n > 64 {
+		return 0, fmt.Errorf("%s=%q is not a difficulty between 1 and 64", powMaxEnv, v)
 	}
 	return n, nil
 }

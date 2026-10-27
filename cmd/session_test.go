@@ -5,13 +5,13 @@ import "testing"
 // CASHCTL_POW_MAX sets the proof-of-work cap; an unreadable value never
 // lifts it.
 func TestPowMax(t *testing.T) {
-	for v, want := range map[string]int{"": defaultPowMax, "20": 20, "0": 0} {
+	for v, want := range map[string]int{"": defaultPowMax, "20": 20, "1": 1} {
 		t.Setenv(powMaxEnv, v)
 		if got, err := powMax(); err != nil || got != want {
 			t.Errorf("%q: %d %v, want %d", v, got, err, want)
 		}
 	}
-	for _, bad := range []string{"x", "-1", "65"} {
+	for _, bad := range []string{"x", "-1", "0", "65"} {
 		t.Setenv(powMaxEnv, bad)
 		if _, err := powMax(); err == nil {
 			t.Errorf("%q accepted", bad)
