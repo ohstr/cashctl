@@ -261,6 +261,15 @@ func replaceMintByUser(cmd *cobra.Command, l *ledger.Ledger, id, device string, 
 	if c.State != ledger.CallStuck || c.Detail != "confirm_replace" {
 		return output.ConflictError(cmd, id, fmt.Errorf("call %s is %s: only a mint the Hub said it never saw can be placed again — run `cashctl cash settle` first", id, c.State))
 	}
+	// Only the copy of the wallet that placed it may place it again (NIP-CASH
+	// §Looking Up a Call).
+	if c.DeviceID != device {
+		return output.FinalConflictError(cmd, id, fmt.Errorf("mint %s was placed from another copy of this wallet: only that copy may mint it again", id))
+	}
+	// --json alone never consents to minting again.
+	if yes, _ := cmd.Flags().GetBool("yes"); jsonMode && !yes {
+		return output.UsageError(cmd, fmt.Errorf("minting %s again needs your explicit consent: add --yes", id))
+	}
 	if !Confirm(cmd, false, fmt.Sprintf("The Hub says it never saw mint %s. Mint it again (under its derived id, never twice)?", id)) {
 		output.Println("Cancelled.")
 		return nil
