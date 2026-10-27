@@ -44,7 +44,6 @@ import (
 
 	"github.com/ohstr/cashctl/internal/testmint"
 	nipcashclient "github.com/ohstr/nmilat/nipcash/client"
-	"github.com/ohstr/nmilat/nipcw"
 	relayclient "github.com/ohstr/nmilat/relay/client"
 	"gopkg.in/yaml.v3"
 )
@@ -342,9 +341,7 @@ func cmdFake(args []string) {
 	case "cash-hub":
 		out["value"] = testmint.MustCashHub(rnd(), "", "wss://fake.invalid")
 	case "circle-hub":
-		v, err := nipcw.EncodeCircleHubConnection(nipcw.CircleHubConnection{WalletPubkey: rnd(), Secret: rnd(), RelayURLs: []string{"wss://fake.invalid"}})
-		must(err)
-		out["value"] = v
+		out["value"] = testmint.MustCircleHub(rnd(), "", "wss://fake.invalid")
 	case "nwc":
 		out["value"] = "nostr+walletconnect://" + rnd() + "?relay=wss%3A%2F%2Ffake.invalid&secret=" + rnd()
 	case "nconnection":

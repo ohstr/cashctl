@@ -146,12 +146,34 @@ CREATE TABLE handoffs (
 	checked_at    TEXT
 );
 
-CREATE TABLE pending_joins (
+CREATE TABLE joins (
 	connection_pubkey TEXT PRIMARY KEY,
 	connection_secret TEXT NOT NULL,
 	hub_pubkey        TEXT NOT NULL,
+	member_pubkey     TEXT NOT NULL,
+	hub_connection    TEXT NOT NULL,
+	hub_identity      TEXT NOT NULL,
+	chain             TEXT NOT NULL,
 	hub_label         TEXT NOT NULL,
-	at                TEXT NOT NULL
+	conn_verified     INTEGER NOT NULL,
+	deadline          INTEGER NOT NULL,
+	device_id         TEXT NOT NULL,
+	terms             TEXT,
+	state             TEXT NOT NULL,
+	detail            TEXT,
+	retry_after       INTEGER,
+	wallet_name       TEXT,
+	created_at        INTEGER NOT NULL,
+	updated_at        INTEGER NOT NULL
+);
+
+CREATE TABLE unverified_confirmations (
+	conn_sha256  TEXT PRIMARY KEY,
+	hrp          TEXT NOT NULL,
+	hub_identity TEXT NOT NULL,
+	reason       TEXT NOT NULL,
+	confirmed_at INTEGER NOT NULL,
+	via          TEXT NOT NULL
 );
 `
 

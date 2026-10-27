@@ -65,12 +65,8 @@ func TestShortcutExample_DropsTheGroup(t *testing.T) {
 
 // join reports the granted cap in the unit it takes it in, beside the millis.
 func TestMaxAmountText(t *testing.T) {
-	v := uint64(500_000)
-	if got := maxAmountText(&v); got != output.FormatAmount(500_000) || got == "" {
+	if got := maxAmountText(500_000); got != output.FormatAmount(500_000) || got == "" {
 		t.Errorf("maxAmountText(500000) = %q", got)
-	}
-	if got := maxAmountText(nil); got != "" {
-		t.Errorf("maxAmountText(nil) = %q, want empty", got)
 	}
 }
 

@@ -82,7 +82,8 @@ func runCashSettle(cmd *cobra.Command, _ []string) error {
 		time.Sleep(time.Until(next))
 		settled = append(settled, settleCalls(cmd, l, settleOptions{})...)
 	}
-	return reportSettle(cmd, l, settled, device, jsonMode)
+	joins, joinsOpen := settleJoins(cmd, device)
+	return reportSettle(cmd, l, settled, joins, joinsOpen, device, jsonMode)
 }
 
 // nextDue is when the earliest open call becomes worth asking about again.
@@ -147,7 +148,7 @@ func callRecovery(c *ledger.Call) string {
 
 // reportSettle prints every call looked at and every call still open, and exits
 // 8 while anything placed from this file is still open.
-func reportSettle(cmd *cobra.Command, l *ledger.Ledger, settled []settledCall, device string, jsonMode bool) error {
+func reportSettle(cmd *cobra.Command, l *ledger.Ledger, settled []settledCall, joins []joinSettleRow, joinsOpen bool, device string, jsonMode bool) error {
 	rows := map[string]settleRow{}
 	var order []string
 	for _, s := range settled {
@@ -173,10 +174,19 @@ func reportSettle(cmd *cobra.Command, l *ledger.Ledger, settled []settledCall, d
 		list = append(list, rows[id])
 	}
 	if jsonMode {
-		output.PrintJSON(map[string]any{"calls": list, "joins": []any{}})
+		output.PrintJSON(map[string]any{"calls": list, "joins": output.NonNil(joins)})
 	} else {
-		if len(list) == 0 {
+		if len(list) == 0 && len(joins) == 0 {
 			output.Println("Nothing to settle.")
+		}
+		for _, j := range joins {
+			line := fmt.Sprintf("join %s at Hub %s: %s", shortFingerprint(j.ConnectionPubkey), shortFingerprint(j.HubPubkey), j.State)
+			if j.Summary != "" {
+				line += " — " + j.Summary
+			} else if j.Detail != "" {
+				line += " — " + j.Detail
+			}
+			output.Println(line)
 		}
 		for _, r := range list {
 			line := fmt.Sprintf("call %s (%s of %v): %s", r.Call, r.Purpose, r.TokenIDs, r.State)
@@ -194,7 +204,7 @@ func reportSettle(cmd *cobra.Command, l *ledger.Ledger, settled []settledCall, d
 			}
 		}
 	}
-	if stillOpen {
+	if stillOpen || joinsOpen {
 		return output.IndeterminateError(cmd, "", errors.New("some calls still have no answer; nothing was resent — run `cashctl cash settle` again later"))
 	}
 	return nil
@@ -223,7 +233,7 @@ func closeCallByUser(cmd *cobra.Command, l *ledger.Ledger, id, device string, js
 	row := rowOf(*c, device, "closed")
 	row.Recovery = recovery
 	if jsonMode {
-		output.PrintJSON(map[string]any{"calls": []settleRow{row}, "joins": []any{}})
+		output.PrintJSON(map[string]any{"calls": []settleRow{row}, "joins": []joinSettleRow{}})
 		return nil
 	}
 	output.Printf("Closed call %s.\n", id)

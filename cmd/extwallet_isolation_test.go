@@ -23,11 +23,7 @@ func cashCommandFile(name string) bool {
 
 // uriFormPending are cash-path files that still read the URI form, each until a
 // named change replaces it. Empty it as they land.
-var uriFormPending = map[string]string{
-	// Joins dial the circle over its URI until the signed circlehub1 (NIP-CW;
-	// needs nmilat's signed circlehub1).
-	"circle.go": "WP-10",
-}
+var uriFormPending = map[string]string{}
 
 func TestExtwalletIsolation_CashFilesNeverReadTheURIForm(t *testing.T) {
 	fset := token.NewFileSet()

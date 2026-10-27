@@ -1,5 +1,5 @@
 // Package testmint signs what a test needs as a Hub would: bills (scheme 1,
-// cash-mint:v1) and cashhub1 connection strings. Every encoder now refuses an
+// cash-mint:v1) and cashhub1 and circlehub1 connection strings. Every encoder now refuses an
 // unsigned bill or string, so a test fixture has to be signed like a real one.
 // For tests and test tooling only; it is never imported by the shipped binary
 // (cmd/dial_lint_test.go).
@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/ohstr/nmilat/nipcash"
+	"github.com/ohstr/nmilat/nipcw"
 	"github.com/ohstr/nmilat/utils"
 )
 
@@ -164,4 +165,65 @@ func Encode(t testing.TB, tok nipcash.Token) (string, error) {
 		return "", err
 	}
 	return nipcash.Encode(signed)
+}
+
+// CircleHub is a circlehub1 string signed by hubPriv's x-only identity on
+// chain "flokicoin": a random connection key and secret, label (when not
+// empty) and relays (wss://relay.example when none).
+func CircleHub(t testing.TB, hubPriv, label string, relays ...string) string {
+	t.Helper()
+	s, err := circleHub(hubPriv, nipcw.CircleHubConnection{Label: label, HasLabel: label != "", Relays: relays})
+	if err != nil {
+		t.Fatalf("testmint: %v", err)
+	}
+	return s
+}
+
+// MustCircleHub is CircleHub outside a test function; it panics.
+func MustCircleHub(hubPriv, label string, relays ...string) string {
+	s, err := circleHub(hubPriv, nipcw.CircleHubConnection{Label: label, HasLabel: label != "", Relays: relays})
+	if err != nil {
+		panic(err)
+	}
+	return s
+}
+
+// SignCircleHub signs c (its Pubkey and Secret random when empty) as hubPriv's
+// identity, on c.Chain or "flokicoin".
+func SignCircleHub(t testing.TB, hubPriv string, c nipcw.CircleHubConnection) string {
+	t.Helper()
+	s, err := circleHub(hubPriv, c)
+	if err != nil {
+		t.Fatalf("testmint: %v", err)
+	}
+	return s
+}
+
+func circleHub(hubPriv string, c nipcw.CircleHubConnection) (string, error) {
+	if c.Chain == "" {
+		c.Chain = "flokicoin"
+	}
+	if len(c.Relays) == 0 {
+		c.Relays = []string{"wss://relay.example"}
+	}
+	if c.Pubkey == "" {
+		c.Pubkey = randomHex()
+	}
+	if c.Secret == "" {
+		c.Secret = randomHex()
+	}
+	identity, err := utils.GetPublicKey(hubPriv)
+	if err != nil {
+		return "", err
+	}
+	c.HubIdentity = identity
+	signer, err := nipcash.LocalChainSigner(hubPriv, c.Chain)
+	if err != nil {
+		return "", err
+	}
+	signed, err := nipcw.SignCircleHubConnection(c, signer, identity)
+	if err != nil {
+		return "", err
+	}
+	return nipcw.EncodeCircleHubConnection(signed)
 }

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/flokiorg/go-flokicoin/chainutil/bech32"
+	"github.com/ohstr/nmilat/nip47"
 	"github.com/ohstr/nmilat/nipcash"
 	relayclient "github.com/ohstr/nmilat/relay/client"
 	"github.com/spf13/cobra"
@@ -159,6 +160,9 @@ func validateConnectionValue(value string) error {
 	if _, err := extwallet.Parse(value); err == nil {
 		return nil
 	}
+	if _, ok, err := config.ParseCircleWallet(value); ok {
+		return err
+	}
 	// Classified before decoding: nipcash.Decode accepts any HRP, so a Hub
 	// string would otherwise register as a wallet that never works.
 	if tok, secret := nipcash.SplitCashSliceString(value); secret != "" && dial.Sniff(tok) == dial.KindCashToken {
@@ -183,9 +187,17 @@ type wrongConnectionKindError struct{ msg string }
 
 func (e *wrongConnectionKindError) Error() string { return e.msg }
 
-// DialGeneric connects to a registered wallet's nostr+walletconnect:// URI. A
-// bill is never a wallet, so a cash token is refused here too.
+// DialGeneric connects to a registered wallet: a Circle Wallet from its stored
+// fields (a pairing built in memory, never a URI), or an outside wallet's
+// nostr+walletconnect:// URI. A bill is never a wallet, so a cash token is
+// refused here too.
 func DialGeneric(ctx context.Context, value string) (*relayclient.NWCClient, error) {
+	if w, ok, err := config.ParseCircleWallet(value); ok {
+		if err != nil {
+			return nil, err
+		}
+		return relayclient.NewNWCClient(ctx, &nip47.PairingInfo{WalletPubkey: w.WalletPubkey, RelayURLs: w.Relays, Secret: w.Secret}, nip47.EncryptionNIP44V2)
+	}
 	if !extwallet.IsURI(value) {
 		return nil, fmt.Errorf("not a wallet connection — expected a nostr+walletconnect:// URI")
 	}

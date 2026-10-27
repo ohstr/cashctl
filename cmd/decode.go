@@ -12,7 +12,6 @@ import (
 	"github.com/ohstr/nmilat/nipcash"
 	nipcashclient "github.com/ohstr/nmilat/nipcash/client"
 	"github.com/ohstr/nmilat/nipcw"
-	relayclient "github.com/ohstr/nmilat/relay/client"
 	"github.com/spf13/cobra"
 
 	"github.com/ohstr/cashctl/internal/dial"
@@ -174,35 +173,52 @@ func decodeCashToken(cmd *cobra.Command, value, embeddedCashSecret string, jsonM
 	return nil
 }
 
+// decodeCircleHub shows a circlehub1 string's public fields and whether its
+// signature confirms the Hub it names; never its secret. --check runs the
+// online check and reports whether the circle takes joins now.
 func decodeCircleHub(cmd *cobra.Command, value string, jsonMode, check bool) error {
-	conn, err := nipcw.DecodeCircleHubConnection(value)
+	c, err := readConnection(cmd, value, nipcw.CircleHubConnectionHRP)
 	if err != nil {
-		return output.InvalidInputError(cmd, value, err)
+		return err
 	}
-
+	h := c.Circle
+	warnings := []string{circleHubKeepPrivate}
+	if !c.Verified {
+		warnings = append(warnings, "Hub not confirmed: "+unverifiedReasonText(c))
+	}
+	out := map[string]any{
+		"type":              "circlehub",
+		"connection_pubkey": h.Pubkey,
+		"relays":            h.Relays,
+		"hub_identity":      h.HubIdentity,
+		"chain":             h.Chain,
+		"signature":         signatureLabel(c),
+		"warnings":          warnings,
+	}
+	if h.HasLabel {
+		out["label"] = h.Label
+	}
+	if !c.Verified {
+		out["signature_reason"] = c.Reason
+	}
 	if !jsonMode {
 		output.Println("type: circlehub")
-		output.Printf("wallet_pubkey: %s\n", conn.WalletPubkey)
-		output.Printf("relays: %s\n", joinStrings(conn.RelayURLs))
-		if conn.Label != "" {
-			// Sanitized: an attacker-controlled Circle Hub connection's own
-			// label has no character restrictions at decode time (see
-			// nipcw.DecodeCircleHubConnection) — this is exactly the
-			// inspect-before-you-trust output `decode` exists for.
-			output.Printf("label: %s\n", output.Sanitize(conn.Label))
+		if h.HasLabel {
+			// Sanitized: the label is whoever made the string's text.
+			output.Printf("label: %s (not confirmed)\n", output.Sanitize(h.Label))
 		}
+		output.Printf("claimed Hub: %s\n", shortFingerprint(h.HubIdentity))
+		output.Printf("chain: %s\n", output.Sanitize(h.Chain))
+		output.Printf("relays: %s\n", joinStrings(h.Relays))
+		if c.Verified {
+			output.Println("signature: verified (the string was issued by the Hub it names)")
+		} else {
+			output.Printf("signature: unverified — %s\n", unverifiedReasonText(c))
+		}
+		output.Notef(false, "Note: %s.", circleHubKeepPrivate)
 	}
-
-	out := map[string]any{
-		"type":          "circlehub",
-		"hrp":           nipcw.CircleHubConnectionHRP,
-		"wallet_pubkey": conn.WalletPubkey,
-		"relays":        conn.RelayURLs,
-		"label":         conn.Label,
-	}
-
 	if shouldRunCheck(cmd, jsonMode, check, "Check if joining is possible?") {
-		result := checkCircleHubJoinable(jsonMode, conn)
+		result := checkCircleHubJoinable(jsonMode, c)
 		if jsonMode {
 			out["check"] = result
 		} else {
@@ -214,6 +230,10 @@ func decodeCircleHub(cmd *cobra.Command, value string, jsonMode, check bool) err
 	}
 	return nil
 }
+
+// circleHubKeepPrivate is said about every circlehub1 string: anyone holding
+// it may join the circle (when they are allowed) and look joins up.
+const circleHubKeepPrivate = "share this string only with people you want in the circle"
 
 // decodeNpub shows an npub's hex public key, the form `--to` and the Hub's
 // own output use.
@@ -529,83 +549,93 @@ func formatExpiry(expiresAt int64) string {
 }
 
 // circleCheckResult is decode --check's report for a circlehub1...
-// connection: only ever "is joining possible here at all" (reachable, and
-// the Hub advertises create_circle_wallet) — never a check of whether any
-// particular identity is allowlisted, since nothing short of actually
-// calling create_circle_wallet answers that. It ALSO can't see the Hub's
-// own expiry: get_info is always-granted and bypasses the generic per-app
-// expiry check entirely (confirmed live — an already-expired circle_hub's
-// connection still reports OK here, even though `join` against the same
-// connection is correctly rejected EXPIRED/auth; there's no read-only
-// NIP-47 call that could see this ahead of time — see
-// docs/private/audit-round2-expiration-matrix.md). Note carries that
-// caveat into --json too, not just the text-mode rendering below, so a
-// script/agent doesn't read OK:true as a stronger guarantee than it is.
+// connection: the online check, and whether the circle takes joins now. It
+// never says whether a particular identity may join: only a join answers that.
 type circleCheckResult struct {
-	OK    bool   `json:"ok"`
-	Error string `json:"error,omitempty"`
-	Note  string `json:"note,omitempty"`
-	// PrivateJoin is whether get_info names the node identity that NIP-CW
-	// Private Join needs; nil when the check didn't get that far. Offered is
-	// not verified: join still checks the Hub's announcement.
+	OK          bool   `json:"ok"`
+	OnlineCheck string `json:"online_check"`
+	Error       string `json:"error,omitempty"`
+	Note        string `json:"note,omitempty"`
+	// Accepting is circle_wallet.accepting: whether the circle takes joins now.
+	Accepting *bool `json:"accepting,omitempty"`
+	// PrivateJoin is whether get_info names the node identity a private join
+	// needs (every join is private). Offered is not verified: join still
+	// checks the Hub's announcement.
 	PrivateJoin *bool `json:"private_join,omitempty"`
 	// CirclePolicy is get_info's circle_policy as sent.
 	CirclePolicy string `json:"circle_policy,omitempty"`
+	Network      string `json:"network,omitempty"`
+	Chain        string `json:"chain,omitempty"`
+	TestNetwork  bool   `json:"test_network,omitempty"`
 }
 
-// circleJoinableCaveat is circleCheckResult's own Note/text-mode wording
-// when OK — see the type's own doc comment for exactly what this can and
-// can't prove.
-const circleJoinableCaveat = "reachable and supports circle wallets — doesn't confirm the Hub hasn't expired or that you're allowlisted; an actual `join` can still fail"
+// circleJoinableCaveat is circleCheckResult's Note when OK.
+const circleJoinableCaveat = "the Hub answers as the string names and takes joins — doesn't confirm you're allowed in; an actual `join` can still fail"
 
-func checkCircleHubJoinable(jsonMode bool, conn nipcw.CircleHubConnection) circleCheckResult {
-	var cw *nip47.CircleWalletInfo
+func checkCircleHubJoinable(jsonMode bool, c *conn) circleCheckResult {
+	var info *nip47.GetInfoResult
 	err := WithSpinner(jsonMode, "Checking...", func() error {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		pairing := &nip47.PairingInfo{WalletPubkey: conn.WalletPubkey, RelayURLs: conn.RelayURLs, Secret: conn.Secret}
-		client, err := relayclient.NewNWCClient(ctx, pairing, nip47.EncryptionNIP44V2)
+		client, err := dialCircleHubFn(ctx, c.Raw)
 		if err != nil {
 			return err
 		}
 		defer client.Close()
-
-		info, err := client.GetInfo(ctx)
-		if err != nil {
-			return err
-		}
-		for _, m := range info.Methods {
-			if m == nipcw.MethodCreateCircleWallet {
-				cw = info.CircleWallet
-				return nil
-			}
-		}
-		return fmt.Errorf("reachable, but this Hub doesn't support create_circle_wallet")
+		info, err = client.Info(ctx)
+		return err
 	})
-	if err != nil {
+	switch {
+	case errors.Is(err, nipcash.ErrHubIdentityMismatch):
+		return circleCheckResult{OnlineCheck: "identity_mismatch"}
+	case errors.Is(err, nipcash.ErrChainMismatch):
+		return circleCheckResult{OnlineCheck: "chain_mismatch"}
+	case err != nil:
 		// Sanitized: same reasoning as checkCashTokenAgainstHub above.
-		return circleCheckResult{OK: false, Error: output.Sanitize(err.Error())}
+		return circleCheckResult{OnlineCheck: "unreachable", Error: output.Sanitize(err.Error())}
 	}
-	return circleJoinableResult(cw)
+	r := circleJoinableResult(info.CircleWallet)
+	r.Network, r.Chain, r.TestNetwork = output.Sanitize(info.Network), output.Sanitize(info.Chain), info.Network != "mainnet"
+	return r
 }
 
-// circleJoinableResult is a passed check's report, with what get_info's
-// circle_wallet says about private join and membership.
+// circleJoinableResult is a passed online check's report, with what get_info's
+// circle_wallet says about joining.
 func circleJoinableResult(cw *nip47.CircleWalletInfo) circleCheckResult {
 	offered := cw != nil && cw.Identity != ""
-	r := circleCheckResult{OK: true, Note: circleJoinableCaveat, PrivateJoin: &offered}
+	r := circleCheckResult{OK: true, OnlineCheck: "pass", Note: circleJoinableCaveat, PrivateJoin: &offered}
 	if cw != nil {
 		r.CirclePolicy = output.Sanitize(cw.CirclePolicy)
+		r.Accepting = cw.Accepting
+		if cw.Accepting == nil || !*cw.Accepting {
+			r.OK = false
+			r.Note = "this circle isn't taking new members now"
+		}
 	}
 	return r
 }
 
 func printCircleCheck(r circleCheckResult) {
-	if !r.OK {
-		output.Printf("check: %s\n", r.Error)
+	switch r.OnlineCheck {
+	case "identity_mismatch":
+		output.Println("online check: FAILED — the Hub answers as another identity than the string names")
+		return
+	case "chain_mismatch":
+		output.Println("online check: FAILED — the Hub names another chain than the string, or none")
+		return
+	case "unreachable":
+		output.Printf("check: couldn't reach the Hub (%s)\n", r.Error)
 		return
 	}
-	output.Printf("check: appears joinable (%s)\n", r.Note)
+	output.Println("online check: pass (the Hub answers as the identity and chain the string names)")
+	if r.TestNetwork {
+		output.Printf("network: %s — a test network, not real money\n", r.Network)
+	}
+	if r.OK {
+		output.Printf("check: appears joinable (%s)\n", r.Note)
+	} else {
+		output.Printf("check: %s\n", r.Note)
+	}
 	if r.PrivateJoin != nil {
 		output.Printf("private join: %s\n", offeredText(*r.PrivateJoin))
 	}

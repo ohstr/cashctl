@@ -7,7 +7,6 @@ import (
 	"github.com/ohstr/nmilat/nip19"
 	"github.com/ohstr/nmilat/nipIC"
 	"github.com/ohstr/nmilat/nipcash"
-	"github.com/ohstr/nmilat/nipcw"
 
 	"github.com/ohstr/cashctl/internal/testmint"
 )
@@ -36,16 +35,8 @@ func TestSniff_CashToken(t *testing.T) {
 }
 
 func TestSniff_CircleHub(t *testing.T) {
-	s, err := nipcw.EncodeCircleHubConnection(nipcw.CircleHubConnection{
-		WalletPubkey: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-		Secret:       "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-		// A relay hint is REQUIRED by every encoder now, so even a fixture that
-		// does not care where the wallet lives must name one.
-		RelayURLs: []string{"wss://relay.example"},
-	})
-	if err != nil {
-		t.Fatalf("test setup: EncodeCircleHubConnection() error = %v", err)
-	}
+	hubPriv, _ := testmint.Key(t)
+	s := testmint.CircleHub(t, hubPriv, "")
 	if got := Sniff(s); got != KindCircleHub {
 		t.Errorf("Sniff(%q) = %v, want KindCircleHub", s, got)
 	}

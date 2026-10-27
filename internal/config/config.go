@@ -67,15 +67,18 @@ type Store struct {
 	loaded        map[string]Connection
 	loadedDefault string
 
-	// answeredJoins are pending joins (see PendingJoin) Save removes in the
-	// same transaction that registers their wallet.
-	answeredJoins []string
+	// answeredJoins are joins (see Join) Save marks done in the same
+	// transaction that registers their wallet, by connection pubkey.
+	answeredJoins []answeredJoin
 }
 
-// AnsweredJoin marks the pending join with this connection pubkey for
-// removal by the next Save, alongside the wallet it produced.
-func (s *Store) AnsweredJoin(connectionPubkey string) {
-	s.answeredJoins = append(s.answeredJoins, connectionPubkey)
+type answeredJoin struct{ connectionPubkey, walletName string }
+
+// AnsweredJoin marks the join with this connection pubkey done by the next
+// Save, alongside the wallet (walletName) it produced; its secret then lives
+// only in that wallet.
+func (s *Store) AnsweredJoin(connectionPubkey, walletName string) {
+	s.answeredJoins = append(s.answeredJoins, answeredJoin{connectionPubkey, walletName})
 }
 
 // snapshot records s's current contents as the baseline the next Save
@@ -245,9 +248,10 @@ func (s *Store) save() error {
 			return fmt.Errorf("cashctl.db: removing connection %s: %w", name, err)
 		}
 	}
-	for _, pub := range s.answeredJoins {
-		if _, err := tx.Exec(`DELETE FROM pending_joins WHERE connection_pubkey = ?`, pub); err != nil {
-			return fmt.Errorf("cashctl.db: removing a pending join: %w", err)
+	for _, a := range s.answeredJoins {
+		if _, err := tx.Exec(`UPDATE joins SET state = 'done', connection_secret = '', wallet_name = ?, detail = NULL,
+			updated_at = strftime('%s','now') WHERE connection_pubkey = ?`, a.walletName, a.connectionPubkey); err != nil {
+			return fmt.Errorf("cashctl.db: closing a join: %w", err)
 		}
 	}
 	if s.Default != s.loadedDefault {

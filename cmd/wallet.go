@@ -139,8 +139,9 @@ pending_joins and pending_merge.`,
 					// history --show-secrets` shows them in full to resend.
 					"unclaimed_handoffs": unclaimedHandoffs(l),
 					"pending_merge":      pendingMergeJSON(l),
-					// Joins the Hub never answered: the wallet may exist, known to
-					// the Hub by connection_pubkey. The secret is never shown.
+					// Joins not finished (open, or kept to show, such as an expired
+					// one): the wallet may exist, known to the Hub by
+					// connection_pubkey. The secret is never shown.
 					"pending_joins": pendingJoins,
 				})
 				return nil
@@ -192,13 +193,20 @@ pending_joins and pending_merge.`,
 				output.Printf("\nHanded out, not yet claimed: %d — `cashctl wallet history --show-secrets` to resend\n", len(pending))
 			}
 			if len(pendingJoins) > 0 {
-				output.Printf("\nJoins with no answer: %d — the wallet may exist; if a join says you already hold one, ask the circle's host to delete the wallet with this connection key, then join again\n", len(pendingJoins))
+				output.Printf("\nJoins not finished: %d — `cashctl cash settle` asks the Hub about open ones\n", len(pendingJoins))
 				for _, j := range pendingJoins {
-					hub := j.HubLabel
+					hub := output.Sanitize(j.HubLabel)
 					if hub == "" {
-						hub = j.HubPubkey
+						hub = "Hub " + shortFingerprint(j.HubPubkey)
 					}
-					output.Printf("  %s   connection key %s   %s\n", output.Sanitize(hub), j.ConnectionPubkey, j.At)
+					if !j.ConnVerified {
+						hub += " (Hub not confirmed)"
+					}
+					state := j.State
+					if j.Detail != "" {
+						state += ": " + output.Sanitize(j.Detail)
+					}
+					output.Printf("  %s   connection key %s   %s   %s\n", hub, j.ConnectionPubkey, state, time.Unix(j.CreatedAt, 0).UTC().Format(time.RFC3339))
 				}
 			}
 			// Last, and only when there is something to say: calls whose answer
