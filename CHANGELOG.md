@@ -2,6 +2,10 @@
 
 ## [0.7.0-rc.1]
 
+- Adds `cash discover recommend`, `report`, `publish-due`, `operator` and
+  `curators publish|pull`, and verifies a listing's operator; recommendations
+  and reports are published after a random delay. `cash discover list
+  --offline` reads only the events it cached.
 - Adds `cash discover list|show|open|relays|curators`, which finds order links
   and circles listed on Nostr relays, checks one with its Hub when you show it,
   and orders from it or joins it.
