@@ -861,7 +861,7 @@ func runCashTransfer(cmd *cobra.Command, args []string) error {
 		// held: with nothing held at all, resolveHeldToken's own "receive
 		// one first" error below is the clearer message — cash selection
 		// would otherwise report a confusing "not enough funds: you hold 0."
-		plan, err := ledger.SelectForAmount(l.Held(), amountFlag)
+		plan, err := ledger.SelectForAmount(unlockedHeld(l), amountFlag)
 		if err != nil {
 			// Both error types' own Error() states their two amounts as
 			// bare unlabeled numbers (see FundsFragmentedError's own doc

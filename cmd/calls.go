@@ -228,6 +228,45 @@ func refuseOpenCalls(cmd *cobra.Command, l *ledger.Ledger, entryIDs []string) er
 	return nil
 }
 
+// refuseLocked is refuseOpenCalls plus a merge key still waiting to be
+// confirmed on the bill: such a key may be all that spends it, so nothing may
+// replace or clear it.
+func refuseLocked(cmd *cobra.Command, l *ledger.Ledger, entryIDs []string) error {
+	if err := refuseOpenCalls(cmd, l, entryIDs); err != nil {
+		return err
+	}
+	for _, id := range entryIDs {
+		if e, ok := l.Find(id); ok && e.PendingThrowawayKey != "" {
+			return output.FinalConflictError(cmd, id, fmt.Errorf(
+				"an earlier merge moved %s onto a key the Hub has not confirmed yet, so nothing more is sent from it until it does. "+
+					"Run `cashctl cash settle`, then try again", id))
+		}
+	}
+	return nil
+}
+
+// locked reports a held bill no new call may spend: an open call names it, or
+// a merge key on it is not confirmed yet.
+func locked(l *ledger.Ledger, e *ledger.Entry) bool {
+	if e.PendingThrowawayKey != "" {
+		return true
+	}
+	_, open := l.OpenCallFor(e.ID)
+	return open
+}
+
+// unlockedHeld is l.Held() without the bills an automatic pick must skip
+// (locked): they stay the user's, but are spoken for until their call ends.
+func unlockedHeld(l *ledger.Ledger) []ledger.Entry {
+	var out []ledger.Entry
+	for _, e := range l.Held() {
+		if !locked(l, &e) {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
 // closeCall gives a call its final state: the generated secrets have been
 // copied into an entry or a hand-off by the caller, so they and the call's
 // authorizing secrets are wiped. The caller's Save persists it with the

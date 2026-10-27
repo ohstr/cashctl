@@ -231,7 +231,7 @@ func runCashConsolidate(cmd *cobra.Command, args []string) error {
 	}
 
 	if len(args) > 0 || sourcesFlag != "" {
-		items, err := resolveConsolidateSources(args, sourcesFlag, l.Held())
+		items, err := resolveConsolidateSources(args, sourcesFlag, unlockedHeld(l))
 		if err != nil {
 			return output.InvocationError(cmd, err)
 		}
@@ -256,8 +256,10 @@ func runCashConsolidate(cmd *cobra.Command, args []string) error {
 	// can actually be merged instead (see mergeableHubGroups) and
 	// process each such group, rather than erroring out and making the
 	// common "tidy up my dust" case require first hunting down IDs.
-	groups := mergeableHubGroups(l.Held())
-	alone := aloneOnTheirHub(l.Held())
+	// A bill with an open call is spoken for until that call ends: never
+	// picked automatically.
+	groups := mergeableHubGroups(unlockedHeld(l))
+	alone := aloneOnTheirHub(unlockedHeld(l))
 	if len(groups) == 0 {
 		if jsonMode {
 			output.PrintJSON(withAlone(map[string]any{"consolidated": []any{}}, alone))
@@ -462,6 +464,9 @@ func consolidateItems(cmd *cobra.Command, l *ledger.Ledger, items []string, toFl
 				// cannot reach this.
 				if spent := spentStatusDescription(e.Status); spent != "" {
 					return alreadySpentError(cmd, e.ID, e.Status)
+				}
+				if err := refuseLocked(cmd, l, []string{e.ID}); err != nil {
+					return err
 				}
 				src, err := sourceFromEntry(cmd, l, e)
 				if err != nil {
