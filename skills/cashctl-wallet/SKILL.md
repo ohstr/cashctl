@@ -135,11 +135,11 @@ expired), `code: "conflict"` (rate-limited, retry), `code: "invalid_input"`
 ```sh
 cashctl decode lokicash1... --json      # {"type":"cash_token","hrp","wallet_pubkey","relays","identity_required",...}
 cashctl decode lokicash1...#deadbeef --json  # cash-mode combined presentation — adds "embedded_cash_secret_present":true
-cashctl decode circlehub1... --json     # {"type":"circlehub","hrp","wallet_pubkey","relays","label"}
+cashctl decode circlehub1... --json     # {"type":"circlehub","connection_pubkey","relays","label"?,"hub_identity","chain","signature","signature_reason"?,"warnings"} — never the secret
 cashctl decode nostr+walletconnect://... --json  # {"type":"nwc_uri","wallet_pubkey","relays"}
 cashctl decode npub1... --json          # {"type":"npub","pubkey"} — the hex form
 cashctl decode lokicash1... --check --json    # adds "check":{"ok","amount_millis"?,"expires_at"?,"spent"?,"error"?} — a network call
-cashctl decode circlehub1... --check --json   # adds "check":{"ok","note"?,"error"?,"private_join"?,"circle_policy"?} — is joining even possible here, and privately
+cashctl decode circlehub1... --check --json   # adds "check":{"ok","online_check","note"?,"error"?,"accepting"?,"private_join"?,"circle_policy"?,"network"?,"chain"?,"test_network"?} — does the Hub answer as the string names, and does it take joins now
 ```
 
 The one general-purpose local decoder: paste in whichever of the three

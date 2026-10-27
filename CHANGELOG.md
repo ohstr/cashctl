@@ -2,6 +2,14 @@
 
 ## [0.7.0-rc.1]
 
+- Changes `join` to take only a `circlehub1` string, check that the Hub answers
+  as the identity and chain it names, and go over the private transport every
+  time; `--private` is removed. A string whose signature doesn't verify is used
+  only after you confirm it once (or `--allow-unverified`).
+- Adds `--max-receive` and `--backup-file` to `join`, and writes every join
+  down before it is sent; a join whose reply is lost is looked up, and `cash
+  settle` finishes it. A circle wallet is stored as its fields, never a URI.
+- Adds a `reason` to `--json` errors, naming the cause within `code`.
 - Adds `cash settle` (also `settle`), which asks the Hubs about calls whose
   answer never came and finishes them; every money command does this first. A
   call the Hub never saw is placed again under a derived id, never twice.

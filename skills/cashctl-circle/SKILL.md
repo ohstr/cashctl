@@ -1,6 +1,6 @@
 ---
 name: cashctl-circle
-description: Join a circle to get a personal Lightning wallet (`cashctl join`, aliasing `cashctl circle join`), the self-service call into a Circle Hub's create_circle_wallet. Use when handed a circlehub1... connection string (or a raw NWC URI for a Hub that hasn't adopted the bech32 form) and asked to join/onboard/get a wallet from it. For local-only inspection of a circlehub1... string itself, see `cashctl decode` in `skills/cashctl-wallet/SKILL.md`.
+description: Join a circle to get a personal Lightning wallet (`cashctl join`, aliasing `cashctl circle join`), the self-service call into a Circle Hub's create_circle_wallet. Use when handed a circlehub1... connection string and asked to join/onboard/get a wallet from it. For local-only inspection of a circlehub1... string itself, see `cashctl decode` in `skills/cashctl-wallet/SKILL.md`.
 license: Unlicense
 ---
 
@@ -21,12 +21,14 @@ Both forms work identically; prefer `join`.
 
 | Flag | Meaning |
 |---|---|
-| *(positional)*, or `--hub` (required) | the Circle Hub connection: `circlehub1...` (recommended) or a raw NWC URI |
+| *(positional)*, or `--hub` (required) | the Circle Hub's `circlehub1...` string (a NWC URI is refused) |
 | *(positional)*, or `--max-amount` (required) | requested spend cap, in loki — either positional order works (`join <hub> <amount>` or `join <amount> <hub>`), sniffed by shape |
 | `--expiry` | requested expiry duration (`0` = the Hub's own default) |
 | `--budget-renewal` | `daily`\|`weekly`\|`monthly`\|`yearly`\|`never` (default: the Hub's own) |
 | `--as` | override credential — `pubkey:<privkey>` (the only NIP-CW credential mode); defaults to your local identity |
-| `--private` | `prefer` (default): join privately when the Hub offers it, else over the shared connection, saying so; `require`: refuse instead of joining over the shared connection |
+| `--max-receive` | requested receive cap, in loki — required unless the Hub reports a default (`per_wallet_max_receive_millis`) |
+| `--allow-unverified` | use a string whose signature doesn't verify; ask the user first, never pass it on your own |
+| `--backup-file` | when the Hub can't rotate a lost connection: write the new wallet's fields there (0600) |
 
 `--hub`/`--max-amount` are kept working exactly as before for
 scripted/agentic use — the positional form above is just the shorter path
@@ -36,39 +38,42 @@ ever dialing the Hub (the Hub would reject it too, just after a
 round-trip).
 
 ```sh
-# {"wallet": "circle:<label-or-n>", "default": true, "private": true, "fallback_reason": "", "response": {"wallet_pubkey", "relays", "connection_pubkey", "expires_at", "max_amount_millis", "max_amount", "fees_ppm", "budget_renewal"}}
+# {"wallet": "circle:<label-or-n>", "default": true, "response": {"wallet_pubkey", "relays", "connection_pubkey", "expires_at", "max_amount_millis", "max_amount", "max_receive_millis", "fees_ppm", "budget_renewal", "dust_threshold_millis", "rotation_delay_secs"}, "terms", "warnings", "network", "chain", "test_network", "hub_verified"}
 cashctl join circlehub1... 100 --json
 ```
 
-**Private join.** When the Hub's `get_info` names a node `identity`, `join`
-sends the request over NIP-CASH's private transport, so the circle's other
-members don't see your pubkey on the shared Hub connection. `private` says
-whether it did. If the Hub offers it but its announcement can't be found or
-verified, `join` falls back to the shared connection and says so:
-`fallback_reason` (`""` otherwise), and a `joined without private transport:
-<reason>` line on stderr in text mode. A failure after such a fallback says
-in its message that it went over the shared connection. With
-`--private=require`, `join` refuses instead and sends nothing:
-`not_found` when the Hub doesn't offer private join, `network` (retryable)
-when its announcement couldn't be fetched or verified. Refusals carry the
-same codes on both transports (table below). `decode --check` shows whether
-a Hub offers private join before you join.
+**Every join is private.** The request goes over NIP-CASH's private
+transport, so the circle's other members don't see your pubkey. When the
+Hub's signed announcement can't be found, nothing is sent: `network`,
+`reason: join_unavailable` — retry later. A circle not taking members now is
+`auth`, `reason: not_accepting`.
+
+**The string is checked.** Before anything is sent, the Hub must answer as
+the identity and chain the `circlehub1` names; otherwise `auth`,
+`reason: connection_mismatch` — never retry with a string from the same
+place. A string whose signature doesn't verify (`hub_verified: false`) is
+used only after the user confirms it once (the prompt, or
+`--allow-unverified` once they agreed); under `--json` without the flag it
+is `usage`, `reason: connection_unverified`, nothing sent. `network` other
+than `mainnet` is a test network (`test_network: true`): not real money.
 
 `max_amount_millis` (`max_amount`: the same in loki) is the cap the Hub actually granted, which can be lower
-than the one you asked for (text mode says so); it is `null` if the Hub did
-not say. `fees_ppm` is the circle's in-circle fee, fixed at join.
+than the one you asked for (text mode says so). `fees_ppm` is the circle's
+in-circle fee, fixed at join.
 
-The wallet's connection key is made on your device: `join` generates it,
-saves its secret before asking, and sends the Hub only `connection_pubkey`.
-The Hub never sees the secret and cannot send a connection string back, so
-there is no "show it again": the wallet saved under `wallet` is the only
-copy. If the Hub never answers, whether the wallet was created is unknown;
-the key stays listed under `pending_joins` in `wallet show`. If a later
-`join` then says `exists`, that wallet is the one with that
-`connection_pubkey`: ask the circle's host to delete it, then join again.
-A Hub from before member-generated keys answers with no relays; `join`
-then fails as `internal` (not retryable: the wallet was likely made), and
-the key is kept the same way.
+The wallet's connection key is made on your device: `join` generates it and
+writes the join down (secret, deadline) before asking; the Hub sees only
+`connection_pubkey`, and the wallet is stored as its fields, never a URI.
+If the reply is lost, `join` looks the join up at once; if it is still
+unknown, `join` exits `indeterminate` (8) with `call.method:
+create_circle_wallet` and `settle_after`, and `cashctl cash settle` finishes
+it later (the wallet the Hub made is registered then). An `unknown` lookup
+means no wallet was made: join again (with a new key, never automatically).
+An expired one stays listed under `pending_joins` in `wallet show`.
+
+When the Hub can't rotate a lost connection (`rotation_delay_secs` absent),
+`join` warns first (`warnings`): losing the wallet's key loses its balance.
+Pass `--backup-file <path>` to keep a copy.
 
 A `--hub` value that's actually a **Cash Hub** connection (`cashhub1...`)
 gets a specific corrective error (`code: "invalid_input"`) — cashctl can't
@@ -92,14 +97,6 @@ A Hub's refusal tells you whether to retry — branch on `code`, with
 relays are not reachable). `decode --check` does not detect this. Retry with
 a growing delay — about 5s, 15s, then 60s — and if it persists past a few
 minutes, it is for the circle's host to fix, not something to keep retrying.
-
-Two joins from one identity within the same second look like a replayed
-proof to the Hub; `join` then waits a second and asks again once, so the
-answer you get is the real one (often `exists`, if the first join landed).
-
-A Hub that predates `WALLET_EXISTS` refuses with `RESTRICTED` and an
-"already has an active circle wallet" message; `join` reports that as
-`exists`/`WALLET_EXISTS` too.
 
 There is no `circle leave`/`circle list` — a circle membership is just an
 ordinary registered wallet from this point on (`cashctl wallet show`,

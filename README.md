@@ -240,7 +240,7 @@ cashctl cash settle --close <call>  # give up on one call (its new codes are pri
 Join a circle to get a personal Lightning wallet.
 
 ```sh
-cashctl join <circlehub1... or NWC URI> 100
+cashctl join circlehub1... 100
 ```
 
 The self-service entry point into a circle. Give it a Circle Hub's
@@ -249,10 +249,12 @@ or via `--hub`/`--max-amount`. A cap is required — there's no "unlimited"
 option.
 
 `join` calls `create_circle_wallet` on your behalf and saves the resulting
-wallet. If it's your first wallet, it also becomes your default. When the
-Hub offers private join, the request goes over NIP-CASH's private transport,
-so the circle's other members don't see your pubkey on the shared connection;
-if that transport can't be used, `join` says it joined without it.
+wallet. If it's your first wallet, it also becomes your default. Every join
+goes over NIP-CASH's private transport, so the circle's other members don't
+see your pubkey; when the Hub's announcement can't be found, nothing is sent.
+Before anything is sent, the Hub must answer as the identity and chain its
+string names; a string whose signature can't be confirmed is used only after
+you agree once. A join whose reply is lost is finished by `cash settle`.
 
 ```sh
 cashctl join circlehub1... --max-amount 100 --budget-renewal monthly
@@ -260,12 +262,14 @@ cashctl join circlehub1... --max-amount 100 --budget-renewal monthly
 
 | Flag | Meaning |
 |---|---|
-| *(positional)*, or `--hub` | the Circle Hub connection (required) |
+| *(positional)*, or `--hub` | the Circle Hub's `circlehub1...` string (required) |
 | *(positional)*, or `--max-amount` | requested spend cap, in loki (required) |
 | `--expiry` | requested expiry duration (default: the Hub's own) |
 | `--budget-renewal` | `daily`\|`weekly`\|`monthly`\|`yearly`\|`never` (default: the Hub's own) |
 | `--as` | override credential (defaults to your local identity) |
-| `--private` | `prefer` (default) or `require`: refuse rather than join over the shared connection |
+| `--max-receive` | requested receive cap, in loki (required unless the Hub sets a default) |
+| `--allow-unverified` | use a string whose signature can't be confirmed (asked once otherwise) |
+| `--backup-file` | where to write the new wallet's connection when the Hub can't rotate a lost one |
 
 `join` is a top-level shortcut for `cashctl circle join`.
 
