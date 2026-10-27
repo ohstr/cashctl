@@ -29,6 +29,10 @@ func newCashReceiveCmd() *cobra.Command {
 		Args: output.ExactArgs(1),
 		RunE: runCashReceive,
 	}
+	cmd.Flags().String("zap-event", "", "the Cash Zap (kind 9522) a zap bill came with: a file, - for stdin, or the JSON")
+	cmd.Flags().Bool("find-zap", false, "find a zap bill's Cash Zap on --relay (never on the bill's own relay hints)")
+	cmd.Flags().StringSlice("relay", nil, "a relay to look for the Cash Zap on (with --find-zap)")
+	cmd.Flags().Bool("trust-minter", false, "check a zap whose minter you don't trust yet with its Hub (its network can't be verified)")
 	return cmd
 }
 
@@ -41,6 +45,32 @@ func runCashReceive(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	// A Cash Zap given as the input, or a zap bill with its event.
+	if looksLikeZapEvent(raw) {
+		ev, evRaw, err := readZapEvent(cmd, raw)
+		if err != nil {
+			return err
+		}
+		return receiveZap(cmd, ev, evRaw)
+	}
+	if zapFlag, _ := cmd.Flags().GetString("zap-event"); zapFlag != "" {
+		ev, evRaw, err := readZapEvent(cmd, zapFlag)
+		if err != nil {
+			return err
+		}
+		return receiveZap(cmd, ev, evRaw)
+	}
+	if find, _ := cmd.Flags().GetBool("find-zap"); find {
+		tok, err := nipcash.Decode(strings.TrimSpace(raw))
+		if err != nil || tok.Scheme != nipcash.SchemeZapV1 {
+			return output.InvalidInputError(cmd, "", errors.New("--find-zap is for a zap bill (one signed for a Cash Zap)"))
+		}
+		ev, evRaw, err := findZapFor(cmd, tok)
+		if err != nil {
+			return err
+		}
+		return receiveZap(cmd, ev, evRaw)
+	}
 	// Trimmed: dial.Sniff trims for its own classification but the raw
 	// string would otherwise still reach nipcash.Decode, which rejects a
 	// stray leading/trailing space as invalid bech32.
@@ -50,7 +80,7 @@ func runCashReceive(cmd *cobra.Command, args []string) error {
 	case dial.KindCircleHub:
 		return output.InvalidInputError(cmd, input, fmt.Errorf("that's a Circle Hub connection — use `cashctl join <connection>` to join it"))
 	case dial.KindCashHub:
-		return output.InvalidInputError(cmd, input, fmt.Errorf("that's a Cash Hub connection (for minting cash) — cashctl can't mint, this needs the Hub operator's own tooling"))
+		return output.InvalidInputError(cmd, input, fmt.Errorf("that's a Cash Hub connection (for minting cash) — mint with `cashctl cash mint <amount> --hub -`"))
 	case dial.KindNWCURI:
 		return output.InvalidInputError(cmd, input, fmt.Errorf("that looks like a wallet connection, not a cash token — use `cashctl connect add <name> <uri>` instead"))
 	case dial.KindNostrEntity:
@@ -68,6 +98,10 @@ func runCashReceive(cmd *cobra.Command, args []string) error {
 	// The provenance gate first: a copy whose signature does not cover its own
 	// relays is refused before any of them is named or dialled.
 	if err := checkBillProvenance(tok); err != nil {
+		if errors.Is(err, errNeedsZapEvent) {
+			return output.InvalidInputError(cmd, input, errors.New(
+				"this bill came from a Cash Zap and needs its Cash Zap event: pass --zap-event <file>, or --find-zap --relay <url>"))
+		}
 		return output.InvalidInputError(cmd, input, err)
 	}
 	// Before anything below dials the bill's relays.

@@ -155,6 +155,18 @@ under a fresh secret (defaults to yes; always proceeds under
 issuer. A failure here doesn't fail the receive — retry later with
 `cashctl consolidate --to cash`.
 
+### Cash Zaps
+
+A Cash Zap (a kind-9522 event) carries a bill signed for that zap. `decode`
+shows its checks; `receive` takes it, asking before it contacts a minter you
+don't trust yet, and keeps the bill only once its Hub confirms your slice.
+
+```sh
+cashctl decode zap.json --target note.json   # rules 1-8, countable or not
+cashctl receive zap.json                      # or: receive <bill> --zap-event zap.json
+cashctl receive <bill> --find-zap --relay wss://relay.example
+```
+
 ## `cashctl redeem`
 
 Redeem a held cash token into a Lightning wallet.

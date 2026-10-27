@@ -119,6 +119,24 @@ keep showing as held until reconciled. Either way: treat a nonzero exit
 carrying `recovery` as "money moved, ledger didn't" — never as "nothing
 happened, retry freely".
 
+### Cash Zaps (kind 9522)
+
+```sh
+cashctl decode zap.json --target note.json --json   # {"type":"cash_zap","rules":[{"n","ok","reason"?}],"countable","minter_pubkey","amount_millis","chain","recipient","via"?,"possibly_expired"?}
+cashctl receive zap.json --json                      # {"received":true,"zap":true,"entry",...}
+cashctl receive <bill> --zap-event zap.json --json
+cashctl receive <bill> --find-zap --relay wss://... --json
+```
+
+`decode` never means money received; only `receive` (rule 9: the Hub's own
+row for your pubkey, unclaimed, of exactly the amount) proves it. A minter
+you don't trust needs the user's OK before anything is contacted:
+`--trust-minter` only after they agreed (else `usage`,
+`reason: minter_untrusted`). A zap bill without its event is refused; give
+it with `--zap-event`, or let `--find-zap` look on the relays you name.
+Suggest `consolidate` afterwards: it re-issues the bill as an ordinary one,
+unlinking it from the public zap.
+
 ## `cashctl redeem` — cash it out
 
 ```sh

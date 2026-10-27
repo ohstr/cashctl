@@ -73,6 +73,7 @@ CREATE TABLE entries (
 	throwaway_key              TEXT,
 	pending_throwaway_key      TEXT,
 	redeem_fee_millis          INTEGER,
+	zap_event                  TEXT,
 	created_by_call            TEXT,
 	version                    INTEGER NOT NULL DEFAULT 0
 );
@@ -165,6 +166,13 @@ CREATE TABLE joins (
 	wallet_name       TEXT,
 	created_at        INTEGER NOT NULL,
 	updated_at        INTEGER NOT NULL
+);
+
+CREATE TABLE trusted_minters (
+	minter_xonly TEXT NOT NULL,
+	chain        TEXT NOT NULL,
+	added_at     INTEGER NOT NULL,
+	PRIMARY KEY (minter_xonly, chain)
 );
 
 CREATE TABLE unverified_confirmations (
