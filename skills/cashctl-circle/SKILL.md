@@ -69,7 +69,11 @@ unknown, `join` exits `indeterminate` (8) with `call.method:
 create_circle_wallet` and `settle_after`, and `cashctl cash settle` finishes
 it later (the wallet the Hub made is registered then). An `unknown` lookup
 means no wallet was made: join again (with a new key, never automatically).
-An expired one stays listed under `pending_joins` in `wallet show`.
+An expired one stays listed under `pending_joins` in `wallet show`. When no
+lookup of a join is answered for 6 minutes past its deadline, `cash settle`
+tries once over another `circlehub1` you hold for the same circle (the
+string it joined with may have been revoked), then shows the join as
+`lookup_unanswered`.
 
 When the Hub can't rotate a lost connection (`rotation_delay_secs` absent),
 `join` warns first (`warnings`): losing the wallet's key loses its balance.
