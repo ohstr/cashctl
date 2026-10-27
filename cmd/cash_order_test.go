@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ohstr/nmilat/nip57/nip57test"
 	"github.com/ohstr/nmilat/nipCO"
 	"github.com/ohstr/nmilat/nipcash"
 	nipcashclient "github.com/ohstr/nmilat/nipcash/client"
@@ -76,7 +77,20 @@ func (f *fakeOrderHub) Place(ctx context.Context, p nipCO.CashOrderParams, j nip
 
 func (f *fakeOrderHub) open(amount uint64, payBy int64) *nipCO.Order {
 	return &nipCO.Order{State: nipCO.OrderOpen, Payment: nipCO.PaymentLightning, AmountMillis: amount, FeeMillis: 1000,
-		PayMillis: amount + 1000, Invoice: "lnfc1invoice", PayBy: payBy}
+		PayMillis: amount + 1000, Invoice: testInvoice(f.t, f.hubPriv, "fc", amount+1000, payBy), PayBy: payBy}
+}
+
+// testInvoice is a signed BOLT11 invoice of millis on currency that expires
+// at expiresAt.
+func testInvoice(t *testing.T, nodePriv, currency string, millis uint64, expiresAt int64) string {
+	t.Helper()
+	now := time.Now().Unix()
+	inv, err := nip57test.SignedBolt11(nip57test.Invoice{Currency: currency, AmountMillis: millis,
+		PaymentHash: mustHex(t, testmint.Hex32(t)), Timestamp: now, Expiry: expiresAt - now, NodePriv: nodePriv})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return inv
 }
 
 // minted is the order as it stands once paid and minted, its bill signed by
@@ -164,7 +178,7 @@ func TestOrderPlace_WritesAheadAndShowsWhatToPay(t *testing.T) {
 	if !f.writtenBeforeSend {
 		t.Error("the order went out before its call and row were written")
 	}
-	if doc["invoice"] != "lnfc1invoice" || doc["state"] != "open" || len(doc["warnings"].([]any)) == 0 {
+	if inv, _ := doc["invoice"].(string); !strings.HasPrefix(inv, "lnfc") || doc["state"] != "open" || len(doc["warnings"].([]any)) == 0 {
 		t.Errorf("--json %v", doc)
 	}
 	o, c := onlyOrder(t)
@@ -300,5 +314,30 @@ func TestOrderPlace_RowAndCallAreOneTransaction(t *testing.T) {
 	l, _ := ledger.Load()
 	if len(l.Calls) != 0 || len(f.placed) != 0 {
 		t.Errorf("calls %d, placed %d: want neither", len(l.Calls), len(f.placed))
+	}
+}
+
+// validateOrder decodes the invoice: its amount is pay_millis, it expires by
+// pay_by, and it is on the Hub's chain.
+func TestValidateOrder_ChecksTheInvoice(t *testing.T) {
+	priv, _ := testmint.Key(t)
+	payBy := time.Now().Unix() + 600
+	o := &ledger.Order{Payment: nipCO.PaymentLightning, AmountMillis: 100_000, Chain: "flokicoin"}
+	order := func(inv string) *nipCO.Order {
+		return &nipCO.Order{Payment: nipCO.PaymentLightning, AmountMillis: 100_000, FeeMillis: 1000, PayMillis: 101_000, PayBy: payBy, Invoice: inv}
+	}
+	if err := validateOrder(o, order(testInvoice(t, priv, "fc", 101_000, payBy)), 0); err != nil {
+		t.Fatalf("a good invoice: %v", err)
+	}
+	for name, inv := range map[string]string{
+		"another amount": testInvoice(t, priv, "fc", 100_000, payBy),
+		"amountless":     testInvoice(t, priv, "fc", 0, payBy),
+		"expires late":   testInvoice(t, priv, "fc", 101_000, payBy+60),
+		"another chain":  testInvoice(t, priv, "bc", 101_000, payBy),
+		"not an invoice": "lnfc1invoice",
+	} {
+		if err := validateOrder(o, order(inv), 0); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
 	}
 }
