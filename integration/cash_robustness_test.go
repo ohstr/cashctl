@@ -93,13 +93,13 @@ func TestCashReceive_TruncatedCashSecretIsRefused(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	cashClient := dialCash(t, ctx, hub.PairingUri)
 	mintResult, err := cashClient.MintCash(ctx, nipcash.MintCashParams{
-		Recipients: []nipcash.Allocation{nipcash.Send(nipcash.Anyone(), amountMillis)},
+		Recipients: []nipcash.Allocation{nipcash.Send(newCashRecipient(t), amountMillis)},
 	})
 	cancel()
 	if err != nil {
 		t.Fatalf("mint_cash (cash): %v", err)
 	}
-	realSecret := mintResult.Recipients[0].CashSecret
+	realSecret := secretFor(mintResult.Recipients[0])
 	truncatedSecret := realSecret[:len(realSecret)/2]
 
 	f := newFixture(t)

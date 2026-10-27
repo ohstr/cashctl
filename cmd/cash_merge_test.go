@@ -160,7 +160,7 @@ func TestMovesWithNoAnswer_AreSettledNotResent(t *testing.T) {
 
 	orig := probeCredentialFn
 	t.Cleanup(func() { probeCredentialFn = orig })
-	probeCredentialFn = func(e *ledger.Entry, cred nipcash.Credential, _ string) (bool, error) {
+	probeCredentialFn = func(e *ledger.Entry, cred nipcash.Credential) (bool, error) {
 		return cred == nipcash.BySigning(priv), nil // the move did happen
 	}
 	// Settling may move the note on (back to a fresh cash note, as a leftover), but
@@ -198,7 +198,7 @@ func TestSettlePendingMoves_TurnsLeftoversIntoCashNotes(t *testing.T) {
 	}
 	orig := probeCredentialFn
 	t.Cleanup(func() { probeCredentialFn = orig })
-	probeCredentialFn = func(*ledger.Entry, nipcash.Credential, string) (bool, error) { return false, context.DeadlineExceeded }
+	probeCredentialFn = func(*ledger.Entry, nipcash.Credential) (bool, error) { return false, context.DeadlineExceeded }
 	var spentWith []nipcash.Credential
 	withMoveFn(t, func(_ *ledger.Entry, cred nipcash.Credential, target nipcash.Target) (*nipcash.CashTransferResult, error) {
 		if _, ok := target.(*nipcash.CashTarget); !ok {

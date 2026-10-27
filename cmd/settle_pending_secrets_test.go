@@ -16,8 +16,8 @@ func withProbes(t *testing.T, live func(e *ledger.Entry, cred nipcash.Credential
 	t.Helper()
 	origLive, origAmount := probeCredentialFn, probeAmountFn
 	t.Cleanup(func() { probeCredentialFn, probeAmountFn = origLive, origAmount })
-	probeCredentialFn = func(e *ledger.Entry, cred nipcash.Credential, _ string) (bool, error) { return live(e, cred) }
-	probeAmountFn = func(e *ledger.Entry, cred nipcash.Credential, _ string) (uint64, bool, error) {
+	probeCredentialFn = func(e *ledger.Entry, cred nipcash.Credential) (bool, error) { return live(e, cred) }
+	probeAmountFn = func(e *ledger.Entry, cred nipcash.Credential) (uint64, bool, error) {
 		if amount == nil {
 			return 0, false, context.DeadlineExceeded
 		}

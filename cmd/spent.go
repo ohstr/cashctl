@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/ohstr/nmilat/nipcash"
 	"github.com/spf13/cobra"
 
 	"github.com/ohstr/cashctl/internal/ledger"
@@ -49,4 +50,14 @@ func alreadySpentError(cmd *cobra.Command, id, status string) error {
 		return output.SpentError(cmd, id, fmt.Errorf("token %q was already %s, so it is spent: its value has already moved", id, spentStatusDescription(status)))
 	}
 	return output.NotFoundError(cmd, id, fmt.Errorf("token %q was already %s, so it is no longer yours", id, spentStatusDescription(status)))
+}
+
+// expiryPtr is a Hub's expires_at as the ledger stores it: nil for a bill that
+// never expires (absent, null or 0 on the wire).
+func expiryPtr(e nipcash.Expiry) *int64 {
+	if e.Never() {
+		return nil
+	}
+	at := e.At
+	return &at
 }

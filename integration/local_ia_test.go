@@ -86,7 +86,7 @@ func (ia *localIA) Attest(t *testing.T, platform nipIC.WebIdentity, externalID, 
 	}
 	ev, err := nipIC.NewAttestation(nipIC.AttestationParams{
 		PrivateKey:    ia.privHex,
-		ConnectionKey: nipIC.NewConnectionKey(platform, externalID),
+		ConnectionKey: mustConnKey(t, platform, externalID),
 		UserPubkey:    userPubkey,
 		Platform:      platform,
 		Evidence: nipIC.Evidence{
@@ -149,7 +149,7 @@ func TestConnectionTarget_TransferReachesTheHubAndIsRefusedForAnUntrustedIA(t *t
 
 	ia := newUntrustedIA(t)
 	const platform, externalID = nipIC.WebIdentity("discord"), "482910"
-	nconn, err := nipIC.EncodeNConnection(nipIC.NewConnectionKey(platform, externalID), []string{"wss://relay.invalid"}, platform)
+	nconn, err := nipIC.EncodeNConnection(mustConnKey(t, platform, externalID), []string{"wss://relay.invalid"}, platform)
 	if err != nil {
 		t.Fatalf("encode nconnection: %v", err)
 	}
@@ -252,7 +252,7 @@ func TestConnectionTarget_TrustedIA_TransferSucceedsButCannotBeClaimed(t *testin
 	const platform, externalID = nipIC.WebIdentity("discord"), "77310045"
 	ia.Attest(t, platform, externalID, recipientPub, 90)
 
-	nconn, err := nipIC.EncodeNConnection(nipIC.NewConnectionKey(platform, externalID), []string{"wss://relay.invalid"}, platform)
+	nconn, err := nipIC.EncodeNConnection(mustConnKey(t, platform, externalID), []string{"wss://relay.invalid"}, platform)
 	if err != nil {
 		t.Fatalf("encode nconnection: %v", err)
 	}

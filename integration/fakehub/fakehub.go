@@ -4,8 +4,8 @@
 // announcement, decrypts each kind-23190 request with its inbox key, and
 // answers under the derived reply key, so everything cashctl does on the wire
 // is the real code path. Bills it mints carry a mint signature by the hub's own
-// key, which is all a client checks before trusting its announcement, so
-// cashctl treats it exactly like a real minter.
+// key (scheme 1, cash-mint:v1), which is all a client checks before trusting its
+// announcement, so cashctl treats it exactly like a real minter.
 //
 // It is an ordinary package, not a _test.go file, so the offline integration
 // tests and the agent-eval shim share one fake. The hostility knobs (LieTotal,
@@ -15,7 +15,6 @@ package fakehub
 
 import (
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
@@ -24,7 +23,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/decred/dcrd/dcrec/secp256k1/v4/ecdsa"
 	btcec "github.com/flokiorg/go-flokicoin/crypto"
 	"github.com/gorilla/websocket"
 
@@ -195,17 +193,21 @@ func (h *Hub) Limits() transport.Limits { return h.limits }
 func (h *Hub) Mint(amountMillis uint64, cashSecret string) (bill, walletPubkey string) {
 	h.t.Helper()
 	walletPubkey = RandomHex32(h.t)
-	payload := nipcash.MintPayload("lokicash", walletPubkey, amountMillis)
-	first := sha256.Sum256([]byte(nipcash.LNSignedMessagePrefix + payload))
-	second := sha256.Sum256(first[:])
-	tok, err := nipcash.Encode(nipcash.Token{
+	signer, err := nipcash.LocalMintSigner(h.hubPriv, "lokicash")
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	signed, err := nipcash.SignToken(nipcash.Token{
 		HRP:                  "lokicash",
 		WalletPubkey:         walletPubkey,
 		Secret:               RandomHex32(h.t),
 		RelayURLs:            []string{h.url},
-		MintSignature:        ecdsa.SignCompact(h.minter, second[:], true),
 		AttestedAmountMillis: &amountMillis,
-	})
+	}, nipcash.SchemeMintV1, nil, h.hubXOnly, signer)
+	if err != nil {
+		h.t.Fatalf("sign fake hub bill: %v", err)
+	}
+	tok, err := nipcash.Encode(signed)
 	if err != nil {
 		h.t.Fatalf("encode fake hub bill: %v", err)
 	}

@@ -230,12 +230,12 @@ func fetchExpiresAtWithCredential(cmd *cobra.Command, token string, cred nipcash
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	client, err := nipcashclient.Connect(ctx, token)
+	client, err := dialBill(ctx, token)
 	if err != nil {
 		return nil
 	}
 	defer client.Close()
-	result, err := client.CheckClaim(ctx, cred, tok, matchPubHex)
+	result, err := client.CheckClaim(ctx, cred, tok)
 	return expiresAtFromCheck(result, err)
 }
 
@@ -259,7 +259,11 @@ func expiresAtFromCheck(result *nipcash.CheckClaimResult, err error) *int64 {
 		}
 		return nil
 	}
-	return result.ExpiresAt
+	if !result.Claimable && result.Reason == "expired" {
+		passed := time.Now().Unix() - 1
+		return &passed
+	}
+	return expiryPtr(result.Row.ExpiresAt)
 }
 
 // earliestExpiry returns whichever of a/b expires soonest — nil (never
@@ -547,6 +551,10 @@ func printAndSaveTransferResult(cmd *cobra.Command, l *ledger.Ledger, transferRe
 		remainder := remainderMode
 		remainder.Token = transferResult.RemainderWalletToken
 		remainder.WalletPubkey = transferResult.RemainderWalletPubkey
+		remainder.Verified, remainder.MinterPubkey = returnedBillCheck(remainder.Token, remainderMode.MinterPubkey)
+		if !remainder.Verified {
+			output.Notef(jsonMode, unverifiedReturnNote)
+		}
 		remainderEntry, _ = l.Add(remainder)
 		// Bounded before it is recorded, like every other Hub-supplied amount that
 		// reaches the ledger (validateQuotedAmounts, cash_receive.go). One figure past
@@ -585,7 +593,12 @@ func printAndSaveTransferResult(cmd *cobra.Command, l *ledger.Ledger, transferRe
 	// transfer is already done by this point regardless of whether l.Save
 	// succeeds, and this string is the only way that result is ever
 	// recoverable once the process exits.
-	recipientToken := transferResult.RecipientToken(originalToken)
+	recipientToken, rtErr := transferResult.RecipientToken(originalToken)
+	if rtErr != nil {
+		// A spin-off the Hub named without its token: the bill exists, but the
+		// reply cannot hand it over. Recorded as sent; the Hub still holds it.
+		recipientToken = ""
+	}
 
 	// For a cash-mode target there's no recipient identity — the recipient
 	// is whoever holds the combined token#secret string, so that's what
@@ -899,7 +912,7 @@ func runCashTransfer(cmd *cobra.Command, args []string) error {
 
 	var client *nipcashclient.Client
 	err = WithSpinner(jsonMode, "Connecting...", func() error {
-		c, cErr := nipcashclient.Connect(ctx, entry.Token)
+		c, cErr := dialBill(ctx, entry.Token)
 		if cErr != nil {
 			return cErr
 		}
@@ -907,7 +920,7 @@ func runCashTransfer(cmd *cobra.Command, args []string) error {
 		return nil
 	})
 	if err != nil {
-		return output.NetworkError(cmd, err)
+		return classifyCashTokenNWCErr(cmd, err)
 	}
 	defer client.Close()
 
@@ -973,9 +986,10 @@ func runCashTransfer(cmd *cobra.Command, args []string) error {
 	var result *nipcash.CashTransferResult
 	err = WithSpinner(jsonMode, "Transferring...", func() error {
 		r, cErr := spendCashEntry(entry, cred, func(c nipcash.Credential) (*nipcash.CashTransferResult, error) {
+			journal, device := billJournal()
 			return client.CashTransfer(ctx, nipcash.CashTransferParams{
 				Credential: c, To: target.Target, CurrentAmount: amount, SplitAmount: splitAmount,
-			})
+			}, journal, device)
 		})
 		if cErr != nil {
 			return cErr

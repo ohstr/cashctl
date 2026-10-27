@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/ohstr/nmilat/nipcash"
 	nipcashclient "github.com/ohstr/nmilat/nipcash/client"
@@ -183,7 +184,7 @@ func quoteHubGroup(
 	client, err := dialHubGroup(ctx, g.Entries)
 	if err != nil {
 		for _, it := range items {
-			errs[it.ID] = output.NetworkError(cmd, err)
+			errs[it.ID] = classifyCashTokenNWCErr(cmd, err)
 		}
 		return quotes, errs
 	}
@@ -216,14 +217,23 @@ func quoteHubGroup(
 			continue
 		}
 		switch {
-		case r.Succeeded() && r.Result != nil && r.Result.IsSpent():
+		case r.Gone != nil || (r.Succeeded() && r.Result != nil && r.Result.Tombstone != nil):
 			errs[r.ID] = recordSpent(cmd, l, entry)
 		case r.Succeeded() && r.Result != nil:
-			myPubHex, _ := signerPubKeyHex(cmd, entry)
-			recipient, ok := nipcash.MatchClaimAuto(r.Result.Recipients, myPubHex)
-			if !ok {
+			// The caller's own row, identified by the credential that asked.
+			cred, credErr := resolveCredential(cmd, entry)
+			if credErr != nil {
+				errs[r.ID] = credErr
+				continue
+			}
+			recipient, rowErr := nipcash.OwnRow(r.Result.Recipients, cred, nipcash.ScopeMine)
+			if rowErr != nil {
 				errs[r.ID] = output.NotFoundError(cmd, r.ID,
 					fmt.Errorf("couldn't determine this token's amount — check `cashctl wallet show`, or that it's still valid"))
+				continue
+			}
+			if ok, reason := nipcash.Claimable(recipient, time.Now().Unix()); !ok {
+				errs[r.ID] = output.NotFoundError(cmd, r.ID, fmt.Errorf("this token can no longer be spent: its slice is %s", reason))
 				continue
 			}
 			q, qErr := recordQuote(cmd, l, entry, recipient)
@@ -322,7 +332,7 @@ func redeemHubGroup(
 		for _, it := range items {
 			idx := outcomeIndex(outcomes, it.ID)
 			if idx >= 0 {
-				outcomes[idx].Err = output.NetworkError(cmd, err)
+				outcomes[idx].Err = classifyCashTokenNWCErr(cmd, err)
 			}
 		}
 		return
@@ -381,7 +391,7 @@ func incompleteReply(sendErr error) error {
 func dialHubGroup(ctx context.Context, entries []*ledger.Entry) (*nipcashclient.Client, error) {
 	var lastErr error
 	for _, e := range entries {
-		client, err := nipcashclient.Connect(ctx, e.Token)
+		client, err := dialBill(ctx, e.Token)
 		if err != nil {
 			lastErr = err
 			continue
@@ -457,7 +467,7 @@ func recordQuote(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entry, reci
 		AmountMillis:        recipient.AmountMillis,
 		RedeemFeeMillis:     recipient.RedeemFeeMillis,
 		NetRedeemableMillis: recipient.NetRedeemableMillis,
-		ExpiresAt:           recipient.ExpiresAt,
+		ExpiresAt:           expiryPtr(recipient.ExpiresAt),
 	}
 	var tok nipcash.Token
 	if decoded, err := nipcash.Decode(entry.Token); err == nil {
@@ -475,7 +485,7 @@ func recordQuote(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entry, reci
 	}
 	entry.AmountMillis = &recipient.AmountMillis
 	entry.RedeemFeeMillis = &recipient.RedeemFeeMillis
-	entry.ExpiresAt = recipient.ExpiresAt
+	entry.ExpiresAt = expiryPtr(recipient.ExpiresAt)
 	_ = l.SetVerified(entry.ID, true)
 	return q, nil
 }
@@ -530,7 +540,7 @@ func retryWithPendingSecrets(
 	retries := make([]nipcashclient.BatchRedeem, 0, 1)
 	pendingByID := make(map[string]string, 1)
 	for _, r := range results {
-		if r.State != nipcashclient.OutcomeError || r.Error == nil || r.Error.Code != "NOT_FOUND" {
+		if r.State != nipcashclient.OutcomeError || r.Error == nil || !isWrongSecretCode(r.Error.Code) {
 			continue
 		}
 		entry := plansEntry(plans, r.ID)

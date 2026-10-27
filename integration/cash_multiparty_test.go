@@ -309,13 +309,13 @@ func TestMultiParty_MixedIdentityModeCashSelection(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	cashClient := dialCash(t, ctx, hub.PairingUri)
 	mintResult, err := cashClient.MintCash(ctx, nipcash.MintCashParams{
-		Recipients: []nipcash.Allocation{nipcash.Send(nipcash.Anyone(), cashAmount)},
+		Recipients: []nipcash.Allocation{nipcash.Send(newCashRecipient(t), cashAmount)},
 	})
 	cancel()
 	if err != nil {
 		t.Fatalf("mint_cash (cash): %v", err)
 	}
-	if res := b.run("receive", mintResult.CashToken+"#"+mintResult.Recipients[0].CashSecret); res.ExitCode != 0 {
+	if res := b.run("receive", mintResult.CashToken+"#"+secretFor(mintResult.Recipients[0])); res.ExitCode != 0 {
 		t.Fatalf("B receive (cash): exit %d\nstderr: %s", res.ExitCode, res.Stderr)
 	}
 

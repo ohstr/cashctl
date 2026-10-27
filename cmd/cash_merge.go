@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/ohstr/nmilat/nipcash"
-	nipcashclient "github.com/ohstr/nmilat/nipcash/client"
 	relayclient "github.com/ohstr/nmilat/relay/client"
 	"github.com/ohstr/nmilat/utils"
 	"github.com/spf13/cobra"
@@ -56,7 +55,7 @@ var moveCashFn = moveCash
 func moveCash(entry *ledger.Entry, cred nipcash.Credential, target nipcash.Target) (*nipcash.CashTransferResult, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	client, err := nipcashclient.Connect(ctx, entry.Token)
+	client, err := dialBill(ctx, entry.Token)
 	if err != nil {
 		return nil, &notSentError{err}
 	}
@@ -64,7 +63,8 @@ func moveCash(entry *ledger.Entry, cred nipcash.Credential, target nipcash.Targe
 	if entry.AmountMillis == nil {
 		return nil, &notSentError{fmt.Errorf("%s has no known amount", entry.ID)}
 	}
-	return client.CashTransfer(ctx, nipcash.CashTransferParams{Credential: cred, To: target, CurrentAmount: *entry.AmountMillis})
+	journal, device := billJournal()
+	return client.CashTransfer(ctx, nipcash.CashTransferParams{Credential: cred, To: target, CurrentAmount: *entry.AmountMillis}, journal, device)
 }
 
 // moveCashNotesToKey moves every cash note among ids onto the throwaway key
@@ -122,6 +122,7 @@ func followMove(e *ledger.Entry, res *nipcash.CashTransferResult) {
 	if res.NewWalletPubkey != "" {
 		e.WalletPubkey = res.NewWalletPubkey
 	}
+	e.Verified, e.MinterPubkey = returnedBillCheck(e.Token, e.MinterPubkey)
 }
 
 // promotePendingSecret records a confirmed re-key: the pending secret, which only
@@ -203,7 +204,10 @@ func toCashNotes(l *ledger.Ledger, ids []string) (converted, unsaved []string) {
 		if !ok || e.ThrowawayKey == "" || e.Status != ledger.StatusHeld || e.PendingCashSecret != "" || e.PendingThrowawayKey != "" {
 			continue
 		}
-		target := nipcash.NewCashTarget()
+		target, err := nipcash.NewCashTarget()
+		if err != nil {
+			continue
+		}
 		e.PendingCashSecret = target.Secret()
 		if err := l.Save(); err != nil {
 			e.PendingCashSecret = ""
@@ -246,8 +250,8 @@ func leftoverKeyBills(l *ledger.Ledger) []string {
 // in tests. ok=false with err=nil means "it does not"; err means no answer.
 var probeCredentialFn = probeCredential
 
-func probeCredential(e *ledger.Entry, cred nipcash.Credential, asPubkeyHex string) (bool, error) {
-	_, ok, err := probeAmount(e, cred, asPubkeyHex)
+func probeCredential(e *ledger.Entry, cred nipcash.Credential) (bool, error) {
+	_, ok, err := probeAmount(e, cred)
 	return ok, err
 }
 
@@ -255,23 +259,27 @@ func probeCredential(e *ledger.Entry, cred nipcash.Credential, asPubkeyHex strin
 // swapped out in tests.
 var probeAmountFn = probeAmount
 
-func probeAmount(e *ledger.Entry, cred nipcash.Credential, asPubkeyHex string) (uint64, bool, error) {
+// The identity asked about is the credential's own (nipcash.OwnRow): a row this
+// credential does not own, a claimed or expired one, or a destroyed bill all
+// answer "it does not".
+func probeAmount(e *ledger.Entry, cred nipcash.Credential) (uint64, bool, error) {
 	tok, err := nipcash.Decode(e.Token)
 	if err != nil {
 		return 0, false, err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	client, err := nipcashclient.Connect(ctx, e.Token)
+	client, err := dialBill(ctx, e.Token)
 	if err != nil {
 		return 0, false, err
 	}
 	defer client.Close()
-	r, err := client.CheckClaim(ctx, cred, tok, asPubkeyHex)
+	r, err := client.CheckClaim(ctx, cred, tok)
+	var gone *nipcash.BillGone
 	switch {
 	case err == nil:
-		return r.AmountMillis, true, nil
-	case errors.Is(err, nipcash.ErrClaimNotFound), isDefiniteRefusal(err):
+		return r.Row.AmountMillis, r.Claimable, nil
+	case errors.Is(err, nipcash.ErrClaimNotFound), errors.As(err, &gone), isDefiniteRefusal(err):
 		return 0, false, nil
 	}
 	return 0, false, err
@@ -313,15 +321,14 @@ func settlePendingMoves(cmd *cobra.Command, l *ledger.Ledger) error {
 
 // settlePendingKey resolves a move onto a throwaway key, reporting a change.
 func settlePendingKey(e *ledger.Entry) bool {
-	pub, err := utils.GetPublicKey(e.PendingThrowawayKey)
-	if err != nil {
+	if _, err := utils.GetPublicKey(e.PendingThrowawayKey); err != nil {
 		return false
 	}
-	if ok, err := probeCredentialFn(e, nipcash.BySigning(e.PendingThrowawayKey), pub); err == nil && ok {
+	if ok, err := probeCredentialFn(e, nipcash.BySigning(e.PendingThrowawayKey)); err == nil && ok {
 		promoteThrowaway(e)
 		return true
 	}
-	if ok, err := probeCredentialFn(e, nipcash.BySecret(e.CashSecret), nipcash.NoLocalIdentity); err == nil && ok {
+	if ok, err := probeCredentialFn(e, nipcash.BySecret(e.CashSecret)); err == nil && ok {
 		e.PendingThrowawayKey = ""
 		return true
 	}
@@ -336,7 +343,7 @@ func settlePendingSecret(e *ledger.Entry) bool {
 		e.PendingCashSecret = ""
 		return true
 	}
-	if ok, err := probeCredentialFn(e, nipcash.BySecret(e.PendingCashSecret), nipcash.NoLocalIdentity); err != nil {
+	if ok, err := probeCredentialFn(e, nipcash.BySecret(e.PendingCashSecret)); err != nil {
 		return false
 	} else if ok {
 		promotePendingSecret(e)
@@ -348,17 +355,16 @@ func settlePendingSecret(e *ledger.Entry) bool {
 		if e.ThrowawayKey == "" {
 			return false
 		}
-		pub, err := utils.GetPublicKey(e.ThrowawayKey)
-		if err != nil {
+		if _, err := utils.GetPublicKey(e.ThrowawayKey); err != nil {
 			return false
 		}
-		if ok, err := probeCredentialFn(e, nipcash.BySigning(e.ThrowawayKey), pub); err == nil && ok {
+		if ok, err := probeCredentialFn(e, nipcash.BySigning(e.ThrowawayKey)); err == nil && ok {
 			e.PendingCashSecret = ""
 			return true
 		}
 		return false
 	}
-	if ok, err := probeCredentialFn(e, nipcash.BySecret(e.CashSecret), nipcash.NoLocalIdentity); err == nil && ok {
+	if ok, err := probeCredentialFn(e, nipcash.BySecret(e.CashSecret)); err == nil && ok {
 		e.PendingCashSecret = ""
 		return true
 	}
@@ -377,13 +383,7 @@ func settleDestinationPark(cmd *cobra.Command, e *ledger.Entry) bool {
 	if err != nil {
 		return false
 	}
-	as := nipcash.NoLocalIdentity
-	if !isCashNote(e) && e.ThrowawayKey == "" {
-		if as, err = localPubKeyHex(cmd); err != nil {
-			return false
-		}
-	}
-	amount, ok, err := probeAmountFn(e, cred, as)
+	amount, ok, err := probeAmountFn(e, cred)
 	if err != nil || !ok || amount != *e.AmountMillis {
 		return false
 	}
@@ -433,12 +433,13 @@ var sendFromEntryFn = sendFromEntry
 func sendFromEntry(entry *ledger.Entry, params nipcash.CashTransferParams) (*nipcash.CashTransferResult, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	client, err := nipcashclient.Connect(ctx, entry.Token)
+	client, err := dialBill(ctx, entry.Token)
 	if err != nil {
 		return nil, &notSentError{err}
 	}
 	defer client.Close()
-	return client.CashTransfer(ctx, params)
+	journal, device := billJournal()
+	return client.CashTransfer(ctx, params, journal, device)
 }
 
 // mergeThenSend sends sendAmount to target out of sources merged under the

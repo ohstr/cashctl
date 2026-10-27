@@ -332,7 +332,7 @@ func TestConnectionTarget_LiteralFormAndConsolidateIA(t *testing.T) {
 
 	a := entryID(t, f.mustJSON("receive", mintPubkeyTokenFromHub(t, hub, pub, 20_000))["entry"])
 	b := entryID(t, f.mustJSON("receive", mintPubkeyTokenFromHub(t, hub, pub, 20_000))["entry"])
-	nconn, err := nipIC.EncodeNConnection(nipIC.NewConnectionKey(platform, externalID), []string{"wss://relay.invalid"}, platform)
+	nconn, err := nipIC.EncodeNConnection(mustConnKey(t, platform, externalID), []string{"wss://relay.invalid"}, platform)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -16,6 +16,8 @@ import (
 	"github.com/ohstr/nmilat/nipIC"
 	"github.com/ohstr/nmilat/nipcash"
 	"github.com/ohstr/nmilat/utils"
+
+	"github.com/ohstr/cashctl/internal/testmint"
 )
 
 func randomPrivKeyHex(t *testing.T) string {
@@ -77,9 +79,10 @@ func TestParseCash_ConnectionKey_ValidAttestation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetPublicKey() error = %v", err)
 	}
-	connKey := nipIC.NewConnectionKey("discord", "482910")
+	connKey := mustConnKey(t, "discord", "482910")
 
 	attestationEvent, err := nipIC.NewAttestation(nipIC.AttestationParams{
+		AuthType:      "oauth",
 		PrivateKey:    iaPriv,
 		ConnectionKey: connKey,
 		UserPubkey:    userPub,
@@ -364,7 +367,7 @@ func TestParseTarget_NIP05_UnreachableDomain(t *testing.T) {
 }
 
 func TestParseTarget_NConnection_NeedsIA(t *testing.T) {
-	nconn, err := nipIC.EncodeNConnection(nipIC.NewConnectionKey("discord", "482910"), []string{"wss://relay.example.com"}, "discord")
+	nconn, err := nipIC.EncodeNConnection(mustConnKey(t, "discord", "482910"), []string{"wss://relay.example.com"}, "discord")
 	if err != nil {
 		t.Fatalf("EncodeNConnection() error = %v", err)
 	}
@@ -390,7 +393,7 @@ func TestParseTarget_NConnection_NeedsIA(t *testing.T) {
 // NeedsIAError.Error() falls back to a generic phrase instead of an empty
 // or malformed-looking platform name in the message.
 func TestParseTarget_NConnection_NoPlatform(t *testing.T) {
-	nconn, err := nipIC.EncodeNConnection(nipIC.NewConnectionKey("discord", "482910"), []string{"wss://relay.example.com"}, "")
+	nconn, err := nipIC.EncodeNConnection(mustConnKey(t, "discord", "482910"), []string{"wss://relay.example.com"}, "")
 	if err != nil {
 		t.Fatalf("EncodeNConnection() error = %v", err)
 	}
@@ -409,7 +412,7 @@ func TestParseTarget_NConnection_NoPlatform(t *testing.T) {
 }
 
 func TestResolveConnectionTarget(t *testing.T) {
-	key := nipIC.NewConnectionKey("discord", "482910")
+	key := mustConnKey(t, "discord", "482910")
 	priv := randomPrivKeyHex(t)
 	iaHex, err := utils.GetPublicKey(priv)
 	if err != nil {
@@ -533,7 +536,7 @@ func TestParseTarget_Errors(t *testing.T) {
 // NIP-CASH: neither the combined "<token>#<secret>" string nor a token alone is
 // ever a cash_secret, so cash: must refuse both rather than send them as one.
 func TestParseCash_RefusesATokenAsTheSecret(t *testing.T) {
-	token, err := nipcash.Encode(nipcash.Token{
+	token, err := testmint.Encode(t, nipcash.Token{
 		HRP: "lokicash", WalletPubkey: strings.Repeat("aa", 32), Secret: strings.Repeat("bb", 32),
 		RelayURLs: []string{"wss://relay.example"},
 	})
@@ -545,4 +548,13 @@ func TestParseCash_RefusesATokenAsTheSecret(t *testing.T) {
 			t.Errorf("ParseCash(%.30q…) = nil error, want a refusal", in)
 		}
 	}
+}
+
+func mustConnKey(t *testing.T, platform nipIC.WebIdentity, user string) nipIC.ConnectionKey {
+	t.Helper()
+	k, err := nipIC.NewConnectionKey(platform, user)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return k
 }

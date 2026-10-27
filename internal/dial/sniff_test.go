@@ -8,6 +8,8 @@ import (
 	"github.com/ohstr/nmilat/nipIC"
 	"github.com/ohstr/nmilat/nipcash"
 	"github.com/ohstr/nmilat/nipcw"
+
+	"github.com/ohstr/cashctl/internal/testmint"
 )
 
 func TestSniff_NWCURI(t *testing.T) {
@@ -17,7 +19,7 @@ func TestSniff_NWCURI(t *testing.T) {
 }
 
 func TestSniff_CashToken(t *testing.T) {
-	token, err := nipcash.Encode(nipcash.Token{
+	token, err := testmint.Encode(t, nipcash.Token{
 		HRP:          "lokicash",
 		WalletPubkey: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		Secret:       "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
@@ -50,16 +52,8 @@ func TestSniff_CircleHub(t *testing.T) {
 }
 
 func TestSniff_CashHub(t *testing.T) {
-	s, err := nipcash.EncodeCashHubConnection(nipcash.CashHubConnection{
-		WalletPubkey: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-		Secret:       "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-		// A relay hint is REQUIRED by every encoder now, so even a fixture that
-		// does not care where the wallet lives must name one.
-		RelayURLs: []string{"wss://relay.example"},
-	})
-	if err != nil {
-		t.Fatalf("test setup: EncodeCashHubConnection() error = %v", err)
-	}
+	hubPriv, _ := testmint.Key(t)
+	s := testmint.CashHub(t, hubPriv, "")
 	if got := Sniff(s); got != KindCashHub {
 		t.Errorf("Sniff(%q) = %v, want KindCashHub", s, got)
 	}
@@ -131,7 +125,7 @@ func TestSniff_NostrEntity_RealEncoders(t *testing.T) {
 // positive: a cash token, Circle Hub, Cash Hub, or plain unknown string
 // must never be misreported as some Nostr entity's HRP.
 func TestNostrEntityHRP_EmptyForNonNostrEntity(t *testing.T) {
-	token, err := nipcash.Encode(nipcash.Token{
+	token, err := testmint.Encode(t, nipcash.Token{
 		HRP:          "lokicash",
 		WalletPubkey: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		Secret:       "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",

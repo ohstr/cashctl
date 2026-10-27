@@ -57,9 +57,10 @@ import (
 func newDecodeCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "decode <string>",
-		Short: "Inspect any cash token, Circle Hub connection, NWC URI or npub locally — no network call unless --check is passed",
+		Short: "Inspect any cash token, Cash Hub or Circle Hub connection, NWC URI or npub locally — no network call unless --check is passed",
 		Example: `  cashctl decode lokicash1...
   cashctl decode lokicash1... --check
+  cashctl decode cashhub1... --check
   cashctl decode circlehub1...
   cashctl decode npub1...`,
 		Args: output.ExactArgs(1),
@@ -89,8 +90,7 @@ func newDecodeCmd() *cobra.Command {
 			case dial.KindNWCURI:
 				return decodeNWCURI(cmd, value, jsonMode)
 			case dial.KindCashHub:
-				return output.InvalidInputError(cmd, value, fmt.Errorf(
-					"that's a Cash Hub connection (for minting cash) — cashctl has no mint capability and can't decode this format"))
+				return decodeCashHub(cmd, value, jsonMode, check)
 			case dial.KindLightningInvoice:
 				return output.InvalidInputError(cmd, value, errors.New(lightningMessage(value)))
 			case dial.KindNostrEntity:
@@ -100,13 +100,13 @@ func newDecodeCmd() *cobra.Command {
 				return output.InvalidInputError(cmd, value, errors.New(nostrEntityMessage(dial.NostrEntityHRP(value))))
 			default:
 				return output.InvalidInputError(cmd, value, fmt.Errorf(
-					"not a recognized cash token, Circle Hub connection, NWC URI or npub; "+
+					"not a recognized cash token, Hub connection, NWC URI or npub; "+
 						"decode takes a cash token (lokicash1..., or <token>#<secret>), "+
-						"a circlehub1... connection, a nostr+walletconnect:// URI, or an npub1... key"))
+						"a cashhub1... or circlehub1... connection, a nostr+walletconnect:// URI, or an npub1... key"))
 			}
 		},
 	}
-	cmd.Flags().Bool("check", false, "also cross-check against the Hub (cash token: matching recipient; circlehub: can we join) — a network call")
+	cmd.Flags().Bool("check", false, "also cross-check against the Hub (cash token: matching recipient; cashhub: the online check; circlehub: can we join) — a network call")
 	return cmd
 }
 
@@ -155,14 +155,8 @@ func decodeCashToken(cmd *cobra.Command, value, embeddedCashSecret string, jsonM
 	if hasEmbeddedCashSecret {
 		out["embedded_cash_secret_present"] = true
 	}
-	if tok.HasProvenance() {
-		out["mint_signature"] = fmt.Sprintf("%x", tok.MintSignature)
-		out["attested_amount_millis"] = *tok.AttestedAmountMillis
-		minter, valid := nipcash.VerifyProvenance(tok)
-		out["mint_signature_valid"] = valid
-		if valid {
-			out["minter_pubkey"] = minter
-		}
+	for k, v := range provenanceJSON(tok) {
+		out[k] = v
 	}
 
 	if shouldCheckCashToken(cmd, jsonMode, check, isCash) {
@@ -255,42 +249,94 @@ func decodeNWCURI(cmd *cobra.Command, value string, jsonMode bool) error {
 	return nil
 }
 
-// formatMinterStatus verifies (not just checks presence of) tok's
-// mint-provenance, so a forged/corrupt signature is never reported as
-// having ANY minter at all just because the fields are present — a
-// tampered pair (mismatched signature/amount, wrong length, ...) fails
-// RecoverCompact outright and gets the explicit INVALID line below.
+// provenance is what a bill's mint signature says about this copy, by its
+// signature scheme (TLV 8): who signed it, and whether the signature covers this
+// copy's own relays and secret (NIP-CASH §Mint Provenance).
+type provenance struct {
+	Scheme     string // mint_v1 | zap_v1 | malformed | none
+	Verdict    string // valid | invalid | needs_zap_event | none
+	RelayHash  string // schemes 1 and 2
+	Minter     string // compressed hex, valid only
+	ValidKnown bool   // false when the verdict needs the zap event
+}
+
+func provenanceOf(tok nipcash.Token) provenance {
+	var p provenance
+	switch tok.Scheme {
+	case nipcash.SchemeMintV1:
+		p.Scheme, p.ValidKnown = "mint_v1", true
+		if minter, ok := nipcash.VerifyProvenance(tok); ok {
+			p.Verdict, p.Minter = "valid", minter
+		} else {
+			p.Verdict = "invalid"
+		}
+	case nipcash.SchemeZapV1:
+		p.Scheme, p.Verdict = "zap_v1", "needs_zap_event"
+	case nipcash.SchemeNone:
+		p.Scheme, p.Verdict = "none", "none"
+	default:
+		p.Scheme, p.Verdict, p.ValidKnown = "malformed", "invalid", true
+	}
+	if p.Scheme == "mint_v1" || p.Scheme == "zap_v1" {
+		p.RelayHash, _ = nipcash.RelayHash(tok.RelayURLs, tok.Secret)
+	}
+	return p
+}
+
+// provenanceJSON is decode --json's provenance fields: signature_scheme,
+// provenance, relay_hash (schemes 1 and 2), mint_signature_valid (null when
+// only the zap event can tell) and, when valid, minter_pubkey.
+func provenanceJSON(tok nipcash.Token) map[string]any {
+	p := provenanceOf(tok)
+	out := map[string]any{"signature_scheme": p.Scheme, "provenance": p.Verdict}
+	if p.RelayHash != "" {
+		out["relay_hash"] = p.RelayHash
+	}
+	if p.Scheme == "none" {
+		return out
+	}
+	if len(tok.MintSignature) > 0 {
+		out["mint_signature"] = fmt.Sprintf("%x", tok.MintSignature)
+	}
+	if tok.AttestedAmountMillis != nil {
+		out["attested_amount_millis"] = *tok.AttestedAmountMillis
+	}
+	if p.ValidKnown {
+		out["mint_signature_valid"] = p.Verdict == "valid"
+	} else {
+		out["mint_signature_valid"] = nil
+	}
+	if p.Minter != "" {
+		out["minter_pubkey"] = p.Minter
+	}
+	return out
+}
+
+// formatMinterStatus is the "minter: ..." line, and the "attested_amount: ..."
+// line to print after it ("" when the bill carries no amount), shared by decode
+// and receive's report.
 //
-// The valid case needs its own caveat, not just a bare pubkey:
-// VerifyProvenance uses ECDSA signature RECOVERY, not verification
-// against any known/trusted key — "valid" only means the signature is
-// internally self-consistent with WalletPubkey+AttestedAmountMillis and
-// names WHICH key produced it, never that the recovered key is a mint
-// cashctl (or its user) has ever heard of. Anyone can mint-sign their own
-// token with a throwaway key and get a "valid" signature and a
-// made-up-but-real minter pubkey out of this exact same check — printing
-// just "minter: <pubkey>" read, to a human, as "cashctl vouches for this,"
-// which it never did (see ledger.Entry.MinterPubkey's own doc comment:
-// this is a same-signer grouping signal for cash selection, not an
-// authenticity guarantee).
-//
-// Returns the "minter: ..." line and, whenever there's a signature to
-// speak of at all (valid or not), the "attested_amount: ..." line to
-// print right after it — "" when there's no provenance, so the caller can
-// skip that line entirely. Shared by decode's own printMintSignatureStatus
-// and cash_receive.go's printCashBill, which need the exact same 3-state
-// check.
+// A valid signature names WHICH key signed this copy and proves the copy's
+// relays and secret are the ones it signed — never that the key is a mint
+// anyone should trust: anyone can sign a bill with a throwaway key.
 func formatMinterStatus(tok nipcash.Token) (minterLine, amountLine string) {
-	if !tok.HasProvenance() {
-		return "minter: unknown", ""
+	p := provenanceOf(tok)
+	amount := func(suffix string) string {
+		if tok.AttestedAmountMillis == nil {
+			return ""
+		}
+		return fmt.Sprintf("attested_amount: %s%s", output.FormatAmount(int64(*tok.AttestedAmountMillis)), suffix)
 	}
-	minter, valid := nipcash.VerifyProvenance(tok)
-	if !valid {
-		return "minter: INVALID SIGNATURE — don't trust attested_amount",
-			fmt.Sprintf("attested_amount: %s (unverified)", output.FormatAmount(int64(*tok.AttestedAmountMillis)))
+	switch p.Verdict {
+	case "valid":
+		return fmt.Sprintf("minter: %s (signature covers this copy's relays; a valid signature ≠ a trusted mint — anyone can self-sign)", p.Minter), amount("")
+	case "needs_zap_event":
+		return "minter: unknown until checked with its zap event (kind 9522); cashctl won't contact its relays", amount(" (unverified)")
+	case "invalid":
+		return "minter: INVALID SIGNATURE — this copy's relays or secret differ from what its minter signed; cashctl won't contact them", amount(" (unverified)")
+	default:
+		return "minter: unknown — no mint signature, so cashctl won't contact its relays", ""
 	}
-	return fmt.Sprintf("minter: %s (valid signature ≠ a trusted mint — anyone can self-sign)", minter),
-		fmt.Sprintf("attested_amount: %s", output.FormatAmount(int64(*tok.AttestedAmountMillis)))
 }
 
 // printMintSignatureStatus is decode's own top-level, unindented rendering
@@ -395,7 +441,7 @@ func checkCashTokenAgainstHub(cmd *cobra.Command, jsonMode bool, value, embedded
 	err := WithSpinner(jsonMode, "Checking...", func() error {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		client, err := nipcashclient.Connect(ctx, value)
+		client, err := dialBill(ctx, value)
 		if err != nil {
 			return err
 		}
@@ -406,13 +452,13 @@ func checkCashTokenAgainstHub(cmd *cobra.Command, jsonMode bool, value, embedded
 		if credErr != nil {
 			return credErr
 		}
-		myPubHex, _ := localPubKeyHex(cmd)
-		result, err := client.CheckClaim(ctx, cred, tok, myPubHex)
-		if errors.Is(err, nipcash.ErrSpent) {
+		result, err := client.CheckClaim(ctx, cred, tok)
+		var gone *nipcash.BillGone
+		if errors.As(err, &gone) {
 			spent = true
 			return errCheckedBillSpent
 		}
-		if errors.Is(err, nipcash.ErrClaimNotFound) {
+		if errors.Is(err, nipcash.ErrClaimNotFound) || (embeddedCashSecret != "" && isWrongSecretDecline(err)) {
 			if isBareCashModeBill(tok, embeddedCashSecret) {
 				return errNeedsCashSecret
 			}
@@ -432,8 +478,11 @@ func checkCashTokenAgainstHub(cmd *cobra.Command, jsonMode bool, value, embedded
 			}
 			return err
 		}
-		amount = result.AmountMillis
-		expiresAt = result.ExpiresAt
+		if !result.Claimable {
+			return fmt.Errorf("this bill's slice is %s: it can no longer be spent", result.Reason)
+		}
+		amount = result.Row.AmountMillis
+		expiresAt = expiryPtr(result.Row.ExpiresAt)
 		return nil
 	})
 	if err != nil {
@@ -582,5 +631,117 @@ func circlePolicyPhrase(policy string) string {
 		return "allowlist"
 	default:
 		return output.Sanitize(policy)
+	}
+}
+
+// cashHubKeepPrivate is said about every cashhub1 string: it carries a secret
+// that mints bills, and one ever published must be revoked (NIP-CASH §Hub Rules).
+const cashHubKeepPrivate = "this string can mint bills: keep it private"
+
+// decodeCashHub shows a cashhub1 string's public fields and whether its
+// signature confirms the Hub it names; never its secret. --check runs the
+// online check (get_info's identity and chain against TLV 4 and 6); a failed
+// check is a result, not a refusal.
+func decodeCashHub(cmd *cobra.Command, value string, jsonMode, check bool) error {
+	c, err := readConnection(cmd, value, "cashhub")
+	if err != nil {
+		return err
+	}
+	h := c.CashHub
+	warnings := []string{cashHubKeepPrivate}
+	if !c.Verified {
+		warnings = append(warnings, "Hub not confirmed: "+unverifiedReasonText(c))
+	}
+	out := map[string]any{
+		"type":              "cashhub",
+		"connection_pubkey": h.Pubkey,
+		"relays":            h.Relays,
+		"hub_identity":      h.HubIdentity,
+		"chain":             h.Chain,
+		"signature":         signatureLabel(c),
+		"warnings":          warnings,
+	}
+	if h.HasLabel {
+		out["label"] = h.Label
+	}
+	if !c.Verified {
+		out["signature_reason"] = c.Reason
+	}
+	if !jsonMode {
+		output.Println("type: cashhub")
+		if h.HasLabel {
+			output.Printf("label: %s (not confirmed)\n", output.Sanitize(h.Label))
+		}
+		output.Printf("claimed Hub: %s\n", shortFingerprint(h.HubIdentity))
+		output.Printf("chain: %s\n", output.Sanitize(h.Chain))
+		output.Printf("relays: %s\n", joinStrings(h.Relays))
+		if c.Verified {
+			output.Println("signature: verified (the string was issued by the Hub it names)")
+		} else {
+			output.Printf("signature: unverified — %s\n", unverifiedReasonText(c))
+		}
+		output.Notef(false, "Note: %s.", cashHubKeepPrivate)
+	}
+	if shouldRunCheck(cmd, jsonMode, check, "Check the Hub online?") {
+		result := checkCashHubOnline(cmd, jsonMode, c)
+		if jsonMode {
+			for k, v := range result {
+				out[k] = v
+			}
+		} else {
+			printOnlineCheck(result)
+		}
+	}
+	if jsonMode {
+		output.PrintJSON(out)
+	}
+	return nil
+}
+
+// checkCashHubOnline runs the online check against a cashhub1's Hub.
+func checkCashHubOnline(cmd *cobra.Command, jsonMode bool, c *conn) map[string]any {
+	out := map[string]any{}
+	_ = WithSpinner(jsonMode, "Checking the Hub...", func() error {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		hub, err := nipcashclient.ConnectCashHub(ctx, c.Raw)
+		if err != nil {
+			out["online_check"], out["error"] = "unreachable", output.Sanitize(err.Error())
+			return nil
+		}
+		defer hub.Close()
+		info, err := hub.Info(ctx)
+		switch {
+		case errors.Is(err, nipcash.ErrHubIdentityMismatch):
+			out["online_check"] = "identity_mismatch"
+		case errors.Is(err, nipcash.ErrChainMismatch):
+			out["online_check"] = "chain_mismatch"
+		case err != nil:
+			out["online_check"], out["error"] = "unreachable", output.Sanitize(err.Error())
+		default:
+			out["online_check"] = "pass"
+			out["network"], out["chain"] = info.Network, info.Chain
+			out["test_network"] = info.TestNetwork()
+		}
+		return nil
+	})
+	return out
+}
+
+// printOnlineCheck is checkCashHubOnline's result in text.
+func printOnlineCheck(r map[string]any) {
+	switch r["online_check"] {
+	case "pass":
+		output.Printf("online check: pass (the Hub answers as the identity and chain the string names)\n")
+		output.Printf("network: %s\n", output.Sanitize(fmt.Sprint(r["network"])))
+		if r["test_network"] == true {
+			output.Println("This Hub runs on a test network: its bills are not real money.")
+		}
+	case "identity_mismatch":
+		output.Println("online check: FAILED — the Hub answers as another identity than the string names")
+	case "chain_mismatch":
+		output.Println("online check: FAILED — the Hub names another chain than the string, or none")
+	default:
+		output.Printf("online check: couldn't reach the Hub (%v)\n", r["error"])
 	}
 }

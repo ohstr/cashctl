@@ -63,7 +63,7 @@ func paidItem(id string) nipcashclient.RedeemOutcome {
 func TestRetryWithPendingSecrets_RecoversAndPromotes(t *testing.T) {
 	plans := []redeemPlan{secretPlan("tok-a", "dead", "live")}
 	items := []nipcashclient.BatchRedeem{batchItem("tok-a")}
-	results := []nipcashclient.RedeemOutcome{declinedItem("tok-a", "NOT_FOUND")}
+	results := []nipcashclient.RedeemOutcome{declinedItem("tok-a", "UNAUTHORIZED")}
 
 	var sentCreds []nipcash.Credential
 	out := retryWithPendingSecrets(plans, items, results, func(r []nipcashclient.BatchRedeem) []nipcashclient.RedeemOutcome {
@@ -93,10 +93,10 @@ func TestRetryWithPendingSecrets_RecoversAndPromotes(t *testing.T) {
 func TestRetryWithPendingSecrets_FailedRetryKeepsTheFirstDecline(t *testing.T) {
 	plans := []redeemPlan{secretPlan("tok-a", "dead", "also-dead")}
 	items := []nipcashclient.BatchRedeem{batchItem("tok-a")}
-	results := []nipcashclient.RedeemOutcome{declinedItem("tok-a", "NOT_FOUND")}
+	results := []nipcashclient.RedeemOutcome{declinedItem("tok-a", "UNAUTHORIZED")}
 
 	out := retryWithPendingSecrets(plans, items, results, func([]nipcashclient.BatchRedeem) []nipcashclient.RedeemOutcome {
-		return []nipcashclient.RedeemOutcome{declinedItem("tok-a", "NOT_FOUND")}
+		return []nipcashclient.RedeemOutcome{declinedItem("tok-a", "UNAUTHORIZED")}
 	})
 
 	if len(out) != 1 || out[0].Succeeded() {
@@ -169,7 +169,7 @@ func TestRetryWithPendingSecrets_NothingToReconcile(t *testing.T) {
 			called := false
 			retryWithPendingSecrets(plans,
 				[]nipcashclient.BatchRedeem{batchItem("tok-a")},
-				[]nipcashclient.RedeemOutcome{declinedItem("tok-a", "NOT_FOUND")},
+				[]nipcashclient.RedeemOutcome{declinedItem("tok-a", "UNAUTHORIZED")},
 				func([]nipcashclient.BatchRedeem) []nipcashclient.RedeemOutcome {
 					called = true
 					return nil
@@ -193,7 +193,7 @@ func TestRetryWithPendingSecrets_RetriesOnlyTheQualifyingItem(t *testing.T) {
 	items := []nipcashclient.BatchRedeem{batchItem("tok-ok"), batchItem("tok-recover"), batchItem("tok-omitted")}
 	results := []nipcashclient.RedeemOutcome{
 		paidItem("tok-ok"),
-		declinedItem("tok-recover", "NOT_FOUND"),
+		declinedItem("tok-recover", "UNAUTHORIZED"),
 		{ItemOutcome: nipcashclient.ItemOutcome{ID: "tok-omitted", State: nipcashclient.OutcomeNotServed}},
 	}
 

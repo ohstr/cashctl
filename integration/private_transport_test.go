@@ -330,17 +330,17 @@ func TestPrivateTransport_CashModeBillIsServed(t *testing.T) {
 	defer cancel()
 	cashClient := dialCash(t, ctx, hub.PairingUri)
 	cashResult, err := cashClient.MintCash(ctx, nipcash.MintCashParams{
-		Recipients: []nipcash.Allocation{nipcash.Send(nipcash.Anyone(), 50_000)},
+		Recipients: []nipcash.Allocation{nipcash.Send(newCashRecipient(t), 50_000)},
 	})
 	if err != nil {
 		t.Fatalf("mint_cash (cash, signed): %v", err)
 	}
-	if len(cashResult.Recipients) != 1 || cashResult.Recipients[0].CashSecret == "" {
+	if len(cashResult.Recipients) != 1 || secretFor(cashResult.Recipients[0]) == "" {
 		t.Fatalf("mint_cash (cash): %+v", cashResult.Recipients)
 	}
 
 	// Receiving this auto-secures it and merges it with the existing holding.
-	receiveResp := f.mustJSON("receive", cashResult.CashToken+"#"+cashResult.Recipients[0].CashSecret)
+	receiveResp := f.mustJSON("receive", cashResult.CashToken+"#"+secretFor(cashResult.Recipients[0]))
 	entry, _ := receiveResp["entry"].(map[string]any)
 	mergedID, _ := entry["id"].(string)
 	if mergedID == "" {

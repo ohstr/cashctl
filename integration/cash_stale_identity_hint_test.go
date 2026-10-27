@@ -69,7 +69,7 @@ func TestReceive_StaleCashModeHint_AfterReassignment_StillReceivable(t *testing.
 		Credential:    nipcash.BySecret(secret),
 		To:            nipcash.Pubkey(pub),
 		CurrentAmount: amountMillis,
-	}); err != nil {
+	}, &memJournal{}, "integration"); err != nil {
 		t.Fatalf("reassign the cash slice onto the local identity: %v", err)
 	}
 

@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/ohstr/nmilat/nipcash"
-	nipcashclient "github.com/ohstr/nmilat/nipcash/client"
 	"github.com/ohstr/nmilat/nipcash/transport"
 	"github.com/ohstr/nmilat/utils"
 	"github.com/spf13/cobra"
@@ -573,7 +572,11 @@ func consolidateItems(cmd *cobra.Command, l *ledger.Ledger, items []string, toFl
 		// when there is no identity to address it to.
 		myPub, err := localPubKeyHex(cmd)
 		if hasCashNote || err != nil {
-			target = nipcash.NewCashTarget()
+			ct, ctErr := nipcash.NewCashTarget()
+			if ctErr != nil {
+				return nil, output.RuntimeError(cmd, ctErr)
+			}
+			target = ct
 		} else {
 			target = nipcash.Pubkey(myPub)
 		}
@@ -909,9 +912,9 @@ func sourceFromEntry(cmd *cobra.Command, l *ledger.Ledger, e *ledger.Entry) (nip
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	client, err := nipcashclient.Connect(ctx, e.Token)
+	client, err := dialBill(ctx, e.Token)
 	if err != nil {
-		return nipcash.Source{}, output.NetworkError(cmd, err)
+		return nipcash.Source{}, classifyCashTokenNWCErr(cmd, err)
 	}
 	defer client.Close()
 	amount, err := resolveAmount(cmd, l, e, client)
@@ -1008,7 +1011,7 @@ func reconcileAmbiguousSources(cmd *cobra.Command, l *ledger.Ledger, localIDs []
 		if statusErr != nil {
 			continue // inconclusive: an error is not evidence either way
 		}
-		if status.IsSpent() {
+		if status.Tombstone != nil {
 			_ = l.SetStatus(id, ledger.StatusConsolidated)
 			confirmedGone = append(confirmedGone, id)
 		}
@@ -1025,7 +1028,7 @@ func reconcileAmbiguousSources(cmd *cobra.Command, l *ledger.Ledger, localIDs []
 var sourceCashStatusFn = func(cmd *cobra.Command, e *ledger.Entry) (*nipcash.CashStatusResult, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	client, err := nipcashclient.Connect(ctx, e.Token)
+	client, err := dialBill(ctx, e.Token)
 	if err != nil {
 		return nil, err
 	}
@@ -1066,10 +1069,14 @@ func doCashConsolidate(cmd *cobra.Command, l *ledger.Ledger, dialCandidates []st
 			for _, id := range localIDs {
 				_ = l.SetStatus(id, ledger.StatusConsolidated)
 			}
+			verified, minter := returnedBillCheck(result.NewWalletToken, sharedMinterOfIDs(l, localIDs))
+			if !verified {
+				jsonMode, _ := cmd.Flags().GetBool("json")
+				output.Notef(jsonMode, unverifiedReturnNote)
+			}
 			newLedgerEntry := ledger.Entry{
-				Token: result.NewWalletToken, WalletPubkey: result.NewWalletPubkey, AmountMillis: &result.AmountMillis, Verified: true,
-				// Inherited, not verified against the new wallet itself — see sharedMinter.
-				MinterPubkey: sharedMinterOfIDs(l, localIDs),
+				Token: result.NewWalletToken, WalletPubkey: result.NewWalletPubkey, AmountMillis: &result.AmountMillis, Verified: verified,
+				MinterPubkey: minter,
 			}
 			// A cash-mode target's own secret only ever exists in target
 			// itself — the wire response never carries it (NIP-CASH
@@ -1110,7 +1117,7 @@ func doCashConsolidate(cmd *cobra.Command, l *ledger.Ledger, dialCandidates []st
 			// clear, so a failed write keeps the park (see release()).
 			parked.release()
 			l.AppendHistory("consolidate", fmt.Sprintf("consolidated %d tokens into one %s note", len(localIDs), output.FormatAmount(int64(result.AmountMillis))))
-			return newEntry, result.ExpiresAt, nil
+			return newEntry, expiryPtr(result.ExpiresAt), nil
 		}
 
 		reportErr := callErr
@@ -1211,7 +1218,7 @@ func hubConsolidateCap(dialToken string) int {
 	if !ok {
 		return transport.DefaultMaxConsolidateSources
 	}
-	client, err := nipcashclient.Connect(ctx, dialToken)
+	client, err := dialBill(ctx, dialToken)
 	if err != nil {
 		return transport.DefaultMaxConsolidateSources
 	}
@@ -1238,7 +1245,7 @@ var hubConsolidateCapFn = hubConsolidateCap
 func attemptCashConsolidate(dialToken string, sources []nipcash.Source, target nipcash.Target) (*nipcash.CashConsolidateResult, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	client, err := nipcashclient.Connect(ctx, dialToken)
+	client, err := dialBill(ctx, dialToken)
 	if err != nil {
 		return nil, &notSentError{err}
 	}
@@ -1249,7 +1256,8 @@ func attemptCashConsolidate(dialToken string, sources []nipcash.Source, target n
 	if len(sources) == 0 {
 		return nil, errors.New("attemptCashConsolidate: no sources")
 	}
-	return client.CashConsolidate(ctx, sources[0].Credential, nipcash.CashConsolidateParams{Sources: sources, To: target})
+	journal, device := billJournal()
+	return client.CashConsolidate(ctx, nipcash.CashConsolidateParams{Sources: sources, To: target}, journal, device)
 }
 
 // attemptCashConsolidateFn is attemptCashConsolidate by default — a

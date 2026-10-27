@@ -166,7 +166,7 @@ func TestAuditD_CLI_ParkIsNotSavedByReleaseAlone(t *testing.T) {
 	auditDTempLedger(t)
 	l, ids := auditDSeedTwoHeldCash(t)
 
-	target := nipcash.NewCashTarget()
+	target := mustCashTarget(t)
 	parked, err := parkDestinationCashSecret(l, ids, target)
 	if err != nil {
 		t.Fatalf("parkDestinationCashSecret() error = %v", err)
@@ -208,11 +208,11 @@ func TestAuditD_CLI_ParkRefusesWhenItCannotRecord(t *testing.T) {
 		t.Fatalf("ledger.Load() error = %v", err)
 	}
 
-	if _, err := parkDestinationCashSecret(l, []string{"tok-nope"}, nipcash.NewCashTarget()); err == nil {
+	if _, err := parkDestinationCashSecret(l, []string{"tok-nope"}, mustCashTarget(t)); err == nil {
 		t.Fatal("parkDestinationCashSecret(no such row) = nil error, want a refusal — proceeding " +
 			"would place the call with nothing recording the secret")
 	}
-	if _, err := parkDestinationCashSecret(l, nil, nipcash.NewCashTarget()); err == nil {
+	if _, err := parkDestinationCashSecret(l, nil, mustCashTarget(t)); err == nil {
 		t.Fatal("parkDestinationCashSecret(no source ids) = nil error, want a refusal")
 	}
 }
@@ -246,12 +246,12 @@ func TestAuditD_CLI_ReleaseLeavesAConcurrentParkAlone(t *testing.T) {
 	auditDTempLedger(t)
 	l, ids := auditDSeedTwoHeldCash(t)
 
-	mine := nipcash.NewCashTarget()
+	mine := mustCashTarget(t)
 	parked, err := parkDestinationCashSecret(l, ids, mine)
 	if err != nil {
 		t.Fatalf("parkDestinationCashSecret() error = %v", err)
 	}
-	theirs := nipcash.NewCashTarget()
+	theirs := mustCashTarget(t)
 	mustFind(t, l, ids[0]).PendingDestinationCashSecret = theirs.Secret()
 
 	parked.release()
@@ -273,7 +273,7 @@ func TestAuditD_CLI_UnreconciledParkIsReportedToTheUser(t *testing.T) {
 			"money at risk is its own defect", len(lines))
 	}
 
-	target := nipcash.NewCashTarget()
+	target := mustCashTarget(t)
 	if _, err := parkDestinationCashSecret(l, ids, target); err != nil {
 		t.Fatalf("parkDestinationCashSecret() error = %v", err)
 	}
@@ -309,7 +309,7 @@ func TestAuditD_CLI_ParkSurvivesALedgerReloadRoundTrip(t *testing.T) {
 	auditDTempLedger(t)
 	l, ids := auditDSeedTwoHeldCash(t)
 
-	want := nipcash.NewCashTarget().Secret()
+	want := mustCashTarget(t).Secret()
 	mustFind(t, l, ids[1]).PendingDestinationCashSecret = want
 	if err := l.Save(); err != nil {
 		t.Fatalf("l.Save() error = %v", err)
@@ -342,7 +342,7 @@ func mustFind(t *testing.T, l *ledger.Ledger, id string) *ledger.Entry {
 func TestWalletShow_ReportsAnUnfinishedCashSendInBothModes(t *testing.T) {
 	auditDTempLedger(t)
 	l, ids := auditDSeedTwoHeldCash(t)
-	target := nipcash.NewCashTarget()
+	target := mustCashTarget(t)
 	if _, err := parkDestinationCashSecret(l, ids, target); err != nil {
 		t.Fatalf("parkDestinationCashSecret() error = %v", err)
 	}

@@ -114,10 +114,10 @@ func TestAuditD_CLI_ConsolidateToCash_SecretIsWrittenAheadOfWireCall(t *testing.
 	// The cash target, and therefore the only copy of the destination secret,
 	// is created here — exactly as credential.ParseTarget("cash") creates it
 	// for the real command, before any prompt and before any wire call.
-	target := nipcash.NewCashTarget()
+	target := mustCashTarget(t)
 	secret := target.Secret()
 	if secret == "" {
-		t.Fatal("nipcash.NewCashTarget() produced an empty secret; this test can prove nothing")
+		t.Fatal("mustCashTarget(t) produced an empty secret; this test can prove nothing")
 	}
 
 	var onDiskAtWireTime bool

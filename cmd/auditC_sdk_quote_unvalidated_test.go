@@ -41,6 +41,8 @@ import (
 	"github.com/ohstr/cashctl/internal/appdir"
 	"github.com/ohstr/cashctl/internal/ledger"
 	"github.com/ohstr/cashctl/internal/output"
+
+	"github.com/ohstr/cashctl/internal/testmint"
 )
 
 func auditCLedger(t *testing.T) *ledger.Ledger {
@@ -308,7 +310,7 @@ func TestAuditC_RecordQuote_Matrix(t *testing.T) {
 func auditCMintedToken(t *testing.T, attested uint64) (token string, amount uint64, minterPubkey string) {
 	t.Helper()
 	amount = attested
-	tok, err := nipcash.Encode(nipcash.Token{
+	tok, err := testmint.Encode(t, nipcash.Token{
 		HRP:                  "lokicash",
 		WalletPubkey:         hex.EncodeToString(bytes.Repeat([]byte{0xab}, 32)),
 		Secret:               hex.EncodeToString(bytes.Repeat([]byte{0xcd}, 32)),

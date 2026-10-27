@@ -23,7 +23,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -38,11 +37,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/decred/dcrd/dcrec/secp256k1/v4/ecdsa"
 	btcec "github.com/flokiorg/go-flokicoin/crypto"
 	"github.com/ohstr/nmilat/nip19"
 	"github.com/ohstr/nmilat/nip47"
 	"github.com/ohstr/nmilat/nipcash"
+
+	"github.com/ohstr/cashctl/internal/testmint"
 	nipcashclient "github.com/ohstr/nmilat/nipcash/client"
 	"github.com/ohstr/nmilat/nipcw"
 	relayclient "github.com/ohstr/nmilat/relay/client"
@@ -177,28 +177,28 @@ func cmdToken(a *admin, st *state, args []string) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
 	defer cancel()
-	client, err := nipcashclient.Connect(ctx, hub.Pairing)
+	client, err := nipcashclient.ConnectCashHub(ctx, hub.Pairing)
 	must(err)
 	defer client.Close()
 
-	target := nipcash.Anyone()
-	if !*cashMode {
-		target = nipcash.Pubkey(toHex(*forPub))
+	var cashTarget *nipcash.CashTarget
+	var target nipcash.Recipient = nipcash.Pubkey(toHex(*forPub))
+	if *cashMode {
+		cashTarget, err = nipcash.NewCashTarget()
+		must(err)
+		target = cashTarget
 	}
 	res, err := client.MintCash(ctx, nipcash.MintCashParams{
 		Recipients: []nipcash.Allocation{nipcash.Send(target, *amount)},
 		Expiry:     time.Duration(*expires) * time.Second,
-	})
+	}, &memJournal{}, "agent-eval")
 	must(err)
 	ag.MintedMloki += *amount
 
 	out := map[string]any{"cash_token": res.CashToken, "hub": *label, "hub_app_id": hub.AppID, "amount_millis": *amount}
 	if *cashMode {
-		if len(res.Recipients) != 1 || res.Recipients[0].CashSecret == "" {
-			fatalf("token: hub returned no cash secret: %+v", res.Recipients)
-		}
-		out["cash_secret"] = res.Recipients[0].CashSecret
-		out["gift"] = res.CashToken + "#" + res.Recipients[0].CashSecret
+		out["cash_secret"] = cashTarget.Secret()
+		out["gift"] = res.CashToken + "#" + cashTarget.Secret()
 	}
 	printJSON(out)
 }
@@ -335,16 +335,12 @@ func cmdFake(args []string) {
 	}
 	yes, no := true, false
 	tok := func(idReq *bool) string {
-		v, err := nipcash.Encode(nipcash.Token{HRP: "lokicash", WalletPubkey: rnd(), Secret: rnd(), RelayURLs: []string{"wss://fake.invalid"}, IdentityRequired: idReq})
-		must(err)
-		return v
+		return testmint.MustBill(nipcash.Token{HRP: "lokicash", WalletPubkey: rnd(), Secret: rnd(), RelayURLs: []string{"wss://fake.invalid"}, IdentityRequired: idReq}, "")
 	}
 	out := map[string]any{"kind": *kind}
 	switch *kind {
 	case "cash-hub":
-		v, err := nipcash.EncodeCashHubConnection(nipcash.CashHubConnection{WalletPubkey: rnd(), Secret: rnd(), RelayURLs: []string{"wss://fake.invalid"}})
-		must(err)
-		out["value"] = v
+		out["value"] = testmint.MustCashHub(rnd(), "", "wss://fake.invalid")
 	case "circle-hub":
 		v, err := nipcw.EncodeCircleHubConnection(nipcw.CircleHubConnection{WalletPubkey: rnd(), Secret: rnd(), RelayURLs: []string{"wss://fake.invalid"}})
 		must(err)
@@ -360,17 +356,11 @@ func cmdFake(args []string) {
 	case "token-cash":
 		out["value"] = tok(&no)
 	case "token-signed":
-		priv, pub := btcec.PrivKeyFromBytes([]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32})
-		const amount = uint64(1000)
-		wp := rnd()
-		first := sha256.Sum256([]byte(nipcash.LNSignedMessagePrefix + nipcash.MintPayload("lokicash", wp, amount)))
-		second := sha256.Sum256(first[:])
-		amt := amount
-		v, err := nipcash.Encode(nipcash.Token{HRP: "lokicash", WalletPubkey: wp, Secret: rnd(), RelayURLs: []string{"wss://fake.invalid"},
-			MintSignature: ecdsa.SignCompact(priv, second[:], true), AttestedAmountMillis: &amt})
-		must(err)
-		ser := btcec.ToSerialized(pub)
-		out["value"], out["minter_pubkey"] = v, hex.EncodeToString(ser[:])
+		privBytes := []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32}
+		_, pub := btcec.PrivKeyFromBytes(privBytes)
+		amt := uint64(1000)
+		v := testmint.MustBill(nipcash.Token{HRP: "lokicash", WalletPubkey: rnd(), Secret: rnd(), RelayURLs: []string{"wss://fake.invalid"}, AttestedAmountMillis: &amt}, hex.EncodeToString(privBytes))
+		out["value"], out["minter_pubkey"] = v, hex.EncodeToString(pub.SerializeCompressed())
 	default:
 		fatalf("fake: unknown --kind %q", *kind)
 	}
@@ -659,4 +649,22 @@ func must(err error) {
 func fatalf(f string, a ...any) {
 	fmt.Fprintf(os.Stderr, "mint: "+f+"\n", a...)
 	os.Exit(1)
+}
+
+// memJournal keeps the mint written ahead for the life of this one command:
+// the harness never recovers a call across runs.
+type memJournal struct{ derived map[string]bool }
+
+func (j *memJournal) WriteAhead(context.Context, []nipcash.PendingCall) error { return nil }
+
+func (j *memJournal) RecordDerived(_ context.Context, id string, _ int64) error {
+	if j.derived == nil {
+		j.derived = map[string]bool{}
+	}
+	j.derived[id] = true
+	return nil
+}
+
+func (j *memJournal) DerivedPlaced(_ context.Context, id string) (bool, error) {
+	return j.derived[id], nil
 }

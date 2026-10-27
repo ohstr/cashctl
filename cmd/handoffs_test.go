@@ -9,11 +9,13 @@ import (
 
 	"github.com/ohstr/cashctl/internal/appdir"
 	"github.com/ohstr/cashctl/internal/ledger"
+
+	"github.com/ohstr/cashctl/internal/testmint"
 )
 
 func handoffToken(t *testing.T) string {
 	t.Helper()
-	tok, err := nipcash.Encode(nipcash.Token{HRP: "lokicash", WalletPubkey: strings.Repeat("ab", 32), Secret: strings.Repeat("cd", 32), RelayURLs: []string{"wss://relay.example"}})
+	tok, err := testmint.Encode(t, nipcash.Token{HRP: "lokicash", WalletPubkey: strings.Repeat("ab", 32), Secret: strings.Repeat("cd", 32), RelayURLs: []string{"wss://relay.example"}})
 	if err != nil {
 		t.Fatal(err)
 	}

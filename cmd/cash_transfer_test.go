@@ -16,6 +16,8 @@ import (
 	"github.com/ohstr/cashctl/internal/credential"
 	"github.com/ohstr/cashctl/internal/identity"
 	"github.com/ohstr/cashctl/internal/ledger"
+
+	"github.com/ohstr/cashctl/internal/testmint"
 )
 
 // newTestTransferCmd builds a *cobra.Command carrying the same flags
@@ -311,7 +313,7 @@ func TestFetchExpiresAt_MalformedTokenReturnsNil(t *testing.T) {
 func TestFetchExpiresAt_UnreachableRelayReturnsNil(t *testing.T) {
 	walletPubkey := strings.Repeat("aa", 32)
 	secret := strings.Repeat("bb", 32)
-	encoded, err := nipcash.Encode(nipcash.Token{
+	encoded, err := testmint.Encode(t, nipcash.Token{
 		HRP:              "lokicash",
 		WalletPubkey:     walletPubkey,
 		Secret:           secret,
@@ -504,7 +506,7 @@ func TestPrintAndSaveTransferResult_CashTargetAssemblesCashToSend(t *testing.T) 
 	withTempConfigDirForTransferResult(t)
 	c := testCmdWithFlags(true, false)
 	l := &ledger.Ledger{}
-	bt := nipcash.NewCashTarget()
+	bt := mustCashTarget(t)
 	target := credential.ResolvedTarget{Target: bt}
 	result := &nipcash.CashTransferResult{AmountMillis: 500, NewWalletToken: "new-sent-token"}
 
@@ -529,7 +531,7 @@ func TestPrintAndSaveTransferResult_CashTargetHumanModeShowsCashString(t *testin
 	withTempConfigDirForTransferResult(t)
 	c := testCmdWithFlags(false, false)
 	l := &ledger.Ledger{}
-	bt := nipcash.NewCashTarget()
+	bt := mustCashTarget(t)
 	target := credential.ResolvedTarget{Target: bt}
 	result := &nipcash.CashTransferResult{AmountMillis: 500, NewWalletToken: "new-sent-token"}
 
@@ -591,7 +593,7 @@ func TestPrintAndSaveTransferResult_CashTargetNoNewTokenFallsBackToOriginal(t *t
 	withTempConfigDirForTransferResult(t)
 	c := testCmdWithFlags(true, false)
 	l := &ledger.Ledger{}
-	bt := nipcash.NewCashTarget()
+	bt := mustCashTarget(t)
 	target := credential.ResolvedTarget{Target: bt}
 	result := &nipcash.CashTransferResult{AmountMillis: 500}
 
@@ -619,7 +621,7 @@ func TestPrintAndSaveTransferResult_CashTargetNothingToFallBackTo(t *testing.T) 
 	withTempConfigDirForTransferResult(t)
 	c := testCmdWithFlags(true, false)
 	l := &ledger.Ledger{}
-	bt := nipcash.NewCashTarget()
+	bt := mustCashTarget(t)
 	target := credential.ResolvedTarget{Target: bt}
 	result := &nipcash.CashTransferResult{AmountMillis: 500}
 
@@ -648,7 +650,7 @@ func TestPrintAndSaveTransferResult_CashRemainderStaysSpendableWithoutIdentity(t
 	withTempConfigDirForTransferResult(t) // fresh config dir: no identity configured
 	c := testCmdWithFlags(true, false)
 	l := &ledger.Ledger{}
-	target := credential.ResolvedTarget{Target: nipcash.NewCashTarget()}
+	target := credential.ResolvedTarget{Target: mustCashTarget(t)}
 	remaining := uint64(9999)
 	result := &nipcash.CashTransferResult{
 		AmountMillis:          1,
@@ -811,10 +813,10 @@ func TestExpiresAtFromCheck_OtherFailuresStillMeanUnknown(t *testing.T) {
 
 func TestExpiresAtFromCheck_SuccessPassesTheRealDeadlineThrough(t *testing.T) {
 	when := time.Now().Add(3 * time.Hour).Unix()
-	if got := expiresAtFromCheck(&nipcash.CheckClaimResult{ExpiresAt: &when}, nil); got == nil || *got != when {
+	if got := expiresAtFromCheck(&nipcash.CheckClaimResult{Claimable: true, Row: nipcash.RecipientStatus{ExpiresAt: nipcash.Expiry{At: when, Present: true}}}, nil); got == nil || *got != when {
 		t.Errorf("expiresAtFromCheck() = %v, want %d", got, when)
 	}
-	if got := expiresAtFromCheck(&nipcash.CheckClaimResult{}, nil); got != nil {
+	if got := expiresAtFromCheck(&nipcash.CheckClaimResult{Claimable: true}, nil); got != nil {
 		t.Errorf("no deadline on the result: got %v, want nil", *got)
 	}
 }

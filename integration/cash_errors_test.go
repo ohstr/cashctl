@@ -4,17 +4,17 @@ package integration
 
 import (
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"strings"
 	"testing"
 
-	"github.com/decred/dcrd/dcrec/secp256k1/v4/ecdsa"
 	btcec "github.com/flokiorg/go-flokicoin/crypto"
 	"github.com/ohstr/nmilat/nipIC"
 	"github.com/ohstr/nmilat/nipcash"
 	"github.com/ohstr/nmilat/nipcw"
+
+	"github.com/ohstr/cashctl/internal/testmint"
 )
 
 // These tests need no admin API and no network: they fabricate
@@ -36,15 +36,8 @@ func fakeHex32(t *testing.T) string {
 
 func fakeCashHubConnection(t *testing.T) string {
 	t.Helper()
-	tok, err := nipcash.EncodeCashHubConnection(nipcash.CashHubConnection{
-		WalletPubkey: fakeHex32(t),
-		Secret:       fakeHex32(t),
-		RelayURLs:    []string{"wss://fake.invalid"},
-	})
-	if err != nil {
-		t.Fatalf("encode fake cash hub connection: %v", err)
-	}
-	return tok
+	hubPriv, _ := testmint.Key(t)
+	return testmint.CashHub(t, hubPriv, "", "wss://fake.invalid")
 }
 
 func fakeCircleHubConnection(t *testing.T) string {
@@ -86,29 +79,19 @@ func fakeCashToken(t *testing.T, identityRequired *bool) string {
 // decode's minter_pubkey matches without needing a live minting node.
 func fakeSignedCashToken(t *testing.T, amountMillis uint64) (token, minterPubkeyHex string) {
 	t.Helper()
-	priv, pub := btcec.PrivKeyFromBytes([]byte{
+	privBytes := []byte{
 		1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
 		17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32,
-	})
-	walletPubkey := fakeHex32(t)
-	payload := nipcash.MintPayload("lokicash", walletPubkey, amountMillis)
-	first := sha256.Sum256([]byte(nipcash.LNSignedMessagePrefix + payload))
-	second := sha256.Sum256(first[:])
-	sig := ecdsa.SignCompact(priv, second[:], true)
-
-	tok, err := nipcash.Encode(nipcash.Token{
+	}
+	_, pub := btcec.PrivKeyFromBytes(privBytes)
+	token = testmint.Bill(t, nipcash.Token{
 		HRP:                  "lokicash",
-		WalletPubkey:         walletPubkey,
+		WalletPubkey:         fakeHex32(t),
 		Secret:               fakeHex32(t),
 		RelayURLs:            []string{"wss://fake.invalid"},
-		MintSignature:        sig,
 		AttestedAmountMillis: &amountMillis,
-	})
-	if err != nil {
-		t.Fatalf("encode fake signed cash token: %v", err)
-	}
-	serialized := btcec.ToSerialized(pub)
-	return tok, hex.EncodeToString(serialized[:])
+	}, hex.EncodeToString(privBytes))
+	return token, hex.EncodeToString(pub.SerializeCompressed())
 }
 
 func TestCashReceive_MisPasteCashHub(t *testing.T) {
@@ -360,7 +343,7 @@ func TestCashTransfer_NConnectionWithoutIA_UsageError(t *testing.T) {
 	f := newFixture(t)
 	f.mustJSON("wallet", "init")
 
-	nconn, err := nipIC.EncodeNConnection(nipIC.NewConnectionKey("discord", "482910"), []string{"wss://fake.invalid"}, "discord")
+	nconn, err := nipIC.EncodeNConnection(mustConnKey(t, "discord", "482910"), []string{"wss://fake.invalid"}, "discord")
 	if err != nil {
 		t.Fatalf("encode nconnection: %v", err)
 	}
@@ -383,7 +366,7 @@ func TestCashTransfer_NConnectionWithIA_ResolvesPastTarget(t *testing.T) {
 	f := newFixture(t)
 	f.mustJSON("wallet", "init")
 
-	nconn, err := nipIC.EncodeNConnection(nipIC.NewConnectionKey("discord", "482910"), []string{"wss://fake.invalid"}, "discord")
+	nconn, err := nipIC.EncodeNConnection(mustConnKey(t, "discord", "482910"), []string{"wss://fake.invalid"}, "discord")
 	if err != nil {
 		t.Fatalf("encode nconnection: %v", err)
 	}

@@ -74,6 +74,9 @@ func classifyNWCErr(cmd *cobra.Command, err error) error {
 // different text there. A spend goes through classifyCashSpendErr instead:
 // silence after a read is safe to retry, silence after a spend is not.
 func classifyCashTokenNWCErr(cmd *cobra.Command, err error) error {
+	if isProvenanceRefusal(err) {
+		return output.InvalidInputError(cmd, "", err)
+	}
 	if explained, ok := explainCashSecretRefusal(err); ok {
 		return output.InvalidInputError(cmd, "", explained)
 	}
@@ -119,13 +122,20 @@ func classifyCashSpendErr(cmd *cobra.Command, err error, verb string, ids ...str
 	if errors.As(err, &walletErr) {
 		return output.NWCErrorForCashToken(cmd, walletErr)
 	}
-	var notSent *notSentError
-	if errors.As(err, &notSent) || errors.Is(err, nipcashclient.ErrNoAnnouncement) {
-		return output.NetworkError(cmd, err)
-	}
 	input := ""
 	if len(ids) == 1 {
 		input = ids[0]
+	}
+	if isProvenanceRefusal(err) {
+		// Refused before any relay was contacted: nothing was sent.
+		return output.InvalidInputError(cmd, input, err)
+	}
+	if errors.Is(err, nipcashclient.ErrNoJournal) || errors.Is(err, nipcashclient.ErrNotSent) {
+		return output.RuntimeError(cmd, fmt.Errorf("not placed — your money has not moved: %w", err))
+	}
+	var notSent *notSentError
+	if errors.As(err, &notSent) || errors.Is(err, nipcashclient.ErrNoAnnouncement) {
+		return output.NetworkError(cmd, err)
 	}
 	if isRejectedBeforeSend(err) {
 		return output.InvalidInputError(cmd, input, fmt.Errorf("this %s was refused before it was sent, so nothing moved: %w", verb, err))
@@ -142,7 +152,6 @@ var rejectedBeforeSend = []error{
 	nipcash.ErrTooFewSources,
 	nipcash.ErrCashSource,
 	nipcash.ErrConsolidateTargetInvalid,
-	nipcash.ErrWrongCredentialForTarget,
 	nipcashclient.ErrItemTooLarge,
 	nipcashclient.ErrInterimIdentityNotPubkey,
 	nipcashclient.ErrNewTargetNotCash,

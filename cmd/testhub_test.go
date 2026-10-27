@@ -64,11 +64,11 @@ func newFakeBillHub(t *testing.T) *fakeBillHub {
 	origMove, origLive, origAmount := moveCashFn, probeCredentialFn, probeAmountFn
 	t.Cleanup(func() { moveCashFn, probeCredentialFn, probeAmountFn = origMove, origLive, origAmount })
 	moveCashFn = h.move
-	probeCredentialFn = func(e *ledger.Entry, cred nipcash.Credential, _ string) (bool, error) {
+	probeCredentialFn = func(e *ledger.Entry, cred nipcash.Credential) (bool, error) {
 		_, ok, err := h.probe(e, cred)
 		return ok, err
 	}
-	probeAmountFn = func(e *ledger.Entry, cred nipcash.Credential, _ string) (uint64, bool, error) {
+	probeAmountFn = func(e *ledger.Entry, cred nipcash.Credential) (uint64, bool, error) {
 		return h.probe(e, cred)
 	}
 	return h
@@ -130,7 +130,13 @@ func (h *fakeBillHub) credFor(target nipcash.Target) nipcash.Credential {
 	return nil
 }
 
-func notFound() error {
+// refusal is the Hub's answer to a move it cannot make: no such bill, or a
+// credential that does not spend it (UNAUTHORIZED for a wrong cash secret,
+// NIP-CASH §Errors).
+func refusal(cred nipcash.Credential, known bool) error {
+	if known {
+		return &relayclient.WalletError{Method: "cash_transfer", Code: "UNAUTHORIZED", Message: "credential does not spend this bill"}
+	}
 	return &relayclient.WalletError{Method: "cash_transfer", Code: "NOT_FOUND", Message: "no such bill"}
 }
 
@@ -141,7 +147,7 @@ func (h *fakeBillHub) move(e *ledger.Entry, cred nipcash.Credential, target nipc
 	b := h.bills[e.Token]
 	if b == nil || b.gone || b.owner != cred {
 		h.mu.Unlock()
-		return nil, notFound()
+		return nil, refusal(cred, b != nil && !b.gone)
 	}
 	newOwner := h.credFor(target)
 	res := &nipcash.CashTransferResult{AmountMillis: b.amount}
@@ -223,29 +229,39 @@ func TestFakeBillHub_AnswersOnlyForTheBillAskedAbout(t *testing.T) {
 	h.bill("tok-b", nipcash.BySecret("sb"), 2000)
 	a, b := &ledger.Entry{Token: "tok-a"}, &ledger.Entry{Token: "tok-b"}
 
-	if ok, err := probeCredentialFn(b, nipcash.BySecret("sa"), ""); err != nil || ok {
+	if ok, err := probeCredentialFn(b, nipcash.BySecret("sa")); err != nil || ok {
 		t.Errorf("bill B answered to bill A's secret: ok=%v err=%v", ok, err)
 	}
-	if amt, ok, err := probeAmountFn(a, nipcash.BySecret("sa"), ""); err != nil || !ok || amt != 1000 {
+	if amt, ok, err := probeAmountFn(a, nipcash.BySecret("sa")); err != nil || !ok || amt != 1000 {
 		t.Errorf("bill A to its own secret: %d %v %v; want 1000 true nil", amt, ok, err)
 	}
-	if _, err := moveCashFn(b, nipcash.BySecret("sa"), nipcash.NewCashTarget()); !isWrongSecretDecline(err) {
-		t.Errorf("moving bill B with bill A's secret: %v; want NOT_FOUND", err)
+	if _, err := moveCashFn(b, nipcash.BySecret("sa"), mustCashTarget(t)); !isWrongSecretDecline(err) {
+		t.Errorf("moving bill B with bill A's secret: %v; want UNAUTHORIZED", err)
 	}
 	if h.owner("tok-b") != nipcash.BySecret("sb") {
 		t.Error("a refused move changed bill B")
 	}
 
 	h.carve = true
-	next := nipcash.NewCashTarget()
+	next := mustCashTarget(t)
 	res, err := moveCashFn(a, nipcash.BySecret("sa"), next)
 	if err != nil || res.NewWalletToken == "" {
 		t.Fatalf("carving bill A: %+v %v", res, err)
 	}
-	if ok, _ := probeCredentialFn(a, nipcash.BySecret(next.Secret()), ""); ok {
+	if ok, _ := probeCredentialFn(a, nipcash.BySecret(next.Secret())); ok {
 		t.Error("the old token answered after its bill was carved away")
 	}
-	if ok, _ := probeCredentialFn(&ledger.Entry{Token: res.NewWalletToken}, nipcash.BySecret(next.Secret()), ""); !ok {
+	if ok, _ := probeCredentialFn(&ledger.Entry{Token: res.NewWalletToken}, nipcash.BySecret(next.Secret())); !ok {
 		t.Error("the carved bill does not answer to its new secret")
 	}
+}
+
+// mustCashTarget is a fresh cash target, failing the test if none can be made.
+func mustCashTarget(t testing.TB) *nipcash.CashTarget {
+	t.Helper()
+	ct, err := nipcash.NewCashTarget()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ct
 }

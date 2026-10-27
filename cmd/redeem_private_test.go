@@ -13,13 +13,15 @@ import (
 
 	"github.com/ohstr/cashctl/internal/ledger"
 	"github.com/ohstr/cashctl/internal/output"
+
+	"github.com/ohstr/cashctl/internal/testmint"
 )
 
 // tokenWithRelays builds a real, decodable cash token naming relays, so
 // planRelays is exercised against the actual codec rather than a stub.
 func tokenWithRelays(t *testing.T, relays ...string) string {
 	t.Helper()
-	tok, err := nipcash.Encode(nipcash.Token{
+	tok, err := testmint.Encode(t, nipcash.Token{
 		HRP:              "lokicash",
 		WalletPubkey:     strings.Repeat("aa", 32),
 		Secret:           strings.Repeat("bb", 32),

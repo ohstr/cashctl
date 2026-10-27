@@ -36,15 +36,15 @@ func mintCashGift(t *testing.T, hub adminCreateAppResponse, amountMillis uint64)
 	return retryEphemeralNWC(t, "mint_cash (cash)", func(ctx context.Context) (string, error) {
 		cashClient := dialCash(t, ctx, hub.PairingUri)
 		result, err := cashClient.MintCash(ctx, nipcash.MintCashParams{
-			Recipients: []nipcash.Allocation{nipcash.Send(nipcash.Anyone(), amountMillis)},
+			Recipients: []nipcash.Allocation{nipcash.Send(newCashRecipient(t), amountMillis)},
 		})
 		if err != nil {
 			return "", err
 		}
-		if len(result.Recipients) != 1 || result.Recipients[0].CashSecret == "" {
+		if len(result.Recipients) != 1 || secretFor(result.Recipients[0]) == "" {
 			t.Fatalf("mint_cash (cash): expected exactly one recipient with a cash_secret: %+v", result.Recipients)
 		}
-		return result.CashToken + "#" + result.Recipients[0].CashSecret, nil
+		return result.CashToken + "#" + secretFor(result.Recipients[0]), nil
 	})
 }
 

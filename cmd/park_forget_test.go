@@ -4,7 +4,6 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/ohstr/nmilat/nipcash"
 	relayclient "github.com/ohstr/nmilat/relay/client"
 	"github.com/spf13/cobra"
 
@@ -33,7 +32,7 @@ func TestForgetIfNothingCreated(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			auditDTempLedger(t)
 			l, ids := auditDSeedTwoHeldCash(t)
-			target := nipcash.NewCashTarget()
+			target := mustCashTarget(t)
 			parked, err := parkDestinationCashSecret(l, ids, target)
 			if err != nil {
 				t.Fatal(err)

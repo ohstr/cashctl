@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/ohstr/nmilat/nipcash"
-	nipcashclient "github.com/ohstr/nmilat/nipcash/client"
 	relayclient "github.com/ohstr/nmilat/relay/client"
 
 	"github.com/ohstr/cashctl/internal/credential"
@@ -78,19 +77,23 @@ func checkHandoff(note string) string {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	client, err := nipcashclient.Connect(ctx, token)
+	client, err := dialBill(ctx, token)
 	if err != nil {
 		return ""
 	}
 	defer client.Close()
-	_, err = client.CheckClaim(ctx, nipcash.BySecret(secret), tok, nipcash.NoLocalIdentity)
+	claim, err := client.CheckClaim(ctx, nipcash.BySecret(secret), tok)
 	var walletErr *relayclient.WalletError
+	var gone *nipcash.BillGone
 	switch {
-	case err == nil:
+	case err == nil && claim.Claimable:
 		return ledger.HandoffUnclaimed
-	// A secret that no longer matches arrives as NOT_FOUND, which CheckClaim
-	// returns as ErrClaimNotFound: someone took the note and re-keyed it.
-	case errors.Is(err, nipcash.ErrSpent), errors.Is(err, nipcash.ErrClaimNotFound):
+	case err == nil && claim.Reason == "expired":
+		return ledger.HandoffExpired
+	case err == nil:
+		return ledger.HandoffClaimed
+	// A secret that no longer matches: someone took the note and re-keyed it.
+	case errors.As(err, &gone), errors.Is(err, nipcash.ErrClaimNotFound), isWrongSecretDecline(err):
 		return ledger.HandoffClaimed
 	case errors.As(err, &walletErr) && walletErr.Code == "EXPIRED":
 		return ledger.HandoffExpired

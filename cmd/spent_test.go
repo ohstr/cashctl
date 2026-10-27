@@ -73,7 +73,7 @@ func TestCashStatus_ATokenYouRedeemedIsSpent(t *testing.T) {
 }
 
 func TestCashStatusRowStatus_SpentIsNotOK(t *testing.T) {
-	if got := cashStatusRowStatus(&nipcash.CashStatusResult{Error: nipcash.ErrorSpent}); got != "spent" {
+	if got := cashStatusRowStatus(&nipcash.CashStatusResult{Tombstone: &nipcash.Tombstone{Status: "spent"}}); got != "spent" {
 		t.Errorf("tombstone row status = %q, want spent", got)
 	}
 	if got := cashStatusRowStatus(&nipcash.CashStatusResult{}); got != "ok" {
@@ -133,7 +133,7 @@ func TestRunCashStatus_AFreshTombstoneIsSpentOnTheFirstCall(t *testing.T) {
 		real := fetchCashStatusFn
 		t.Cleanup(func() { fetchCashStatusFn = real })
 		fetchCashStatusFn = func(*cobra.Command, bool, *ledger.Entry) (*nipcash.CashStatusResult, error) {
-			return &nipcash.CashStatusResult{Error: nipcash.ErrorSpent}, nil
+			return &nipcash.CashStatusResult{Tombstone: &nipcash.Tombstone{Status: "spent"}}, nil
 		}
 		cmd := newTestStatusCmd(jsonMode, false)
 		_ = cmd.Flags().Set("token", e.ID)
@@ -174,7 +174,7 @@ func TestRunCashStatus_ATombstoneAmongSeveralStaysARow(t *testing.T) {
 	t.Cleanup(func() { fetchCashStatusFn = real })
 	fetchCashStatusFn = func(_ *cobra.Command, _ bool, e *ledger.Entry) (*nipcash.CashStatusResult, error) {
 		if e.ID == spent.ID {
-			return &nipcash.CashStatusResult{Error: nipcash.ErrorSpent}, nil
+			return &nipcash.CashStatusResult{Tombstone: &nipcash.Tombstone{Status: "spent"}}, nil
 		}
 		return &nipcash.CashStatusResult{}, nil
 	}

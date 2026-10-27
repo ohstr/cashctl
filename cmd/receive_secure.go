@@ -71,13 +71,17 @@ func (s protectedStatus) json() map[string]any {
 	return out
 }
 
-// isWrongSecretDecline reports whether err looks like a cash_secret
-// mismatch (NWC code NOT_FOUND) rather than some other failure — NIP-CASH
-// §Redemption Metadata guarantees a wrong secret always declines this way.
+// isWrongSecretDecline reports whether err is a cash_secret mismatch rather
+// than some other failure.
 func isWrongSecretDecline(err error) bool {
 	var walletErr *relayclient.WalletError
-	return errors.As(err, &walletErr) && walletErr.Code == "NOT_FOUND"
+	return errors.As(err, &walletErr) && isWrongSecretCode(walletErr.Code)
 }
+
+// isWrongSecretCode is the code a Hub answers a cash_secret that does not
+// verify with: UNAUTHORIZED, never NOT_FOUND, which means a verified holder
+// with no slice (NIP-CASH §Errors).
+func isWrongSecretCode(code string) bool { return code == "UNAUTHORIZED" }
 
 // protectCashReceipt is receive's automatic follow-up for a freshly
 // received cash-mode entry: confirm with the user, then re-key it
@@ -146,7 +150,11 @@ func protectRekeyOnly(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entry,
 		}
 	}
 
-	bt := nipcash.NewCashTarget()
+	bt, err := nipcash.NewCashTarget()
+	if err != nil {
+		printProtectFailure(jsonMode, err)
+		return protectedStatus{Status: "failed", Error: err.Error()}, entry
+	}
 	entry.PendingCashSecret = bt.Secret()
 	if err := l.Save(); err != nil {
 		// Nothing has been sent to the Hub yet — entry.CashSecret is
@@ -157,7 +165,7 @@ func protectRekeyOnly(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entry,
 	}
 
 	var result *nipcash.CashTransferResult
-	err := WithSpinner(jsonMode, "Protecting...", func() error {
+	err = WithSpinner(jsonMode, "Protecting...", func() error {
 		r, cErr := moveCashFn(entry, nipcash.BySecret(entry.CashSecret), bt)
 		if cErr != nil {
 			return cErr
@@ -211,6 +219,10 @@ func protectRekeyOnly(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entry,
 		entry.Token = result.NewWalletToken
 		if result.NewWalletPubkey != "" {
 			entry.WalletPubkey = result.NewWalletPubkey
+		}
+		entry.Verified, entry.MinterPubkey = returnedBillCheck(entry.Token, entry.MinterPubkey)
+		if !entry.Verified {
+			output.Notef(jsonMode, unverifiedReturnNote)
 		}
 	}
 

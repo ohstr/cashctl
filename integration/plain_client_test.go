@@ -262,13 +262,13 @@ func TestSpentBill_HolderGetsATombstone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the holder of a destroyed bill must get a definitive answer, not %v", err)
 	}
-	if !res.IsSpent() {
+	if res.Tombstone == nil {
 		t.Fatalf("want a spent tombstone, got %+v", res)
 	}
-	if res.RetainedUntil == nil {
+	if res.Tombstone.RetainedUntil == nil {
 		t.Error("a tombstone must say when the Hub will stop answering, so a client knows this answer is temporary")
-	} else if *res.RetainedUntil <= time.Now().Unix() {
-		t.Errorf("retained_until is already in the past (%d); the Hub answered outside its own window", *res.RetainedUntil)
+	} else if *res.Tombstone.RetainedUntil <= time.Now().Unix() {
+		t.Errorf("retained_until is already in the past (%d); the Hub answered outside its own window", *res.Tombstone.RetainedUntil)
 	}
 	if len(res.Recipients) != 0 {
 		t.Errorf("a destroyed bill must disclose no roster: %+v", res.Recipients)

@@ -60,7 +60,17 @@ func ParseCash(s string) (nipcash.Credential, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to load attestation file %q: %w", attestationFile, err)
 		}
-		return nipcash.BySigningConnectionKey(privKey, nipIC.WebIdentity(platform), externalID, attestation), nil
+		// The attestation names the platform and user; the key is taken from it
+		// (NIP-IC). The ones given here must agree with it.
+		if string(attestation.Platform) != platform {
+			return nil, fmt.Errorf("connection-key: platform %q doesn't match the attestation's %q", platform, attestation.Platform)
+		}
+		// A platform with a canonical form must name the attested account; any
+		// other takes its key from the attestation byte for byte.
+		if key, kErr := nipIC.NewConnectionKey(nipIC.WebIdentity(platform), externalID); kErr == nil && key != attestation.ConnectionKey {
+			return nil, fmt.Errorf("connection-key: %s,%s isn't the account the attestation names", platform, externalID)
+		}
+		return nipcash.BySigningConnectionKey(privKey, attestation)
 	default:
 		return nil, fmt.Errorf("unknown credential kind %q (want pubkey, connection-key, or cash)", prefix)
 	}
@@ -191,8 +201,12 @@ func ParseTarget(s string) (ResolvedTarget, error) {
 		// Resolved stays empty: it is the public description of a target, and
 		// the secret this generates spends the note. Callers that hand the note
 		// over read it from the target (CashTarget.Secret), once.
+		ct, err := nipcash.NewCashTarget()
+		if err != nil {
+			return ResolvedTarget{}, err
+		}
 		return ResolvedTarget{
-			Target: nipcash.NewCashTarget(),
+			Target: ct,
 			Kind:   TargetKindCash,
 			Input:  s,
 		}, nil
@@ -230,7 +244,11 @@ func ParseTarget(s string) (ResolvedTarget, error) {
 		if len(parts) != 3 {
 			return ResolvedTarget{}, fmt.Errorf("connection: target needs platform:external-id:ia-pubkey, got %d field(s)", len(parts))
 		}
-		return ResolvedTarget{Target: nipcash.ConnectionKey(nipIC.WebIdentity(parts[0]), parts[1], parts[2]), Kind: TargetKindConnection, Input: s}, nil
+		target, err := nipcash.ConnectionKey(nipIC.WebIdentity(parts[0]), parts[1], parts[2])
+		if err != nil {
+			return ResolvedTarget{}, fmt.Errorf("connection: %w", err)
+		}
+		return ResolvedTarget{Target: target, Kind: TargetKindConnection, Input: s}, nil
 	default:
 		return ResolvedTarget{}, fmt.Errorf("unknown target kind %q (want pubkey, connection, or cash)", prefix)
 	}
@@ -254,8 +272,12 @@ func ResolveConnectionTarget(originalInput string, key nipIC.ConnectionKey, plat
 	if platformLabel == "" {
 		platformLabel = "unspecified-platform"
 	}
+	target, err := nipcash.ResolvedConnectionKey(key, platform, iaHex)
+	if err != nil {
+		return ResolvedTarget{}, err
+	}
 	return ResolvedTarget{
-		Target:   nipcash.ResolvedConnectionKey(key, platform, iaHex),
+		Target:   target,
 		Kind:     TargetKindConnection,
 		Input:    originalInput,
 		Resolved: fmt.Sprintf("%s connection; Identity Authority: %s", platformLabel, iaDisplay),

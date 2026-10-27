@@ -39,12 +39,12 @@ func TestReconcileAmbiguousSources_OnlyATombstoneMarksASourceGone(t *testing.T) 
 
 	answers := map[string]func() (*nipcash.CashStatusResult, error){
 		spent: func() (*nipcash.CashStatusResult, error) {
-			return &nipcash.CashStatusResult{Error: nipcash.ErrorSpent}, nil
+			return &nipcash.CashStatusResult{Tombstone: &nipcash.Tombstone{Status: "spent"}}, nil
 		},
 		live:   func() (*nipcash.CashStatusResult, error) { return &nipcash.CashStatusResult{}, nil },
 		failed: func() (*nipcash.CashStatusResult, error) { return nil, errors.New("timeout") },
 		bad.ID: func() (*nipcash.CashStatusResult, error) {
-			return &nipcash.CashStatusResult{Error: nipcash.ErrorSpent}, nil
+			return &nipcash.CashStatusResult{Tombstone: &nipcash.Tombstone{Status: "spent"}}, nil
 		},
 	}
 	real := sourceCashStatusFn

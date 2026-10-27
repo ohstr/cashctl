@@ -18,6 +18,8 @@ import (
 	"github.com/ohstr/cashctl/internal/identity"
 	"github.com/ohstr/cashctl/internal/ledger"
 	"github.com/ohstr/cashctl/internal/output"
+
+	"github.com/ohstr/cashctl/internal/testmint"
 )
 
 func TestResolveConsolidateSources_PositionalArgs(t *testing.T) {
@@ -106,19 +108,14 @@ func groupableEntry(id, hub string, amountMillis uint64) ledger.Entry {
 // multi-Hub test here would collapse into a single group and fail.
 func hubToken(hub string) string {
 	amt := uint64(1)
-	tok, err := nipcash.Encode(nipcash.Token{
+	return testmint.MustBill(nipcash.Token{
 		HRP:                  "lokicash",
 		WalletPubkey:         hex.EncodeToString(bytes.Repeat([]byte{0xab}, 32)),
 		Secret:               hex.EncodeToString(bytes.Repeat([]byte{0xcd}, 32)),
 		RelayURLs:            []string{"wss://relay.test"},
-		MintSignature:        bytes.Repeat([]byte{0x01}, 65),
 		AttestedAmountMillis: &amt,
 		HubGroup:             nipcash.HubGroupFor(hub),
-	})
-	if err != nil {
-		panic(err)
-	}
-	return tok
+	}, "")
 }
 
 // hubKey is the map key groups are bucketed under: the fingerprint, hex-encoded.
@@ -365,7 +362,7 @@ func TestDoCashConsolidate_SucceedsOnFirstCandidate(t *testing.T) {
 	expiresAt := int64(12345)
 	withFakeAttemptCashConsolidate(t, func(dialToken string, sources []nipcash.Source, target nipcash.Target) (*nipcash.CashConsolidateResult, error) {
 		calls++
-		return &nipcash.CashConsolidateResult{AmountMillis: 3000, NewWalletToken: "merged-token", NewWalletPubkey: "merged-pub", ExpiresAt: &expiresAt}, nil
+		return &nipcash.CashConsolidateResult{AmountMillis: 3000, NewWalletToken: "merged-token", NewWalletPubkey: "merged-pub", ExpiresAt: nipcash.Expiry{At: expiresAt, Present: true}}, nil
 	})
 
 	cmd := &cobra.Command{}
@@ -930,7 +927,7 @@ func TestDoCashConsolidate_CashTargetResultIsLabelledProtected(t *testing.T) {
 		t.Fatal(err)
 	}
 	ids := []string{l.Entries[0].ID, l.Entries[1].ID}
-	target := nipcash.NewCashTarget()
+	target := mustCashTarget(t)
 	withFakeAttemptCashConsolidate(t, func(string, []nipcash.Source, nipcash.Target) (*nipcash.CashConsolidateResult, error) {
 		return &nipcash.CashConsolidateResult{AmountMillis: 2000, NewWalletToken: "lokicash1merged", NewWalletPubkey: "merged-pub"}, nil
 	})

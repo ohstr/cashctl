@@ -135,14 +135,14 @@ func setUpCashHubOpts(t *testing.T, admin *adminClient, opts cashHubOpts) adminC
 
 // dialCash dials hubPairingURI as a NIP-CASH client (mint_cash, cash_redeem,
 // list_recipients, ...).
-func dialCash(t *testing.T, ctx context.Context, hubPairingURI string) *nipcashclient.Client {
+func dialCash(t *testing.T, ctx context.Context, hubConnection string) *liveCashHub {
 	t.Helper()
-	c, err := nipcashclient.Connect(ctx, hubPairingURI)
+	c, err := nipcashclient.ConnectCashHub(ctx, hubConnection)
 	if err != nil {
 		t.Fatalf("dial cash hub (nipcash): %v", err)
 	}
 	t.Cleanup(c.Close)
-	return c
+	return &liveCashHub{t: t, hub: c}
 }
 
 // dialNWC dials hubPairingURI as a plain NIP-47 client (make_invoice,
@@ -346,15 +346,15 @@ func TestCashInspect_DecodeAndListRecipients(t *testing.T) {
 	mintCash := func() (token, secret string) {
 		t.Helper()
 		result, err := cashClient.MintCash(ctx, nipcash.MintCashParams{
-			Recipients: []nipcash.Allocation{nipcash.Send(nipcash.Anyone(), amountMillis)},
+			Recipients: []nipcash.Allocation{nipcash.Send(newCashRecipient(t), amountMillis)},
 		})
 		if err != nil {
 			t.Fatalf("mint_cash (cash): %v", err)
 		}
-		if len(result.Recipients) != 1 || result.Recipients[0].CashSecret == "" {
+		if len(result.Recipients) != 1 || secretFor(result.Recipients[0]) == "" {
 			t.Fatalf("mint_cash (cash): expected exactly one recipient with a cash_secret: %+v", result.Recipients)
 		}
-		return result.CashToken, result.Recipients[0].CashSecret
+		return result.CashToken, secretFor(result.Recipients[0])
 	}
 
 	// Two separate cash mints: a token can only ever be received once per
@@ -455,15 +455,15 @@ func TestCashReceive_CashGiftString(t *testing.T) {
 
 	const amountMillis = uint64(80_000)
 	mintResult, err := cashClient.MintCash(ctx, nipcash.MintCashParams{
-		Recipients: []nipcash.Allocation{nipcash.Send(nipcash.Anyone(), amountMillis)},
+		Recipients: []nipcash.Allocation{nipcash.Send(newCashRecipient(t), amountMillis)},
 	})
 	if err != nil {
 		t.Fatalf("mint_cash (cash): %v", err)
 	}
-	if len(mintResult.Recipients) != 1 || mintResult.Recipients[0].CashSecret == "" {
+	if len(mintResult.Recipients) != 1 || secretFor(mintResult.Recipients[0]) == "" {
 		t.Fatalf("mint_cash (cash): expected exactly one recipient with a cash_secret: %+v", mintResult.Recipients)
 	}
-	giftString := mintResult.CashToken + "#" + mintResult.Recipients[0].CashSecret
+	giftString := mintResult.CashToken + "#" + secretFor(mintResult.Recipients[0])
 
 	receiveResp := f.mustJSON("receive", giftString)
 	entry, _ := receiveResp["entry"].(map[string]any)

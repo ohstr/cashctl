@@ -469,7 +469,7 @@ func connectPlan(ctx context.Context, cmd *cobra.Command, plan *redeemPlan, outc
 	}
 	var client *nipcashclient.Client
 	err := WithSpinner(jsonMode, redeemStep(total, i, "Connecting..."), func() error {
-		c, cErr := nipcashclient.Connect(ctx, plan.Entry.Token)
+		c, cErr := dialBill(ctx, plan.Entry.Token)
 		if cErr != nil {
 			return cErr
 		}
@@ -477,7 +477,7 @@ func connectPlan(ctx context.Context, cmd *cobra.Command, plan *redeemPlan, outc
 		return nil
 	})
 	if err != nil {
-		outcomes[i].Err = output.NetworkError(cmd, err)
+		outcomes[i].Err = classifyCashTokenNWCErr(cmd, err)
 		return false
 	}
 	plan.Client = client
@@ -1176,6 +1176,7 @@ func truncateInvoiceForDisplay(invoice string) string {
 // those fall back to naming just the connection kind. A caller that never
 // registers the destination finds out it doesn't dial from the failure
 // that follows, not from what got printed here first.
+
 func safeDestinationLabel(raw string) string {
 	switch dial.Sniff(raw) {
 	case dial.KindNWCURI:
@@ -1220,17 +1221,11 @@ func resolveAmount(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entry, so
 	if err != nil {
 		return 0, err
 	}
-	myPubHex, _ := signerPubKeyHex(cmd, entry)
-	result, err := sourceClient.CheckClaim(ctx, cred, tok, myPubHex)
-	if errors.Is(err, nipcash.ErrSpent) {
-		return 0, recordSpent(cmd, l, entry)
-	}
-	if errors.Is(err, nipcash.ErrClaimNotFound) {
-		return 0, output.NotFoundError(cmd, entry.ID, fmt.Errorf("couldn't determine this token's amount — check `cashctl wallet show`, or that it's still valid"))
-	}
+	claim, err := ownClaim(ctx, cmd, l, sourceClient, entry, cred, tok)
 	if err != nil {
-		return 0, classifyCashTokenNWCErr(cmd, err)
+		return 0, err
 	}
+	result := &claim.Row
 	// Same guard as the two quote paths, for the same reason and against the same
 	// attacker: this also persists a Hub-supplied amount and sets Verified = true, and
 	// it is reached by redeem, transfer AND consolidate, so it is the widest of the
@@ -1238,7 +1233,7 @@ func resolveAmount(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entry, so
 	// this holder's slice, which may legitimately be smaller than the bill's signed
 	// total — see that function's own comment on why the ceiling carries over and the
 	// floor does not.
-	if vErr := validateQuotedAmounts(cmd, tok, result.MinterPubkey, redeemQuote{
+	if vErr := validateQuotedAmounts(cmd, tok, minterPubkeyFromToken(tok), redeemQuote{
 		AmountMillis:        result.AmountMillis,
 		RedeemFeeMillis:     result.RedeemFeeMillis,
 		NetRedeemableMillis: result.NetRedeemableMillis,
@@ -1250,7 +1245,7 @@ func resolveAmount(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entry, so
 	}
 	entry.AmountMillis = &result.AmountMillis
 	entry.RedeemFeeMillis = &result.RedeemFeeMillis
-	entry.ExpiresAt = result.ExpiresAt
+	entry.ExpiresAt = expiryPtr(result.ExpiresAt)
 	_ = l.SetVerified(entry.ID, true)
 	return result.AmountMillis, nil
 }
@@ -1305,29 +1300,24 @@ func resolveRedeemQuote(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entr
 	if err != nil {
 		return redeemQuote{}, err
 	}
-	myPubHex, _ := signerPubKeyHex(cmd, entry)
-	result, err := sourceClient.CheckClaim(ctx, cred, tok, myPubHex)
-	if errors.Is(err, nipcash.ErrSpent) {
-		return redeemQuote{}, recordSpent(cmd, l, entry)
-	}
-	if errors.Is(err, nipcash.ErrClaimNotFound) {
-		return redeemQuote{}, output.NotFoundError(cmd, entry.ID, fmt.Errorf("couldn't determine this token's amount — check `cashctl wallet show`, or that it's still valid"))
-	}
+	claim, err := ownClaim(ctx, cmd, l, sourceClient, entry, cred, tok)
 	if err != nil {
-		return redeemQuote{}, classifyCashTokenNWCErr(cmd, err)
+		return redeemQuote{}, err
 	}
+	result := &claim.Row
 	q := redeemQuote{
 		AmountMillis:        result.AmountMillis,
 		RedeemFeeMillis:     result.RedeemFeeMillis,
 		NetRedeemableMillis: result.NetRedeemableMillis,
-		ExpiresAt:           result.ExpiresAt,
+		ExpiresAt:           expiryPtr(result.ExpiresAt),
 	}
-	if result.MinterPubkey != nil {
+	minter := minterPubkeyFromToken(tok)
+	if minter != nil {
 		q.AttestedAmountMillis = tok.AttestedAmountMillis
 	}
 	// Before the ledger sees any of it. Persisting first and validating after would
 	// leave the poison behind even on the refusal path.
-	if err := validateQuotedAmounts(cmd, tok, result.MinterPubkey, q); err != nil {
+	if err := validateQuotedAmounts(cmd, tok, minter, q); err != nil {
 		return redeemQuote{}, err
 	}
 	if err := checkQuoteDrift(cmd, entry, q.AmountMillis, q.RedeemFeeMillis); err != nil {
@@ -1335,7 +1325,7 @@ func resolveRedeemQuote(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entr
 	}
 	entry.AmountMillis = &result.AmountMillis
 	entry.RedeemFeeMillis = &result.RedeemFeeMillis
-	entry.ExpiresAt = result.ExpiresAt
+	entry.ExpiresAt = expiryPtr(result.ExpiresAt)
 	_ = l.SetVerified(entry.ID, true)
 	return q, nil
 }
@@ -1589,7 +1579,7 @@ func exactSameHubSum(quotes []quotedEntry, target uint64) []*ledger.Entry {
 func quoteHeldCandidate(cmd *cobra.Command, entry *ledger.Entry) (redeemQuote, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	client, err := nipcashclient.Connect(ctx, entry.Token)
+	client, err := dialBill(ctx, entry.Token)
 	if err != nil {
 		return redeemQuote{}, err
 	}
@@ -1679,4 +1669,23 @@ func invoiceAmountOverride(cmd *cobra.Command, invoice string) (*uint64, error) 
 		return nil, output.InvalidInputError(cmd, amountFlag, err)
 	}
 	return &amt, nil
+}
+
+// ownClaim reads a held bill's own row from its Hub, identified by the
+// credential (nipcash.OwnRow): a tombstone marks the entry spent; no row, or a
+// row that can no longer be spent (claimed, withdrawn, expired), is not_found.
+func ownClaim(ctx context.Context, cmd *cobra.Command, l *ledger.Ledger, c *nipcashclient.Client, entry *ledger.Entry, cred nipcash.Credential, tok nipcash.Token) (*nipcash.CheckClaimResult, error) {
+	claim, err := c.CheckClaim(ctx, cred, tok)
+	var gone *nipcash.BillGone
+	switch {
+	case errors.As(err, &gone):
+		return nil, recordSpent(cmd, l, entry)
+	case errors.Is(err, nipcash.ErrClaimNotFound):
+		return nil, output.NotFoundError(cmd, entry.ID, fmt.Errorf("couldn't determine this token's amount — check `cashctl wallet show`, or that it's still valid"))
+	case err != nil:
+		return nil, classifyCashTokenNWCErr(cmd, err)
+	case !claim.Claimable:
+		return nil, output.NotFoundError(cmd, entry.ID, fmt.Errorf("this token can no longer be spent: its slice is %s", claim.Reason))
+	}
+	return claim, nil
 }

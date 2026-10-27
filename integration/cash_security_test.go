@@ -67,12 +67,12 @@ func TestWalletShow_NeverLeaksSecrets(t *testing.T) {
 	defer cancel()
 	cashClient := dialCash(t, ctx, hub.PairingUri)
 	mintResult, err := cashClient.MintCash(ctx, nipcash.MintCashParams{
-		Recipients: []nipcash.Allocation{nipcash.Send(nipcash.Anyone(), 15_000)},
+		Recipients: []nipcash.Allocation{nipcash.Send(newCashRecipient(t), 15_000)},
 	})
 	if err != nil {
 		t.Fatalf("mint_cash (cash): %v", err)
 	}
-	cashSecret := mintResult.Recipients[0].CashSecret
+	cashSecret := secretFor(mintResult.Recipients[0])
 	if res := f.run("receive", mintResult.CashToken+"#"+cashSecret); res.ExitCode != 0 {
 		t.Fatalf("receive (cash): exit %d\nstderr: %s", res.ExitCode, res.Stderr)
 	}
