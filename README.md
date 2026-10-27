@@ -246,6 +246,19 @@ cashctl cash order place cashorder1... 100
 cashctl cash order watch <order>
 ```
 
+## `cashctl cash withdraw`
+
+Pays a whole bill out to an on-chain address. `quote` shows exactly what the
+recipient gets and moves nothing; `send` sends only after you type `yes` to
+that quote (or, from a script, `send --quote <wq-…> --yes`). `show` follows
+the payout until it is final; a payout the Hub cancels comes back as cash.
+
+```sh
+cashctl cash withdraw quote fc1q...
+cashctl cash withdraw send fc1q...          # shows the quote, asks for "yes"
+cashctl cash withdraw show
+```
+
 ## `cashctl cash settle`
 
 Asks the Hubs about every transfer, merge or re-key whose answer never came,

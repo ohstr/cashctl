@@ -35,6 +35,9 @@ const (
 	CallExpired    = "expired"
 	CallStuck      = "stuck"
 	CallClosed     = "closed"
+	// CallOpenWithdraw is a withdrawal the Hub accepted: its payout is followed
+	// until it is final or cancelled.
+	CallOpenWithdraw = "open_withdraw"
 	// CallOpenOrder is a placed order: its call is answered, and the order is
 	// read until it is finished.
 	CallOpenOrder = "open_order"
@@ -56,6 +59,9 @@ const (
 	RoleNewIdentity   = "new_identity"
 	RoleRemainder     = "remainder"
 	RoleMintRecipient = "mint_recipient"
+	// RoleRemint is a cash-mode withdrawal's re-mint secret, used only if the
+	// Hub cancels the payout.
+	RoleRemint = "remint"
 )
 
 // CallSecret is a secret a call generated, with its commitment, which is all

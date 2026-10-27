@@ -163,7 +163,7 @@ func reportSettle(cmd *cobra.Command, l *ledger.Ledger, settled []settledCall, j
 			}
 			// An open order is answered: it waits for its payment, not for
 			// cash settle.
-			if c.DeviceID == device && c.State != ledger.CallOpenOrder {
+			if c.DeviceID == device && c.State != ledger.CallOpenOrder && c.State != ledger.CallOpenWithdraw {
 				stillOpen = true
 			}
 		}

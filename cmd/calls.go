@@ -132,8 +132,11 @@ func (j *ledgerJournal) WriteAhead(_ context.Context, calls []nipcash.PendingCal
 		}
 		for _, s := range pc.Secrets {
 			role := ledger.RoleNewIdentity
-			if s.Role == "remainder" {
+			switch s.Role {
+			case "remainder":
 				role = ledger.RoleRemainder
+			case nipcash.SecretRoleRemint:
+				role = ledger.RoleRemint
 			}
 			c.Secrets = append(c.Secrets, ledger.CallSecret{Role: role, Secret: s.Secret})
 		}

@@ -2,6 +2,9 @@
 
 ## [0.7.0-rc.1]
 
+- Adds `cash withdraw quote|send|show|cancel|settle`, which pays a bill out
+  on-chain after the user confirms the exact quote, then follows the payout; a
+  payout the Hub cancels comes back as a new bill.
 - Adds `cash order place|show|watch|settle`, which buys cash over a
   `cashorder1` Order connection and collects the bills once paid; `decode`
   reads a `cashorder1` string.

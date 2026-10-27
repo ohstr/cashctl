@@ -190,6 +190,47 @@ CREATE TABLE orders (
 	finished_at     INTEGER
 );
 
+CREATE TABLE withdraw_quotes (
+	quote_handle  TEXT PRIMARY KEY,
+	entry_id      TEXT NOT NULL,
+	wallet_pubkey TEXT NOT NULL,
+	hub_identity  TEXT NOT NULL,
+	address       TEXT NOT NULL,
+	quote_json    TEXT NOT NULL,
+	quote_id      TEXT NOT NULL,
+	send_before   INTEGER,
+	used          INTEGER NOT NULL DEFAULT 0,
+	created_at    INTEGER NOT NULL
+);
+
+CREATE TABLE withdrawals (
+	withdrawal_id      TEXT PRIMARY KEY,
+	call_id            TEXT NOT NULL,
+	source_entry_id    TEXT NOT NULL,
+	wallet_pubkey      TEXT NOT NULL,
+	hub_identity       TEXT NOT NULL,
+	address            TEXT,
+	quote_json         TEXT,
+	quote_id           TEXT,
+	amount_millis      INTEGER NOT NULL,
+	network_fee_millis INTEGER,
+	hub_fee_millis     INTEGER,
+	fee_millis         INTEGER NOT NULL,
+	payout_millis      INTEGER NOT NULL,
+	sent_by            INTEGER NOT NULL,
+	holds_until        INTEGER,
+	send_before        INTEGER,
+	notify             TEXT NOT NULL,
+	accepted_relays    TEXT,
+	state              TEXT NOT NULL,
+	payout_json        TEXT,
+	remint_entry_id    TEXT,
+	quote_expired_seen INTEGER NOT NULL DEFAULT 0,
+	confirmed_at       INTEGER,
+	checked_at         INTEGER,
+	finished_at        INTEGER
+);
+
 CREATE TABLE unverified_confirmations (
 	conn_sha256  TEXT PRIMARY KEY,
 	hrp          TEXT NOT NULL,

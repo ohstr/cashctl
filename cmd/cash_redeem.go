@@ -1036,6 +1036,8 @@ func spentStatusDescription(status string) string {
 		return "consolidated into another token"
 	case ledger.StatusSpent:
 		return "reported spent by its Hub"
+	case ledger.StatusWithdrawn:
+		return "withdrawn on-chain"
 	default:
 		return ""
 	}
