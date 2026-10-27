@@ -61,7 +61,7 @@ a `<token>#<secret>` bill (take it with `cashctl receive`) with
 ## `cashctl wallet show` / `history`
 
 ```sh
-cashctl wallet show --json     # {"npub", "identity_source", "wallets", "default_wallet", "held_tokens", "unfinished_cash_sends", "unclaimed_handoffs", "pending_joins"}; each held token carries its "cash_hub"
+cashctl wallet show --json     # {"npub", "identity_source", "wallets", "default_wallet", "held_tokens", "open_calls", "unclaimed_handoffs", "pending_joins"}; each held token carries its "cash_hub"
 cashctl wallet history --json  # {"history": [{"at","action","detail"}, ...], "handoffs": [{"id","at","kind","handoff","secret_hidden","amount_millis","target","status","checked_at"}, ...]}
 cashctl wallet history --show-secrets --json  # the same, unclaimed cash notes in full (secret-bearing)
 ```
@@ -77,11 +77,12 @@ and gifts, which stay `sent` because their claim can't be seen — branch on
 each entry's `status`. `wallet balance` shows the unclaimed cash notes as
 `outstanding_cash_notes`, outside the total.
 
-`unfinished_cash_sends` is normally `[]`. Each entry
-(`{"token_id", "cash_secret"}`) is an interrupted `--to cash` send that may
-have created a bill: `cash_secret` is the only copy of its secret, so keep
-it. The bill's token itself comes only from the Hub; check
-`wallet history` before assuming the send failed.
+`open_calls` is normally `[]`. Each entry is a transfer, merge or re-key
+whose answer never came (`{"call", "method", "purpose", "state",
+"deadline", "token_ids", "amount_millis", "device", "secrets"}`): it was
+written down before it was sent, its bills are not spent again until the
+Hub says what happened, and each `secrets[].secret` it generated may be the
+only copy of what spends a bill, so keep them.
 
 ## `cashctl wallet balance` — the unified figure
 

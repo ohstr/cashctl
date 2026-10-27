@@ -2,6 +2,12 @@
 
 ## [0.7.0-rc.1]
 
+- Changes transfers, merges and protects to be written down with their request
+  id, deadline and every new secret before they are sent; one that gets no
+  clear answer stays open, and its bills are not spent again until the Hub says
+  what happened. `wallet show` lists open calls and their new codes.
+- Changes a partial split of a cash note to give the remainder a fresh secret of
+  its own.
 - Changes the local database to a new format. A `cashctl.db` from an earlier
   version is refused, naming the file to move aside; nothing in it is read.
   ([#129](https://github.com/ohstr/cashctl/pull/129))
