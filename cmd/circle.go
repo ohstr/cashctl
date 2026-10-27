@@ -28,6 +28,7 @@ const (
 	reasonNotAccepting    = "not_accepting"
 	reasonJoinUnavailable = "join_unavailable"
 	reasonOverHubLimit    = "over_hub_limit"
+	reasonNoRotation      = "no_rotation"
 )
 
 // withHeldWalletHint adds to a WALLET_EXISTS refusal which wallet here is
@@ -99,6 +100,7 @@ you agree once (or pass --allow-unverified).`,
 	cmd.Flags().String("as", "", "override credential (defaults to your local identity)")
 	cmd.Flags().Bool("allow-unverified", false, "use a string whose signature can't be confirmed (asked once per string otherwise)")
 	cmd.Flags().String("backup-file", "", "write the new wallet's connection to this file (0600) when the Hub can't rotate a lost one")
+	cmd.Flags().Bool("accept-no-rotation", false, "join a Hub that can't rotate a lost connection without --backup-file (needed under --json/--yes)")
 	return cmd
 }
 
@@ -334,10 +336,19 @@ func runCircleJoin(cmd *cobra.Command, args []string) error {
 	req := joinRequest{MaxAmountMillis: maxAmount, MaxReceiveMillis: maxReceive, ExpirySecs: int64(expiry / time.Second),
 		BudgetRenewal: budgetRenewal, Network: info.Network}
 	journal := &joinJournal{conn: c, request: req}
+	refusedNoRotation := false
 	opts := nipcwclient.JoinOptions{WarnNoRotation: func(context.Context) bool {
 		w := "this Hub can't rotate a lost connection: if you lose this wallet's connection key, its balance can't be reached by anyone"
 		warnings = append(warnings, w)
 		output.Notef(jsonMode, "Warning: %s.", w)
+		// Warned before the join (NIP-CW §Recovering a Lost Connection): with
+		// no terminal to answer, only a backup or an explicit flag joins.
+		yes, _ := cmd.Flags().GetBool("yes")
+		accept, _ := cmd.Flags().GetBool("accept-no-rotation")
+		if (jsonMode || yes) && backupFile == "" && !accept {
+			refusedNoRotation = true
+			return false
+		}
 		if backupFile == "" && !jsonMode {
 			if yes, _ := cmd.Flags().GetBool("yes"); !yes {
 				output.Fprintf(os.Stderr, "Save a backup of the new wallet's connection to a file (path, or Enter to skip): ")
@@ -357,6 +368,13 @@ func runCircleJoin(cmd *cobra.Command, args []string) error {
 		}, opts, journal)
 		return jErr
 	})
+	if err != nil && refusedNoRotation && errors.Is(err, nipcwclient.ErrJoinDeclined) {
+		if journal.written != nil {
+			_ = config.SetJoinState(journal.written.ConnectionPubkey, config.JoinNotApplied, "not_sent", 0)
+		}
+		return output.WithReason(output.UsageError(cmd, errors.New(
+			"this Hub can't rotate a lost connection, so a lost key loses the wallet; nothing was sent. Join with --backup-file <path> to keep a copy, or --accept-no-rotation")), reasonNoRotation)
+	}
 	if err != nil {
 		return joinFailed(cmd, client, journal, cred, err, label, warnings, isTest)
 	}

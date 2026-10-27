@@ -445,6 +445,25 @@ func TestJoin_UnverifiedStringNeedsOneConfirmation(t *testing.T) {
 	}
 }
 
+// CC-C1: under --json a Hub without rotation is refused before the join, unless
+// --backup-file or --accept-no-rotation says otherwise.
+func TestJoin_NoRotationUnderJSONNeedsBackupOrFlag(t *testing.T) {
+	info := goodCircleInfo()
+	info.CircleWallet.RotationDelaySecs = nil
+	f := &fakeCircleHub{info: info}
+	setUpCircleHub(t, f)
+	_, _, err := runJoinCLI(t, testCircleHub(t), nil)
+	if ce := output.AsCLIError(err); ce == nil || ce.Reason != reasonNoRotation {
+		t.Fatalf("err %v, want refused with no_rotation", err)
+	}
+	if f.joins != 0 {
+		t.Errorf("%d joins sent, want none", f.joins)
+	}
+	if _, _, err := runJoinCLI(t, testCircleHub(t), map[string]string{"accept-no-rotation": "true"}); err != nil {
+		t.Fatalf("join with --accept-no-rotation: %v", err)
+	}
+}
+
 // R-CW-09: a Hub without rotation gets the warning first, and --backup-file
 // writes the wallet's fields (0600, no URI).
 func TestJoin_NoRotationWarnsAndWritesTheBackup(t *testing.T) {
