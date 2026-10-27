@@ -16,6 +16,7 @@ import (
 	"github.com/ohstr/cashctl/internal/appdir"
 	"github.com/ohstr/cashctl/internal/ledger"
 	"github.com/ohstr/cashctl/internal/output"
+	"github.com/ohstr/cashctl/internal/store"
 	"github.com/ohstr/cashctl/internal/testmint"
 )
 
@@ -278,5 +279,26 @@ func TestOrder_EndedUnpaid(t *testing.T) {
 	}
 	if o, c := onlyOrder(t); o.State != ledger.OrderEndedUnpaid || c.State != ledger.CallDone {
 		t.Errorf("order %s, call %s", o.State, c.State)
+	}
+}
+
+// The order row is written in the same transaction as its call: when the row
+// can't be written, neither is the call, and nothing is sent.
+func TestOrderPlace_RowAndCallAreOneTransaction(t *testing.T) {
+	f, conn := setUpOrderHub(t)
+	db, err := store.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TRIGGER fail_orders BEFORE INSERT ON orders BEGIN SELECT RAISE(ABORT, 'injected'); END`); err != nil {
+		t.Fatal(err)
+	}
+	_ = db.Close()
+	if _, err := placeOrder(t, conn, "100"); err == nil {
+		t.Fatal("placed with an order row that can't be written")
+	}
+	l, _ := ledger.Load()
+	if len(l.Calls) != 0 || len(f.placed) != 0 {
+		t.Errorf("calls %d, placed %d: want neither", len(l.Calls), len(f.placed))
 	}
 }

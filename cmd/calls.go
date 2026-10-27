@@ -87,6 +87,7 @@ type ledgerJournal struct {
 func (j *ledgerJournal) WriteAhead(_ context.Context, calls []nipcash.PendingCall) error {
 	var written []string
 	undo := func(err error) error {
+		j.l.DropStagedOrders()
 		for _, id := range written {
 			j.l.RemoveCall(id)
 		}
