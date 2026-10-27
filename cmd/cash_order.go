@@ -345,10 +345,18 @@ func recordOrder(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, o *ledger
 	case orderclient.EndedUnpaid(order, o.SawProgress, now):
 		o.State, finished = ledger.OrderEndedUnpaid, true
 	}
-	if finished {
+	switch {
+	case finished && watchedAfterClose(order):
+		// A closed on-chain order may still gain bills (NIP-CO §Order State):
+		// its call stays open, with the key that collects them.
+		if o.FinishedAt == 0 {
+			o.FinishedAt = now
+		}
+		c.State, c.Detail, c.UpdatedAt = ledger.CallOpenOrder, string(order.State), now
+	case finished:
 		o.FinishedAt = now
 		closeCall(l, c, ledger.CallDone, o.State)
-	} else {
+	default:
 		c.State, c.Detail, c.UpdatedAt = ledger.CallOpenOrder, string(order.State), now
 	}
 	if err := l.Save(); err != nil {
@@ -358,6 +366,12 @@ func recordOrder(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, o *ledger
 		return false, output.RuntimeError(cmd, err)
 	}
 	return finished, nil
+}
+
+// watchedAfterClose reports an order that is finished for the user but whose
+// Hub still mints later payments: an on-chain order in closed.
+func watchedAfterClose(order *nipCO.Order) bool {
+	return order != nil && order.Payment == nipCO.PaymentOnchain && order.State == nipCO.OrderClosed
 }
 
 // validateOrder is what cashctl checks of an order beyond nmilat's parse: the

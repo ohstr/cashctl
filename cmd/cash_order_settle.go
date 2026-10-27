@@ -75,7 +75,17 @@ func settleOrderCall(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, devic
 			return "ended unpaid: nothing was minted"
 		}
 		o.CheckedAt = now.Unix()
+		if o.FinishedAt != 0 {
+			// A closed on-chain order the Hub no longer knows gains nothing more.
+			closeCall(l, c, ledger.CallDone, o.State)
+			_ = l.Save()
+		}
 		_ = ledger.PutOrder(o)
+		return "no longer answered by the Hub"
+	case act.Kind == nipcashclient.ActionShow && act.Reason == "lookup_unknown" && o.FinishedAt != 0:
+		// A closed on-chain order the Hub no longer knows gains nothing more.
+		closeCall(l, c, ledger.CallDone, o.State)
+		_ = l.Save()
 		return "no longer answered by the Hub"
 	case act.Kind == nipcashclient.ActionShow && act.Reason == "lookup_unknown":
 		c.Detail, c.UpdatedAt = "lookup_unknown", now.Unix()

@@ -70,7 +70,31 @@ func (f *fakeOrderHub) Place(ctx context.Context, p nipCO.CashOrderParams, j nip
 			return nil, err
 		}
 	}
+	if p.Payment == nipCO.PaymentOnchain {
+		return f.onchain(p.AmountMillis, nipCO.OrderOpen, 0), nil
+	}
 	return f.open(p.AmountMillis, time.Now().Unix()+600), nil
+}
+
+// testOrderAddress is a valid mainnet flokicoin witness address.
+const testOrderAddress = "fc1qqypqxpq9qcrsszg2pvxq6rs0zqg3yyc5nuq0zs"
+
+// onchain is an on-chain order in state, with bills minted for it, each
+// signed by the Hub.
+func (f *fakeOrderHub) onchain(amount uint64, state nipCO.OrderState, bills int) *nipCO.Order {
+	o := &nipCO.Order{State: state, Payment: nipCO.PaymentOnchain, AmountMillis: amount, FeeMillis: 1000,
+		PayMillis: amount + 1000, Address: testOrderAddress, Confirmations: 1, PayBy: time.Now().Unix() + 3600}
+	for i := 0; i < bills; i++ {
+		o.Bills = append(o.Bills, f.billFor(amount))
+	}
+	return o
+}
+
+func (f *fakeOrderHub) billFor(amount uint64) nipCO.OrderBill {
+	wallet := testmint.Hex32(f.t)
+	tok := testmint.Bill(f.t, nipcash.Token{HRP: "lokicash", WalletPubkey: wallet, Secret: testmint.Hex32(f.t),
+		RelayURLs: []string{"wss://hub.example"}, IdentityRequired: ptrTo(false)}, f.hubPriv)
+	return nipCO.OrderBill{WalletPubkey: wallet, Token: nipcash.TokenOrTombstone{Token: tok}, AmountMillis: amount, PaidMillis: amount + 1000}
 }
 
 func (f *fakeOrderHub) open(amount uint64, payBy int64) *nipCO.Order {
@@ -278,5 +302,73 @@ func TestOrder_EndedUnpaid(t *testing.T) {
 	}
 	if o, c := onlyOrder(t); o.State != ledger.OrderEndedUnpaid || c.State != ledger.CallDone {
 		t.Errorf("order %s, call %s", o.State, c.State)
+	}
+}
+
+func placeOnchainOrder(t *testing.T, f *fakeOrderHub, conn string) ledger.Order {
+	t.Helper()
+	f.terms.Onchain = &nipCO.KindTerms{MinMillis: 1000, MaxMillis: 1_000_000_000, FeeBase: 1000, Window: 3600,
+		Confirmations: []nipCO.Tier{{N: 1}}}
+	c := orderCmd(newCashOrderPlaceCmd(), map[string]string{"onchain": "true"})
+	var err error
+	captureStreams(t, func() { err = runCashOrderPlace(c, []string{conn, "100"}) })
+	if err != nil {
+		t.Fatalf("place on-chain: %v", err)
+	}
+	o, _ := onlyOrder(t)
+	return o
+}
+
+func showAllOrders(t *testing.T) (string, string, error) {
+	t.Helper()
+	c := orderCmd(newCashOrderShowCmd(), nil)
+	var err error
+	stdout, stderr := captureStreams(t, func() { err = showOrders(c, nil, false) })
+	return stdout, stderr, err
+}
+
+// O-1: a closed on-chain order keeps its call (and the key that collects its
+// bills); a payment minted after it closed is collected by show and settle;
+// once the Hub no longer knows the order, the call is closed.
+func TestOrder_ClosedOnchainCollectsLaterBills(t *testing.T) {
+	f, conn := setUpOrderHub(t)
+	placeOnchainOrder(t, f, conn)
+	bills := []nipCO.OrderBill{f.billFor(100_000)}
+	f.lookup = func(nipcash.PendingCall) (nipcashclient.LookupOutcome, *nipCO.Order, error) {
+		o := f.onchain(100_000, nipCO.OrderClosed, 0)
+		o.Bills = bills
+		return nipcashclient.LookupOutcome{Status: nipcash.LookupDone}, o, nil
+	}
+	if err := settleOrders(t, nil); err != nil {
+		t.Fatalf("settle: %v", err)
+	}
+	o, c := onlyOrder(t)
+	if o.State != string(nipCO.OrderClosed) || o.FinishedAt == 0 || c.State != ledger.CallOpenOrder || len(c.Secrets) == 0 {
+		t.Fatalf("after closed: order %s/%d, call %s, secrets %d", o.State, o.FinishedAt, c.State, len(c.Secrets))
+	}
+	if l, _ := ledger.Load(); len(l.Held()) != 1 {
+		t.Fatalf("held %d, want 1", len(l.Held()))
+	}
+	// A later payment to the closed order's address is minted.
+	bills = append(bills, f.billFor(50_000))
+	if _, _, err := showAllOrders(t); err != nil {
+		t.Fatalf("show: %v", err)
+	}
+	if l, _ := ledger.Load(); len(l.Held()) != 2 {
+		t.Fatalf("held %d after a later bill, want 2", len(l.Held()))
+	}
+	if err := settleOrders(t, nil); err != nil {
+		t.Fatalf("settle again: %v", err)
+	}
+	if l, _ := ledger.Load(); len(l.Held()) != 2 {
+		t.Error("a bill was recorded twice")
+	}
+	// The Hub forgot the order: nothing more can come; the call closes.
+	f.lookup = func(nipcash.PendingCall) (nipcashclient.LookupOutcome, *nipCO.Order, error) {
+		return nipcashclient.LookupOutcome{Status: nipcash.LookupUnknown}, nil, nil
+	}
+	_ = settleOrders(t, nil)
+	if o, c := onlyOrder(t); c.State != ledger.CallDone || o.State != string(nipCO.OrderClosed) {
+		t.Errorf("after unknown: order %s, call %s", o.State, c.State)
 	}
 }
