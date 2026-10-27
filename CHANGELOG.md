@@ -5,8 +5,10 @@
 - Changes every command that contacts a bill to check its mint signature first:
   a bill whose signature does not cover its own relays and secret, or that has
   none, is refused before any relay is contacted.
+  ([#128](https://github.com/ohstr/cashctl/pull/128))
 - Adds `signature_scheme`, `provenance` and `relay_hash` to `decode`, and decodes
   a `cashhub1` connection with its signature verdict and `--check` online check.
+  ([#128](https://github.com/ohstr/cashctl/pull/128))
 - Fixes a batched redeem whose Hub reply contradicts itself, or whose result
   can't be read, being reported as an ordinary failure; it is now
   `indeterminate`, never resent, and the other bills keep their outcomes.
