@@ -10,6 +10,10 @@
   `cashorder1` Order connection and collects the bills once paid; `decode`
   reads a `cashorder1` string.
   ([#136](https://github.com/ohstr/cashctl/pull/136))
+- Adds Cash Zaps: `decode` shows a kind-9522 zap's checks, and `receive` takes
+  one (or a zap bill with `--zap-event` or `--find-zap`) once its Hub confirms
+  your slice, asking first about a minter you don't trust.
+  ([#135](https://github.com/ohstr/cashctl/pull/135))
 - Adds proof of work for Hubs whose relays ask for it, capped by
   `CASHCTL_POW_MAX` (default 28); above the cap nothing is sent.
   ([#134](https://github.com/ohstr/cashctl/pull/134))

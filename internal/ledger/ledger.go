@@ -144,6 +144,11 @@ type Entry struct {
 	// for the same or a smaller amount is refused.
 	RedeemFeeMillis *uint64 `json:"redeem_fee_millis,omitempty"`
 
+	// ZapEvent is the kind-9522 Cash Zap a zap bill (scheme 2) arrived with,
+	// as JSON: only it proves the bill's provenance, so it is kept with the
+	// bill and every dial of the bill checks against it.
+	ZapEvent string `json:"-"`
+
 	// CashProtection reports whether a cash-mode entry's CashSecret
 	// is exclusively known to this ledger (CashProtected, re-keyed by
 	// cmd/receive_secure.go's protectCashReceipt/protectRekeyOnly or a
@@ -296,21 +301,21 @@ func load() (*Ledger, error) {
 		identity_required, amount_millis, received_at, verified, status, cash_secret,
 		connection_key_platform, connection_key_external_id, attestation_event_id, ia_pubkey,
 		expires_at, cash_protection,
-		throwaway_key, pending_throwaway_key, version, redeem_fee_millis
+		throwaway_key, pending_throwaway_key, version, redeem_fee_millis, zap_event
 		FROM entries ORDER BY rowid`)
 	if err != nil {
 		return nil, fmt.Errorf("cashctl.db: reading entries: %w", err)
 	}
 	for rows.Next() {
 		var e Entry
-		var relayURLs, cashProtection, throwawayKey, pendingThrowawayKey sql.NullString
+		var relayURLs, cashProtection, throwawayKey, pendingThrowawayKey, zapEvent sql.NullString
 		var identityRequired, amountMillis, expiresAt, redeemFee sql.NullInt64
 		var version int64
 		if err := rows.Scan(&e.ID, &e.Token, &e.WalletPubkey, &e.MinterPubkey, &e.Secret, &relayURLs,
 			&identityRequired, &amountMillis, &e.ReceivedAt, &e.Verified, &e.Status, &e.CashSecret,
 			&e.ConnectionKeyPlatform, &e.ConnectionKeyExternalID, &e.AttestationEventID, &e.IAPubkey,
 			&expiresAt, &cashProtection,
-			&throwawayKey, &pendingThrowawayKey, &version, &redeemFee); err != nil {
+			&throwawayKey, &pendingThrowawayKey, &version, &redeemFee, &zapEvent); err != nil {
 			_ = rows.Close()
 			return nil, fmt.Errorf("cashctl.db: reading entries: %w", err)
 		}
@@ -318,6 +323,7 @@ func load() (*Ledger, error) {
 		e.CashProtection = cashProtection.String
 		e.ThrowawayKey = throwawayKey.String
 		e.PendingThrowawayKey = pendingThrowawayKey.String
+		e.ZapEvent = zapEvent.String
 		if relayURLs.Valid && relayURLs.String != "" {
 			if err := json.Unmarshal([]byte(relayURLs.String), &e.RelayURLs); err != nil {
 				_ = rows.Close()
@@ -509,8 +515,8 @@ func (l *Ledger) save() error {
 			identity_required, amount_millis, received_at, verified, status, cash_secret,
 			connection_key_platform, connection_key_external_id, attestation_event_id, ia_pubkey,
 			expires_at, cash_protection,
-			throwaway_key, pending_throwaway_key, redeem_fee_millis, version)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+			throwaway_key, pending_throwaway_key, redeem_fee_millis, zap_event, version)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
 			ON CONFLICT(id) DO UPDATE SET
 				token = excluded.token, wallet_pubkey = excluded.wallet_pubkey,
 				minter_pubkey = excluded.minter_pubkey, secret = excluded.secret,
@@ -526,13 +532,14 @@ func (l *Ledger) save() error {
 				throwaway_key = excluded.throwaway_key,
 				pending_throwaway_key = excluded.pending_throwaway_key,
 				redeem_fee_millis = excluded.redeem_fee_millis,
+				zap_event = excluded.zap_event,
 				version = entries.version + 1
 			WHERE entries.version = ?`,
 			e.ID, e.Token, e.WalletPubkey, e.MinterPubkey, e.Secret, relayURLs,
 			identityRequired, amountMillis, e.ReceivedAt, e.Verified, e.Status, e.CashSecret,
 			e.ConnectionKeyPlatform, e.ConnectionKeyExternalID, e.AttestationEventID, e.IAPubkey,
 			expiresAt, e.CashProtection,
-			e.ThrowawayKey, e.PendingThrowawayKey, redeemFee, expectedVersion)
+			e.ThrowawayKey, e.PendingThrowawayKey, redeemFee, nullString(e.ZapEvent), expectedVersion)
 		if err != nil {
 			// entries.id collisions are handled by ON CONFLICT above — the
 			// only other constraint this table has is token's own UNIQUE,
@@ -834,4 +841,22 @@ func (l *Ledger) newID() string {
 
 func nowRFC3339() string {
 	return time.Now().UTC().Format(time.RFC3339)
+}
+
+// nullString is s, NULL when empty.
+func nullString(s string) sql.NullString { return sql.NullString{String: s, Valid: s != ""} }
+
+// ZapEventFor is the Cash Zap stored with a held token, "" when none.
+func ZapEventFor(token string) (string, error) {
+	db, err := store.Open()
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = db.Close() }()
+	var ev sql.NullString
+	err = db.QueryRow(`SELECT zap_event FROM entries WHERE token = ?`, strings.ToLower(token)).Scan(&ev)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return ev.String, err
 }

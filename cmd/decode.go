@@ -63,7 +63,8 @@ func newDecodeCmd() *cobra.Command {
   cashctl decode lokicash1... --check
   cashctl decode cashhub1... --check
   cashctl decode circlehub1...
-  cashctl decode npub1...`,
+  cashctl decode npub1...
+  cashctl decode zap.json --check    # a Cash Zap (kind 9522)`,
 		Args: output.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := rejectConnectionFlag(cmd); err != nil {
@@ -71,6 +72,10 @@ func newDecodeCmd() *cobra.Command {
 			}
 			jsonMode, _ := cmd.Flags().GetBool("json")
 			check, _ := cmd.Flags().GetBool("check")
+			// A Cash Zap (kind 9522): as JSON, a file, or - for stdin.
+			if looksLikeZapEvent(args[0]) || strings.HasSuffix(strings.ToLower(args[0]), ".json") || (args[0] == stdinArg) {
+				return decodeCashZap(cmd, args[0], jsonMode, check)
+			}
 			// Split before sniffing: NIP-CASH's "<token>#<cash_secret>"
 			// combined presentation (§Presenting a Cash-Mode Slice as One
 			// String) wouldn't decode as bech32 at all otherwise. A string
@@ -109,6 +114,7 @@ func newDecodeCmd() *cobra.Command {
 			}
 		},
 	}
+	cmd.Flags().String("target", "", "a Cash Zap's target event (JSON file), which rule 7 checks the zap against")
 	cmd.Flags().Bool("check", false, "also cross-check against the Hub (cash token: matching recipient; cashhub: the online check; circlehub: can we join) — a network call")
 	return cmd
 }

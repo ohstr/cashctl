@@ -2,11 +2,16 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 
+	"github.com/ohstr/nmilat/nip01"
+	"github.com/ohstr/nmilat/nipCZ"
 	"github.com/ohstr/nmilat/nipcash"
 	nipcashclient "github.com/ohstr/nmilat/nipcash/client"
+
+	"github.com/ohstr/cashctl/internal/ledger"
 )
 
 // Every bill cashctl contacts goes through dialBill: a bill's relays and secret
@@ -53,6 +58,14 @@ func dialBill(ctx context.Context, token string) (*nipcashclient.Client, error) 
 	if err != nil {
 		return nil, err
 	}
+	if tok.Scheme == nipcash.SchemeZapV1 {
+		// A zap bill is checked against the Cash Zap it was received with.
+		zc, err := heldZapContext(token)
+		if err != nil {
+			return nil, err
+		}
+		return nipcashclient.ConnectZap(ctx, token, zc, sessionOptions()...)
+	}
 	if err := checkBillProvenance(tok); err != nil {
 		return nil, err
 	}
@@ -83,3 +96,28 @@ func returnedBillCheck(token string, expectMinter *string) (verified bool, minte
 // unverifiedReturnNote is what a command says about a bill returnedBillCheck
 // refused.
 const unverifiedReturnNote = "The Hub returned a bill whose mint signature doesn't check out; it is kept but marked unverified, and cashctl will not contact its relays."
+
+// heldZapContext is the zap context of a held zap bill, from the Cash Zap it
+// was received with; errNeedsZapEvent without one.
+func heldZapContext(token string) (nipcash.ZapContext, error) {
+	raw, err := ledger.ZapEventFor(token)
+	if err != nil || raw == "" {
+		return nipcash.ZapContext{}, errNeedsZapEvent
+	}
+	var ev nip01.Event
+	if err := json.Unmarshal([]byte(raw), &ev); err != nil {
+		return nipcash.ZapContext{}, errNeedsZapEvent
+	}
+	z, err := nipCZ.ParseCashZap(&ev)
+	if err != nil {
+		return nipcash.ZapContext{}, errNeedsZapEvent
+	}
+	return nipCZ.ZapContextFromEvent(z)
+}
+
+// dialZapFn dials a zap bill with the zap context its provenance is checked
+// against (rule 9 of a Cash Zap being received). Swapped in tests.
+var dialZapFn = func(ctx context.Context, token string, zc nipcash.ZapContext) (zapStatusClient, error) {
+	return nipcashclient.ConnectZap(ctx, token, zc, sessionOptions()...)
+}
+

@@ -8,8 +8,11 @@ package testmint
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"strconv"
 	"testing"
+	"time"
 
+	"github.com/ohstr/nmilat/nip01"
 	"github.com/ohstr/nmilat/nipCO"
 	"github.com/ohstr/nmilat/nipcash"
 	"github.com/ohstr/nmilat/nipcw"
@@ -252,3 +255,47 @@ func CashOrder(t testing.TB, hubPriv string) string {
 	}
 	return s
 }
+
+// CashZap is a kind-9522 Cash Zap from senderPriv to the author of target (a
+// kind-1 note), carrying a zap bill (scheme 2) of amount on lokicash signed by
+// minterPriv for that context. It returns the event and the bill.
+func CashZap(t testing.TB, minterPriv, senderPriv string, target *nip01.Event, amount uint64) (*nip01.Event, string) {
+	t.Helper()
+	recipient, targetID := target.PubKey, target.ID
+	sender, err := utils.GetPublicKey(senderPriv)
+	if err != nil {
+		t.Fatalf("testmint: %v", err)
+	}
+	minterX, err := utils.GetPublicKey(minterPriv)
+	if err != nil {
+		t.Fatalf("testmint: %v", err)
+	}
+	issued := uint64(time.Now().Unix()) //nolint:gosec // unix time
+	zc := nipcash.ZapContext{Recipient: recipient, Sender: sender, ZapTarget: targetID, IssuedAt: issued}
+	amt := amount
+	tok := nipcash.Token{HRP: "lokicash", WalletPubkey: randomHex(), Secret: randomHex(),
+		RelayURLs: []string{"wss://hub.example"}, IdentityRequired: ptrBool(true), AttestedAmountMillis: &amt}
+	signer, err := nipcash.LocalMintSigner(minterPriv, tok.HRP)
+	if err != nil {
+		t.Fatalf("testmint: %v", err)
+	}
+	tok, err = nipcash.SignToken(tok, nipcash.SchemeZapV1, &zc, minterX, signer)
+	if err != nil {
+		t.Fatalf("testmint: %v", err)
+	}
+	s, err := nipcash.Encode(tok)
+	if err != nil {
+		t.Fatalf("testmint: %v", err)
+	}
+	ev, err := nip01.NewSignedEvent(9522, "zap", senderPriv,
+		[]string{"e", targetID}, []string{"k", "1"}, []string{"p", recipient},
+		[]string{"amount", strconv.FormatUint(amount, 10)}, []string{"chain", "flokicoin"},
+		[]string{"cash", s}, []string{"w", tok.WalletPubkey},
+		[]string{"issued_at", strconv.FormatUint(issued, 10)}, []string{"expires_at", "0"})
+	if err != nil {
+		t.Fatalf("testmint: %v", err)
+	}
+	return ev, s
+}
+
+func ptrBool(b bool) *bool { return &b }
