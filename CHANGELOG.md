@@ -6,6 +6,7 @@
   `CASHCTL_POW_MAX`, to cap proof of work. `cash order watch` now reads an
   order when its notices arrive, and an order's invoice is checked locally
   (amount, expiry, chain) before it is shown to pay.
+  ([#145](https://github.com/ohstr/cashctl/pull/145))
 - Adds `cash discover list|show|open|relays|curators`, which finds order links
   and circles listed on Nostr relays, checks one with its Hub when you show it,
   and orders from it or joins it.
