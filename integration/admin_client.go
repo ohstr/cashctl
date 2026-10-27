@@ -114,6 +114,13 @@ type adminCreateAppRequest struct {
 	CirclePerWalletMaxMloki int    `json:"circlePerWalletMaxMloki,omitempty"`
 	CircleFeesPpm           int    `json:"circleFeesPpm,omitempty"`
 	CircleMinBudgetRenewal  string `json:"circleMinBudgetRenewal,omitempty"`
+	// CircleRotationEnabled serves member requests (rotate, freeze,
+	// unfreeze); CircleRotationDelaySecs is the delay new wallets get (0:
+	// lokihub's default, 5 days). CircleDustThresholdMloki is what a member
+	// deletion may leave (0: lokihub's default).
+	CircleRotationEnabled    *bool `json:"circleRotationEnabled,omitempty"`
+	CircleRotationDelaySecs  int   `json:"circleRotationDelaySecs,omitempty"`
+	CircleDustThresholdMloki int   `json:"circleDustThresholdMloki,omitempty"`
 
 	ProviderPubkey string          `json:"providerPubkey,omitempty"`
 	FollowSetD     string          `json:"followSetD,omitempty"`
