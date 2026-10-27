@@ -9,6 +9,7 @@ import (
 
 	"github.com/ohstr/nmilat/nip19"
 	"github.com/ohstr/nmilat/nip47"
+	"github.com/ohstr/nmilat/nipCO"
 	"github.com/ohstr/nmilat/nipcash"
 	nipcashclient "github.com/ohstr/nmilat/nipcash/client"
 	"github.com/ohstr/nmilat/nipcw"
@@ -91,6 +92,8 @@ func newDecodeCmd() *cobra.Command {
 				return decodeNWCURI(cmd, value, jsonMode)
 			case dial.KindCashHub:
 				return decodeCashHub(cmd, value, jsonMode, check)
+			case dial.KindCashOrder:
+				return decodeCashOrder(cmd, value, jsonMode, check)
 			case dial.KindLightningInvoice:
 				return output.InvalidInputError(cmd, value, errors.New(lightningMessage(value)))
 			case dial.KindNostrEntity:
@@ -775,4 +778,83 @@ func printOnlineCheck(r map[string]any) {
 	default:
 		output.Printf("online check: couldn't reach the Hub (%v)\n", r["error"])
 	}
+}
+
+// decodeCashOrder shows a cashorder1 Order connection's public fields and its
+// signature verdict; --check reads the terms with the online check.
+func decodeCashOrder(cmd *cobra.Command, value string, jsonMode, check bool) error {
+	c, err := readConnection(cmd, value, nipCO.OrderConnectionHRP)
+	if err != nil {
+		return err
+	}
+	h := c.Order
+	out := map[string]any{"type": "order_connection", "connection_pubkey": h.Pubkey, "relays": h.Relays,
+		"hub_identity": h.HubIdentity, "chain": h.Chain, "signature": signatureLabel(c)}
+	if h.HasLabel {
+		out["label"] = h.Label
+	}
+	if !c.Verified {
+		out["signature_reason"] = c.Reason
+		out["warnings"] = []string{"Hub not confirmed: " + unverifiedReasonText(c)}
+	}
+	if !jsonMode {
+		output.Println("type: order_connection")
+		if h.HasLabel {
+			output.Printf("label: %s (not confirmed)\n", output.Sanitize(h.Label))
+		}
+		output.Printf("claimed Hub: %s\n", shortFingerprint(h.HubIdentity))
+		output.Printf("chain: %s\n", output.Sanitize(h.Chain))
+		output.Printf("relays: %s\n", joinStrings(h.Relays))
+		if c.Verified {
+			output.Println("signature: verified (the string was issued by the Hub it names)")
+		} else {
+			output.Printf("signature: unverified — %s\n", unverifiedReasonText(c))
+		}
+	}
+	if shouldRunCheck(cmd, jsonMode, check, "Check the Hub online?") {
+		result := map[string]any{}
+		_ = WithSpinner(jsonMode, "Checking the Hub...", func() error {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			hub, err := dialOrderFn(ctx, c.Raw)
+			switch {
+			case errors.Is(err, nipcash.ErrHubIdentityMismatch):
+				result["online_check"] = "identity_mismatch"
+				return nil
+			case errors.Is(err, nipcash.ErrChainMismatch):
+				result["online_check"] = "chain_mismatch"
+				return nil
+			case err != nil:
+				result["online_check"], result["error"] = "unreachable", output.Sanitize(err.Error())
+				return nil
+			}
+			defer hub.Close()
+			terms, err := hub.Terms(ctx)
+			if err != nil {
+				result["online_check"], result["error"] = "unreachable", output.Sanitize(err.Error())
+				return nil
+			}
+			result["online_check"], result["network"], result["test_network"] = "pass", hub.Network(), hub.Network() != "mainnet"
+			if terms.SellsNothing() {
+				result["sells_nothing"] = true
+			} else {
+				result["terms"] = terms
+			}
+			return nil
+		})
+		if jsonMode {
+			for k, v := range result {
+				out[k] = v
+			}
+		} else {
+			output.Printf("online check: %v\n", result["online_check"])
+			if result["sells_nothing"] == true {
+				output.Println("terms: retired — this link sells nothing now")
+			}
+		}
+	}
+	if jsonMode {
+		output.PrintJSON(out)
+	}
+	return nil
 }

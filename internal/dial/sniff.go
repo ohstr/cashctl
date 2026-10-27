@@ -47,6 +47,9 @@ const (
 	// what it is instead of being decoded as a cash token and failing on
 	// the bytes.
 	KindLightningInvoice
+	// KindCashOrder: a cashorder1... Order connection (NIP-CO), which
+	// `cash order place` buys cash over.
+	KindCashOrder
 )
 
 // hub HRPs are matched exactly; anything else that decodes as valid
@@ -58,6 +61,7 @@ const (
 const (
 	hrpCircleHub = "circlehub"
 	hrpCashHub   = "cashhub"
+	hrpCashOrder = "cashorder"
 )
 
 // nostrEntityHRPs: the standard NIP-19 entity prefixes (npub, nsec, note,
@@ -103,6 +107,8 @@ func Sniff(s string) Kind {
 		return KindCircleHub
 	case hrp == hrpCashHub:
 		return KindCashHub
+	case hrp == hrpCashOrder:
+		return KindCashOrder
 	case nostrEntityHRPs[hrp]:
 		return KindNostrEntity
 	case strings.HasPrefix(hrp, "ln"):

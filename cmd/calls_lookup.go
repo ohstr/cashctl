@@ -44,6 +44,9 @@ func pendingOf(c *ledger.Call) nipcash.PendingCall {
 	if c.AuthorizerKind == ledger.AuthCashSecret {
 		pc.SourceSecret = c.AuthorizerSecret
 	}
+	if c.AuthorizerKind == ledger.AuthBuyerKey {
+		pc.BuyerKey = c.AuthorizerSecret
+	}
 	for _, s := range c.Secrets {
 		role := ""
 		if s.Role == ledger.RoleRemainder {
@@ -241,7 +244,9 @@ type settleOptions struct {
 
 // due reports a call worth asking about now.
 func due(c *ledger.Call, now int64) bool {
-	if !c.Open() || c.State == ledger.CallExpired {
+	if !c.Open() || c.State == ledger.CallExpired || c.State == ledger.CallOpenOrder {
+		// An open order is read by `cash order show|watch|settle` and `cash
+		// settle`, not before every money command.
 		return false
 	}
 	if c.RetryAfter != nil {
@@ -268,7 +273,12 @@ func settleCalls(cmd *cobra.Command, l *ledger.Ledger, opts settleOptions) []set
 		if !opts.all && !due(c, time.Now().Unix()) {
 			continue
 		}
-		summary := settleOne(cmd, l, c, device)
+		var summary string
+		if c.Method == nipcash.MethodCashOrder {
+			summary = settleOrderCall(cmd, l, c, device)
+		} else {
+			summary = settleOne(cmd, l, c, device)
+		}
 		if c, ok = l.FindCall(id); ok {
 			out = append(out, settledCall{Call: *c, Summary: summary, NextStep: nextStep(c, device)})
 		}
@@ -606,6 +616,10 @@ func nextStep(c *ledger.Call, device string) string {
 	switch {
 	case !c.Open():
 		return "nothing"
+	case c.State == ledger.CallOpenOrder:
+		return "pay the order, then `cashctl cash order show` collects its bills"
+	case c.Method == nipcash.MethodCashOrder && c.Detail == "confirm_replace":
+		return "the Hub says this order was never placed: `cashctl cash order settle --replace <order>` places it again (it asks for a new payment)"
 	case c.State == ledger.CallExpired:
 		return "the Hub no longer keeps a record of it; keep its secrets (shown here) and contact the Hub"
 	case c.DeviceID != device:

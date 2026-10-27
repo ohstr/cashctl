@@ -127,6 +127,9 @@ func (j *ledgerJournal) WriteAhead(_ context.Context, calls []nipcash.PendingCal
 		if c.AuthorizerKind == ledger.AuthCashSecret && c.AuthorizerSecret == "" {
 			c.AuthorizerSecret = pc.SourceSecret
 		}
+		if c.AuthorizerKind == ledger.AuthBuyerKey && c.AuthorizerSecret == "" {
+			c.AuthorizerSecret = pc.BuyerKey
+		}
 		for _, s := range pc.Secrets {
 			role := ledger.RoleNewIdentity
 			if s.Role == "remainder" {

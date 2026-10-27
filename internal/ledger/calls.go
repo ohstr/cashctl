@@ -35,6 +35,9 @@ const (
 	CallExpired    = "expired"
 	CallStuck      = "stuck"
 	CallClosed     = "closed"
+	// CallOpenOrder is a placed order: its call is answered, and the order is
+	// read until it is finished.
+	CallOpenOrder = "open_order"
 )
 
 // Authorizer kinds: who signed (or, for a cash note, whose secret opened) the
@@ -45,6 +48,7 @@ const (
 	AuthCashSecret    = "cash_secret"
 	AuthCashHubClient = "cashhub_client"
 	AuthAsCredential  = "as_credential"
+	AuthBuyerKey      = "buyer_key"
 )
 
 // Secret roles: what each generated secret becomes.

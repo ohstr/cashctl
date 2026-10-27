@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"testing"
 
+	"github.com/ohstr/nmilat/nipCO"
 	"github.com/ohstr/nmilat/nipcash"
 	"github.com/ohstr/nmilat/nipcw"
 	"github.com/ohstr/nmilat/utils"
@@ -226,4 +227,28 @@ func circleHub(hubPriv string, c nipcw.CircleHubConnection) (string, error) {
 		return "", err
 	}
 	return nipcw.EncodeCircleHubConnection(signed)
+}
+
+// CashOrder is a cashorder1 Order connection signed by hubPriv's identity on
+// chain "flokicoin", with a random connection key and secret.
+func CashOrder(t testing.TB, hubPriv string) string {
+	t.Helper()
+	identity, err := utils.GetPublicKey(hubPriv)
+	if err != nil {
+		t.Fatalf("testmint: %v", err)
+	}
+	signer, err := nipcash.LocalChainSigner(hubPriv, "flokicoin")
+	if err != nil {
+		t.Fatalf("testmint: %v", err)
+	}
+	c, err := nipCO.SignOrderConnection(nipCO.OrderConnection{Pubkey: randomHex(), Relays: []string{"wss://relay.example"},
+		Secret: randomHex(), HubIdentity: identity, Chain: "flokicoin"}, signer, identity)
+	if err != nil {
+		t.Fatalf("testmint: %v", err)
+	}
+	s, err := nipCO.EncodeOrderConnection(c)
+	if err != nil {
+		t.Fatalf("testmint: %v", err)
+	}
+	return s
 }

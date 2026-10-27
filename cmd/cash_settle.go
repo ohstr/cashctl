@@ -87,7 +87,7 @@ func runCashSettle(cmd *cobra.Command, _ []string) error {
 func nextDue(l *ledger.Ledger) (time.Time, bool) {
 	var next int64
 	for _, c := range l.Calls {
-		if !c.Open() || c.State == ledger.CallExpired || c.State == ledger.CallStuck {
+		if !c.Open() || c.State == ledger.CallExpired || c.State == ledger.CallStuck || c.State == ledger.CallOpenOrder {
 			continue
 		}
 		at := c.Deadline + 1
@@ -161,7 +161,9 @@ func reportSettle(cmd *cobra.Command, l *ledger.Ledger, settled []settledCall, j
 				order = append(order, c.CallID)
 				rows[c.CallID] = rowOf(c, device, "")
 			}
-			if c.DeviceID == device {
+			// An open order is answered: it waits for its payment, not for
+			// cash settle.
+			if c.DeviceID == device && c.State != ledger.CallOpenOrder {
 				stillOpen = true
 			}
 		}

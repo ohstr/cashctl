@@ -167,6 +167,29 @@ CREATE TABLE joins (
 	updated_at        INTEGER NOT NULL
 );
 
+CREATE TABLE orders (
+	order_id        TEXT PRIMARY KEY,
+	call_id         TEXT NOT NULL,
+	notify          TEXT NOT NULL,
+	payment         TEXT NOT NULL,
+	amount_millis   INTEGER NOT NULL,
+	recipient_kind  TEXT NOT NULL,
+	recipient       TEXT NOT NULL,
+	hub_identity    TEXT NOT NULL,
+	chain           TEXT NOT NULL,
+	network         TEXT,
+	conn_verified   INTEGER NOT NULL,
+	state           TEXT NOT NULL,
+	saw_progress    INTEGER NOT NULL DEFAULT 0,
+	terms_changed   INTEGER NOT NULL DEFAULT 0,
+	pay_by          INTEGER,
+	order_json      TEXT,
+	accepted_relays TEXT,
+	created_at      INTEGER NOT NULL,
+	checked_at      INTEGER,
+	finished_at     INTEGER
+);
+
 CREATE TABLE unverified_confirmations (
 	conn_sha256  TEXT PRIMARY KEY,
 	hrp          TEXT NOT NULL,

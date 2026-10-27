@@ -235,6 +235,17 @@ cashctl cash mint 100 --hub - --to npub1... < hub.txt          # a bill for some
 A mint whose reply is lost is finished by `cash settle`; one the Hub never
 saw is minted again only with `cash settle --replace <call>`.
 
+## `cashctl cash order`
+
+Buys cash over an Order connection (a `cashorder1...` string): `place` shows
+the terms and returns an invoice (or, with `--onchain`, an address) to pay;
+`watch` or `show` then collects the bill.
+
+```sh
+cashctl cash order place cashorder1... 100
+cashctl cash order watch <order>
+```
+
 ## `cashctl cash settle`
 
 Asks the Hubs about every transfer, merge or re-key whose answer never came,

@@ -493,6 +493,24 @@ saw it, the call is `stuck`/`confirm_replace` and only
 `cash settle --replace <call>` mints it again (under its derived id). `-c`
 is refused.
 
+## `cashctl cash order` — buy cash
+
+```sh
+cashctl cash order place cashorder1... 100 --json   # {"order","state":"open","invoice"|"address","pay_millis","pay_by","warnings",...}
+cashctl cash order watch <order> --json             # until minted/expired (Lightning) or closed (on-chain)
+cashctl cash order show --json                      # {"orders":[...]}
+cashctl cash order settle --replace <order> --yes   # only for an order the Hub says was never placed
+```
+
+Pay exactly `pay_millis` before `pay_by`: a different amount mints a
+different bill, never a refund. `--to cash` (default) makes a cash note kept
+here with its secret; `--to self` your own bill; any other target gets the
+bill as a gift. A retired link answers `reason: not_selling` (exit 7). A
+placement whose reply was lost is exit 8: never place it again yourself —
+`cash order settle` reads it, and only an order the Hub says it never saw
+can be placed again, with `--replace` (it asks for a new payment). Never
+print or log `notify`.
+
 ## `cashctl cash settle` — finish what got no answer
 
 ```sh

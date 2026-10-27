@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/ohstr/nmilat/nipCO"
 	"github.com/ohstr/nmilat/nipcash"
 	"github.com/ohstr/nmilat/nipcw"
 	"github.com/spf13/cobra"
@@ -27,6 +28,7 @@ type conn struct {
 	HRP      string
 	CashHub  *nipcash.CashHubConnection
 	Circle   *nipcw.CircleHubConnection
+	Order    *nipCO.OrderConnection
 	Verified bool
 	// Reason says why Verified is false: chain_no_prefix | signer_mismatch.
 	Reason string
@@ -39,6 +41,8 @@ func (c *conn) hubIdentity() string {
 		return c.CashHub.HubIdentity
 	case c.Circle != nil:
 		return c.Circle.HubIdentity
+	case c.Order != nil:
+		return c.Order.HubIdentity
 	}
 	return ""
 }
@@ -50,6 +54,8 @@ func (c *conn) chain() string {
 		return c.CashHub.Chain
 	case c.Circle != nil:
 		return c.Circle.Chain
+	case c.Order != nil:
+		return c.Order.Chain
 	}
 	return ""
 }
@@ -62,6 +68,8 @@ func (c *conn) label() (string, bool) {
 		return c.CashHub.Label, c.CashHub.HasLabel
 	case c.Circle != nil:
 		return c.Circle.Label, c.Circle.HasLabel
+	case c.Order != nil:
+		return c.Order.Label, c.Order.HasLabel
 	}
 	return "", false
 }
@@ -111,6 +119,13 @@ func readConnection(cmd *cobra.Command, raw string, want ...string) (*conn, erro
 			return nil, invalid(s, fmt.Errorf("not a valid circlehub1 connection: %w", err))
 		}
 		c.Circle = &decoded
+		verifyErr = decoded.Verify()
+	case nipCO.OrderConnectionHRP:
+		decoded, err := nipCO.DecodeOrderConnection(s)
+		if err != nil {
+			return nil, invalid(s, fmt.Errorf("not a valid cashorder1 connection: %w", err))
+		}
+		c.Order = &decoded
 		verifyErr = decoded.Verify()
 	default:
 		return nil, invalid(s, fmt.Errorf("cashctl can't read %s1 connections yet", hrp))

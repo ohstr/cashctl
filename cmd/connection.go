@@ -171,6 +171,8 @@ func validateConnectionValue(value string) error {
 	switch dial.Sniff(value) {
 	case dial.KindCircleHub:
 		return &wrongConnectionKindError{"that's a Circle Hub connection, not a wallet — join the circle with `cashctl join <hub-connection> <max-amount>`"}
+	case dial.KindCashOrder:
+		return &wrongConnectionKindError{"that's an Order connection (for buying cash), not a wallet — use `cashctl cash order place`"}
 	case dial.KindCashHub:
 		return &wrongConnectionKindError{"that's a Cash Hub connection (for minting cash), not a wallet — cashctl can't use it"}
 	case dial.KindLightningInvoice:
