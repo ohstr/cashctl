@@ -374,9 +374,58 @@ func watchedAfterClose(order *nipCO.Order) bool {
 	return order != nil && order.Payment == nipCO.PaymentOnchain && order.State == nipCO.OrderClosed
 }
 
+// orderSegwitHRPs are the segwit address HRPs by chain and network, as
+// get_info reports them (nmilat's order reply check).
+var orderSegwitHRPs = map[string]map[string]string{
+	"bitcoin":   {"mainnet": "bc", "testnet": "tb", "testnet4": "tb", "signet": "tb", "regtest": "bcrt"},
+	"flokicoin": {"mainnet": "fc", "testnet": "tf", "regtest": "fcrt"},
+}
+
+// checkOrderAddress is the address check nmilat makes on a placement reply,
+// applied to every order read: single-case (returned lowercased), a witness
+// address of the Hub's chain and network.
+func checkOrderAddress(addr, chain, network string) (string, error) {
+	norm, err := nipcash.NormalizeAddress(addr)
+	if err != nil || len(norm) != len(addr) {
+		return "", errors.New("the address is not single-case")
+	}
+	if hrp, ok := orderSegwitHRPs[chain][network]; ok {
+		_, err = nipcash.ClassifyAddress(norm, hrp)
+	} else if hrps, ok := nipcash.WithdrawHRPs(chain); ok {
+		_, _, err = nipcash.ClassifyAddressAmong(norm, hrps)
+	} else {
+		_, _, err = nipcash.DecodeWitnessAddress(norm, "")
+	}
+	if err != nil {
+		return "", fmt.Errorf("the address is not one of this Hub's chain and network: %w", err)
+	}
+	return norm, nil
+}
+
 // validateOrder is what cashctl checks of an order beyond nmilat's parse: the
-// kind and amount as sent, a payment to show, and pay_by within reach.
+// kind and amount as sent, a payment to show, and pay_by within reach. An
+// on-chain address is checked against the Hub's chain and network on every
+// read, not only on the placement reply; confirmations that differ from the
+// ones first stated mark the terms changed.
 func validateOrder(o *ledger.Order, order *nipCO.Order, now int64) error {
+	if order != nil && order.Payment == nipCO.PaymentOnchain && order.Address != "" {
+		addr, err := checkOrderAddress(order.Address, o.Chain, o.Network)
+		if err != nil {
+			return err
+		}
+		order.Address = addr
+		if o.OrderJSON != "" {
+			var before nipCO.Order
+			if json.Unmarshal([]byte(o.OrderJSON), &before) == nil {
+				switch {
+				case before.Address != "" && before.Address != addr:
+					return errors.New("the order's address changed")
+				case before.Confirmations != 0 && before.Confirmations != order.Confirmations:
+					order.TermsChanged = true
+				}
+			}
+		}
+	}
 	switch {
 	case order == nil:
 		return errors.New("no order")

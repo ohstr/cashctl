@@ -372,3 +372,20 @@ func TestOrder_ClosedOnchainCollectsLaterBills(t *testing.T) {
 		t.Errorf("after unknown: order %s, call %s", o.State, c.State)
 	}
 }
+
+// O-4: an on-chain address that arrives through a lookup is checked against
+// the Hub's chain and network: one for another chain is never shown to pay.
+func TestOrder_LookupAddressChecked(t *testing.T) {
+	f, conn := setUpOrderHub(t)
+	placeOnchainOrder(t, f, conn)
+	f.lookup = func(nipcash.PendingCall) (nipcashclient.LookupOutcome, *nipCO.Order, error) {
+		o := f.onchain(100_000, nipCO.OrderOpen, 0)
+		o.Address = "bc1qqypqxpq9qcrsszg2pvxq6rs0zqg3yyc5fcj4z3"
+		return nipcashclient.LookupOutcome{Status: nipcash.LookupDone}, o, nil
+	}
+	_ = settleOrders(t, nil)
+	o, c := onlyOrder(t)
+	if c.State != ledger.CallStuck || c.Detail != "invalid_result" || strings.Contains(o.OrderJSON, "bc1q") {
+		t.Errorf("wrong-chain address: call %s/%s, order %s", c.State, c.Detail, o.OrderJSON)
+	}
+}
