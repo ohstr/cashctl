@@ -1024,6 +1024,9 @@ func resolveHeldToken(cmd *cobra.Command, l *ledger.Ledger) (*ledger.Entry, erro
 		if spent := spentStatusDescription(e.Status); spent != "" {
 			return nil, alreadySpentError(cmd, id, e.Status)
 		}
+		if e.Status == ledger.StatusRedeeming {
+			return nil, errRedeemInFlight(cmd, id)
+		}
 		return e, nil
 	}
 	held, err := pickableHeld(cmd, l)

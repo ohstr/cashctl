@@ -477,10 +477,13 @@ func sendWithdrawal(cmd *cobra.Command, e *ledger.Entry, q *nipcash.WithdrawQuot
 		return output.RuntimeError(cmd, err)
 	}
 	e, ok := l.Find(e.ID)
+	if ok && e.Status == ledger.StatusRedeeming {
+		return errRedeemInFlight(cmd, e.ID)
+	}
 	if !ok || e.Status != ledger.StatusHeld {
 		return output.NotFoundError(cmd, "", errors.New("the bill is no longer held"))
 	}
-	if err := refuseOpenCalls(cmd, l, []string{e.ID}); err != nil {
+	if err := refuseLocked(cmd, l, []string{e.ID}); err != nil {
 		return err
 	}
 	if e.ExpiresAt != nil && *e.ExpiresAt > 0 && time.Until(time.Unix(*e.ExpiresAt, 0)) <= 120*time.Second {

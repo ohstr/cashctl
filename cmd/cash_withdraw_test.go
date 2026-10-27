@@ -432,3 +432,25 @@ func TestWithdraw_TombstoneIsBillGone(t *testing.T) {
 		t.Errorf("withdrawal %s: %q", w.State, withdrawalText(w))
 	}
 }
+
+// A bill whose redeem may still settle is never withdrawn (redeem_in_flight),
+// named or picked.
+func TestWithdraw_RefusesARedeemingBill(t *testing.T) {
+	_, entryID := setUpWithdraw(t)
+	l, _ := ledger.Load()
+	e, _ := l.Find(entryID)
+	e.Status = ledger.StatusRedeeming
+	_ = l.Save()
+	for _, flags := range []map[string]string{nil, {"token": entryID}} {
+		c := withdrawCmd(newCashWithdrawQuoteCmd(), flags)
+		c.SetArgs([]string{testAddress})
+		var err error
+		captureStreams(t, func() { err = c.Execute() })
+		if output.AsCLIError(err) == nil || output.ExitCode(err) == 0 {
+			t.Errorf("quote of a redeeming bill (%v): %v, want refused", flags, err)
+		}
+		if flags != nil && output.AsCLIError(err).Reason != reasonRedeemInFlight {
+			t.Errorf("named redeeming bill: %v, want redeem_in_flight", err)
+		}
+	}
+}
