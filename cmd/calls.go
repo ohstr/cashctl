@@ -238,10 +238,16 @@ func refuseOpenCalls(cmd *cobra.Command, l *ledger.Ledger, entryIDs []string) er
 	return nil
 }
 
-// refuseLocked is refuseOpenCalls plus a merge key still waiting to be
-// confirmed on the bill: such a key may be all that spends it, so nothing may
-// replace or clear it.
+// refuseLocked is refuseOpenCalls plus a bill whose redeem may still settle
+// (redeem_in_flight) and a merge key still waiting to be confirmed on the
+// bill: such a key may be all that spends it, so nothing may replace or clear
+// it.
 func refuseLocked(cmd *cobra.Command, l *ledger.Ledger, entryIDs []string) error {
+	for _, id := range entryIDs {
+		if e, ok := l.Find(id); ok && e.Status == ledger.StatusRedeeming {
+			return errRedeemInFlight(cmd, id)
+		}
+	}
 	if err := refuseOpenCalls(cmd, l, entryIDs); err != nil {
 		return err
 	}

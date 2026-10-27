@@ -30,6 +30,10 @@ const (
 	// §Answering About a Destroyed Bill). Set only on that answer, never on
 	// silence, which proves nothing.
 	StatusSpent = "spent"
+	// StatusRedeeming: a cash_redeem whose payment may still settle (answered
+	// INTERNAL, omitted or timed out, and the own row still claimed). Counted
+	// in no balance, offered to no operation, re-read until it ends.
+	StatusRedeeming = "redeeming"
 )
 
 // CashProtection values — see Entry.CashProtection's own doc comment.
@@ -159,6 +163,17 @@ type Entry struct {
 	// same Entry shape as a genuinely protected one, with no way to tell
 	// them apart later (`wallet show`, `wallet history`, ...).
 	CashProtection string `json:"cash_protection,omitempty"`
+
+	// RedeemPaymentHash, RedeemInvoiceExpiresAt and RedeemInto are set only
+	// while a redeem's payment may still settle (StatusRedeeming), and kept on
+	// a redeem presumed paid (RedeemPresumedAt) until the Hub decides it: the
+	// invoice's hash and expiry, and the --into connection ("" for --invoice).
+	RedeemPaymentHash      string `json:"-"`
+	RedeemInvoiceExpiresAt *int64 `json:"-"`
+	RedeemInto             string `json:"-"`
+	// RedeemPresumedAt is when a redeem still claimed 24 h past its invoice's
+	// expiry was presumed paid; a later read showing the row unclaimed re-opens it.
+	RedeemPresumedAt *int64 `json:"-"`
 }
 
 // HistoryEntry is one line of cashctl's local action log (`cashctl wallet
@@ -296,7 +311,8 @@ func load() (*Ledger, error) {
 		identity_required, amount_millis, received_at, verified, status, cash_secret,
 		connection_key_platform, connection_key_external_id, attestation_event_id, ia_pubkey,
 		expires_at, cash_protection,
-		throwaway_key, pending_throwaway_key, version, redeem_fee_millis
+		throwaway_key, pending_throwaway_key, version, redeem_fee_millis,
+		redeem_payment_hash, redeem_invoice_expires_at, redeem_into, redeem_presumed_at
 		FROM entries ORDER BY rowid`)
 	if err != nil {
 		return nil, fmt.Errorf("cashctl.db: reading entries: %w", err)
@@ -305,12 +321,15 @@ func load() (*Ledger, error) {
 		var e Entry
 		var relayURLs, cashProtection, throwawayKey, pendingThrowawayKey sql.NullString
 		var identityRequired, amountMillis, expiresAt, redeemFee sql.NullInt64
+		var redeemHash, redeemInto sql.NullString
+		var redeemInvoiceExpires, redeemPresumed sql.NullInt64
 		var version int64
 		if err := rows.Scan(&e.ID, &e.Token, &e.WalletPubkey, &e.MinterPubkey, &e.Secret, &relayURLs,
 			&identityRequired, &amountMillis, &e.ReceivedAt, &e.Verified, &e.Status, &e.CashSecret,
 			&e.ConnectionKeyPlatform, &e.ConnectionKeyExternalID, &e.AttestationEventID, &e.IAPubkey,
 			&expiresAt, &cashProtection,
-			&throwawayKey, &pendingThrowawayKey, &version, &redeemFee); err != nil {
+			&throwawayKey, &pendingThrowawayKey, &version, &redeemFee,
+			&redeemHash, &redeemInvoiceExpires, &redeemInto, &redeemPresumed); err != nil {
 			_ = rows.Close()
 			return nil, fmt.Errorf("cashctl.db: reading entries: %w", err)
 		}
@@ -318,6 +337,15 @@ func load() (*Ledger, error) {
 		e.CashProtection = cashProtection.String
 		e.ThrowawayKey = throwawayKey.String
 		e.PendingThrowawayKey = pendingThrowawayKey.String
+		e.RedeemPaymentHash, e.RedeemInto = redeemHash.String, redeemInto.String
+		if redeemInvoiceExpires.Valid {
+			v := redeemInvoiceExpires.Int64
+			e.RedeemInvoiceExpiresAt = &v
+		}
+		if redeemPresumed.Valid {
+			v := redeemPresumed.Int64
+			e.RedeemPresumedAt = &v
+		}
 		if relayURLs.Valid && relayURLs.String != "" {
 			if err := json.Unmarshal([]byte(relayURLs.String), &e.RelayURLs); err != nil {
 				_ = rows.Close()
@@ -509,8 +537,9 @@ func (l *Ledger) save() error {
 			identity_required, amount_millis, received_at, verified, status, cash_secret,
 			connection_key_platform, connection_key_external_id, attestation_event_id, ia_pubkey,
 			expires_at, cash_protection,
-			throwaway_key, pending_throwaway_key, redeem_fee_millis, version)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+			throwaway_key, pending_throwaway_key, redeem_fee_millis,
+			redeem_payment_hash, redeem_invoice_expires_at, redeem_into, redeem_presumed_at, version)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
 			ON CONFLICT(id) DO UPDATE SET
 				token = excluded.token, wallet_pubkey = excluded.wallet_pubkey,
 				minter_pubkey = excluded.minter_pubkey, secret = excluded.secret,
@@ -526,13 +555,19 @@ func (l *Ledger) save() error {
 				throwaway_key = excluded.throwaway_key,
 				pending_throwaway_key = excluded.pending_throwaway_key,
 				redeem_fee_millis = excluded.redeem_fee_millis,
+				redeem_payment_hash = excluded.redeem_payment_hash,
+				redeem_invoice_expires_at = excluded.redeem_invoice_expires_at,
+				redeem_into = excluded.redeem_into,
+				redeem_presumed_at = excluded.redeem_presumed_at,
 				version = entries.version + 1
 			WHERE entries.version = ?`,
 			e.ID, e.Token, e.WalletPubkey, e.MinterPubkey, e.Secret, relayURLs,
 			identityRequired, amountMillis, e.ReceivedAt, e.Verified, e.Status, e.CashSecret,
 			e.ConnectionKeyPlatform, e.ConnectionKeyExternalID, e.AttestationEventID, e.IAPubkey,
 			expiresAt, e.CashProtection,
-			e.ThrowawayKey, e.PendingThrowawayKey, redeemFee, expectedVersion)
+			e.ThrowawayKey, e.PendingThrowawayKey, redeemFee,
+			nullString(e.RedeemPaymentHash), nullInt(e.RedeemInvoiceExpiresAt), nullString(e.RedeemInto), nullInt(e.RedeemPresumedAt),
+			expectedVersion)
 		if err != nil {
 			// entries.id collisions are handled by ON CONFLICT above — the
 			// only other constraint this table has is token's own UNIQUE,
@@ -756,7 +791,7 @@ func (l *Ledger) Held() []Entry {
 func (l *Ledger) Add(e Entry) (*Entry, error) {
 	e.Token = strings.ToLower(e.Token)
 	if existing, ok := l.FindByToken(e.Token); ok {
-		if existing.Status == StatusHeld {
+		if existing.Status == StatusHeld || existing.Status == StatusRedeeming {
 			return nil, ErrAlreadyHeld
 		}
 		// The exact same token string came back — the one way this
@@ -834,4 +869,15 @@ func (l *Ledger) newID() string {
 
 func nowRFC3339() string {
 	return time.Now().UTC().Format(time.RFC3339)
+}
+
+func nullString(s string) sql.NullString {
+	return sql.NullString{String: s, Valid: s != ""}
+}
+
+func nullInt(v *int64) sql.NullInt64 {
+	if v == nil {
+		return sql.NullInt64{}
+	}
+	return sql.NullInt64{Int64: *v, Valid: true}
 }

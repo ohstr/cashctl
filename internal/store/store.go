@@ -73,6 +73,10 @@ CREATE TABLE entries (
 	throwaway_key              TEXT,
 	pending_throwaway_key      TEXT,
 	redeem_fee_millis          INTEGER,
+	redeem_payment_hash        TEXT,
+	redeem_invoice_expires_at  INTEGER,
+	redeem_into                TEXT,
+	redeem_presumed_at         INTEGER,
 	created_by_call            TEXT,
 	version                    INTEGER NOT NULL DEFAULT 0
 );

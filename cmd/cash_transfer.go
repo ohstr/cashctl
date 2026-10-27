@@ -907,7 +907,7 @@ func runCashTransfer(cmd *cobra.Command, args []string) error {
 		entry = e
 	}
 
-	if err := refuseOpenCalls(cmd, l, []string{entry.ID}); err != nil {
+	if err := refuseLocked(cmd, l, []string{entry.ID}); err != nil {
 		return err
 	}
 	cred, err := resolveCredential(cmd, entry)

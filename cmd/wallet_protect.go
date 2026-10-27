@@ -210,6 +210,9 @@ func resolveUnprotectedCashHoldings(cmd *cobra.Command, l *ledger.Ledger, args [
 		if !ok {
 			return nil, nil, output.NotFoundError(cmd, id, fmt.Errorf("no held token %q", id))
 		}
+		if e.Status == ledger.StatusRedeeming {
+			return nil, nil, errRedeemInFlight(cmd, id)
+		}
 		if e.CashProtection != ledger.CashShared {
 			return nil, nil, output.ConflictError(cmd, id, errors.New(unprotectableReason(e)))
 		}

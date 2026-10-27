@@ -2,6 +2,11 @@
 
 ## [0.7.0-rc.1]
 
+- Adds a `redeeming` state for a redeem whose payment may still settle (answered
+  `INTERNAL`, omitted or timed out with the bill still claimed): it is never
+  resent, counts in no balance, is refused by every other command
+  (`redeem_in_flight`), and `cash status` and `cash settle` read it again until
+  it ends.
 - Adds proof of work for Hubs whose relays ask for it, capped by
   `CASHCTL_POW_MAX` (default 28); above the cap nothing is sent.
   ([#134](https://github.com/ohstr/cashctl/pull/134))
