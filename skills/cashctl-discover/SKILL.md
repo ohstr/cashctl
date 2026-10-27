@@ -30,3 +30,26 @@ cashctl cash discover open of-… 100 --json             # taps again, then runs
   unverified string still needs the user's OK).
 - Every subcommand rejects `-c`. `--test-networks` (or
   `CASHCTL_TEST_NETWORKS=1`) also lists offers on test networks.
+
+## Your own signals (public)
+
+```sh
+cashctl cash discover recommend of-… --text "…" --yes --json   # {"outbox":"rq-…","kind":31191,"publish_after","relays","audience"}
+cashctl cash discover recommend --withdraw of-… --yes          # published at once
+cashctl cash discover report of-… --reason no_payout|impersonation|spam|terms_mismatch --yes
+cashctl cash discover publish-due [--list] [--cancel rq-…]      # signs and publishes what is due
+cashctl cash discover operator add|remove of-… --yes           # your own kind 11191 (offers you run)
+cashctl cash discover curators publish|pull --yes               # names private (NIP-44 to yourself)
+cashctl cash discover list --offline                            # the cache only, no relay contacted
+```
+
+- All of these publish under the user's Nostr account and say so first:
+  pass `--yes` only after the user agreed. Without an identity they are
+  refused `usage`, `reason: identity_required`; never create one yourself.
+- `recommend` only an offer the user used (an order answered, or a join
+  made, over a confirmed string), a day after it and not in the same run;
+  else `reason: recommend_not_allowed`. Never write the text for the user.
+- Recommendations and reports wait 1–6 hours in the outbox; `publish-due`
+  (which every `cash discover` command runs first) publishes them.
+- An operator is `verified` only when the listing names it and its own 11191
+  names the listing; otherwise `operator` is null ("operator unknown").

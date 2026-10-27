@@ -11,6 +11,7 @@ import (
 	"os"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -44,7 +45,8 @@ func newCashDiscoverCmd() *cobra.Command {
 		RunE:  groupRunE,
 	}
 	cmd.AddCommand(newDiscoverListCmd(), newDiscoverShowCmd(), newDiscoverOpenCmd(),
-		newDiscoverRelaysCmd(), newDiscoverCuratorsCmd())
+		newDiscoverRelaysCmd(), newDiscoverCuratorsCmd(), newDiscoverRecommendCmd(), newDiscoverReportCmd(),
+		newDiscoverPublishDueCmd(), newDiscoverOperatorCmd())
 	return cmd
 }
 
@@ -97,18 +99,221 @@ func offerHandle(addr string) string {
 	return "of-" + hex.EncodeToString(sum[:])[:10]
 }
 
-// discovered is one listing with its signals.
+// discovered is one listing with its signals and, when verified, its operator.
 type discovered struct {
-	L       *listing.Listing
-	Signals listing.Signals
+	L        *listing.Listing
+	Signals  listing.Signals
+	Operator string // the verified operator's pubkey, "" when unverified
+	Names    map[string]string
 }
 
-// discoverRun fetches, parses and versions listings, then gathers the signals
-// of the user's curators. It reports the relays that failed.
-func discoverRun(cmd *cobra.Command) ([]discovered, *listing.VersionBook, []string, error) {
-	relays, err := discoverRelays(cmd)
+// discoverWorld is everything the cache holds, read into its parts.
+type discoverWorld struct {
+	book      *listing.VersionBook
+	recs      []*listing.Recommendation
+	reps      []*listing.Report
+	deletions []*nip01.Event
+	operators map[string]*listing.OperatorOffers // newest 11191 per author
+	names     map[string]string                  // kind-0 display names
+	followsOf map[string][]string                // newest kind-3 p tags per author
+	nodes     []string
+	opKeys    []string
+}
+
+// localIdentityHex is the local identity's pubkey without unlocking anything,
+// "" when there is none.
+func localIdentityHex() string {
+	npub, _, err := currentIdentity()
+	if err != nil || npub == "" {
+		return ""
+	}
+	pub, err := nip19.DecodePublicKey(npub)
 	if err != nil {
-		return nil, nil, nil, err
+		return ""
+	}
+	return pub
+}
+
+// sinceKey names the since of one filter on one relay in discover_state.
+func sinceKey(relay string, f nip01.SubscriptionFilter) string {
+	f.Since = 0
+	b, _ := json.Marshal(struct {
+		F    nip01.SubscriptionFilter
+		Tags map[string][]string
+	}{f, f.Tags})
+	sum := sha256.Sum256(append([]byte(relay+"|"), b...))
+	return "since:" + hex.EncodeToString(sum[:])[:24]
+}
+
+// fetchIntoCache asks every relay for every filter, from the since it last
+// answered, and caches each event whose id and signature check. It returns the
+// relays that failed every request.
+func fetchIntoCache(ctx context.Context, relays []string, filters []nip01.SubscriptionFilter, origin string) []string {
+	var failed []string
+	for _, r := range relays {
+		answered := false
+		for _, f := range filters {
+			key := sinceKey(r, f)
+			if b, _ := config.DiscoverState(key); len(b) > 0 {
+				if n, err := strconv.ParseUint(string(b), 10, 64); err == nil {
+					f.Since = n
+				}
+			}
+			started := time.Now().Unix()
+			evs, bad := fetchEventsFn(ctx, []string{r}, []nip01.SubscriptionFilter{f})
+			if len(bad) > 0 {
+				continue
+			}
+			answered = true
+			for _, ev := range evs {
+				if ev == nil || ev.Verify() != nil {
+					continue
+				}
+				raw, err := json.Marshal(ev)
+				if err != nil {
+					continue
+				}
+				_ = config.PutDiscoverEvent(ev.ID, ev.Kind, ev.PubKey, int64(ev.CreatedAt), string(raw), origin) //nolint:gosec // unix time
+			}
+			// A little before the request started, so an event a relay stored
+			// meanwhile is asked for again.
+			_ = config.PutDiscoverState(key, []byte(strconv.FormatInt(max(started-60, 0), 10)))
+		}
+		if !answered {
+			failed = append(failed, r)
+		}
+	}
+	_ = config.PruneDiscoverEvents(discoverCacheMax)
+	return failed
+}
+
+// discoverCacheMax bounds discover_events.
+const discoverCacheMax = 5000
+
+// readWorld reads the cache: listings into the version book, and every signal.
+func readWorld(chains []string, testNets bool, now int64) *discoverWorld {
+	w := &discoverWorld{book: listing.NewVersionBook(), operators: map[string]*listing.OperatorOffers{},
+		names: map[string]string{}, followsOf: map[string][]string{}}
+	if snap, _ := config.DiscoverState(versionBookKey); snap != nil {
+		_ = w.book.Restore(snap)
+	}
+	raws, _ := config.DiscoverEvents()
+	var ops, kind0, kind3 []*nip01.Event
+	for _, raw := range raws {
+		var ev nip01.Event
+		if json.Unmarshal([]byte(raw), &ev) != nil {
+			continue
+		}
+		e := ev
+		switch ev.Kind {
+		case listing.KindListing:
+			if l, err := listing.ParseListing(&e, listing.CheckOptions{Chains: chains, TestNetworks: testNets}); err == nil {
+				w.book.Offer(l, now)
+				w.nodes = append(w.nodes, l.NodeIdentity)
+				if l.Operator != nil {
+					w.opKeys = append(w.opKeys, l.Operator.Pubkey)
+				}
+			}
+		case listing.KindRecommendation:
+			if r, err := listing.ParseRecommendation(&e); err == nil {
+				w.recs = append(w.recs, r)
+			}
+		case listing.KindReport:
+			if r, err := listing.ParseReport(&e); err == nil {
+				w.reps = append(w.reps, r)
+			}
+		case 5:
+			w.deletions = append(w.deletions, &e)
+		case listing.KindOperatorOffers:
+			ops = append(ops, &e)
+		case 0:
+			kind0 = append(kind0, &e)
+		case 3:
+			kind3 = append(kind3, &e)
+		}
+	}
+	for _, d := range w.deletions {
+		w.book.ApplyDeletion(d)
+	}
+	w.recs = listing.NewestRecommendations(w.recs, w.deletions)
+	authors := map[string]bool{}
+	for _, ev := range ops {
+		authors[ev.PubKey] = true
+	}
+	for a := range authors {
+		if o := listing.NewestOperatorOffers(ops, a); o != nil {
+			w.operators[a] = o
+		}
+	}
+	for _, ev := range newestPerAuthor(kind0) {
+		var meta struct {
+			Name        string `json:"name"`
+			DisplayName string `json:"display_name"`
+		}
+		if json.Unmarshal([]byte(ev.Content), &meta) == nil {
+			name := meta.DisplayName
+			if name == "" {
+				name = meta.Name
+			}
+			if name != "" {
+				w.names[ev.PubKey] = untrusted(name, listing.MaxTitle)
+			}
+		}
+	}
+	for _, ev := range newestPerAuthor(kind3) {
+		for _, t := range ev.Tags {
+			if len(t) >= 2 && t[0] == "p" && isHex64(t[1]) {
+				w.followsOf[ev.PubKey] = append(w.followsOf[ev.PubKey], t[1])
+			}
+		}
+	}
+	if snap, err := w.book.Snapshot(); err == nil {
+		_ = config.PutDiscoverState(versionBookKey, snap)
+	}
+	return w
+}
+
+// newestPerAuthor keeps each author's newest replaceable event.
+func newestPerAuthor(evs []*nip01.Event) []*nip01.Event {
+	best := map[string]*nip01.Event{}
+	for _, ev := range evs {
+		if cur, ok := best[ev.PubKey]; !ok || nip01.Supersedes(ev, cur) {
+			best[ev.PubKey] = ev
+		}
+	}
+	out := make([]*nip01.Event, 0, len(best))
+	for _, ev := range best {
+		out = append(out, ev)
+	}
+	return out
+}
+
+// operatorOf is the verified operator of the listing at addr: the listing's p,
+// confirmed by that account's newest 11191 naming the listing.
+func (w *discoverWorld) operatorOf(now int64) func(string) (string, bool) {
+	return func(addr string) (string, bool) {
+		l, ok := w.book.Current(addr, now)
+		if !ok || l.Operator == nil {
+			return "", false
+		}
+		if listing.OperatorVerified(l, w.operators[l.Operator.Pubkey]) {
+			return l.Operator.Pubkey, true
+		}
+		return "", false
+	}
+}
+
+// discoverRun fetches (unless --offline), then reads the cache: listings
+// versioned, ranked by the signals of the user's follows and curators. It
+// reports the relays that failed.
+func discoverRun(cmd *cobra.Command) ([]discovered, *listing.VersionBook, []string, error) {
+	offline, _ := cmd.Flags().GetBool("offline")
+	var relays []string
+	if !offline {
+		var err error
+		if relays, err = discoverRelays(cmd); err != nil {
+			return nil, nil, nil, err
+		}
 	}
 	testNets, _ := cmd.Flags().GetBool("test-networks")
 	if os.Getenv("CASHCTL_TEST_NETWORKS") == "1" {
@@ -119,73 +324,72 @@ func discoverRun(cmd *cobra.Command) ([]discovered, *listing.VersionBook, []stri
 		chains = []string{c}
 	}
 	curators, _ := config.Curators()
-	book := listing.NewVersionBook()
-	if snap, _ := config.DiscoverState(versionBookKey); snap != nil {
-		_ = book.Restore(snap)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-	global := listing.GlobalFilter(chains, 0)
-	evs, failed := fetchEventsFn(ctx, relays, []nip01.SubscriptionFilter{global})
-	if len(failed) == len(relays) && len(evs) == 0 {
-		return nil, nil, failed, output.NetworkError(cmd, errors.New("no discovery relay answered"))
-	}
+	self := localIdentityHex()
 	now := time.Now().Unix()
-	var nodes []string
-	for _, ev := range evs {
-		l, err := listing.ParseListing(ev, listing.CheckOptions{Chains: chains, TestNetworks: testNets})
-		if err != nil {
-			continue
+	var failed []string
+	if !offline {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		filters := []nip01.SubscriptionFilter{listing.GlobalFilter(chains, 0)}
+		if self != "" {
+			filters = append(filters, nip01.SubscriptionFilter{Kinds: []int{3, 10002}, Authors: []string{self}})
 		}
-		book.Offer(l, now)
-		nodes = append(nodes, l.NodeIdentity)
-	}
-	var recs []*listing.Recommendation
-	var reps []*listing.Report
-	var deletions []*nip01.Event
-	if trusted := listing.TrustedFilters(listing.Trusted{Curators: curators, Nodes: nodes}); len(trusted) > 0 {
-		more, f2 := fetchEventsFn(ctx, relays, trusted)
-		failed = append(failed, f2...)
-		for _, ev := range more {
-			switch ev.Kind {
-			case listing.KindRecommendation:
-				if r, err := listing.ParseRecommendation(ev); err == nil {
-					recs = append(recs, r)
-				}
-			case listing.KindReport:
-				if r, err := listing.ParseReport(ev); err == nil {
-					reps = append(reps, r)
-				}
-			case 5:
-				deletions = append(deletions, ev)
-				book.ApplyDeletion(ev)
-			case listing.KindListing:
-				if l, err := listing.ParseListing(ev, listing.CheckOptions{Chains: chains, TestNetworks: testNets}); err == nil {
-					book.Offer(l, now)
-				}
-			}
+		failed = fetchIntoCache(ctx, relays, filters, config.OriginGlobal)
+		w := readWorld(chains, testNets, now)
+		trusted := listing.TrustedFilters(listing.Trusted{Follows: w.followsOf[self], Curators: curators,
+			Nodes: w.nodes, Operators: w.opKeys})
+		if len(trusted) > 0 {
+			f2 := fetchIntoCache(ctx, relays, trusted, config.OriginTrusted)
+			failed = intersect(failed, f2)
+		}
+		if raws, _ := config.DiscoverEvents(); len(failed) == len(relays) && len(raws) == 0 {
+			return nil, nil, failed, output.NetworkError(cmd, errors.New("no discovery relay answered and nothing is cached"))
 		}
 	}
-	recs = listing.NewestRecommendations(recs, deletions)
-	if snap, err := book.Snapshot(); err == nil {
-		_ = config.PutDiscoverState(versionBookKey, snap)
-	}
-	trust := listing.Trust{Curators: map[string]bool{}}
+	w := readWorld(chains, testNets, now)
+	follows := w.followsOf[self]
+	trust := listing.Trust{Curators: map[string]bool{}, Follows: map[string]bool{}}
 	for _, c := range curators {
 		trust.Curators[c] = true
 	}
+	for _, f := range follows {
+		trust.Follows[f] = true
+	}
+	opOf := w.operatorOf(now)
 	var out []discovered
-	for _, addr := range book.Addresses() {
-		l, ok := book.Current(addr, now)
+	for _, addr := range w.book.Addresses() {
+		l, ok := w.book.Current(addr, now)
 		if !ok {
 			continue
 		}
-		out = append(out, discovered{L: l, Signals: listing.SignalsFor(l, trust, recs, reps, nil, nil)})
+		var followers []string
+		op, verified := opOf(addr)
+		if verified {
+			for _, f := range follows {
+				if slices.Contains(w.followsOf[f], op) {
+					followers = append(followers, f)
+				}
+			}
+		}
+		out = append(out, discovered{L: l, Signals: listing.SignalsFor(l, trust, w.recs, w.reps, followers, opOf),
+			Operator: op, Names: w.names})
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		return listing.RankLess(out[i].L, out[i].Signals, out[j].L, out[j].Signals, now)
 	})
-	return out, book, failed, nil
+	return out, w.book, failed, nil
+}
+
+// intersect is the relays in both lists: a relay failed overall only when it
+// failed both passes.
+func intersect(a, b []string) []string {
+	var out []string
+	for _, x := range a {
+		if slices.Contains(b, x) {
+			out = append(out, x)
+		}
+	}
+	return out
 }
 
 // untrusted is a lister's text made safe for a terminal: one line, bounded,
@@ -208,7 +412,14 @@ func listingView(d discovered) map[string]any {
 		"title": untrusted(l.Title, listing.MaxTitle), "content": untrusted(l.Content, listing.MaxContent),
 		"node": l.NodeIdentity, "chain": l.Chain, "network": l.Network, "test_network": l.Network != "mainnet",
 		"status": string(l.Status), "summary": output.NonNil(l.Summary), "listed_at": l.CreatedAt(),
-		"operator": map[string]any{"verified": false}}
+		"operator": nil}
+	if d.Operator != "" {
+		op := map[string]any{"pubkey": d.Operator, "verified": true, "followed_by": output.NonNil(d.Signals.OperatorFollowedBy)}
+		if n := d.Names[d.Operator]; n != "" {
+			op["name"] = n
+		}
+		v["operator"] = op
+	}
 	if l.Image != "" {
 		v["image"] = l.Image
 	}
@@ -227,7 +438,7 @@ func listingView(d discovered) map[string]any {
 	}
 	v["recommendations"], v["reports"] = output.NonNil(recs), output.NonNil(reps)
 	section := "unreviewed"
-	if len(d.Signals.Recommendations) > 0 {
+	if len(d.Signals.Recommendations) > 0 || len(d.Signals.OperatorFollowedBy) > 0 {
 		section = "reviewed"
 	}
 	v["section"] = section
@@ -243,6 +454,7 @@ func newDiscoverListCmd() *cobra.Command {
 			if err := rejectConnectionFlag(cmd); err != nil {
 				return err
 			}
+			discoverPre(cmd)
 			jsonMode, _ := cmd.Flags().GetBool("json")
 			typ, _ := cmd.Flags().GetString("type")
 			onlyUnreviewed, _ := cmd.Flags().GetBool("unreviewed")
@@ -263,7 +475,13 @@ func newDiscoverListCmd() *cobra.Command {
 				views = append(views, v)
 			}
 			if jsonMode {
-				output.PrintJSON(map[string]any{"offers": output.NonNil(views), "curators": len(curators), "relays_failed": output.NonNil(failed)})
+				follows := 0
+				if self := localIdentityHex(); self != "" {
+					follows = len(readFollows(self))
+				}
+				output.PrintJSON(map[string]any{"offers": output.NonNil(views), "curators": len(curators),
+					"ranking_from":  map[string]any{"follows": follows, "curators": output.NonNil(curators)},
+					"relays_failed": output.NonNil(failed)})
 				return nil
 			}
 			for _, r := range failed {
@@ -291,6 +509,7 @@ func newDiscoverListCmd() *cobra.Command {
 	cmd.Flags().String("type", "", "order or circle")
 	cmd.Flags().Bool("unreviewed", false, "list the offers nobody you trust recommends")
 	cmd.Flags().StringSlice("relay", nil, "also read this relay (this run only)")
+	cmd.Flags().Bool("offline", false, "read only what is cached, contacting no relay")
 	cmd.Flags().String("chain", "", "only this chain")
 	cmd.Flags().Bool("test-networks", false, "also list offers on test networks")
 	return cmd
@@ -317,7 +536,18 @@ func printListingCard(v map[string]any) {
 		title = "(no title)"
 	}
 	node, _ := v["node"].(string)
-	output.Printf("%v  %s%s  — node %s\n", v["offer"], marks, title, shortFingerprint(node))
+	operator := "operator unknown"
+	if op, ok := v["operator"].(map[string]any); ok {
+		name, _ := op["name"].(string)
+		if name == "" {
+			name = npubOrHex(op["pubkey"].(string))
+		}
+		operator = "run by " + name + " ✓"
+		if fb, _ := op["followed_by"].([]string); len(fb) > 0 {
+			operator += fmt.Sprintf(", followed by %d you follow", len(fb))
+		}
+	}
+	output.Printf("%v  %s%s  — node %s, %s\n", v["offer"], marks, title, shortFingerprint(node), operator)
 	if summary, _ := v["summary"].([]string); len(summary) > 0 {
 		output.Printf("    as listed: %s\n", strings.Join(summary, " · "))
 	}
@@ -410,6 +640,7 @@ func newDiscoverShowCmd() *cobra.Command {
 			if err := rejectConnectionFlag(cmd); err != nil {
 				return err
 			}
+			discoverPre(cmd)
 			jsonMode, _ := cmd.Flags().GetBool("json")
 			l, book, err := resolveOffer(cmd, args[0])
 			if err != nil {
@@ -467,6 +698,7 @@ func newDiscoverShowCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringSlice("relay", nil, "also read this relay (this run only)")
+	cmd.Flags().Bool("offline", false, "read only what is cached, contacting no relay")
 	cmd.Flags().Bool("test-networks", false, "also find offers on test networks")
 	cmd.Flags().String("chain", "", "only this chain")
 	return cmd
@@ -483,6 +715,7 @@ which run their own checks and confirmations.`,
 		RunE: runDiscoverOpen,
 	}
 	cmd.Flags().StringSlice("relay", nil, "also read this relay (this run only)")
+	cmd.Flags().Bool("offline", false, "read only what is cached, contacting no relay")
 	cmd.Flags().Bool("test-networks", false, "also find offers on test networks")
 	cmd.Flags().String("chain", "", "only this chain")
 	// The flags of `cash order place` and `join` it passes on.
@@ -502,6 +735,7 @@ func runDiscoverOpen(cmd *cobra.Command, args []string) error {
 	if err := rejectConnectionFlag(cmd); err != nil {
 		return err
 	}
+	discoverPre(cmd)
 	l, book, err := resolveOffer(cmd, args[0])
 	if err != nil {
 		return err
@@ -616,6 +850,14 @@ func newDiscoverCuratorsCmd() *cobra.Command {
 		c, _ := config.Curators()
 		return printList(cmd, "curators", c)
 	}})
+	publish := &cobra.Command{Use: "publish", Short: "Publish your curator set (names private, NIP-44 to yourself)", Args: output.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error { return curatorsPublish(cmd) }}
+	pull := &cobra.Command{Use: "pull", Short: "Replace your local curators with your newest published set", Args: output.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error { return curatorsPull(cmd) }}
+	for _, c := range []*cobra.Command{publish, pull} {
+		c.Flags().StringSlice("relay", nil, "also read and publish to this relay")
+	}
+	cmd.AddCommand(publish, pull)
 	return cmd
 }
 
@@ -643,4 +885,9 @@ func printList(cmd *cobra.Command, key string, items []string) error {
 		output.Println(i)
 	}
 	return nil
+}
+
+// readFollows is the identity's follows from its newest cached kind 3.
+func readFollows(self string) []string {
+	return readWorld(discoverChains, true, time.Now().Unix()).followsOf[self]
 }
