@@ -288,3 +288,62 @@ func TestRunWalletProtect_SettlesALandedReKeyFirst(t *testing.T) {
 		t.Errorf("call %s, entry protection %q; want done and protected", got.State, e.CashProtection)
 	}
 }
+
+// CC-B1: a lookup done whose moved bill is a tombstone records no bill: the
+// protected entry is spent, never kept holding the drained token.
+func TestSettle_DoneWithATombstoneForTheMovedBill(t *testing.T) {
+	_, id, c, _ := lostProtect(t)
+	result, _ := json.Marshal(map[string]any{"amount_millis": 1000, "identity_type": "cash",
+		"new_wallet_pubkey": hexWallet("moved"), "new_wallet_token": map[string]any{"status": "spent", "reason": "transferred"}})
+	withLookup(t, func(*ledger.Call) (nipcashclient.LookupOutcome, error) {
+		return nipcashclient.LookupOutcome{Status: nipcash.LookupDone, Result: result}, nil
+	})
+	l := settleNow(t)
+	e, _ := l.Find(id)
+	if e.Status != ledger.StatusSpent || e.CashProtection == ledger.CashProtected {
+		t.Errorf("entry after a done carrying a tombstone: %+v; want spent", e)
+	}
+	got, _ := l.FindCall(c.CallID)
+	if got.State != ledger.CallDone {
+		t.Errorf("call %+v, want done", got)
+	}
+}
+
+// CC-B1: a consolidate looked up done whose merged bill is a tombstone adds no
+// held entry with an empty token, and no gift.
+func TestSettle_ConsolidateDoneWithATombstone(t *testing.T) {
+	l, ids, sources := consolidateFixture(t)
+	withFakeAttemptCashConsolidate(t, func(string, []nipcash.Source, nipcash.Target) (*nipcash.CashConsolidateResult, error) {
+		return nil, context.DeadlineExceeded
+	})
+	if _, _, err := doCashConsolidate(&cobra.Command{}, l, []string{"dial-a"}, sources, ids, testTarget(), true); output.AsCLIError(err).Code != output.CodeIndeterminate {
+		t.Fatalf("err %v, want indeterminate", err)
+	}
+	l, _ = ledger.Load()
+	c, open := l.OpenCallFor(ids[0])
+	if !open {
+		t.Fatal("no open consolidate")
+	}
+	// Applied straight from the parsed lookup result (consolidateParams needs a
+	// local identity this fixture does not have).
+	if _, err := applyConsolidateResult(&cobra.Command{}, l, c, &nipcash.CashConsolidateResult{AmountMillis: 3000,
+		NewWalletPubkey: hexWallet("merged"), NewWalletTombstone: &nipcash.Tombstone{Status: "spent", Reason: "redeemed"}}); err != nil {
+		t.Fatal(err)
+	}
+	closeCall(l, c, ledger.CallDone, "")
+	if err := l.Save(); err != nil {
+		t.Fatal(err)
+	}
+	fresh, _ := ledger.Load()
+	for _, e := range fresh.Entries {
+		if e.Token == "" {
+			t.Errorf("an entry with an empty token was recorded: %+v", e)
+		}
+	}
+	if len(fresh.Held()) != 0 {
+		t.Errorf("held after the merged bill's tombstone: %+v", fresh.Held())
+	}
+	if len(fresh.Handoffs) != 0 {
+		t.Errorf("handoffs %+v, want none", fresh.Handoffs)
+	}
+}
