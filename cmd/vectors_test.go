@@ -15,20 +15,31 @@ import (
 // The known answers for provenance and the relay hash come from nmilat's
 // exported vector files (testdata/vectors, NIP-CASH §Mint Provenance), read
 // from the nmilat module this build uses, so cashctl and nmilat can't drift
-// apart on them (plan §10.5, T-31). An nmilat that exports no vectors skips.
+// apart on them (plan §10.5, T-31). An nmilat that exports no vectors skips,
+// except under CI (or CASHCTL_REQUIRE_VECTORS=1), where it fails.
 
 // nmilatVector reads one of nmilat's vector files.
 func nmilatVector(t *testing.T, name string) []byte {
 	t.Helper()
 	out, err := exec.Command("go", "list", "-m", "-f", "{{.Dir}}", "github.com/ohstr/nmilat").Output()
 	if err != nil {
-		t.Skipf("can't locate the nmilat module: %v", err)
+		skipOrFail(t, "can't locate the nmilat module: %v", err)
 	}
 	b, err := os.ReadFile(filepath.Join(strings.TrimSpace(string(out)), "testdata", "vectors", name))
 	if err != nil {
-		t.Skipf("this nmilat exports no %s: %v", name, err)
+		skipOrFail(t, "this nmilat exports no %s: %v", name, err)
 	}
 	return b
+}
+
+// skipOrFail skips a vector test whose vectors are missing, but fails it where
+// the known answers must run (CI, or CASHCTL_REQUIRE_VECTORS=1).
+func skipOrFail(t *testing.T, format string, args ...any) {
+	t.Helper()
+	if os.Getenv("CI") != "" || os.Getenv("CASHCTL_REQUIRE_VECTORS") == "1" {
+		t.Fatalf(format, args...)
+	}
+	t.Skipf(format, args...)
 }
 
 type provenanceVectors struct {
