@@ -30,10 +30,10 @@ func newConnectAddCmd() *cobra.Command {
 		Long: `Registers a wallet connection under a name, for -c/--connection, --into
 and the default wallet.
 
-<connection> is a nostr+walletconnect:// URI, or a cash-token-family string
-(lokicash1...) used as a wallet. A circlehub1... connection is joined with
-` + "`cashctl join`" + `, a <token>#<secret> bill is taken with ` + "`cashctl receive`" + `;
-both are refused here. Your first wallet becomes the default.`,
+<connection> is a nostr+walletconnect:// URI. A bill is never a wallet: a
+cash token or <token>#<secret> is taken with ` + "`cashctl receive`" + `, and a
+circlehub1... connection is joined with ` + "`cashctl join`" + `; both are refused
+here. Your first wallet becomes the default.`,
 		Example: `  cashctl connect add savings "nostr+walletconnect://<pubkey>?relay=wss://...&secret=..."
   cashctl connect add savings - < savings.uri    # read it from stdin, keeping the secret out of ps and shell history`,
 		Args: output.ExactArgs(2),
@@ -61,7 +61,6 @@ both are refused here. Your first wallet becomes the default.`,
 				// never succeed — the caller has to pick a different one.
 				return output.InvalidInputError(cmd, name, err)
 			}
-			s.SetKind(name, connectionKindOf(value))
 
 			setDefault := false
 			if wasEmpty {

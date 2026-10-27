@@ -86,17 +86,6 @@ func TestAdd_StoresTokenLowercase(t *testing.T) {
 	}
 }
 
-func TestFindByToken_IsCaseInsensitive_EvenForLegacyUppercaseRows(t *testing.T) {
-	// A row saved before Add started normalizing is stored exactly as
-	// pasted; lookups must still find it from either spelling.
-	l := &Ledger{Entries: []Entry{{ID: "old", Token: "LOKICASH1LEGACY", Status: StatusHeld}}}
-	for _, in := range []string{"LOKICASH1LEGACY", "lokicash1legacy"} {
-		if _, ok := l.FindByToken(in); !ok {
-			t.Errorf("FindByToken(%q) = not found, want the legacy uppercase row", in)
-		}
-	}
-}
-
 // A full-amount transfer reassigns a wallet in place, so the SAME token
 // string can genuinely come back to a previous holder. entries.token is
 // UNIQUE, so Add must reactivate the existing row, not reject it (and not

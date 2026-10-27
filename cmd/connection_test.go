@@ -27,10 +27,12 @@ func TestValidateConnectionValue(t *testing.T) {
 	}
 	nwcURI := "nostr+walletconnect://" + walletPubkey + "?relay=wss%3A%2F%2Frelay.example&secret=" + secret
 
-	for _, ok := range []string{nwcURI, cashToken} {
-		if err := validateConnectionValue(ok); err != nil {
-			t.Errorf("validateConnectionValue(%.40q…) = %v, want accepted", ok, err)
-		}
+	if err := validateConnectionValue(nwcURI); err != nil {
+		t.Errorf("validateConnectionValue(nwc URI) = %v, want accepted", err)
+	}
+	// A bill is never a wallet.
+	if err := validateConnectionValue(cashToken); err == nil || !strings.Contains(err.Error(), "never a wallet") {
+		t.Errorf("validateConnectionValue(cash token) = %v, want refused as a bill", err)
 	}
 	// "n"/"no" are what a person types at init's yes/no-sounding wallet
 	// prompt; the rest are ordinary mis-pastes. None can ever be dialed.

@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/flokiorg/go-flokicoin/chainutil/bech32"
-	"github.com/ohstr/nmilat/nip47"
 	"github.com/ohstr/nmilat/nipcash"
 	relayclient "github.com/ohstr/nmilat/relay/client"
 	"github.com/spf13/cobra"
@@ -151,8 +150,8 @@ func ResolveConnectionValue(cmd *cobra.Command) (value string, ok bool, err erro
 }
 
 // validateConnectionValue reports whether value is something DialGeneric can
-// actually use — the same two forms it accepts, checked without a network
-// call. Registering anything else (a stray "n" typed at init's wallet
+// actually use — an outside wallet's nostr+walletconnect:// URI — checked
+// without a network call. Registering anything else (a stray "n" typed at init's wallet
 // prompt, a mis-paste, a Hub string) used to succeed silently and only fail
 // later, on the first command that needed the wallet, as a confusing
 // "not a valid connection string" far from where the mistake was made.
@@ -173,11 +172,9 @@ func validateConnectionValue(value string) error {
 	case dial.KindLightningInvoice:
 		return &wrongConnectionKindError{lightningMessage(value)}
 	case dial.KindCashToken:
-		if _, err := nipcash.Decode(value); err == nil {
-			return nil
-		}
+		return &wrongConnectionKindError{"that's a cash bill, not a wallet — a bill is never a wallet; take it with `cashctl receive`"}
 	}
-	return fmt.Errorf("not a valid wallet connection — expected a nostr+walletconnect:// URI (or a cash-token-family connection string)")
+	return fmt.Errorf("not a valid wallet connection — expected a nostr+walletconnect:// URI")
 }
 
 // wrongConnectionKindError is validateConnectionValue's refusal of a string
@@ -186,29 +183,13 @@ type wrongConnectionKindError struct{ msg string }
 
 func (e *wrongConnectionKindError) Error() string { return e.msg }
 
-// DialGeneric connects to any NWC-capable connection string — a plain
-// nostr+walletconnect:// URI, or a cash-token-family bech32 string (which
-// carries the identical pairing data, just packaged differently — see
-// `connect add`'s own "pairing-uri-or-cash-token" acceptance).
+// DialGeneric connects to a registered wallet's nostr+walletconnect:// URI. A
+// bill is never a wallet, so a cash token is refused here too.
 func DialGeneric(ctx context.Context, value string) (*relayclient.NWCClient, error) {
-	if extwallet.IsURI(value) {
-		return extwallet.Dial(ctx, value)
+	if !extwallet.IsURI(value) {
+		return nil, fmt.Errorf("not a wallet connection — expected a nostr+walletconnect:// URI")
 	}
-	tok, err := nipcash.Decode(value)
-	if err != nil {
-		return nil, fmt.Errorf("not a valid connection string")
-	}
-	pairing := &nip47.PairingInfo{WalletPubkey: tok.WalletPubkey, RelayURLs: tok.RelayURLs, Secret: tok.Secret}
-	return relayclient.NewNWCClient(ctx, pairing, nip47.EncryptionNIP44V2)
-}
-
-// connectionKindOf is what a validated `connect add` value is: a
-// cash-token-family string used as a wallet, or a plain NWC URI.
-func connectionKindOf(value string) string {
-	if dial.Sniff(value) == dial.KindCashToken {
-		return config.KindCashToken
-	}
-	return config.KindNWC
+	return extwallet.Dial(ctx, value)
 }
 
 func safeDestinationLabel(raw string) string {

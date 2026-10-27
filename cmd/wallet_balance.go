@@ -228,7 +228,7 @@ func runWalletBalanceFrom(cmd *cobra.Command, from string, jsonMode bool) error 
 
 // liveBalanceMloki dials c and calls get_balance. On a CodeAuth decline
 // (EXPIRED, RESTRICTED, UNAUTHORIZED — the Hub has permanently cut this
-// connection off), falls back to the cached LastKnownBalanceMloki (if any),
+// connection off), falls back to the cached LastKnownBalanceMillis (if any),
 // flagged as stranded — see Connection's own doc comment for why that's
 // the only way to show a figure at all for a wallet that can never be
 // queried live again.
@@ -252,7 +252,7 @@ func liveBalanceMloki(c config.Connection) (amount int64, stranded bool, err err
 }
 
 // strandedBalanceFallback decides whether a get_balance failure should fall
-// back to c's cached LastKnownBalanceMloki rather than being treated as
+// back to c's cached LastKnownBalanceMillis rather than being treated as
 // plainly unreachable. Only a CodeAuth decline qualifies: the Hub has
 // permanently and authoritatively cut the connection off, so the cached
 // figure is frozen and accurate forever. Any other failure (network,
@@ -263,8 +263,8 @@ func liveBalanceMloki(c config.Connection) (amount int64, stranded bool, err err
 // classification doesn't need a live Hub to verify.
 func strandedBalanceFallback(err error, c config.Connection) (amount int64, ok bool) {
 	var walletErr *relayclient.WalletError
-	if errors.As(err, &walletErr) && output.NWCErrorCode(walletErr.Code) == output.CodeAuth && c.LastKnownBalanceMloki != nil {
-		return *c.LastKnownBalanceMloki, true
+	if errors.As(err, &walletErr) && output.NWCErrorCode(walletErr.Code) == output.CodeAuth && c.LastKnownBalanceMillis != nil {
+		return *c.LastKnownBalanceMillis, true
 	}
 	return 0, false
 }

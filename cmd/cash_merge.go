@@ -118,7 +118,7 @@ func followMove(e *ledger.Entry, res *nipcash.CashTransferResult) {
 	if res == nil || res.NewWalletToken == "" {
 		return
 	}
-	e.Token = res.NewWalletToken
+	e.Token = strings.ToLower(res.NewWalletToken)
 	if res.NewWalletPubkey != "" {
 		e.WalletPubkey = res.NewWalletPubkey
 	}

@@ -3,6 +3,7 @@ package cmd
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/ohstr/nmilat/nipcash"
 	relayclient "github.com/ohstr/nmilat/relay/client"
@@ -216,7 +217,7 @@ func protectRekeyOnly(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entry,
 	// only this caller can read it.
 	moved := result != nil && result.NewWalletToken != ""
 	if moved {
-		entry.Token = result.NewWalletToken
+		entry.Token = strings.ToLower(result.NewWalletToken)
 		if result.NewWalletPubkey != "" {
 			entry.WalletPubkey = result.NewWalletPubkey
 		}

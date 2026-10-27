@@ -2,6 +2,10 @@
 
 ## [0.7.0-rc.1]
 
+- Changes the local database to a new format. A `cashctl.db` from an earlier
+  version is refused, naming the file to move aside; nothing in it is read.
+- Changes `connect add` to refuse a cash bill: a bill is never a wallet.
+- Changes the cached wallet balance in `--json` to `last_known_balance_millis`.
 - Changes every command that contacts a bill to check its mint signature first:
   a bill whose signature does not cover its own relays and secret, or that has
   none, is refused before any relay is contacted.

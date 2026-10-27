@@ -338,7 +338,7 @@ func load() (*Ledger, error) {
 		identity_required, amount_millis, received_at, verified, status, cash_secret,
 		connection_key_platform, connection_key_external_id, attestation_event_id, ia_pubkey,
 		pending_cash_secret, expires_at, cash_protection, pending_destination_cash_secret,
-		throwaway_key, pending_throwaway_key, COALESCE(version, 0), redeem_fee_millis
+		throwaway_key, pending_throwaway_key, version, redeem_fee_millis
 		FROM entries ORDER BY rowid`)
 	if err != nil {
 		return nil, fmt.Errorf("cashctl.db: reading entries: %w", err)
@@ -570,8 +570,8 @@ func (l *Ledger) save() error {
 				throwaway_key = excluded.throwaway_key,
 				pending_throwaway_key = excluded.pending_throwaway_key,
 				redeem_fee_millis = excluded.redeem_fee_millis,
-				version = COALESCE(entries.version, 0) + 1
-			WHERE COALESCE(entries.version, 0) = ?`,
+				version = entries.version + 1
+			WHERE entries.version = ?`,
 			e.ID, e.Token, e.WalletPubkey, e.MinterPubkey, e.Secret, relayURLs,
 			identityRequired, amountMillis, e.ReceivedAt, e.Verified, e.Status, e.CashSecret,
 			e.ConnectionKeyPlatform, e.ConnectionKeyExternalID, e.AttestationEventID, e.IAPubkey,
@@ -744,13 +744,12 @@ var ErrConcurrentUpdate = errors.New("this wallet's local record was changed by 
 // FindByToken looks up an entry by its original token string — used to
 // reject re-receiving the same token twice.
 func (l *Ledger) FindByToken(token string) (*Entry, bool) {
-	// Case-insensitive (see Add's own doc comment on why): a caller pasting
-	// the uppercase spelling of an already-held token still matches it,
-	// rather than looking like a brand new one. EqualFold rather than
-	// lowercasing both sides so rows saved before Add started normalizing
-	// (stored exactly as pasted) still match too.
+	// Tokens are stored lowercase (Add, and every token a Hub returns); the
+	// uppercase spelling of a held token, as a QR code carries it, is the same
+	// token.
+	token = strings.ToLower(token)
 	for i := range l.Entries {
-		if strings.EqualFold(l.Entries[i].Token, token) {
+		if l.Entries[i].Token == token {
 			return &l.Entries[i], true
 		}
 	}
