@@ -66,16 +66,9 @@ func TestHubGroupTamper_WrongFingerprintIsStillRefusedByTheHub(t *testing.T) {
 	// The tamper: hub B's bill, wearing hub A's fingerprint. Everything else is
 	// untouched — same wallet pubkey, same secret, same relays, same mint signature,
 	// which still verifies because it never covered the fingerprint.
-	disguised, err := nipcash.Encode(nipcash.Token{
-		HRP:                  b.HRP,
-		WalletPubkey:         b.WalletPubkey,
-		Secret:               b.Secret,
-		RelayURLs:            b.RelayURLs,
-		IdentityRequired:     b.IdentityRequired,
-		MintSignature:        b.MintSignature,
-		AttestedAmountMillis: b.AttestedAmountMillis,
-		HubGroup:             a1.HubGroup,
-	})
+	disguisedTok := b
+	disguisedTok.HubGroup = a1.HubGroup
+	disguised, err := nipcash.Encode(disguisedTok)
 	if err != nil {
 		t.Fatalf("re-encode B with A's fingerprint: %v", err)
 	}
@@ -107,7 +100,9 @@ func TestHubGroupTamper_WrongFingerprintIsStillRefusedByTheHub(t *testing.T) {
 	// The refusal must be the HUB's same-hub rule, reported legibly — not a crash, and
 	// not a generic failure.
 	combined := res.Stdout + res.Stderr
-	if !strings.Contains(combined, "same Cash Hub") && !strings.Contains(combined, "same Lightning node") {
+	// NIP-CASH §Consolidating: sources of different Hubs are refused with
+	// RESTRICTED; the write-ahead engine reports the Hub's code.
+	if !strings.Contains(combined, "same Cash Hub") && !strings.Contains(combined, "same Lightning node") && !strings.Contains(combined, `"RESTRICTED"`) {
 		t.Errorf("want the hub's same-Cash-Hub refusal, got:\nstdout: %s\nstderr: %s", res.Stdout, res.Stderr)
 	}
 	// Classified, not retryable: retrying the identical selection fails identically.

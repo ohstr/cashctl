@@ -10,6 +10,7 @@
 package integration
 
 import (
+	"errors"
 	"github.com/ohstr/cashctl/internal/testmint"
 	"os"
 	"strings"
@@ -99,11 +100,15 @@ func TestNoBillTrafficOnTheSharedTransport(t *testing.T) {
 		HRP: unsigned.HRP, WalletPubkey: unsigned.WalletPubkey, Secret: unsigned.Secret,
 		RelayURLs: unsigned.RelayURLs, IdentityRequired: unsigned.IdentityRequired,
 	})
-	if err != nil {
+	switch {
+	case errors.Is(err, nipcash.ErrTokenUnsigned):
+		// The encoder no longer builds a bill without mint provenance at all.
+	case err != nil:
 		t.Fatal(err)
-	}
-	if res := f.run("receive", stripped); res.ExitCode == 0 {
-		t.Errorf("receive of a bill with no mint provenance succeeded: %s", res.Stdout)
+	default:
+		if res := f.run("receive", stripped); res.ExitCode == 0 {
+			t.Errorf("receive of a bill with no mint provenance succeeded: %s", res.Stdout)
+		}
 	}
 
 	for i, stop := range stops {

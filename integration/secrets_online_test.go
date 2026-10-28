@@ -194,7 +194,7 @@ func TestCashTransfer_AsCashCredential_OverridesStoredSecretAndSpends(t *testing
 	if realSecret == "" {
 		t.Skip("no cash secret stored after receive — nothing to override")
 	}
-	corruptCashSecret(t, f, id, "not-the-real-secret", "")
+	corruptCashSecret(t, f, id, "not-the-real-secret")
 
 	res := f.run("transfer", "10", "cash", "--token", id, "--as", "cash:"+realSecret, "--yes")
 	if res.ExitCode != 0 {

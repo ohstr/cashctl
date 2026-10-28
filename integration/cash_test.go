@@ -114,7 +114,10 @@ func setUpCashHubOpts(t *testing.T, admin *adminClient, opts cashHubOpts) adminC
 			if err == nil {
 				continue
 			}
-			if claim.Archived || claim.Status != "unclaimed" {
+			if claim.Archived || claim.Status != "unclaimed" || strings.Contains(err.Error(), "ordered slice") {
+				// A wallet holding an ordered slice is never deleted by the
+				// Hub (NIP-CO: the slice was paid for, not issued from the
+				// Hub's balance), so it stays, and its Hub with it.
 				// Expected: the Hub deletes a bill once nothing is left on
 				// it, so a spent claim's wallet is usually already gone.
 				continue

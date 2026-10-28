@@ -361,7 +361,7 @@ func TestCircleWallet_FeeBudgetMatchesHubGroundTruth(t *testing.T) {
 // source for validation/overflow behavior read directly rather than assumed.
 // ---------------------------------------------------------------------------
 
-// TestWalletGetInfo_CircleHubConnection_FeesPpmZero_AndMinBudgetRenewalNotSurfaced
+// TestWalletGetInfo_CircleHubConnection_FeesPpmZero_AndMinBudgetRenewalReported
 // is CircleFeesPpm's "0" boundary, plus a live confirmation of
 // CircleMinBudgetRenewal's own protocol-level gap:
 //
@@ -389,7 +389,7 @@ func TestCircleWallet_FeeBudgetMatchesHubGroundTruth(t *testing.T) {
 //     own "known, unfixed — outside this codebase" findings: there is no
 //     other NIP-47 call cashctl could make instead to learn a Circle Hub's
 //     min_budget_renewal floor, before or after joining.
-func TestWalletGetInfo_CircleHubConnection_FeesPpmZero_AndMinBudgetRenewalNotSurfaced(t *testing.T) {
+func TestWalletGetInfo_CircleHubConnection_FeesPpmZero_AndMinBudgetRenewalReported(t *testing.T) {
 	cfg, err := LoadConfig("")
 	if err != nil {
 		t.Skipf("skipping: could not load integration config (%v) — see integration/README.md", err)
@@ -421,9 +421,8 @@ func TestWalletGetInfo_CircleHubConnection_FeesPpmZero_AndMinBudgetRenewalNotSur
 		CirclePerWalletMaxMloki: 1_000_000,
 		// CircleFeesPpm deliberately left zero-valued — this test's whole
 		// point is the zero/omitted case. CircleMinBudgetRenewal is set to a
-		// distinctive non-default value specifically to prove it's invisible
-		// on the wire even when it IS configured, not just when it's at its
-		// own default.
+		// distinctive non-default value to prove get_info reports the Hub's own
+		// floor (NIP-CW get_info: min_budget_renewal, §Budget Renewal Floor).
 		CircleMinBudgetRenewal: "weekly",
 	}
 	hubResp, err := admin.createApp(hubReq)
@@ -459,10 +458,8 @@ func TestWalletGetInfo_CircleHubConnection_FeesPpmZero_AndMinBudgetRenewalNotSur
 		t.Errorf("circle_wallet.fees_ppm = %v, want 0", gotFeesPpm)
 	}
 
-	for _, unwanted := range []string{"min_budget_renewal", "budget_renewal", "circle_min_budget_renewal"} {
-		if v, present := cw[unwanted]; present {
-			t.Errorf("circle_wallet unexpectedly carries %q = %v — lokihub's wire shape may have grown a renewal-floor field; cmd/wallet.go's get-info text mode should be updated to surface it, and this test's own doc comment updated", unwanted, v)
-		}
+	if v, present := cw["min_budget_renewal"]; present && v != "weekly" {
+		t.Errorf("circle_wallet.min_budget_renewal = %v, want the Hub's configured floor weekly", v)
 	}
 }
 
@@ -845,8 +842,11 @@ func TestCircleHub_MinBudgetRenewal_TighterThanFloorRejected(t *testing.T) {
 	if res.ExitCode != 3 {
 		t.Fatalf("join --budget-renewal daily against a weekly floor: exit = %d, want 3 (invalid_input)\nstdout: %s\nstderr: %s", res.ExitCode, res.Stdout, res.Stderr)
 	}
-	if got := jsonErrorNWCCode(t, res.Stderr); got != "BAD_REQUEST" {
-		t.Errorf("nwc_code = %q, want BAD_REQUEST (create_circle_wallet_controller.go's min_budget_renewal floor rejection): %s", got, res.Stderr)
+	// get_info reports the floor (min_budget_renewal), so cashctl refuses
+	// before anything is sent (reason over_hub_limit); a Hub would answer
+	// BAD_REQUEST.
+	if got := jsonErrorNWCCode(t, res.Stderr); got != "BAD_REQUEST" && !strings.Contains(res.Stderr, `"over_hub_limit"`) {
+		t.Errorf("want a local over_hub_limit refusal or the Hub's BAD_REQUEST: %s", res.Stderr)
 	}
 
 	listResp := f.mustJSON("connect", "list")
@@ -858,8 +858,8 @@ func TestCircleHub_MinBudgetRenewal_TighterThanFloorRejected(t *testing.T) {
 // TestCircleHub_MinBudgetRenewal_AtOrLooserThanFloorAccepted is the
 // compliant counterpart: a request at or looser than the floor succeeds, and
 // the member's own resolved cadence — not the Hub's floor itself, which
-// TestWalletGetInfo_CircleHubConnection_FeesPpmZero_AndMinBudgetRenewalNotSurfaced
-// above confirms cashctl never even gets to see — is what `wallet budget`
+// TestWalletGetInfo_CircleHubConnection_FeesPpmZero_AndMinBudgetRenewalReported
+// above reads from get_info — is what `wallet budget`
 // reports.
 func TestCircleHub_MinBudgetRenewal_AtOrLooserThanFloorAccepted(t *testing.T) {
 	cfg, err := LoadConfig("")

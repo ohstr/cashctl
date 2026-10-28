@@ -219,7 +219,7 @@ func TestAsCredential_CashSecret(t *testing.T) {
 		if secret == "" {
 			t.Skip("no cash secret stored after receive — nothing to override")
 		}
-		corruptCashSecret(t, f, id, "not-the-real-secret", "")
+		corruptCashSecret(t, f, id, "not-the-real-secret")
 		return f, id, secret
 	}
 
@@ -286,7 +286,7 @@ func TestStdinDash(t *testing.T) {
 	}
 
 	circleHub := setUpCircleHub(t, admin, pub)
-	requireOK(t, "join -", f.runWith(nil, *circleHub.CircleHubToken+"\n", "join", "-", "10"))
+	requireOK(t, "join -", f.runWith(nil, *circleHub.CircleHubToken+"\n", "join", "-", "20"))
 
 	requireFailure(t, "receive - with empty stdin", f.run("receive", "-"), 2, "usage", "")
 }
@@ -306,11 +306,11 @@ func TestVaultIdentity_SignsUnattendedWithPassword(t *testing.T) {
 	}
 	hub := setUpCircleHub(t, admin, pub)
 
-	res := f.run("join", *hub.CircleHubToken, "10")
+	res := f.run("join", *hub.CircleHubToken, "20")
 	if res.ExitCode == 0 || !strings.Contains(res.Stderr, "NCLI_VAULT_PASSWORD") {
 		t.Fatalf("join without NCLI_VAULT_PASSWORD: exit %d, want a refusal naming it\nstderr: %s", res.ExitCode, res.Stderr)
 	}
-	requireOK(t, "join with NCLI_VAULT_PASSWORD", f.runWith([]string{"NCLI_VAULT_PASSWORD=vault-password-for-test"}, "", "join", *hub.CircleHubToken, "10"))
+	requireOK(t, "join with NCLI_VAULT_PASSWORD", f.runWith([]string{"NCLI_VAULT_PASSWORD=vault-password-for-test"}, "", "join", *hub.CircleHubToken, "20"))
 }
 
 // TestConnectionTarget_LiteralFormAndConsolidateIA sends to a connection-key

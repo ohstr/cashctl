@@ -165,12 +165,13 @@ func TestConnectionTarget_TransferReachesTheHubAndIsRefusedForAnUntrustedIA(t *t
 	if res.ExitCode == 0 {
 		t.Fatalf("this hub accepted an unregistered IA — the fixture can now drive a real delivery, see this test's doc comment: %s", res.Stdout)
 	}
-	// Not retryable, and blamed on the IA rather than reported as a bad
-	// token or a network problem: an agent has to be able to tell "pick a
-	// different Identity Authority" apart from "back off and retry".
-	assertTerminalFailure(t, res, "transfer to a connection target with an untrusted IA", "invalid_input")
-	if !strings.Contains(res.Stderr, "Identity Authority") {
-		t.Errorf("error should name the Identity Authority as the problem, got: %s", res.Stderr)
+	// Not retryable, and a policy refusal rather than a bad token or a
+	// network problem: NIP-CASH §Transferring refuses an untrusted IA with
+	// RESTRICTED (cashctl: auth), and the code alone does not say which
+	// policy it was.
+	assertTerminalFailure(t, res, "transfer to a connection target with an untrusted IA", "auth")
+	if got := nwcCodeFromError(t, res.Stderr); got != "RESTRICTED" {
+		t.Errorf("nwc_code = %q, want RESTRICTED: %s", got, res.Stderr)
 	}
 
 	// And the refusal must be clean: the money stays exactly where it was.

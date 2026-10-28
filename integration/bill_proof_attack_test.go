@@ -30,19 +30,26 @@ import (
 // hub at all and would fail for an unrelated reason.
 func retoken(t *testing.T, tok nipcash.Token, secret string) string {
 	t.Helper()
-	forged, err := nipcash.Encode(nipcash.Token{
-		HRP:                  tok.HRP,
-		WalletPubkey:         tok.WalletPubkey,
-		Secret:               secret,
-		RelayURLs:            tok.RelayURLs,
-		IdentityRequired:     tok.IdentityRequired,
-		MintSignature:        tok.MintSignature,
-		AttestedAmountMillis: tok.AttestedAmountMillis,
-	})
+	// A copy of the decoded token keeps every field the encoder needs (the
+	// provenance pair and its signature scheme among them).
+	tok.Secret = secret
+	forged, err := nipcash.Encode(tok)
 	if err != nil {
 		t.Fatalf("re-encode token: %v", err)
 	}
 	return forged
+}
+
+// requireSilence accepts the two barriers a bill with a forged connection
+// secret meets: the mint provenance covers the secret (through relay_hash), so
+// the client cannot verify the copy and never finds the Hub's private
+// transport, and a Hub that is reached anyway omits the item. Either way
+// nothing is answered.
+func requireSilence(t *testing.T, err error) {
+	t.Helper()
+	if msg := err.Error(); !strings.Contains(msg, "no answer") && !strings.Contains(msg, "announcement") {
+		t.Errorf("want an information-free omission, got %v", err)
+	}
 }
 
 // TestBillProofAttack_WrongConnectionSecretGetsSilence is the core attack: everything
@@ -79,9 +86,7 @@ func TestBillProofAttack_WrongConnectionSecretGetsSilence(t *testing.T) {
 	if err == nil {
 		t.Fatalf("a forged possession proof was SERVED (%+v) — a guessable wallet pubkey is now an oracle", res)
 	}
-	if !strings.Contains(err.Error(), "no answer") {
-		t.Errorf("want an information-free omission, got %v", err)
-	}
+	requireSilence(t, err)
 	// It must not leak that the bill exists, nor anything on it.
 	for _, leak := range []string{"NOT_FOUND", "no slice", "spent", pubA, pubB} {
 		if strings.Contains(err.Error(), leak) {
@@ -144,14 +149,9 @@ func TestBillProofAttack_AGuessedWalletPubkeyCannotEvenReachTheHub(t *testing.T)
 	}
 
 	// The real bill's relays and provenance, a wallet pubkey that is pure invention.
-	guessed, err := nipcash.Encode(nipcash.Token{
-		HRP:                  realTok.HRP,
-		WalletPubkey:         fakeHex32(t),
-		Secret:               fakeHex32(t),
-		RelayURLs:            realTok.RelayURLs,
-		MintSignature:        realTok.MintSignature,
-		AttestedAmountMillis: realTok.AttestedAmountMillis,
-	})
+	guessedTok := realTok
+	guessedTok.WalletPubkey, guessedTok.Secret, guessedTok.IdentityRequired = fakeHex32(t), fakeHex32(t), nil
+	guessed, err := nipcash.Encode(guessedTok)
 	if err != nil {
 		t.Fatalf("encode guessed token: %v", err)
 	}
@@ -231,9 +231,7 @@ func TestBillProofAttack_SpendMethodsAreGatedToo(t *testing.T) {
 	if redeemErr == nil {
 		t.Fatal("a redeem with a forged possession proof SUCCEEDED — this moves money")
 	}
-	if !strings.Contains(redeemErr.Error(), "no answer") {
-		t.Errorf("want an information-free omission, got %v", redeemErr)
-	}
+	requireSilence(t, redeemErr)
 
 	// The assertion that actually matters: the slice is still there, unspent.
 	walletID := walletAppIDForPubkey(t, admin, hub.ID, tok.WalletPubkey)

@@ -26,7 +26,8 @@ const kindFollowSet = 30000
 
 // followSetJoinAmount is what every member here asks for, small enough that
 // several members fit under followSetHubOpts' funding.
-const followSetJoinAmount = "10"
+// lokihub refuses a circle wallet cap under its fee reserve (11 loki).
+const followSetJoinAmount = "20"
 
 var followSetHubOpts = circleHubOpts{FundLoki: 1000}
 

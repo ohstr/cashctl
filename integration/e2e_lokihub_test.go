@@ -26,7 +26,7 @@ func e2eOrderTerms() map[string]any {
 	return map[string]any{
 		"terms": map[string]any{
 			"lightning": map[string]any{"min_millis": 1000, "max_millis": 1_000_000, "fee_base": 1000, "fee_ppm": 1000, "window": 600},
-			"onchain": map[string]any{"min_millis": 10_000, "max_millis": 1_000_000, "fee_base": 21000, "fee_ppm": 2000, "window": 3600,
+			"onchain": map[string]any{"min_millis": 10_000, "max_millis": 5_000_000, "fee_base": 21000, "fee_ppm": 2000, "window": 3600,
 				"confirmations": []map[string]any{{"n": 1}}},
 			"bill": map[string]any{"redeem_fee_base": 0, "redeem_fee_ppm": 0, "min_transfer_millis": 0},
 		},
@@ -115,7 +115,8 @@ func TestE2E_OrderOnchain_PaidAndConfirmed(t *testing.T) {
 	f := newFixture(t)
 	f.mustJSON("wallet", "init")
 
-	placed := f.mustJSON("cash", "order", "place", cashorder, lokiArg(20_000), "--onchain", "--to", "self")
+	// Large enough that its single output is not dust on the chain.
+	placed := f.mustJSON("cash", "order", "place", cashorder, lokiArg(1_000_000), "--onchain", "--to", "self")
 	id, _ := placed["order"].(string)
 	addr, _ := placed["address"].(string)
 	pay := uint64(mloki(placed, "pay_millis"))
@@ -127,13 +128,19 @@ func TestE2E_OrderOnchain_PaidAndConfirmed(t *testing.T) {
 	if txid == "" {
 		t.Fatal("payer pay-address: no txid")
 	}
+	// An on-chain order stays open until it expires or is closed and may gain
+	// more bills (NIP-CO §Client Behavior), so the wait is for the bill.
 	admin.mineUntil(t, 12, "on-chain order minted", func() bool {
-		return orderFinished(showOrder(t, f, id))
+		b, _ := showOrder(t, f, id)["bills"].([]any)
+		return len(b) > 0
 	})
 	o := showOrder(t, f, id)
 	bills, _ := o["bills"].([]any)
 	if len(bills) != 1 {
 		t.Fatalf("one on-chain output mints one bill, got %d: %v", len(bills), o)
+	}
+	if orderFinished(o) {
+		t.Errorf("an open on-chain order is not finished by its first bill: %v", o)
 	}
 	if b, _ := bills[0].(map[string]any); b["outpoint"] == nil || !strings.HasPrefix(b["outpoint"].(string), txid) {
 		t.Errorf("the bill names the paying outpoint %s: %v", txid, b)
@@ -303,8 +310,10 @@ func TestE2E_LostReply_TransferKilledAfterSendSettles(t *testing.T) {
 }
 
 // TestE2E_LostReply_TransferKilledBeforeSendStaysHeld kills cashctl after it
-// wrote the call ahead but before it sent it: the lookup answers unknown once
-// the deadline passes, and the bill is still held, unspent.
+// wrote the call ahead but before it sent it: the lookup answers that the Hub
+// never saw it once the deadline passes, so `cash settle` places it again
+// under its derived id (transfers and merges, at most three times), and the
+// transfer happens exactly once: the 300-loki remainder is held.
 func TestE2E_LostReply_TransferKilledBeforeSendStaysHeld(t *testing.T) {
 	admin := adminOrSkip(t)
 	hub := setUpCashHub(t, admin)
@@ -322,8 +331,11 @@ func TestE2E_LostReply_TransferKilledBeforeSendStaysHeld(t *testing.T) {
 		t.Fatalf("cash settle: exit %d\nstdout: %s\nstderr: %s", settled.ExitCode, settled.Stdout, settled.Stderr)
 	}
 	held, _ := f.mustJSON("wallet", "show")["held_tokens"].([]any)
-	if len(held) != 1 || uint64(mloki(held[0].(map[string]any), "amount_millis")) != 400_000 {
-		t.Fatalf("a call never sent leaves the bill held whole: %v", held)
+	if len(held) != 1 || uint64(mloki(held[0].(map[string]any), "amount_millis")) != 300_000 {
+		t.Fatalf("a call never sent is placed again once, leaving the 300-loki remainder held: %v", held)
+	}
+	if again := f.run("cash", "settle", "--no-wait", "--yes"); again.ExitCode != 0 {
+		t.Fatalf("nothing is left open after settle: exit %d %s", again.ExitCode, again.Stdout)
 	}
 }
 
@@ -332,10 +344,12 @@ func TestE2E_LostReply_TransferKilledBeforeSendStaysHeld(t *testing.T) {
 func TestE2E_LostReply_MintKilledAfterSendSettles(t *testing.T) {
 	admin := adminOrSkip(t)
 	hub := setUpCashHub(t, admin)
-	f, _ := newMember(t)
+	f, pub := newMember(t)
 	env := []string{"CASHCTL_CASH_HUB=" + *hub.CashHubToken, "CASHCTL_CRASHPOINT=calls.after_send"}
-	if res := f.runWith(env, "", "cash", "mint", lokiArg(25_000), "--to", "self"); res.ExitCode == 0 {
-		t.Fatalf("the crashpoint did not fire: %s", res.Stdout)
+	// `cash mint --to` takes the wallet's own key for a bill held here (there
+	// is no "self" shorthand on mint); a crash point kills with SIGKILL.
+	if res := f.runWith(env, "", "cash", "mint", lokiArg(25_000), "--to", pub); res.ExitCode != 137 && res.ExitCode != -1 {
+		t.Fatalf("the crashpoint did not fire: exit %d\nstdout: %s\nstderr: %s", res.ExitCode, res.Stdout, res.Stderr)
 	}
 	settled := f.runWith([]string{"CASHCTL_CASH_HUB=" + *hub.CashHubToken}, "", "cash", "settle", "--wait", "--yes")
 	if settled.ExitCode != 0 {

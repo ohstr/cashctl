@@ -323,15 +323,9 @@ func TestSpentBill_NonHolderGetsSilence(t *testing.T) {
 	// An attacker with all of this and no secret is the realistic case: a wallet
 	// pubkey is public, relay hints travel with the bill, and provenance is
 	// verifiable by anyone.
-	forged, err := nipcash.Encode(nipcash.Token{
-		HRP:                  tok.HRP,
-		WalletPubkey:         tok.WalletPubkey,
-		Secret:               fakeHex32(t),
-		RelayURLs:            tok.RelayURLs,
-		IdentityRequired:     tok.IdentityRequired,
-		MintSignature:        tok.MintSignature,
-		AttestedAmountMillis: tok.AttestedAmountMillis,
-	})
+	forgedTok := tok
+	forgedTok.Secret = fakeHex32(t)
+	forged, err := nipcash.Encode(forgedTok)
 	if err != nil {
 		t.Fatalf("re-encode token with a forged connection secret: %v", err)
 	}
@@ -350,9 +344,7 @@ func TestSpentBill_NonHolderGetsSilence(t *testing.T) {
 	if err == nil {
 		t.Fatalf("a guessed wallet pubkey got an answer about a destroyed bill: %+v", res)
 	}
-	if !strings.Contains(err.Error(), "no answer") {
-		t.Errorf("want an information-free omission, got %v", err)
-	}
+	requireSilence(t, err)
 	if strings.Contains(err.Error(), "spent") {
 		t.Errorf("the refusal confirmed the bill had existed: %v", err)
 	}

@@ -122,22 +122,29 @@ func TestCashTransfer_ExpiredWallet_ClassifiedAsAuth(t *testing.T) {
 	waitPastCashExpiry()
 
 	res := f.run("transfer", fakeHex32(t), "--yes")
-	if res.ExitCode != 7 {
-		t.Fatalf("transfer on an expired wallet: exit = %d, want 7 (auth)\nstdout: %s\nstderr: %s", res.ExitCode, res.Stdout, res.Stderr)
+	if res.ExitCode == 10 {
+		// The Hub's expiry sweep already destroyed the bill (lokihub sweeps
+		// expired bills within seconds): its tombstone (reason expired, NIP-CASH
+		// §Answering About a Destroyed Bill) is reported spent, and the entry
+		// stops being held.
+		if !jsonErrorContains(t, res.Stderr, "spent", "") {
+			t.Errorf("unexpected error body: %s", res.Stderr)
+		}
+		if n := heldCount(t, f); n != 0 {
+			t.Errorf("a swept bill is no longer held, got %d held", n)
+		}
+		return
 	}
-	// --json's "error" field is now the wallet's own raw message
-	// (CLIError.RawMessage, see internal/output/errors.go), not cashctl's
-	// generic "This wallet has expired..." translation — lokihub phrases
-	// this specific decline as a "redemption deadline ... has passed",
-	// never the literal word "expired", so check for either the way
-	// TestDecodeCheck_ExpiredCashToken_ReportsAccurateDeadlineMessage
-	// (this same file) already does, rather than assuming one exact
-	// phrasing.
-	if !jsonErrorContainsAny(t, res.Stderr, "auth", "deadline", "expired") {
+	if res.ExitCode != 7 {
+		t.Fatalf("transfer on an expired wallet: exit = %d, want 7 (auth), or 10 (spent) once swept\nstdout: %s\nstderr: %s", res.ExitCode, res.Stdout, res.Stderr)
+	}
+	// NIP-CASH §Transferring, step 1: a slice past its expiry is refused with
+	// RESTRICTED (NIP-CASH has no EXPIRED code).
+	if !jsonErrorContains(t, res.Stderr, "auth", "") {
 		t.Errorf("unexpected error body: %s", res.Stderr)
 	}
-	if got := nwcCodeFromError(t, res.Stderr); got != "EXPIRED" {
-		t.Errorf("nwc_code = %q, want EXPIRED", got)
+	if got := nwcCodeFromError(t, res.Stderr); got != "RESTRICTED" {
+		t.Errorf("nwc_code = %q, want RESTRICTED: %s", got, res.Stderr)
 	}
 	if n := heldCount(t, f); n != 1 {
 		t.Errorf("a rejected transfer must leave the token held, got %d held", n)
@@ -760,14 +767,14 @@ func TestDecodeCheck_ExpiredCircleHub_StillReportsJoinable(t *testing.T) {
 	}
 	// The gap itself can't be closed (see above), but ok:true must not be
 	// left looking like an unqualified guarantee — note should say so.
-	if note, _ := check["note"].(string); !strings.Contains(note, "expired") && !strings.Contains(note, "allowlisted") {
+	if note, _ := check["note"].(string); !strings.Contains(note, "expired") && !strings.Contains(note, "allowlisted") && !strings.Contains(note, "allowed in") {
 		t.Errorf(`decode --check "note" = %q, want it to caveat that this doesn't confirm expiry/allowlist status`, note)
 	}
 
 	// Half 2: an actual join is correctly rejected anyway — cashctl's own
 	// error classification is fine here; it's only the pre-flight --check
 	// that can't see this coming.
-	res := f.run("join", "--hub", *hubResp.CircleHubToken, "--max-amount", "100", "--yes")
+	res := f.run("join", "--hub", *hubResp.CircleHubToken, "--max-amount", "100", "--yes", "--accept-no-rotation")
 	if res.ExitCode != 7 {
 		t.Fatalf("join against an already-expired circle_hub: exit = %d, want 7 (auth)\nstdout: %s\nstderr: %s", res.ExitCode, res.Stdout, res.Stderr)
 	}

@@ -72,8 +72,8 @@ func TestCircleJoin_PrivateWhenOffered(t *testing.T) {
 		f    *fixture
 		args []string
 	}{
-		{"join", byDefault, []string{"join", *hub.CircleHubToken, "10"}},
-		{"circle join", required, []string{"circle", "join", *hub.CircleHubToken, "10"}},
+		{"join", byDefault, []string{"join", *hub.CircleHubToken, "20"}},
+		{"circle join", required, []string{"circle", "join", *hub.CircleHubToken, "20"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			stop := countPrivateRequests(t, relay, inbox)
