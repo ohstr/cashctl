@@ -13,6 +13,7 @@ import (
 	"github.com/ohstr/nmilat/nipCO"
 	"github.com/ohstr/nmilat/nipcash"
 	nipcashclient "github.com/ohstr/nmilat/nipcash/client"
+	relayclient "github.com/ohstr/nmilat/relay/client"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
@@ -617,12 +618,18 @@ func sendWithdrawal(cmd *cobra.Command, e *ledger.Entry, q *nipcash.WithdrawQuot
 			return output.WithReason(pErr, reasonReceiptInvalid)
 		}
 		var ind *nipcashclient.IndeterminateError
-		if c := j.call(); c != nil && errors.As(err, &ind) && quoteRefused(ind.Detail) {
+		if c := j.call(); c != nil && errors.As(err, &ind) && ind.Code != "" {
+			// A coded refusal at step 3 (quote_expired, quote_invalid,
+			// own_address, unfinal, RATE_LIMITED, INSUFFICIENT_BALANCE, ...)
+			// leaves the slice claimable, but an id-bearing code is only final
+			// once the lookup after the deadline says unknown (R2-C4, W-6).
 			pErr := placeErr(cmd, l, &j.ledgerJournal, err, "withdrawal", e.ID)
-			w := j.w
-			w.QuoteExpiredSeen = true
-			_ = ledger.PutWithdrawal(w)
-			// Confirm with the Hub that nothing moved before quoting again.
+			if quoteRefused(ind.Detail) {
+				w := j.w
+				w.QuoteExpiredSeen = true
+				_ = ledger.PutWithdrawal(w)
+			}
+			// Confirm with the Hub that nothing moved before reporting it.
 			waitFn(time.Until(time.Unix(c.Deadline+1, 0)))
 			l2, lErr := ledger.Load()
 			if lErr != nil {
@@ -632,8 +639,14 @@ func sendWithdrawal(cmd *cobra.Command, e *ledger.Entry, q *nipcash.WithdrawQuot
 			if c2, ok := l2.FindCall(c.CallID); ok && c2.Open() {
 				settleWithdrawCall(cmd, l2, c2, device)
 			}
-			if c2, ok := l2.FindCall(c.CallID); ok && c2.State == ledger.CallNotApplied {
+			c2, ok := l2.FindCall(c.CallID)
+			switch {
+			case ok && c2.State == ledger.CallNotApplied && quoteRefused(ind.Detail):
 				return errQuoteExpired
+			case ok && c2.State == ledger.CallNotApplied:
+				return output.WithDetail(output.NWCErrorForCashToken(cmd, &relayclient.WalletError{Method: c2.Method, Code: ind.Code,
+					Message: "the Hub refused this withdrawal (" + refusalText(ind.Code, ind.Detail) + ") and never applied it; nothing moved, and the bill is still yours"}),
+					ind.Detail)
 			}
 			return pErr
 		}
@@ -890,6 +903,14 @@ func txCheck(w ledger.Withdrawal, p nipcash.Payout) string {
 
 // quoteRefused reports a step-3 refusal of the quote itself (quote_expired,
 // or quote_invalid): nothing moved, and only a new quote can go on.
+// refusalText is a refusal's code with its detail, when it has one.
+func refusalText(code, detail string) string {
+	if detail == "" {
+		return code
+	}
+	return code + "/" + detail
+}
+
 func quoteRefused(detail string) bool {
 	return detail == string(nipcash.DetailQuoteExpired) || detail == string(nipcash.DetailQuoteInvalid)
 }

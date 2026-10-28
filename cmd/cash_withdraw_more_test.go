@@ -394,3 +394,37 @@ func TestWithdraw_QuoteInvalidIsLikeExpired(t *testing.T) {
 		t.Errorf("withdrawal %+v", ws)
 	}
 }
+
+// R2-C4 (W-6): every coded step-3 refusal, not only quote_expired, is looked
+// up once after the deadline in the same run: unknown ends it not applied,
+// with its code, instead of exit 8 until a later settle.
+func TestWithdraw_CodedRefusalIsSettledInTheSameRun(t *testing.T) {
+	for _, tc := range []struct{ code, detail string }{
+		{"RATE_LIMITED", ""}, {"INSUFFICIENT_BALANCE", ""}, {"RESTRICTED", string(nipcash.DetailOwnAddress)},
+	} {
+		t.Run(tc.code+tc.detail, func(t *testing.T) {
+			f, _ := setUpWithdraw(t)
+			f.answer = func(pc nipcash.PendingCall) (*nipcash.Payout, error) {
+				pc.LastCode = tc.code
+				return nil, &nipcashclient.IndeterminateError{Call: pc, Code: tc.code, Detail: tc.detail}
+			}
+			looked := 0
+			f.lookup = func(nipcash.PendingCall) (nipcashclient.LookupOutcome, *nipcash.Payout, error) {
+				looked++
+				return nipcashclient.LookupOutcome{Status: nipcash.LookupUnknown}, nil, nil
+			}
+			prevW := waitFn
+			waitFn = func(time.Duration) {}
+			t.Cleanup(func() { waitFn = prevW })
+			handle := runWithdrawQuote(t)["quote"].(string)
+			_, err := runWithdrawSend(t, nil, map[string]string{"quote": handle, "yes": "true"})
+			if ce := output.AsCLIError(err); ce == nil || output.ExitCode(err) == 8 || ce.Detail != tc.detail {
+				t.Fatalf("err %v: want a final refusal with detail %q, not exit 8", err, tc.detail)
+			}
+			ws, _ := ledger.Withdrawals()
+			if looked != 1 || len(ws) != 1 || ws[0].State != ledger.WithdrawNotApplied {
+				t.Errorf("looked up %d, withdrawals %+v", looked, ws)
+			}
+		})
+	}
+}
