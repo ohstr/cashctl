@@ -32,13 +32,6 @@ func TestCircleJoin_RefusedTerms(t *testing.T) {
 			exit: 3, code: "invalid_input", nwcCode: "",
 		},
 		{
-			// Under lokihub's minimum cap (its 11-loki fee reserve): the Hub's
-			// LIMIT_EXCEEDED, retryable with other values (NIP-CW §Errors).
-			name: "cap under the hub's minimum",
-			args: []string{"0.5"},
-			exit: 3, code: "invalid_input", nwcCode: "LIMIT_EXCEEDED",
-		},
-		{
 			name: "cap over the per-wallet maximum",
 			opts: circleHubOpts{PerWalletMaxMloki: 50_000},
 			args: []string{"60"},
@@ -59,6 +52,19 @@ func TestCircleJoin_RefusedTerms(t *testing.T) {
 			}
 		})
 	}
+
+	// NIP-CW step 6 checks no floor on max_amount, and get_info has no field
+	// to advertise one: a cap under lokihub's fee reserve (11 loki) is
+	// granted, a wallet that pays only inside the circle.
+	t.Run("cap under the fee reserve is granted", func(t *testing.T) {
+		f, pub := newMember(t)
+		hub := setUpCircleHub(t, admin, pub)
+		joined := f.mustJSON("join", *hub.CircleHubToken, "5")
+		resp, _ := joined["response"].(map[string]any)
+		if got, _ := resp["max_amount_millis"].(float64); got != 5_000 {
+			t.Errorf("max_amount_millis = %v, want 5000: %v", resp["max_amount_millis"], resp)
+		}
+	})
 
 	t.Run("zero cap is refused before anything is sent", func(t *testing.T) {
 		f, pub := newMember(t)

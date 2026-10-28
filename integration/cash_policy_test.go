@@ -38,7 +38,7 @@ func TestCircleWallet_BudgetCapDeclineIsCleanAndWalletStaysUsable(t *testing.T) 
 	if circleHub.CircleHubToken == nil || *circleHub.CircleHubToken == "" {
 		t.Fatalf("create ephemeral circle_hub: no circleHubToken in response: %+v", circleHub)
 	}
-	// Above lokihub's minimum cap (its 11-loki fee reserve).
+	// Above lokihub's fee reserve (11 loki), so an external payment fits.
 	const capMloki = uint64(20_000)
 	joinResp := u.mustJSON("join", "--hub", *circleHub.CircleHubToken, "--max-amount", "20", "--yes")
 	if walletName, _ := joinResp["wallet"].(string); walletName == "" {
