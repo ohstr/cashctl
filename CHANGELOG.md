@@ -2,6 +2,22 @@
 
 ## [0.7.0-rc.1]
 
+- Refuses to quote or withdraw a bill still on a merge's throwaway key
+  (`mid_merge`); `cash settle` now turns merge leftovers back into cash notes,
+  as every money command does. See `docs/client-rules.md`.
+- Says when a cancelled payout's re-minted bill is already gone
+  (`remint_gone`, with the Hub's reason), instead of closing it silently.
+- Refuses an `--invoice` redeem of a connection-key bill whose own row its Hub
+  won't show (`status_unreadable`), so it can no longer stay `redeeming` for
+  ever.
+- Settles every coded withdrawal refusal in the same run, not only a refused
+  quote, and follows another copy's withdrawal named in answer to a
+  re-placement.
+- Fixes a consolidate tombstone marking the wrong bill spent when the first
+  candidate could not be dialled or the first source was not held here.
+- Ends an order `not_placed` when its call closes without placing, writes a
+  forgotten closed order and a recovered withdrawal in one save, and looks a
+  closed on-chain order up at most hourly.
 - Adds `circle request rotate|freeze|unfreeze`: a member request signed by the
   key that joined, for the circle's host to submit. A rotate's new key is
   written down before the request is printed, `cash settle` installs it once
