@@ -154,7 +154,7 @@ func showOrders(cmd *cobra.Command, ids []string, local bool) error {
 		}
 		device, _ := deviceIDFn()
 		for _, o := range pick {
-			if c, ok := l.FindCall(o.CallID); ok && c.Open() {
+			if c, ok := l.FindCall(o.CallID); ok && c.Open() && (len(ids) > 0 || !closedOrderNotDue(c, time.Now().Unix())) {
 				settleOrderCall(cmd, l, c, device)
 			}
 		}
@@ -417,7 +417,7 @@ func runCashOrderSettle(cmd *cobra.Command, args []string) error {
 			continue
 		}
 		c, ok := l.FindCall(o.CallID)
-		if !ok || !c.Open() {
+		if !ok || !c.Open() || (len(args) == 0 && closedOrderNotDue(c, time.Now().Unix())) {
 			continue
 		}
 		settleOrderCall(cmd, l, c, device)
@@ -432,6 +432,36 @@ func runCashOrderSettle(cmd *cobra.Command, args []string) error {
 		return output.IndeterminateError(cmd, "", errors.New("an order's placement still has no answer; nothing was resent"))
 	}
 	return nil
+}
+
+// closedOrderRecheck is how often a closed on-chain order, watched only for
+// late payments to its address, is looked up again (R2-C7).
+const closedOrderRecheck = int64(3600)
+
+// closedOrderWatched reports an answered order (open_order) whose row is
+// finished: a closed on-chain order kept only for late payments.
+func closedOrderWatched(c *ledger.Call) bool {
+	_, ok := closedOrderRow(c)
+	return ok
+}
+
+func closedOrderRow(c *ledger.Call) (ledger.Order, bool) {
+	if c.Method != nipcash.MethodCashOrder || c.State != ledger.CallOpenOrder {
+		return ledger.Order{}, false
+	}
+	o, ok, err := ledger.OrderForCall(c.CallID)
+	if err != nil || !ok || o.FinishedAt == 0 {
+		return ledger.Order{}, false
+	}
+	return o, true
+}
+
+// closedOrderNotDue reports a closed on-chain order looked up less than
+// closedOrderRecheck ago: `cash settle` and `cash order show` skip it until
+// then; naming the order still reads it at once.
+func closedOrderNotDue(c *ledger.Call, now int64) bool {
+	o, ok := closedOrderRow(c)
+	return ok && o.CheckedAt != 0 && now-o.CheckedAt < closedOrderRecheck
 }
 
 // endOrphanedPlacing ends every `placing` row whose call already closed not

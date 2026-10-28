@@ -500,14 +500,26 @@ func TestOrder_ClosedOnchainCollectsLaterBills(t *testing.T) {
 	if l, _ := ledger.Load(); len(l.Held()) != 1 {
 		t.Fatalf("held %d, want 1", len(l.Held()))
 	}
-	// A later payment to the closed order's address is minted.
+	// A later payment to the closed order's address is minted, once the
+	// closed order is due again (R2-C7).
 	bills = append(bills, f.billFor(50_000))
+	if _, _, err := showAllOrders(t); err != nil {
+		t.Fatalf("show: %v", err)
+	}
+	if l, _ := ledger.Load(); len(l.Held()) != 1 {
+		t.Fatalf("held %d: a closed order checked just now was read again", len(l.Held()))
+	}
+	if c := onlyOrderCall(t); nextStep(c, "") == nextStep(&ledger.Call{State: ledger.CallOpenOrder, Method: nipcash.MethodCashOrder}, "") {
+		t.Errorf("next step %q: want the closed-order step, not \"pay the order\"", nextStep(c, ""))
+	}
+	staleOrderChecks(t)
 	if _, _, err := showAllOrders(t); err != nil {
 		t.Fatalf("show: %v", err)
 	}
 	if l, _ := ledger.Load(); len(l.Held()) != 2 {
 		t.Fatalf("held %d after a later bill, want 2", len(l.Held()))
 	}
+	staleOrderChecks(t)
 	if err := settleOrders(t, nil); err != nil {
 		t.Fatalf("settle again: %v", err)
 	}
@@ -518,6 +530,7 @@ func TestOrder_ClosedOnchainCollectsLaterBills(t *testing.T) {
 	f.lookup = func(nipcash.PendingCall) (nipcashclient.LookupOutcome, *nipCO.Order, error) {
 		return nipcashclient.LookupOutcome{Status: nipcash.LookupUnknown}, nil, nil
 	}
+	staleOrderChecks(t)
 	_ = settleOrders(t, nil)
 	if o, c := onlyOrder(t); c.State != ledger.CallDone || o.State != string(nipCO.OrderClosed) {
 		t.Errorf("after unknown: order %s, call %s", o.State, c.State)
@@ -692,6 +705,7 @@ func TestOrder_ClosedOnchainForgottenWritesCallAndRowTogether(t *testing.T) {
 	f.lookup = func(nipcash.PendingCall) (nipcashclient.LookupOutcome, *nipCO.Order, error) {
 		return nipcashclient.LookupOutcome{Status: nipcash.LookupUnknown}, nil, nil
 	}
+	staleOrderChecks(t)
 	db, err := store.Open()
 	if err != nil {
 		t.Fatal(err)
@@ -711,8 +725,28 @@ func TestOrder_ClosedOnchainForgottenWritesCallAndRowTogether(t *testing.T) {
 		}
 	}
 	_ = db.Close()
+	staleOrderChecks(t)
 	_ = settleOrders(t, nil)
 	if o2, c := onlyOrder(t); c.State != ledger.CallDone || o2.CheckedAt == 0 {
 		t.Errorf("call %s, order checked %d", c.State, o2.CheckedAt)
 	}
+}
+
+// staleOrderChecks makes every order's last check older than
+// closedOrderRecheck, so a closed order is due again.
+func staleOrderChecks(t *testing.T) {
+	t.Helper()
+	orders, _ := ledger.Orders()
+	for _, o := range orders {
+		if o.CheckedAt != 0 {
+			o.CheckedAt -= closedOrderRecheck + 1
+			_ = ledger.PutOrder(o)
+		}
+	}
+}
+
+func onlyOrderCall(t *testing.T) *ledger.Call {
+	t.Helper()
+	_, c := onlyOrder(t)
+	return c
 }

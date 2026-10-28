@@ -282,6 +282,9 @@ func settleCalls(cmd *cobra.Command, l *ledger.Ledger, opts settleOptions) []set
 		if !opts.all && !due(c, time.Now().Unix()) {
 			continue
 		}
+		if closedOrderNotDue(c, time.Now().Unix()) {
+			continue
+		}
 		var summary string
 		switch c.Method {
 		case nipcash.MethodCashOrder:
@@ -780,6 +783,8 @@ func nextStep(c *ledger.Call, device string) string {
 		return "the payout is followed: `cashctl cash withdraw show`"
 	case c.Method == nipcash.MethodCashWithdraw && c.Detail == "confirm_replace":
 		return "the Hub says this withdrawal never arrived: `cashctl cash withdraw settle --replace <withdrawal> --yes` sends it again"
+	case c.State == ledger.CallOpenOrder && closedOrderWatched(c):
+		return "the order is closed; a later payment to its address is still collected: `cashctl cash order show`"
 	case c.State == ledger.CallOpenOrder:
 		return "pay the order, then `cashctl cash order show` collects its bills"
 	case c.Method == nipcash.MethodCashOrder && c.Detail == "confirm_replace":
