@@ -95,6 +95,11 @@ func checkHandoff(note string) string {
 	// A secret that no longer matches: someone took the note and re-keyed it.
 	case errors.As(err, &gone), errors.Is(err, nipcash.ErrClaimNotFound), isWrongSecretDecline(err):
 		return ledger.HandoffClaimed
+	// The note's one row carries another commitment: a cash-mode bill's status
+	// is answered from the bill proof alone (NIP-CASH §Scoping the Roster), so
+	// a note the taker re-keyed in place still answers, under their secret.
+	case errors.Is(err, nipcash.ErrMineWidened):
+		return ledger.HandoffClaimed
 	case errors.As(err, &walletErr) && walletErr.Code == "EXPIRED":
 		return ledger.HandoffExpired
 	}
