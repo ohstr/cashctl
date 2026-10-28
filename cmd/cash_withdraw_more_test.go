@@ -16,6 +16,7 @@ import (
 	"github.com/ohstr/cashctl/internal/dial"
 	"github.com/ohstr/cashctl/internal/ledger"
 	"github.com/ohstr/cashctl/internal/output"
+	"github.com/ohstr/cashctl/internal/store"
 	"github.com/ohstr/cashctl/internal/testmint"
 )
 
@@ -426,5 +427,37 @@ func TestWithdraw_CodedRefusalIsSettledInTheSameRun(t *testing.T) {
 				t.Errorf("looked up %d, withdrawals %+v", looked, ws)
 			}
 		})
+	}
+}
+
+// R2-C5: a recovered withdrawal's call and row are written in one save; a
+// recovered call found with no row (an older store) is never closed as "not
+// sent": its row is rebuilt and the payout followed.
+func TestWithdraw_RecoveredCallIsNeverReadAsNotSent(t *testing.T) {
+	_, entryID := setUpWithdraw(t)
+	l, _ := ledger.Load()
+	e, _ := l.Find(entryID)
+	rid, _ := nipcash.NewRequestID()
+	w, err := recoverWithdrawal(withdrawCmd(newCashStatusCmd(), nil), l, e, rid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok, _ := ledger.WithdrawalForCall(w.CallID); !ok || !got.Recovered {
+		t.Fatalf("row %+v (%v): want it written with the call", got, ok)
+	}
+	db, err := store.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`DELETE FROM withdrawals`); err != nil {
+		t.Fatal(err)
+	}
+	_ = db.Close()
+	l, _ = ledger.Load()
+	c, _ := l.FindCall(w.CallID)
+	summary, got := settleWithdrawOne(withdrawCmd(newCashStatusCmd(), nil), l, c, "this-device")
+	c, _ = l.FindCall(w.CallID)
+	if c.State == ledger.CallNotApplied || got == nil || !got.Recovered {
+		t.Errorf("summary %q, call %s/%s, row %+v: want the recovered withdrawal followed", summary, c.State, c.Detail, got)
 	}
 }

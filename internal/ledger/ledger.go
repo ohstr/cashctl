@@ -246,6 +246,9 @@ type Ledger struct {
 
 	// stagedOrders are orders the next Save writes with the calls (StageOrder).
 	stagedOrders []Order
+	// stagedWithdrawals are withdrawals the next Save writes with the calls
+	// (StageWithdrawal).
+	stagedWithdrawals []Withdrawal
 
 	loadedCalls  map[string]Call
 	callVersions map[string]int64
@@ -670,11 +673,16 @@ func (l *Ledger) save() error {
 			return err
 		}
 	}
+	for _, w := range l.stagedWithdrawals {
+		if err := putWithdrawal(tx, w); err != nil {
+			return err
+		}
+	}
 
 	if err := tx.Commit(); err != nil {
 		return err
 	}
-	l.stagedOrders = nil
+	l.stagedOrders, l.stagedWithdrawals = nil, nil
 	l.snapshotCalls(callVersions)
 
 	// Re-baseline against what was just committed. This is NOT hypothetical, and

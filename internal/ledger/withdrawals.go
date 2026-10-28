@@ -54,27 +54,37 @@ func ns(v string) sql.NullString { return sql.NullString{String: v, Valid: v != 
 
 // PutWithdrawal writes w (insert or replace).
 func PutWithdrawal(w Withdrawal) error {
-	relays, _ := json.Marshal(w.AcceptedRelays)
 	return store.WithBusyRetry(func() error {
 		db, err := store.Open()
 		if err != nil {
 			return err
 		}
 		defer func() { _ = db.Close() }()
-		_, err = db.Exec(`INSERT OR REPLACE INTO withdrawals (withdrawal_id, call_id, source_entry_id, wallet_pubkey,
-			hub_identity, address, quote_json, quote_id, amount_millis, network_fee_millis, hub_fee_millis, fee_millis,
-			payout_millis, sent_by, holds_until, send_before, notify, accepted_relays, state, payout_json, remint_entry_id,
-			quote_expired_seen, confirmed_at, checked_at, finished_at, recovered)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			w.WithdrawalID, w.CallID, w.SourceEntryID, w.WalletPubkey, w.HubIdentity, ns(w.Address), ns(w.QuoteJSON),
-			ns(w.QuoteID), w.AmountMillis, w.NetworkFeeMillis, w.HubFeeMillis, w.FeeMillis, w.PayoutMillis, w.SentBy,
-			nz(w.HoldsUntil), nz(w.SendBefore), w.Notify, string(relays), w.State, ns(w.PayoutJSON), ns(w.RemintEntryID),
-			w.QuoteExpiredSeen, nz(w.ConfirmedAt), nz(w.CheckedAt), nz(w.FinishedAt), w.Recovered)
-		if err != nil {
-			return fmt.Errorf("cashctl.db: saving withdrawal %s: %w", w.WithdrawalID, err)
-		}
-		return nil
+		return putWithdrawal(db, w)
 	})
+}
+
+// StageWithdrawal has the next Save write w in the same transaction as the
+// calls and entries, so a withdrawal and its call are written together.
+func (l *Ledger) StageWithdrawal(w Withdrawal) {
+	l.stagedWithdrawals = append(l.stagedWithdrawals, w)
+}
+
+func putWithdrawal(db execer, w Withdrawal) error {
+	relays, _ := json.Marshal(w.AcceptedRelays)
+	_, err := db.Exec(`INSERT OR REPLACE INTO withdrawals (withdrawal_id, call_id, source_entry_id, wallet_pubkey,
+		hub_identity, address, quote_json, quote_id, amount_millis, network_fee_millis, hub_fee_millis, fee_millis,
+		payout_millis, sent_by, holds_until, send_before, notify, accepted_relays, state, payout_json, remint_entry_id,
+		quote_expired_seen, confirmed_at, checked_at, finished_at, recovered)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		w.WithdrawalID, w.CallID, w.SourceEntryID, w.WalletPubkey, w.HubIdentity, ns(w.Address), ns(w.QuoteJSON),
+		ns(w.QuoteID), w.AmountMillis, w.NetworkFeeMillis, w.HubFeeMillis, w.FeeMillis, w.PayoutMillis, w.SentBy,
+		nz(w.HoldsUntil), nz(w.SendBefore), w.Notify, string(relays), w.State, ns(w.PayoutJSON), ns(w.RemintEntryID),
+		w.QuoteExpiredSeen, nz(w.ConfirmedAt), nz(w.CheckedAt), nz(w.FinishedAt), w.Recovered)
+	if err != nil {
+		return fmt.Errorf("cashctl.db: saving withdrawal %s: %w", w.WithdrawalID, err)
+	}
+	return nil
 }
 
 const withdrawalColumns = `withdrawal_id, call_id, source_entry_id, wallet_pubkey, hub_identity, address, quote_json,

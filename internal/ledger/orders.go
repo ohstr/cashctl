@@ -91,6 +91,9 @@ func (l *Ledger) StageOrder(o Order) {
 // DropStagedOrders forgets orders staged and not yet saved.
 func (l *Ledger) DropStagedOrders() { l.stagedOrders = nil }
 
+// DropStagedWithdrawals forgets withdrawals staged and not yet saved.
+func (l *Ledger) DropStagedWithdrawals() { l.stagedWithdrawals = nil }
+
 // DeleteOrder removes an order row.
 func DeleteOrder(id string) error {
 	return store.WithBusyRetry(func() error {

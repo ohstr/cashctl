@@ -36,6 +36,16 @@ func settleWithdrawOne(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, dev
 	if err != nil {
 		return "no withdrawal record", nil
 	}
+	if !ok && c.DeviceID == ledger.DeviceRecovered {
+		// A recovered withdrawal was sent from another copy: never "not sent".
+		// A store written before its call and row shared one save may lack the
+		// row; it is rebuilt and the payout followed (R2-C5).
+		w = recoveredRow(l, c)
+		if err := ledger.PutWithdrawal(w); err != nil {
+			return "no withdrawal record", nil
+		}
+		ok = true
+	}
 	if !ok {
 		// The row is written before anything is sent: a call without one
 		// stopped between its two writes and never went out.
@@ -411,6 +421,17 @@ func withdrawRequestIDOf(res *nipcash.CashStatusResult) string {
 // and a call of device "recovered" is looked up with that request id. It is
 // never re-placed; its receipt is checked against the payout it answers with,
 // and its quote id is taken from the receipt.
+// recoveredRow is the row of a recovered withdrawal's call, as
+// recoverWithdrawal writes it.
+func recoveredRow(l *ledger.Ledger, c *ledger.Call) ledger.Withdrawal {
+	w := ledger.Withdrawal{WithdrawalID: c.CallID, CallID: c.CallID, HubIdentity: c.HubIdentity, WalletPubkey: c.Target,
+		AmountMillis: c.AmountMillis, State: ledger.WithdrawSending, Recovered: true}
+	if len(c.SourceEntryIDs) > 0 {
+		w.SourceEntryID = c.SourceEntryIDs[0]
+	}
+	return w
+}
+
 func recoverWithdrawal(cmd *cobra.Command, l *ledger.Ledger, e *ledger.Entry, rid string) (ledger.Withdrawal, error) {
 	kind, pub, secret := authorizerOf(cmd, e, nil)
 	var amount uint64
@@ -428,10 +449,14 @@ func recoverWithdrawal(cmd *cobra.Command, l *ledger.Ledger, e *ledger.Entry, ri
 	callID := c.CallID
 	_ = l.SetStatus(e.ID, ledger.StatusWithdrawn)
 	l.AppendHistory("withdraw", "found a withdrawal this device has no record of (withdrawal "+callID+")")
-	if err := l.Save(); err != nil {
-		return ledger.Withdrawal{}, err
-	}
+	// The call, the bill's status and the row go in one save: a call with no
+	// row reads as never sent (R2-C5).
 	w := ledger.Withdrawal{WithdrawalID: callID, CallID: callID, SourceEntryID: e.ID, WalletPubkey: e.WalletPubkey,
 		HubIdentity: xOnlyMinter(e), AmountMillis: amount, State: ledger.WithdrawSending, Recovered: true}
-	return w, ledger.PutWithdrawal(w)
+	l.StageWithdrawal(w)
+	if err := l.Save(); err != nil {
+		l.DropStagedWithdrawals()
+		return ledger.Withdrawal{}, err
+	}
+	return w, nil
 }
