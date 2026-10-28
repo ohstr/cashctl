@@ -27,6 +27,9 @@ var nwcErrorCode = map[string]ErrorCode{
 	// NIP-CW join: the identity already holds a wallet under this Hub. Not
 	// retryable, and not RESTRICTED's "not a member" either.
 	nipcw.ErrWalletExists: CodeExists,
+	// NIP-CW join: a requested limit the Hub does not grant, retryable with
+	// other values; the same as cashctl's own over_hub_limit refusal.
+	nipcw.ErrLimitExceeded: CodeInvalidInput,
 	// NIP-CW member requests: a frozen wallet's key is refused until an
 	// unfreeze or a completed rotation; a second rotation waits for the first.
 	nipcw.ErrFrozen:          CodeAuth,
@@ -59,6 +62,7 @@ var nwcErrorMessages = map[string]string{
 	"BAD_REQUEST":            "That request wasn't valid.",
 	nipcw.ErrNotReady:        "The Hub isn't ready yet. Wait a moment and try again.",
 	nipcw.ErrWalletExists:    "You already hold a wallet from this circle.",
+	nipcw.ErrLimitExceeded:   "The Hub doesn't grant those terms; join again with other values.",
 	nipcw.ErrFrozen:          "This wallet is frozen by a member request; it moves funds again only after an unfreeze (`cashctl circle request unfreeze`) or a completed rotation.",
 	nipcw.ErrRotationPending: "This wallet already has a rotation pending; wait until it completes or is cancelled.",
 }
