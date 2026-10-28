@@ -158,6 +158,7 @@ func showOrders(cmd *cobra.Command, ids []string, local bool) error {
 				settleOrderCall(cmd, l, c, device)
 			}
 		}
+		endOrphanedPlacing(l, pick)
 	}
 	var views []map[string]any
 	for _, o := range pick {
@@ -409,6 +410,7 @@ func runCashOrderSettle(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return output.RuntimeError(cmd, err)
 	}
+	endOrphanedPlacing(l, orders)
 	stillOpen := false
 	for _, o := range orders {
 		if len(args) == 1 && o.OrderID != args[0] {
@@ -430,6 +432,25 @@ func runCashOrderSettle(cmd *cobra.Command, args []string) error {
 		return output.IndeterminateError(cmd, "", errors.New("an order's placement still has no answer; nothing was resent"))
 	}
 	return nil
+}
+
+// endOrphanedPlacing ends every `placing` row whose call already closed not
+// applied: a crash between the call's close and the row's write, or a store
+// written before both went into one save (R2-C2).
+func endOrphanedPlacing(l *ledger.Ledger, orders []ledger.Order) {
+	staged := false
+	for _, o := range orders {
+		if o.FinishedAt != 0 || o.State != ledger.OrderPlacing {
+			continue
+		}
+		if c, ok := l.FindCall(o.CallID); ok && c.State == ledger.CallNotApplied {
+			stageNotPlacedOrder(l, c)
+			staged = true
+		}
+	}
+	if staged && l.Save() != nil {
+		l.DropStagedOrders()
+	}
 }
 
 // replaceOrderByUser places again an order the Hub says it never saw, under the

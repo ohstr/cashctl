@@ -325,6 +325,26 @@ func closeCall(l *ledger.Ledger, c *ledger.Call, state, detail string) {
 	c.State, c.Detail, c.UpdatedAt = state, detail, time.Now().Unix()
 	c.Secrets = nil
 	c.AuthorizerSecret, c.TargetCredential = "", ""
+	if state == ledger.CallNotApplied {
+		stageNotPlacedOrder(l, c)
+	}
+}
+
+// stageNotPlacedOrder ends, in the next Save, the order row of a cash_order
+// call that closed without placing (never sent, refused, or a re-placement
+// that went nowhere): nothing can be paid or minted for it, so it must not
+// stay `placing` behind a closed call (R2-C2).
+func stageNotPlacedOrder(l *ledger.Ledger, c *ledger.Call) {
+	if l == nil || c.Method != nipcash.MethodCashOrder {
+		return
+	}
+	o, ok, err := ledger.OrderForCall(c.CallID)
+	if err != nil || !ok || o.FinishedAt != 0 || o.State != ledger.OrderPlacing {
+		return
+	}
+	now := time.Now().Unix()
+	o.State, o.FinishedAt, o.CheckedAt = ledger.OrderNotPlaced, now, now
+	l.StageOrder(o)
 }
 
 // detailNotSent is the detail of a call written ahead and never published.

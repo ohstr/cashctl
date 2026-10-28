@@ -611,6 +611,71 @@ func TestOrder_ReplaceDeviceAndNotSent(t *testing.T) {
 	}
 }
 
+// R2-C2: an order whose call closes without placing, after its write-ahead,
+// ends not_placed in the same save: never sent, or refused BAD_REQUEST.
+func TestOrderPlace_ClosedWithoutPlacingEndsTheRow(t *testing.T) {
+	for name, answer := range map[string]error{
+		"not sent":    nipcashclient.ErrNotSent,
+		"bad request": &nipcashclient.FinalError{Method: nipcash.MethodCashOrder, Code: "BAD_REQUEST"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f, conn := setUpOrderHub(t)
+			f.answer = func(nipcash.PendingCall) error { return answer }
+			if _, err := placeOrder(t, conn, "100"); err == nil {
+				t.Fatal("placed")
+			}
+			o, c := onlyOrder(t)
+			if c.State != ledger.CallNotApplied || o.State != ledger.OrderNotPlaced || o.FinishedAt == 0 {
+				t.Errorf("call %s/%s, order %s", c.State, c.Detail, o.State)
+			}
+		})
+	}
+}
+
+// R2-C2: a --replace whose child was written ahead and then never sent ends
+// the order not_placed; it is not left placing behind a closed call.
+func TestOrder_ReplaceWrittenAheadThenNotSentEndsTheRow(t *testing.T) {
+	f, conn := setUpOrderHub(t)
+	f.answer = func(pc nipcash.PendingCall) error {
+		return &nipcashclient.IndeterminateError{Call: pc, Cause: errors.New("no reply")}
+	}
+	_, _ = placeOrder(t, conn, "100")
+	o, c := onlyOrder(t)
+	l, _ := ledger.Load()
+	call, _ := l.FindCall(c.CallID)
+	call.State, call.Detail = ledger.CallStuck, "confirm_replace"
+	_ = l.Save()
+	f.answer = func(nipcash.PendingCall) error { return nipcashclient.ErrNotSent }
+	if err := settleOrders(t, map[string]string{"replace": o.OrderID, "yes": "true"}); err == nil {
+		t.Fatal("a re-placement never sent reported success")
+	}
+	o, c = onlyOrder(t)
+	if o.State != ledger.OrderNotPlaced || o.FinishedAt == 0 || c.State != ledger.CallNotApplied {
+		t.Errorf("order %s, call %s/%s", o.State, c.State, c.Detail)
+	}
+}
+
+// R2-C2: a placing row left behind a call already closed not applied (a crash
+// between the two writes) is ended by the next settle.
+func TestOrderSettle_EndsAPlacingRowBehindAClosedCall(t *testing.T) {
+	f, conn := setUpOrderHub(t)
+	f.answer = func(pc nipcash.PendingCall) error {
+		return &nipcashclient.IndeterminateError{Call: pc, Cause: errors.New("no reply")}
+	}
+	_, _ = placeOrder(t, conn, "100")
+	o, c := onlyOrder(t)
+	l, _ := ledger.Load()
+	call, _ := l.FindCall(c.CallID)
+	call.State, call.Detail = ledger.CallNotApplied, detailNotSent
+	_ = l.Save()
+	o.State, o.FinishedAt = ledger.OrderPlacing, 0
+	_ = ledger.PutOrder(o)
+	_ = settleOrders(t, nil)
+	if o, _ := onlyOrder(t); o.State != ledger.OrderNotPlaced || o.FinishedAt == 0 {
+		t.Errorf("order %s", o.State)
+	}
+}
+
 // R2-C8: a closed on-chain order past pay_by that the Hub no longer answers
 // closes its call and writes its row in one save: when the row can't be
 // written, the call stays open and is looked up again.
