@@ -751,6 +751,12 @@ func applyPayout(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, w *ledger
 		}
 		w.RemintEntryID, w.FinishedAt = id, now
 		closeCall(l, c, ledger.CallDone, "cancelled")
+		if reason, gone := remintGone(*w); gone {
+			// Shared client rule A2: closed, nothing added, and the user told.
+			l.AppendHistory("withdraw", fmt.Sprintf("withdrawal %s cancelled by the Hub; the bill it re-minted is already gone (%s)", w.WithdrawalID, reason))
+			jsonMode, _ := cmd.Flags().GetBool("json")
+			output.Notef(jsonMode, "Withdrawal %s was cancelled, and the bill the Hub re-minted for it is already gone (%s): nothing came back. If you did not spend it, contact the Hub.", w.WithdrawalID, reason)
+		}
 	default:
 		retry := now + 600
 		c.State, c.Detail, c.RetryAfter, c.UpdatedAt = ledger.CallOpenWithdraw, string(p.State), &retry, now
@@ -860,8 +866,28 @@ func withdrawalView(w ledger.Withdrawal) map[string]any {
 	if w.RemintEntryID != "" {
 		v["remint_entry"] = w.RemintEntryID
 	}
+	if reason, gone := remintGone(w); gone {
+		v[reasonRemintGone], v["remint_gone_reason"] = true, reason
+	}
 	v["next_step"] = withdrawalNextStep(w)
 	return v
+}
+
+// reasonRemintGone marks a cancelled payout whose re-minted bill the Hub
+// answered as a tombstone (shared client rule A2, the same name as cashkit's).
+const reasonRemintGone = "remint_gone"
+
+// remintGone reports a cancelled payout whose new_wallet_token is a
+// tombstone, with the tombstone's reason.
+func remintGone(w ledger.Withdrawal) (string, bool) {
+	if w.State != string(nipcash.PayoutCancelled) || w.PayoutJSON == "" {
+		return "", false
+	}
+	var p nipcash.Payout
+	if json.Unmarshal([]byte(w.PayoutJSON), &p) != nil || p.NewWalletToken.Tombstone == nil {
+		return "", false
+	}
+	return tombstoneReason(p.NewWalletToken.Tombstone), true
 }
 
 func withdrawalNextStep(w ledger.Withdrawal) string {
@@ -869,6 +895,9 @@ func withdrawalNextStep(w ledger.Withdrawal) string {
 	case string(nipcash.PayoutFinal):
 		return "nothing: received"
 	case string(nipcash.PayoutCancelled):
+		if reason, gone := remintGone(w); gone {
+			return "nothing came back: the re-minted bill is already gone (" + reason + "); if you did not spend it, contact the Hub"
+		}
 		return "nothing: the amount is back as cash"
 	case ledger.WithdrawNotApplied:
 		return "nothing: not sent, your cash is still yours"
@@ -905,6 +934,9 @@ func withdrawalText(w ledger.Withdrawal) string {
 		}
 		return "Received"
 	case string(nipcash.PayoutCancelled):
+		if reason, gone := remintGone(w); gone {
+			return fmt.Sprintf("The Hub did not send it, and the bill it re-minted for your %s is already gone (%s).", f(w.AmountMillis), reason)
+		}
 		return fmt.Sprintf("The Hub did not send it. Your %s is back as cash: %s.", f(w.AmountMillis), w.RemintEntryID)
 	}
 	return w.State

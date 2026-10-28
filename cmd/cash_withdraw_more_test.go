@@ -461,3 +461,27 @@ func TestWithdraw_RecoveredCallIsNeverReadAsNotSent(t *testing.T) {
 		t.Errorf("summary %q, call %s/%s, row %+v: want the recovered withdrawal followed", summary, c.State, c.Detail, got)
 	}
 }
+
+// Shared client rule A2: a cancelled payout whose re-minted bill is a
+// tombstone closes the call with nothing added, and the user is told
+// (remint_gone with the tombstone's reason), never silently.
+func TestApplyPayout_RemintGoneIsShown(t *testing.T) {
+	_, entryID, w := sendQueued(t)
+	l, _ := ledger.Load()
+	c, _ := l.FindCall(w.CallID)
+	p := &nipcash.Payout{State: nipcash.PayoutCancelled, PayoutMillis: w.PayoutMillis, Address: w.Address,
+		NewWalletToken: nipcash.TokenOrTombstone{Tombstone: &nipcash.Tombstone{Status: nipcash.StatusSpent, Reason: "redeemed"}}}
+	if err := applyPayout(withdrawCmd(newCashStatusCmd(), nil), l, c, &w, p); err != nil {
+		t.Fatal(err)
+	}
+	l, _ = ledger.Load()
+	c, _ = l.FindCall(w.CallID)
+	got, _, _ := ledger.FindWithdrawal(w.WithdrawalID)
+	v := withdrawalView(got)
+	if c.State != ledger.CallDone || got.RemintEntryID != "" || v[reasonRemintGone] != true || v["remint_gone_reason"] != "redeemed" {
+		t.Errorf("call %s, withdrawal %+v, view %v", c.State, got, v)
+	}
+	if !strings.Contains(withdrawalText(got), "already gone") || len(l.Held()) != 0 {
+		t.Errorf("text %q, held %d (source %s)", withdrawalText(got), len(l.Held()), entryID)
+	}
+}
