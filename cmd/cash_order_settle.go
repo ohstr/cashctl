@@ -79,9 +79,14 @@ func settleOrderCall(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, devic
 		}
 		o.CheckedAt = now.Unix()
 		if o.FinishedAt != 0 {
-			// A closed on-chain order the Hub no longer knows gains nothing more.
+			// A closed on-chain order the Hub no longer knows gains nothing more:
+			// the call and the row are written together (R2-C8).
 			closeCall(l, c, ledger.CallDone, o.State)
-			_ = l.Save()
+			l.StageOrder(o)
+			if l.Save() != nil {
+				l.DropStagedOrders()
+			}
+			return "no longer answered by the Hub"
 		}
 		_ = ledger.PutOrder(o)
 		return "no longer answered by the Hub"

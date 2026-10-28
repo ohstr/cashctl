@@ -610,3 +610,44 @@ func TestOrder_ReplaceDeviceAndNotSent(t *testing.T) {
 		t.Errorf("after a failed re-placement: order %s, call %s/%s", o.State, c.State, c.Detail)
 	}
 }
+
+// R2-C8: a closed on-chain order past pay_by that the Hub no longer answers
+// closes its call and writes its row in one save: when the row can't be
+// written, the call stays open and is looked up again.
+func TestOrder_ClosedOnchainForgottenWritesCallAndRowTogether(t *testing.T) {
+	f, conn := setUpOrderHub(t)
+	placeOnchainOrder(t, f, conn)
+	f.lookup = func(nipcash.PendingCall) (nipcashclient.LookupOutcome, *nipCO.Order, error) {
+		return nipcashclient.LookupOutcome{Status: nipcash.LookupDone}, f.onchain(100_000, nipCO.OrderClosed, 0), nil
+	}
+	_ = settleOrders(t, nil)
+	o, _ := onlyOrder(t)
+	o.PayBy, o.SawProgress = time.Now().Unix()-10, true
+	_ = ledger.PutOrder(o)
+	f.lookup = func(nipcash.PendingCall) (nipcashclient.LookupOutcome, *nipCO.Order, error) {
+		return nipcashclient.LookupOutcome{Status: nipcash.LookupUnknown}, nil, nil
+	}
+	db, err := store.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ev := range []string{"INSERT", "UPDATE"} {
+		if _, err := db.Exec(`CREATE TRIGGER fail_orders_` + ev + ` BEFORE ` + ev + ` ON orders BEGIN SELECT RAISE(ABORT, 'injected'); END`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_ = settleOrders(t, nil)
+	if _, c := onlyOrder(t); c.State != ledger.CallOpenOrder {
+		t.Fatalf("call %s with its row unwritten: want it still open", c.State)
+	}
+	for _, ev := range []string{"INSERT", "UPDATE"} {
+		if _, err := db.Exec(`DROP TRIGGER fail_orders_` + ev); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_ = db.Close()
+	_ = settleOrders(t, nil)
+	if o2, c := onlyOrder(t); c.State != ledger.CallDone || o2.CheckedAt == 0 {
+		t.Errorf("call %s, order checked %d", c.State, o2.CheckedAt)
+	}
+}
