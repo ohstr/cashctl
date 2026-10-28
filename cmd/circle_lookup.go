@@ -103,12 +103,12 @@ func lookupJoinOnce(ctx context.Context, cmd *cobra.Command, client circleHub, j
 	// JoinShow: kept for the member to see, never rejoined with this key.
 	_ = config.SetJoinState(j.ConnectionPubkey, config.JoinShown, action.Reason, 0)
 	j.State, j.Detail = config.JoinShown, action.Reason
-	switch {
-	case action.Reason == "join_expired":
+	switch action.Reason {
+	case "join_expired":
 		return joinOutcome{Join: j, Summary: "expired: the Hub no longer answers for this join",
 			Err: output.WithReason(output.FinalConflictError(cmd, "", errors.New(
 				"this join expired before its outcome was known; it is kept in `cashctl wallet show`, and is never rejoined with its key")), "join_expired")}
-	case action.Reason == "lookup_unauthorized":
+	case "lookup_unauthorized":
 		return joinOutcome{Join: j, Summary: "the Hub refused the lookup's signer",
 			Err: output.WithReason(output.AuthError(cmd, fmt.Errorf(
 				"the Hub refused to look this join up for signer %s; the wallet may exist. Run `cashctl cash settle --as` with the key that joined", j.MemberPubkey)), "lookup_unauthorized")}

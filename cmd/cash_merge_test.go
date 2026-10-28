@@ -175,7 +175,7 @@ func TestMovesWithNoAnswer_AreSettledNotResent(t *testing.T) {
 		}
 		return &nipcash.CashTransferResult{}, nil
 	})
-	settlePendingMoves(&cobra.Command{}, fresh)
+	_ = settlePendingMoves(&cobra.Command{}, fresh)
 	again, _ := ledger.Load()
 	a := again.Entries[0]
 	if a.PendingThrowawayKey != "" || a.ThrowawayKey != "" || !isCashNote(&a) || a.CashSecret == "sa" {
@@ -208,7 +208,7 @@ func TestSettlePendingMoves_TurnsLeftoversIntoCashNotes(t *testing.T) {
 		spentWith = append(spentWith, cred)
 		return &nipcash.CashTransferResult{}, nil
 	})
-	settlePendingMoves(&cobra.Command{}, l)
+	_ = settlePendingMoves(&cobra.Command{}, l)
 	fresh, _ := ledger.Load()
 	a := fresh.Entries[0]
 	if len(spentWith) != 1 || spentWith[0] != nipcash.BySigning(priv) {
@@ -313,7 +313,7 @@ func TestMergeThenSend_TheMergedBillSurvivesAFailedSend(t *testing.T) {
 			if c, open := fresh.OpenCallFor(m.ID); !open || c.Purpose != purposeSplit {
 				t.Errorf("an unanswered send has no open call on the merged bill: %+v", c)
 			}
-			settlePendingMoves(testCmdWithFlags(true, true), fresh)
+			_ = settlePendingMoves(testCmdWithFlags(true, true), fresh)
 			if m := mergedEntry(t); m.ThrowawayKey != priv {
 				t.Errorf("the next command moved a bill whose send is still open: %+v", m)
 			}

@@ -91,13 +91,6 @@ func (h *fakeBillHub) bill(token string, owner nipcash.Credential, amount uint64
 	h.bills[token] = &fakeBill{owner: owner, amount: amount}
 }
 
-// key lets a move to priv's pubkey hand the bill to priv's signing credential.
-func (h *fakeBillHub) key(priv, pub string) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.keys = append(h.keys, fakeKey{target: nipcash.Pubkey(pub), cred: nipcash.BySigning(priv)})
-}
-
 // owner is the credential that spends token now, or nil if no live bill has it.
 func (h *fakeBillHub) owner(token string) nipcash.Credential {
 	h.mu.Lock()

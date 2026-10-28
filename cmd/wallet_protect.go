@@ -73,7 +73,7 @@ func runWalletProtect(cmd *cobra.Command, args []string) error {
 		var err error
 		entries, unresolved, err = resolveUnprotectedCashHoldings(cmd, l, args)
 		// Nothing left to protect is not a failure when settling just did it.
-		if err != nil && !(named == "" && len(settled) > 0 && output.AsCLIError(err).Code == output.CodeNotFound) {
+		if err != nil && (named != "" || len(settled) == 0 || output.AsCLIError(err).Code != output.CodeNotFound) {
 			return err
 		}
 	}

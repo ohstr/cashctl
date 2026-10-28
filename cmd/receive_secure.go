@@ -245,18 +245,6 @@ func printProtectUnsaved(jsonMode bool, err error, recovery string) {
 	output.Printf("Moved on the Hub, but saving that locally failed (%v). Save this now, it will not be shown again:\n%s\n", err, recovery)
 }
 
-// printProtectFailureWrongSecret is printProtectFailure's counterpart for
-// isWrongSecretDecline — printed instead of, never alongside, the
-// ordinary message, whose "still shared" framing is false reassurance
-// when the real problem is that this cash was never genuinely redeemable
-// with the secret presented at all.
-func printProtectFailureWrongSecret(jsonMode bool, err error) {
-	if jsonMode {
-		return
-	}
-	output.Printf("Received, but the secret doesn't match (%v) — likely wrong/truncated. Ask for the full \"token#secret\" string again.\n", err)
-}
-
 func printProtectPartialFailure(jsonMode bool, err error) {
 	if jsonMode {
 		return

@@ -105,7 +105,7 @@ func fingerprint(path string) (string, error) {
 	}
 	h := sha256.New()
 	for _, part := range []string{machineIDFn(), abs, file} {
-		fmt.Fprintf(h, "%d:%s", len(part), part)
+		_, _ = fmt.Fprintf(h, "%d:%s", len(part), part)
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
 }

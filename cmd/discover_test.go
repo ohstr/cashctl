@@ -41,7 +41,7 @@ func newListingFixture(t *testing.T) *listingFixture {
 	}
 	now := time.Now().Unix()
 	ev, err := listing.NewListing(listing.ListingFields{Order: &oc, Network: "mainnet", Summary: []string{listing.SummaryLightning},
-		Title: "Buy cash ‮ here", Status: listing.StatusOpen, Expiration: now + 86400}, now-10, now,
+		Title: "Buy cash \u202e here", Status: listing.StatusOpen, Expiration: now + 86400}, now-10, now,
 		func(ev *nip01.Event) error { return ev.Sign(orders.hubPriv) })
 	if err != nil {
 		t.Fatal(err)
@@ -128,7 +128,7 @@ func TestDiscover_ListAndCurators(t *testing.T) {
 		t.Fatalf("offers %v", doc)
 	}
 	o := offers[0].(map[string]any)
-	if strings.Contains(o["title"].(string), "‮") || o["section"] != "unreviewed" || o["offer"] != offerHandle(f.addr) {
+	if strings.Contains(o["title"].(string), "\u202e") || o["section"] != "unreviewed" || o["offer"] != offerHandle(f.addr) {
 		t.Errorf("offer %v", o)
 	}
 	curPriv, _ := testmint.Key(t)

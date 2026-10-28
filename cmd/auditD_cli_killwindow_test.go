@@ -14,34 +14,12 @@ import (
 	"testing"
 
 	"github.com/ohstr/cashctl/internal/appdir"
-	"github.com/ohstr/cashctl/internal/store"
 )
 
 func auditDTempLedger(t *testing.T) {
 	t.Helper()
 	appdir.SetOverride(t.TempDir())
 	t.Cleanup(func() { appdir.SetOverride("") })
-}
-
-// auditDLedgerBytesContain reports whether the raw cashctl.db file on disk
-// contains needle anywhere in it. Deliberately the whole file rather than a
-// targeted SELECT: the question is "could a process that restarts from scratch
-// find this value anywhere in local state", and a byte scan cannot be fooled by
-// looking in the wrong column.
-func auditDLedgerBytesContain(t *testing.T, needle string) bool {
-	t.Helper()
-	path, err := store.Path()
-	if err != nil {
-		t.Fatalf("store.Path() error = %v", err)
-	}
-	b, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return false
-		}
-		t.Fatalf("reading %s: %v", filepath.Base(path), err)
-	}
-	return strings.Contains(string(b), needle)
 }
 
 // TestAuditD_CLI_NoSignalHandlerNarrowsTheKillWindow records the aggravating
