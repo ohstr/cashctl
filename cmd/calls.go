@@ -351,6 +351,18 @@ func sentNothing(err error) bool {
 // user's error. j is the journal it was placed with (it knows whether a call
 // was written); verb names the action; ids are the source entries.
 func placeErr(cmd *cobra.Command, l *ledger.Ledger, j *ledgerJournal, err error, verb string, ids ...string) error {
+	billID := ""
+	if len(ids) > 0 {
+		billID = ids[0]
+	}
+	return placeErrFor(cmd, l, j, err, verb, billID, ids...)
+}
+
+// placeErrFor is placeErr with the entry a tombstone answers for named
+// explicitly: billID is the ledger entry of the item's bill (a consolidate's
+// wire sources[0], which need not be ids[0]), or "" when that bill is not in
+// the ledger, so a tombstone marks nothing spent.
+func placeErrFor(cmd *cobra.Command, l *ledger.Ledger, j *ledgerJournal, err error, verb, billID string, ids ...string) error {
 	c := j.call()
 	input := ""
 	if len(ids) == 1 {
@@ -386,16 +398,17 @@ func placeErr(cmd *cobra.Command, l *ledger.Ledger, j *ledgerJournal, err error,
 		// source, or a consolidate's sources[0]. Every other source is a live
 		// bill the Hub never touched, so it stays held (NIP-CASH §Answer or Omit).
 		closeCall(l, c, ledger.CallNotApplied, "tombstone")
-		if len(ids) == 0 {
-			_ = l.Save()
-			return output.SpentError(cmd, input, errBillSpent)
-		}
-		if e, ok := l.Find(ids[0]); ok {
-			markSpent(l, e)
+		if billID != "" {
+			if e, ok := l.Find(billID); ok {
+				markSpent(l, e)
+			}
 		}
 		_ = l.Save()
-		if len(ids) > 1 {
-			return output.SpentError(cmd, ids[0], fmt.Errorf("%w (token %s); nothing was %sd, and your other tokens are still yours", errBillSpent, ids[0], verb))
+		switch {
+		case billID != "" && len(ids) > 1:
+			return output.SpentError(cmd, billID, fmt.Errorf("%w (token %s); nothing was %sd, and your other tokens are still yours", errBillSpent, billID, verb))
+		case billID == "" && len(ids) > 0:
+			return output.SpentError(cmd, input, fmt.Errorf("%w (the first token given, which is not one cashctl holds); nothing was %sd, and your tokens are still yours", errBillSpent, verb))
 		}
 		return output.SpentError(cmd, input, errBillSpent)
 	case c != nil && errors.As(err, &indeterminate):
@@ -485,7 +498,16 @@ func placeConsolidate(ctx context.Context, cmd *cobra.Command, l *ledger.Ledger,
 	j := &ledgerJournal{l: l, spec: spec}
 	res, err := caller.CashConsolidate(callContext(ctx), p, j, device)
 	if err != nil {
-		perr := placeErr(cmd, l, j, err, "consolidate", spec.SourceEntryIDs...)
+		// A tombstone answers for the wire's sources[0], which the dial order
+		// or a non-ledger --sources token can put anywhere in, or outside,
+		// SourceEntryIDs (NIP-CASH §Answer or Omit).
+		billID := ""
+		if len(p.Sources) > 0 {
+			if e := firstSourceEntry(l, spec.SourceEntryIDs, p.Sources[0].WalletPubkey); e != nil {
+				billID = e.ID
+			}
+		}
+		perr := placeErrFor(cmd, l, j, err, "consolidate", billID, spec.SourceEntryIDs...)
 		raw, closedErr := awaitPlacement(ctx, cmd, l, j.call())
 		if closedErr != nil {
 			return nil, nil, closedErr

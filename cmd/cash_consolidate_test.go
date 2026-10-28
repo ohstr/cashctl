@@ -953,6 +953,60 @@ func TestDoCashConsolidate_TombstoneSpendsOnlyTheFirstSource(t *testing.T) {
 	}
 }
 
+// R2-C1: when the first candidate cannot be dialled, the next one goes to the
+// wire's sources[0]. A tombstone then answers for that bill, not for the first
+// local id: the bill the Hub destroyed is marked spent, the other stays held.
+func TestDoCashConsolidate_TombstoneAfterAFailedDialSpendsTheDialledSource(t *testing.T) {
+	l, ids, sources := consolidateFixture(t)
+	hooks := installFakeCaller(t)
+	hooks.dialErr = map[string]error{"dial-a": errors.New("unreachable")}
+	var first string
+	withFakeAttemptCashConsolidate(t, func(_ string, srcs []nipcash.Source, _ nipcash.Target) (*nipcash.CashConsolidateResult, error) {
+		first = srcs[0].WalletPubkey
+		return nil, &nipcash.BillGone{Method: nipcash.MethodCashConsolidate, Tombstone: nipcash.Tombstone{Status: "spent", Reason: "redeemed"}}
+	})
+	_, _, err := doCashConsolidate(&cobra.Command{}, l, []string{"dial-a", "dial-b"}, sources, ids, testTarget(), true)
+	if output.AsCLIError(err).Code != output.CodeSpent {
+		t.Fatalf("err %v, want spent", err)
+	}
+	if first != hexWallet("dial-b") {
+		t.Fatalf("wire sources[0] = %s, want dial-b's wallet", first)
+	}
+	fresh, err := ledger.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, want := range []string{ledger.StatusHeld, ledger.StatusSpent} {
+		if got, _ := fresh.Find(ids[i]); got.Status != want {
+			t.Errorf("source %d status %q, want %q", i, got.Status, want)
+		}
+	}
+}
+
+// R2-C1: a first source that is not a ledger entry (a bare --sources token) is
+// the bill a tombstone answers for: nothing the ledger holds is marked spent.
+func TestDoCashConsolidate_TombstoneForANonLedgerFirstSourceMarksNothing(t *testing.T) {
+	l, ids, sources := consolidateFixture(t)
+	bare := nipcash.Source{WalletPubkey: hexWallet("bare"), Amount: 700, Credential: nipcash.BySigning(strings.Repeat("22", 32))}
+	sources = append([]nipcash.Source{bare}, sources...)
+	withFakeAttemptCashConsolidate(t, func(string, []nipcash.Source, nipcash.Target) (*nipcash.CashConsolidateResult, error) {
+		return nil, &nipcash.BillGone{Method: nipcash.MethodCashConsolidate, Tombstone: nipcash.Tombstone{Status: "spent", Reason: "redeemed"}}
+	})
+	_, _, err := doCashConsolidate(&cobra.Command{}, l, []string{"bare-token"}, sources, ids, testTarget(), true)
+	if output.AsCLIError(err).Code != output.CodeSpent {
+		t.Fatalf("err %v, want spent", err)
+	}
+	fresh, err := ledger.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, id := range ids {
+		if got, _ := fresh.Find(id); got.Status != ledger.StatusHeld {
+			t.Errorf("source %d status %q, want held", i, got.Status)
+		}
+	}
+}
+
 // CC-A5: an interim round to the merge key whose first source is
 // identity-bound keeps the key with its call; a lookup answered done holds the
 // merged bill under that key, never files it as a gift.

@@ -571,10 +571,27 @@ func replaceCallConfirmed(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, 
 		return "placed again as call " + derivedID + ": " + summary
 	default:
 		// The re-placement's own outcome follows the placement rules.
-		_ = placeErr(cmd, l, j, sendErr, transferVerb(child.Purpose), child.SourceEntryIDs...)
+		_ = placeErrFor(cmd, l, j, sendErr, transferVerb(child.Purpose), tombstoneEntryID(l, child), child.SourceEntryIDs...)
 		finishRefusedWithdrawal(l, derivedID)
 		return "placed again as call " + derivedID
 	}
+}
+
+// tombstoneEntryID is the ledger entry a tombstone answering c is about: the
+// call's target bill (a consolidate's wire sources[0], NIP-CASH §Answer or
+// Omit), looked up among its sources by wallet, or "" when that bill is not a
+// ledger entry. Other methods name their one source first.
+func tombstoneEntryID(l *ledger.Ledger, c *ledger.Call) string {
+	if c == nil || len(c.SourceEntryIDs) == 0 {
+		return ""
+	}
+	if c.Method != nipcash.MethodCashConsolidate {
+		return c.SourceEntryIDs[0]
+	}
+	if e := firstSourceEntry(l, c.SourceEntryIDs, c.Target); e != nil {
+		return e.ID
+	}
+	return ""
 }
 
 // applyCallResult applies the result a lookup returned for c.
