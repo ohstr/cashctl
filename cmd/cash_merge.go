@@ -6,10 +6,10 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/ohstr/nmilat/nipcash"
-	nipcashclient "github.com/ohstr/nmilat/nipcash/client"
 	relayclient "github.com/ohstr/nmilat/relay/client"
 	"github.com/ohstr/nmilat/utils"
 	"github.com/spf13/cobra"
@@ -48,55 +48,66 @@ func isCashNote(e *ledger.Entry) bool {
 	return e.ThrowawayKey == "" && e.IdentityRequired != nil && !*e.IdentityRequired && e.CashSecret != ""
 }
 
-// moveCashFn places one whole-amount cash_transfer of entry to target, spent with
-// cred — swapped out in tests.
-var moveCashFn = moveCash
-
-func moveCash(entry *ledger.Entry, cred nipcash.Credential, target nipcash.Target) (*nipcash.CashTransferResult, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	client, err := nipcashclient.Connect(ctx, entry.Token)
-	if err != nil {
-		return nil, &notSentError{err}
-	}
-	defer client.Close()
+// moveCash places one whole-amount cash_transfer of entry to target, spent with
+// cred, as a call written ahead for purpose. On success the caller applies the
+// result and closes the returned call before its Save.
+func moveCash(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entry, cred nipcash.Credential, target nipcash.Target, purpose string) (*nipcash.CashTransferResult, *ledger.Call, error) {
 	if entry.AmountMillis == nil {
-		return nil, &notSentError{fmt.Errorf("%s has no known amount", entry.ID)}
+		return nil, nil, output.RuntimeError(cmd, fmt.Errorf("%s has no known amount", entry.ID))
 	}
-	return client.CashTransfer(ctx, nipcash.CashTransferParams{Credential: cred, To: target, CurrentAmount: *entry.AmountMillis})
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	caller, err := dialCallerFn(ctx, entry.Token)
+	if err != nil {
+		return nil, nil, classifyCashSpendErr(cmd, &notSentError{err}, transferVerb(purpose), entry.ID)
+	}
+	defer caller.Close()
+	kind, pub, secret := authorizerOf(cmd, entry, cred)
+	spec := callSpec{Purpose: purpose, SourceEntryIDs: []string{entry.ID}, AuthorizerKind: kind,
+		AuthorizerPubkey: pub, AuthorizerSecret: secret, TargetCredential: entry.Token}
+	return placeTransfer(ctx, cmd, l, caller, spec, nipcash.CashTransferParams{Credential: cred, To: target, CurrentAmount: *entry.AmountMillis})
 }
 
 // moveCashNotesToKey moves every cash note among ids onto the throwaway key
 // priv/pub, saving after each. Returns the ids it moved. A definite refusal moves
 // the already-moved ones back to fresh cash notes and returns the refusal; no
-// answer leaves that note's key pending (settled on a later run) and returns an
-// indeterminate error.
+// answer leaves that note's move open (its key kept on the entry, looked up
+// later) and returns the indeterminate error.
 func moveCashNotesToKey(cmd *cobra.Command, l *ledger.Ledger, ids []string, priv, pub string) ([]string, error) {
+	// Refused before any note is touched: a note whose earlier move is still
+	// open keeps that move's key, which may be all that spends it now.
+	if err := refuseLocked(cmd, l, ids); err != nil {
+		return nil, err
+	}
 	var moved []string
 	for _, id := range ids {
 		e, ok := l.Find(id)
 		if !ok || !isCashNote(e) {
 			continue
 		}
+		// The key is written ahead in the same save as the call: if the move
+		// lands and the answer is lost, it is the only thing that spends the note.
 		e.PendingThrowawayKey = priv
-		if err := l.Save(); err != nil {
-			e.PendingThrowawayKey = ""
-			return moved, output.RuntimeError(cmd, err)
-		}
-		res, err := moveCashFn(e, nipcash.BySecret(e.CashSecret), nipcash.Pubkey(pub))
+		res, call, err := moveCash(cmd, l, e, nipcash.BySecret(e.CashSecret), nipcash.Pubkey(pub), purposeMergeMove)
+		e, _ = l.Find(id)
 		if err != nil {
-			var notSent *notSentError
-			if errors.As(err, &notSent) || isDefiniteRefusal(err) {
-				e.PendingThrowawayKey = ""
-				_ = l.Save()
-				undoMoves(cmd, l, moved)
-				return nil, classifyCashSpendErr(cmd, err, "merge", id)
+			if output.AsCLIError(err).Code == output.CodeIndeterminate {
+				return moved, err
 			}
-			// No answer: the move may have happened. Keep the pending key.
-			return moved, classifyCashSpendErr(cmd, err, "merge", id)
+			// Only the key this run set is cleared, and only once no call of
+			// this move is left open.
+			if _, open := l.OpenCallFor(id); !open && e.PendingThrowawayKey == priv {
+				e.PendingThrowawayKey = ""
+			}
+			_ = l.Save()
+			if uErr := undoMoves(cmd, l, moved); uErr != nil {
+				return nil, withRecovery(err, uErr)
+			}
+			return nil, err
 		}
 		followMove(e, res)
 		promoteThrowaway(e)
+		closeCall(l, call, ledger.CallDone, "")
 		if err := l.Save(); err != nil {
 			return moved, reportUnsavedResult(cmd, err, "Merge (moving a note)", fmt.Sprintf("%s is now spent by the private key %s", e.ID, priv))
 		}
@@ -114,16 +125,17 @@ func followMove(e *ledger.Entry, res *nipcash.CashTransferResult) {
 	if res == nil || res.NewWalletToken == "" {
 		return
 	}
-	e.Token = res.NewWalletToken
+	e.Token = strings.ToLower(res.NewWalletToken)
 	if res.NewWalletPubkey != "" {
 		e.WalletPubkey = res.NewWalletPubkey
 	}
+	e.Verified, e.MinterPubkey = returnedBillCheck(e.Token, e.MinterPubkey)
 }
 
-// promotePendingSecret records a confirmed re-key: the pending secret, which only
-// this ledger holds, now spends the bill as an ordinary cash note.
-func promotePendingSecret(e *ledger.Entry) {
-	e.CashSecret, e.PendingCashSecret = e.PendingCashSecret, ""
+// becomeCashNote records a confirmed re-key: secret, which only this ledger
+// holds, now spends the bill as an ordinary cash note.
+func becomeCashNote(e *ledger.Entry, secret string) {
+	e.CashSecret = secret
 	e.ThrowawayKey = ""
 	e.IdentityRequired = ptrTo(false)
 	e.CashProtection = ledger.CashProtected
@@ -145,59 +157,95 @@ func isDefiniteRefusal(err error) bool {
 	return errors.As(err, &walletErr) || isRejectedBeforeSend(err)
 }
 
-// undoMoves moves the notes of a refused merge back to fresh cash notes.
-func undoMoves(cmd *cobra.Command, l *ledger.Ledger, ids []string) {
-	if toCashNotes(l, ids) > 0 {
+// undoMoves moves the notes of a refused merge back to fresh cash notes. Its
+// error, when not nil, carries the recovery of a note moved but not saved.
+func undoMoves(cmd *cobra.Command, l *ledger.Ledger, ids []string) error {
+	converted, unsaved := toCashNotes(cmd, l, ids)
+	if len(unsaved) > 0 {
+		return unsavedNotesError(cmd, unsaved)
+	}
+	if len(converted) > 0 {
 		jsonMode, _ := cmd.Flags().GetBool("json")
 		output.Notef(jsonMode, "The merge was refused, so the notes it had moved are cash notes again.")
 	}
+	return nil
 }
 
-// toCashNotes moves bills off their throwaway key onto fresh cash notes, each
-// secret written ahead of its move (PendingCashSecret), so whatever a merge leaves
-// behind — notes it moved before a refusal, a split's change, an interim bill — is
-// an ordinary cash note again. Best-effort: a bill that cannot be moved stays an
-// ordinary held bill its key spends, reported as a merge left midway. Returns how
-// many it converted.
-func toCashNotes(l *ledger.Ledger, ids []string) int {
-	converted := 0
+// withRecovery keeps classified as the error (its code and message still say why
+// the operation failed) and attaches unsaved's recovery to it, so a note moved but
+// not saved is never dropped for the reason it was moved.
+func withRecovery(classified, unsaved error) error {
+	var ce *output.CLIError
+	if !errors.As(classified, &ce) {
+		return unsaved
+	}
+	ce.Recovery = output.AsCLIError(unsaved).Recovery
+	return classified
+}
+
+// errNoteNotSaved is the cause reportUnsavedResult names for toCashNotes's
+// unsaved notes: the move landed on the Hub, the local save of it did not.
+var errNoteNotSaved = errors.New("the local save failed")
+
+// unsavedNotesError reports notes toCashNotes moved but could not save, with
+// each one's <token>#<secret> as the recovery.
+func unsavedNotesError(cmd *cobra.Command, unsaved []string) error {
+	return reportUnsavedResult(cmd, errNoteNotSaved, "Turning a note back into a cash note",
+		"Save this now, it will not be shown again: "+strings.Join(unsaved, " "))
+}
+
+// toCashNotes moves bills off their throwaway key onto fresh cash notes, each a
+// call written ahead with its new secret, so whatever a merge leaves behind —
+// notes it moved before a refusal, a split's change, an interim bill — is an
+// ordinary cash note again. Best-effort: a bill that cannot be moved stays an
+// ordinary held bill its key spends, reported as a merge left midway; one with
+// a call still open is skipped even when named.
+//
+// Returns the ids it converted, and the <token>#<secret> of each note the Hub
+// moved but whose save then failed: disk still names the bill's old state, so
+// that string is the only way back to it once the process exits.
+func toCashNotes(cmd *cobra.Command, l *ledger.Ledger, ids []string) (converted, unsaved []string) {
 	for _, id := range ids {
 		e, ok := l.Find(id)
-		if !ok || e.ThrowawayKey == "" || e.Status != ledger.StatusHeld {
+		if !ok || e.ThrowawayKey == "" || e.Status != ledger.StatusHeld || e.PendingThrowawayKey != "" {
 			continue
 		}
-		target := nipcash.NewCashTarget()
-		e.PendingCashSecret = target.Secret()
-		if err := l.Save(); err != nil {
-			e.PendingCashSecret = ""
+		if _, open := l.OpenCallFor(id); open {
 			continue
 		}
-		res, err := moveCashFn(e, nipcash.BySigning(e.ThrowawayKey), target)
+		target, err := nipcash.NewCashTarget()
 		if err != nil {
-			if isDefiniteRefusal(err) {
-				e.PendingCashSecret = ""
-				_ = l.Save()
-			}
 			continue
 		}
+		res, call, err := moveCash(cmd, l, e, nipcash.BySigning(e.ThrowawayKey), target, purposeUnmergeMove)
+		if err != nil {
+			continue
+		}
+		e, _ = l.Find(id)
 		followMove(e, res)
-		promotePendingSecret(e)
-		_ = l.Save()
-		converted++
+		becomeCashNote(e, target.Secret())
+		closeCall(l, call, ledger.CallDone, "")
+		if err := l.Save(); err != nil {
+			unsaved = append(unsaved, entryRecoveryString(e))
+			continue
+		}
+		converted = append(converted, id)
 	}
-	return converted
+	return converted, unsaved
 }
 
 // leftoverKeyBills is every held bill still on a throwaway key with no move
-// pending: something a merge left behind, to be turned back into a cash note.
+// open: something a merge left behind, to be turned back into a cash note.
 func leftoverKeyBills(l *ledger.Ledger) []string {
 	var ids []string
 	for _, e := range l.Entries {
-		// A pending secret may be the only one that spends it now: moving it again
-		// would overwrite that secret.
-		if e.Status == ledger.StatusHeld && e.ThrowawayKey != "" && e.PendingThrowawayKey == "" && e.PendingCashSecret == "" {
-			ids = append(ids, e.ID)
+		if e.Status != ledger.StatusHeld || e.ThrowawayKey == "" || e.PendingThrowawayKey != "" {
+			continue
 		}
+		if _, open := l.OpenCallFor(e.ID); open {
+			continue
+		}
+		ids = append(ids, e.ID)
 	}
 	return ids
 }
@@ -206,8 +254,8 @@ func leftoverKeyBills(l *ledger.Ledger) []string {
 // in tests. ok=false with err=nil means "it does not"; err means no answer.
 var probeCredentialFn = probeCredential
 
-func probeCredential(e *ledger.Entry, cred nipcash.Credential, asPubkeyHex string) (bool, error) {
-	_, ok, err := probeAmount(e, cred, asPubkeyHex)
+func probeCredential(e *ledger.Entry, cred nipcash.Credential) (bool, error) {
+	_, ok, err := probeAmount(e, cred)
 	return ok, err
 }
 
@@ -215,123 +263,95 @@ func probeCredential(e *ledger.Entry, cred nipcash.Credential, asPubkeyHex strin
 // swapped out in tests.
 var probeAmountFn = probeAmount
 
-func probeAmount(e *ledger.Entry, cred nipcash.Credential, asPubkeyHex string) (uint64, bool, error) {
+// The identity asked about is the credential's own (nipcash.OwnRow): a row this
+// credential does not own, a claimed or expired one, or a destroyed bill all
+// answer "it does not".
+func probeAmount(e *ledger.Entry, cred nipcash.Credential) (uint64, bool, error) {
 	tok, err := nipcash.Decode(e.Token)
 	if err != nil {
 		return 0, false, err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	client, err := nipcashclient.Connect(ctx, e.Token)
+	client, err := dialBill(ctx, e.Token)
 	if err != nil {
 		return 0, false, err
 	}
 	defer client.Close()
-	r, err := client.CheckClaim(ctx, cred, tok, asPubkeyHex)
+	r, err := client.CheckClaim(ctx, cred, tok)
+	var gone *nipcash.BillGone
 	switch {
 	case err == nil:
-		return r.AmountMillis, true, nil
-	case errors.Is(err, nipcash.ErrClaimNotFound), isDefiniteRefusal(err):
+		return r.Row.AmountMillis, r.Claimable, nil
+	case errors.Is(err, nipcash.ErrClaimNotFound), errors.As(err, &gone), isDefiniteRefusal(err):
 		return 0, false, nil
 	}
 	return 0, false, err
 }
 
-// settlePendingMoves finishes the record of any move whose answer never came: if
-// the throwaway key now spends the note, the move happened; if its cash secret
-// still does, it did not. The same for a re-key's pending cash secret, and a
-// destination secret parked for a send is dropped once the source shows nothing
-// moved. Otherwise each is left pending for a later run. Never resends anything.
-// Then turns whatever a merge left on a throwaway key back into cash notes: no
-// merge is in progress when a command starts.
-func settlePendingMoves(cmd *cobra.Command, l *ledger.Ledger) {
+// settleBeforeSpend runs at the start of every money command: the open calls
+// that are due are looked up and finished (settleCalls), then merge moves are
+// settled. Its error, when not nil, carries the recovery of a note moved but
+// not saved.
+func settleBeforeSpend(cmd *cobra.Command, l *ledger.Ledger) error {
+	settleCalls(cmd, l, settleOptions{})
+	return settlePendingMoves(cmd, l)
+}
+
+// settlePendingMoves finishes the record of a merge move whose answer never
+// came: if the throwaway key now spends the note, the move happened; if its cash
+// secret still does, it did not. Otherwise it is left for a later run. Never
+// resends anything. Then turns whatever a merge left on a throwaway key back into
+// cash notes: no merge is in progress when a command starts. Its error, when not
+// nil, carries the recovery of a note moved but not saved.
+func settlePendingMoves(cmd *cobra.Command, l *ledger.Ledger) error {
 	changed := false
 	for i := range l.Entries {
 		e := &l.Entries[i]
 		if e.Status != ledger.StatusHeld {
 			continue
 		}
-		if e.PendingThrowawayKey != "" && settlePendingKey(e) {
+		_, open := l.OpenCallFor(e.ID)
+		if e.PendingThrowawayKey != "" && settlePendingKey(e, open) {
 			changed = true
-		}
-		if e.PendingCashSecret != "" && settlePendingSecret(e) {
-			changed = true
-		}
-		if e.PendingDestinationCashSecret != "" && settleDestinationPark(cmd, e) {
-			changed = true
+			if e.PendingThrowawayKey == "" && e.ThrowawayKey != "" {
+				// The key spends the note: its move happened.
+				if c, open := l.OpenCallFor(e.ID); open && c.Purpose == purposeMergeMove {
+					closeCall(l, c, ledger.CallDone, "settled from the bill's state")
+				}
+			}
 		}
 	}
 	if changed {
 		_ = l.Save()
 	}
-	toCashNotes(l, leftoverKeyBills(l))
+	if _, unsaved := toCashNotes(cmd, l, leftoverKeyBills(l)); len(unsaved) > 0 {
+		return unsavedNotesError(cmd, unsaved)
+	}
+	return nil
 }
 
 // settlePendingKey resolves a move onto a throwaway key, reporting a change.
-func settlePendingKey(e *ledger.Entry) bool {
-	pub, err := utils.GetPublicKey(e.PendingThrowawayKey)
-	if err != nil {
+// While the move's call is open (open), the probe may only promote: the Hub can
+// still commit the move up to its deadline, so an old secret that spends the
+// note today says nothing final, and the key must survive until the call
+// engine closes the call.
+func settlePendingKey(e *ledger.Entry, open bool) bool {
+	if _, err := utils.GetPublicKey(e.PendingThrowawayKey); err != nil {
 		return false
 	}
-	if ok, err := probeCredentialFn(e, nipcash.BySigning(e.PendingThrowawayKey), pub); err == nil && ok {
+	if ok, err := probeCredentialFn(e, nipcash.BySigning(e.PendingThrowawayKey)); err == nil && ok {
 		promoteThrowaway(e)
 		return true
 	}
-	if ok, err := probeCredentialFn(e, nipcash.BySecret(e.CashSecret), nipcash.NoLocalIdentity); err == nil && ok {
+	if open {
+		return false
+	}
+	if ok, err := probeCredentialFn(e, nipcash.BySecret(e.CashSecret)); err == nil && ok {
 		e.PendingThrowawayKey = ""
 		return true
 	}
 	return false
-}
-
-// settlePendingSecret resolves a re-key onto a fresh cash secret (a protect, or a
-// move off a throwaway key), reporting a change: promoted if the Hub answers to
-// it, dropped if it still answers to the current secret.
-func settlePendingSecret(e *ledger.Entry) bool {
-	if e.PendingCashSecret == e.CashSecret {
-		e.PendingCashSecret = ""
-		return true
-	}
-	if ok, err := probeCredentialFn(e, nipcash.BySecret(e.PendingCashSecret), nipcash.NoLocalIdentity); err != nil {
-		return false
-	} else if ok {
-		promotePendingSecret(e)
-		return true
-	}
-	if e.CashSecret == "" {
-		return false
-	}
-	if ok, err := probeCredentialFn(e, nipcash.BySecret(e.CashSecret), nipcash.NoLocalIdentity); err == nil && ok {
-		e.PendingCashSecret = ""
-		return true
-	}
-	return false
-}
-
-// settleDestinationPark drops a destination secret parked on e for a send whose
-// outcome was never recorded, but only when the send cannot have happened: e
-// still answers to its own credential for its full recorded amount. Anything
-// else keeps it, since it may be the only copy of a live bill's secret.
-func settleDestinationPark(cmd *cobra.Command, e *ledger.Entry) bool {
-	if e.AmountMillis == nil {
-		return false
-	}
-	cred, err := resolveCredential(cmd, e)
-	if err != nil {
-		return false
-	}
-	as := nipcash.NoLocalIdentity
-	if !isCashNote(e) && e.ThrowawayKey == "" {
-		if as, err = localPubKeyHex(cmd); err != nil {
-			return false
-		}
-	}
-	amount, ok, err := probeAmountFn(e, cred, as)
-	if err != nil || !ok || amount != *e.AmountMillis {
-		return false
-	}
-	e.PendingDestinationCashSecret = ""
-	return true
 }
 
 // pendingMerge summarizes held notes moved for a merge that has not finished:
@@ -370,18 +390,20 @@ func printPendingMerge(l *ledger.Ledger) {
 	output.Printf("\nMid-merge: %d note(s) moved for a merge that has not finished%s — `cashctl consolidate` finishes it.\n", n, when)
 }
 
-// sendFromEntryFn places one cash_transfer from a held bill — swapped out in tests.
-var sendFromEntryFn = sendFromEntry
-
-func sendFromEntry(entry *ledger.Entry, params nipcash.CashTransferParams) (*nipcash.CashTransferResult, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+// sendFromEntry places one cash_transfer from a held bill as a call written
+// ahead for purpose.
+func sendFromEntry(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entry, params nipcash.CashTransferParams, purpose string) (*nipcash.CashTransferResult, *ledger.Call, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	client, err := nipcashclient.Connect(ctx, entry.Token)
+	caller, err := dialCallerFn(ctx, entry.Token)
 	if err != nil {
-		return nil, &notSentError{err}
+		return nil, nil, classifyCashSpendErr(cmd, &notSentError{err}, "transfer", entry.ID)
 	}
-	defer client.Close()
-	return client.CashTransfer(ctx, params)
+	defer caller.Close()
+	kind, pub, secret := authorizerOf(cmd, entry, params.Credential)
+	spec := callSpec{Purpose: purpose, SourceEntryIDs: []string{entry.ID}, AuthorizerKind: kind,
+		AuthorizerPubkey: pub, AuthorizerSecret: secret, TargetCredential: entry.Token}
+	return placeTransfer(ctx, cmd, l, caller, spec, params)
 }
 
 // mergeThenSend sends sendAmount to target out of sources merged under the
@@ -412,7 +434,7 @@ func mergeThenSend(cmd *cobra.Command, l *ledger.Ledger, tokens []string, source
 			_ = l.SetStatus(merged.ID, ledger.StatusTransferred)
 		}
 		res := &nipcash.CashTransferResult{AmountMillis: sendAmount, NewWalletToken: merged.Token, NewWalletPubkey: merged.WalletPubkey}
-		return printAndSaveTransferResult(cmd, l, res, sendAmount, toValue, target, sourceIDs, ledger.Entry{}, merged.Token)
+		return printAndSaveTransferResult(cmd, l, res, nil, sendAmount, toValue, target, sourceIDs, ledger.Entry{}, merged.Token)
 	}
 
 	var merged *ledger.Entry
@@ -443,32 +465,29 @@ func mergeThenSend(cmd *cobra.Command, l *ledger.Ledger, tokens []string, source
 		}
 	}
 
-	parked, err := parkDestinationCashSecret(l, []string{mergedID}, target.Target)
-	if err != nil {
-		return output.RuntimeError(cmd, err)
-	}
 	merged, _ = l.Find(mergedID)
 	var result *nipcash.CashTransferResult
+	var call *ledger.Call
 	var sendErr error
 	_ = WithSpinner(jsonMode, "Transferring...", func() error {
-		result, sendErr = sendFromEntryFn(merged, nipcash.CashTransferParams{
+		result, call, sendErr = sendFromEntry(cmd, l, merged, nipcash.CashTransferParams{
 			Credential: cred, To: target.Target,
 			CurrentAmount: *merged.AmountMillis, SplitAmount: &sendAmount,
-		})
+		}, purposeSplit)
 		return nil
 	})
 	if sendErr != nil {
-		classified := classifyCashSpendErr(cmd, sendErr, "transfer", mergedID)
-		if priv != "" && output.AsCLIError(classified).Code != output.CodeIndeterminate {
+		if priv != "" && output.AsCLIError(sendErr).Code != output.CodeIndeterminate {
 			// Refused, or never sent: the merged bill is still whole and ours.
-			toCashNotes(l, []string{mergedID})
+			if _, unsaved := toCashNotes(cmd, l, []string{mergedID}); len(unsaved) > 0 {
+				return withRecovery(sendErr, unsavedNotesError(cmd, unsaved))
+			}
 		}
-		parked.forgetIfNothingCreated(classified)
-		return classified
+		return sendErr
 	}
 	_ = l.SetStatus(mergedID, ledger.StatusTransferred)
-	parked.release()
+	merged, _ = l.Find(mergedID)
 	// consolidated_from names the bills the caller held, not the interim merge.
-	return printAndSaveTransferResult(cmd, l, result, sendAmount, toValue, target, sourceIDs,
+	return printAndSaveTransferResult(cmd, l, result, call, sendAmount, toValue, target, sourceIDs,
 		ledger.Entry{IdentityRequired: ptrTo(true), MinterPubkey: merged.MinterPubkey, ThrowawayKey: priv}, merged.Token)
 }

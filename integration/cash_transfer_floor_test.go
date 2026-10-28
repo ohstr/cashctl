@@ -102,6 +102,9 @@ func TestCashTransferMinFloor_SplitAtFloor_Succeeds(t *testing.T) {
 // TestCashTransferSplit_AmountAndFloorBoundaries, which asserts the source
 // claim is left completely untouched), and cashctl must not mark anything
 // transferred when the wire call itself never landed.
+// NIP-CASH §Transferring and Splitting, step 4: a split below the slice's
+// floor, or one leaving a remainder below it, is refused with RESTRICTED
+// (cashctl: exit 7, code auth), not BAD_REQUEST.
 func TestCashTransferMinFloor_SplitBelowFloor_Rejected(t *testing.T) {
 	cfg, err := LoadConfig("")
 	if err != nil {
@@ -128,8 +131,8 @@ func TestCashTransferMinFloor_SplitBelowFloor_Rejected(t *testing.T) {
 	}
 
 	res := f.run("transfer", fakeHex32(t), "--amount", lokiArg(floor-1), "--yes")
-	if res.ExitCode != 3 {
-		t.Fatalf("split one unit below the floor: exit = %d, want 3 (invalid_input)\nstdout: %s\nstderr: %s", res.ExitCode, res.Stdout, res.Stderr)
+	if res.ExitCode != 7 {
+		t.Fatalf("split one unit below the floor: exit = %d, want 7 (auth: RESTRICTED, NIP-CASH §Transferring step 4)\nstdout: %s\nstderr: %s", res.ExitCode, res.Stdout, res.Stderr)
 	}
 	// NOT asserting the message names "floor"/the actual numbers, even
 	// though lokihub's own wire message does (handleCashTransferSplit:
@@ -145,11 +148,11 @@ func TestCashTransferMinFloor_SplitBelowFloor_Rejected(t *testing.T) {
 	// git status) — not fixed here, only pinned as-is so this test keeps
 	// passing and the gap stays visible instead of silently regressing
 	// further.
-	if !jsonErrorContains(t, res.Stderr, "invalid_input", "") {
+	if !jsonErrorContains(t, res.Stderr, "auth", "") {
 		t.Errorf("unexpected error body: %s", res.Stderr)
 	}
-	if got := nwcCodeFromError(t, res.Stderr); got != "BAD_REQUEST" {
-		t.Errorf("nwc_code = %q, want BAD_REQUEST", got)
+	if got := nwcCodeFromError(t, res.Stderr); got != "RESTRICTED" {
+		t.Errorf("nwc_code = %q, want RESTRICTED", got)
 	}
 	if n := heldCount(t, f); n != 1 {
 		t.Errorf("a rejected split must leave the token held, got %d held", n)
@@ -194,8 +197,8 @@ func TestCashTransferMinFloor_RemainderBelowFloor_Rejected(t *testing.T) {
 	}
 
 	res := f.run("transfer", fakeHex32(t), "--amount", lokiArg(int64(splitAmount)), "--yes")
-	if res.ExitCode != 3 {
-		t.Fatalf("split leaving a below-floor remainder: exit = %d, want 3 (invalid_input)\nstdout: %s\nstderr: %s", res.ExitCode, res.Stdout, res.Stderr)
+	if res.ExitCode != 7 {
+		t.Fatalf("split leaving a below-floor remainder: exit = %d, want 7 (auth: RESTRICTED, NIP-CASH §Transferring step 4)\nstdout: %s\nstderr: %s", res.ExitCode, res.Stdout, res.Stderr)
 	}
 	// Same generic-message gap as TestCashTransferMinFloor_SplitBelowFloor_
 	// Rejected above (see its own comment, and docs/private/
@@ -209,11 +212,11 @@ func TestCashTransferMinFloor_RemainderBelowFloor_Rejected(t *testing.T) {
 	// test and the split-side one currently produce byte-identical error
 	// bodies except for nothing at all distinguishing them. Not fixed
 	// here (internal/output/ ownership, see above).
-	if !jsonErrorContains(t, res.Stderr, "invalid_input", "") {
+	if !jsonErrorContains(t, res.Stderr, "auth", "") {
 		t.Errorf("unexpected error body: %s", res.Stderr)
 	}
-	if got := nwcCodeFromError(t, res.Stderr); got != "BAD_REQUEST" {
-		t.Errorf("nwc_code = %q, want BAD_REQUEST", got)
+	if got := nwcCodeFromError(t, res.Stderr); got != "RESTRICTED" {
+		t.Errorf("nwc_code = %q, want RESTRICTED", got)
 	}
 	if n := heldCount(t, f); n != 1 {
 		t.Errorf("a rejected split must leave the token held, got %d held", n)

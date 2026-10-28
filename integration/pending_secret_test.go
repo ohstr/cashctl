@@ -5,29 +5,16 @@ package integration
 import (
 	"database/sql"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	_ "modernc.org/sqlite"
 )
 
-// These tests cover the fix for a real fund-loss bug: protectCashReceipt
-// generates a cash-mode target's replacement secret purely locally (NIP-CASH
-// never returns it — only a one-way commitment ever crosses the wire), so
-// it can and now does persist that candidate as PendingCashSecret BEFORE
-// placing the wire call that's meant to confirm it. A kill or lost response
-// during that call can leave genuinely ambiguous which of the two secrets
-// the Hub actually accepted — NIP-CASH has no read-only way to ask
-// (nipcashclient.CheckClaim's own doc comment) — so cashctl can only find
-// out by trying: resolveCredential's callers (redeem, transfer) retry once
-// with PendingCashSecret when the usual secret is declined as wrong.
-//
-// Reproducing the exact kill-timing race against a live Hub is inherently
-// flaky (a ~250ms window in a ~400ms operation, per the campaign's own
-// report). These tests instead reconstruct the ambiguous ON-DISK STATE
-// directly — deterministic, and it's the actual data shape a kill leaves
-// behind, whichever secret really won — and confirm cashctl recovers the
-// funds from it either way.
+// The pending-secret fallback these tests once covered is gone: every call
+// that creates a bill is written ahead (the request id and every secret it
+// generates are saved before it is sent) and settled through cash_lookup, so
+// the ledger has no pending_cash_secret column left to fall back on. What
+// stays are the helpers the --as tests use to make the stored secret wrong.
 
 // currentCashSecret reads entryID's live cash_secret column directly —
 // receive's own --json output never includes it (Entry.CashSecret is
@@ -47,135 +34,20 @@ func currentCashSecret(t *testing.T, f *fixture, entryID string) string {
 	return secret
 }
 
-// corruptCashSecret opens f's cashctl.db directly and rewrites the given
-// held entry's cash_secret/pending_cash_secret columns — simulating the
-// on-disk state left by an interrupted protect step, without needing to
-// actually race a kill against the network.
-func corruptCashSecret(t *testing.T, f *fixture, entryID, cashSecret, pendingSecret string) {
+// corruptCashSecret opens f's cashctl.db directly and overwrites the held
+// entry's cash_secret, so only a credential passed in --as can spend it.
+func corruptCashSecret(t *testing.T, f *fixture, entryID, cashSecret string) {
 	t.Helper()
 	db, err := sql.Open("sqlite", "file:"+filepath.Join(f.configDir, "cashctl.db"))
 	if err != nil {
 		t.Fatalf("open cashctl.db directly: %v", err)
 	}
 	defer db.Close()
-	res, err := db.Exec(`UPDATE entries SET cash_secret = ?, pending_cash_secret = ? WHERE id = ?`, cashSecret, pendingSecret, entryID)
+	res, err := db.Exec(`UPDATE entries SET cash_secret = ? WHERE id = ?`, cashSecret, entryID)
 	if err != nil {
 		t.Fatalf("corrupt entries row: %v", err)
 	}
 	if n, _ := res.RowsAffected(); n != 1 {
 		t.Fatalf("corrupt entries row: matched %d rows, want 1", n)
-	}
-}
-
-// receiveAndScrambleCashSecret receives gift (protect runs normally,
-// under --json, and rekeys it to a fresh, genuinely live secret), then
-// simulates an interrupted rekey's on-disk aftermath: cash_secret is
-// overwritten with a dead value, and the real, still-live secret protect
-// just established is moved into pending_cash_secret instead — exactly
-// the shape a kill between protectRekeyOnly's write-ahead save and its own
-// final promotion leaves behind, regardless of which save actually landed.
-func receiveAndScrambleCashSecret(t *testing.T, f *fixture, gift string) (id string) {
-	t.Helper()
-	recv := f.mustJSON("receive", gift)
-	secured, _ := recv["secured"].(map[string]any)
-	if secured["status"] != "rekeyed" {
-		t.Fatalf("secured.status = %v, want rekeyed (test fixture assumption)", secured)
-	}
-	id = entryID(t, recv["entry"])
-	real := currentCashSecret(t, f, id)
-	corruptCashSecret(t, f, id, strings.Repeat("d", 64), real)
-	return id
-}
-
-// TestPendingSecretFallback_RedeemRecoversWhenPendingSecretIsTheRealOne is
-// the direct regression test: an entry whose cash_secret column is stale
-// (the OLD, now-dead secret an interrupted rekey retired) but whose
-// pending_cash_secret column holds the secret the Hub actually accepted
-// must still redeem for real, not report "wrong secret" and give up.
-func TestPendingSecretFallback_RedeemRecoversWhenPendingSecretIsTheRealOne(t *testing.T) {
-	admin := adminOrSkip(t)
-	hub := setUpCashHub(t, admin)
-	f := newFixture(t)
-
-	const amount = uint64(8_000)
-	receiveAndScrambleCashSecret(t, f, mintCashGift(t, hub, amount))
-
-	inv := makeHubInvoice(t, hub, amount)
-	res := f.run("redeem", "--invoice", inv, "--yes")
-	if res.ExitCode != 0 {
-		t.Fatalf("redeem with a dead cash_secret but a live pending_cash_secret: exit %d — the fallback did not recover the real secret\nstdout: %s\nstderr: %s",
-			res.ExitCode, res.Stdout, res.Stderr)
-	}
-	out := mustDecodeJSON(t, "redeem", res.Stdout)
-	if pre, _ := out["preimage"].(string); pre == "" {
-		t.Errorf("redeem succeeded but no preimage: %v", out)
-	}
-}
-
-// TestPendingSecretFallback_TransferRecoversWhenPendingSecretIsTheRealOne is
-// the same recovery, via transfer instead of redeem — the other single-
-// entry spend path that goes through resolveCredential.
-func TestPendingSecretFallback_TransferRecoversWhenPendingSecretIsTheRealOne(t *testing.T) {
-	admin := adminOrSkip(t)
-	hub := setUpCashHub(t, admin)
-	f := newFixture(t)
-
-	receiveAndScrambleCashSecret(t, f, mintCashGift(t, hub, 6_000))
-
-	res := f.run("transfer", fakeHex32(t), "--yes")
-	if res.ExitCode != 0 {
-		t.Fatalf("transfer with a dead cash_secret but a live pending_cash_secret: exit %d — the fallback did not recover the real secret\nstdout: %s\nstderr: %s",
-			res.ExitCode, res.Stdout, res.Stderr)
-	}
-}
-
-// TestPendingSecretFallback_DoesNotMaskAGenuinelyWrongSecret confirms the
-// fallback isn't a blanket "ignore cash_secret" escape hatch: when
-// NEITHER value is live any more (both genuinely wrong/spent), the spend
-// must still fail, with the original decline reported.
-func TestPendingSecretFallback_DoesNotMaskAGenuinelyWrongSecret(t *testing.T) {
-	admin := adminOrSkip(t)
-	hub := setUpCashHub(t, admin)
-	f := newFixture(t)
-
-	recv := f.mustJSON("receive", mintCashGift(t, hub, 4_000))
-	id := entryID(t, recv["entry"])
-	corruptCashSecret(t, f, id, strings.Repeat("1", 64), strings.Repeat("2", 64))
-
-	res := f.run("transfer", fakeHex32(t), "--yes")
-	if res.ExitCode == 0 {
-		t.Fatalf("transfer succeeded with two genuinely wrong secrets: %s", res.Stdout)
-	}
-	if e := parseErrorReport(t, res); e.Code != "not_found" {
-		t.Errorf("code = %q, want not_found (the original decline, not something the retry attempt invented)", e.Code)
-	}
-}
-
-// TestReceive_ProtectRekeyOnly_HappyPath_LeavesNoPendingSecret pins the
-// unchanged common case: a normal, uninterrupted protect leaves CashSecret
-// as the fresh secret and PendingCashSecret empty — the write-ahead field
-// is write-only scaffolding for the interrupted case, invisible otherwise.
-func TestReceive_ProtectRekeyOnly_HappyPath_LeavesNoPendingSecret(t *testing.T) {
-	admin := adminOrSkip(t)
-	hub := setUpCashHub(t, admin)
-	f := newFixture(t)
-
-	recv := f.mustJSON("receive", mintCashGift(t, hub, 5_000))
-	secured, _ := recv["secured"].(map[string]any)
-	if secured["status"] != "rekeyed" {
-		t.Fatalf("secured.status = %v, want rekeyed", secured)
-	}
-
-	db, err := sql.Open("sqlite", "file:"+filepath.Join(f.configDir, "cashctl.db"))
-	if err != nil {
-		t.Fatalf("open cashctl.db directly: %v", err)
-	}
-	defer db.Close()
-	var pending sql.NullString
-	if err := db.QueryRow(`SELECT pending_cash_secret FROM entries WHERE id = ?`, entryID(t, recv["entry"])).Scan(&pending); err != nil {
-		t.Fatalf("querying pending_cash_secret: %v", err)
-	}
-	if pending.Valid && pending.String != "" {
-		t.Errorf("pending_cash_secret = %q after an uninterrupted protect, want empty", pending.String)
 	}
 }

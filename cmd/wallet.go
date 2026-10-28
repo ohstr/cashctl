@@ -32,7 +32,7 @@ func newWalletCmd() *cobra.Command {
 		&cobra.Command{Use: "use <name>", Short: "Set the default wallet", Args: output.ExactArgs(1), RunE: runWalletUse},
 		newWalletGetInfoCmd(), newWalletBalanceCmd(), newWalletBudgetCmd(),
 		newWalletInvoiceCmd(), newWalletPayCmd(), newWalletListTxCmd(), newWalletSignMessageCmd(),
-		newWalletProtectCmd(),
+		newWalletProtectCmd(), newWalletDeleteCmd(),
 	)
 	return cmd
 }
@@ -93,8 +93,9 @@ call: amounts are as last known.
 
 --json adds: held_tokens (each with its id and cash_hub — only same-Hub
 tokens merge), unclaimed_handoffs (cash notes still unclaimed and gifts,
-which stay "sent": branch on status), unfinished_cash_sends (an interrupted
-cash send's only secret copy — keep it), pending_joins and pending_merge.`,
+which stay "sent": branch on status), open_calls (a transfer, merge or
+re-key with no answer yet, with each new code it generated — keep them),
+pending_joins and pending_merge.`,
 		Args: output.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			jsonMode, _ := cmd.Flags().GetBool("json")
@@ -122,6 +123,15 @@ cash send's only secret copy — keep it), pending_joins and pending_merge.`,
 			if err != nil {
 				return output.RuntimeError(cmd, err)
 			}
+			device, _ := deviceIDFn()
+			var recovered []string
+			if ws, err := ledger.Withdrawals(); err == nil {
+				for _, w := range ws {
+					if w.Recovered && w.FinishedAt == 0 {
+						recovered = append(recovered, w.WithdrawalID)
+					}
+				}
+			}
 
 			if jsonMode {
 				output.PrintJSON(map[string]any{
@@ -130,15 +140,20 @@ cash send's only secret copy — keep it), pending_joins and pending_merge.`,
 					"wallets":         output.NonNil(s.Connections),
 					"default_wallet":  s.Default,
 					"held_tokens":     heldTokensJSON(l.Held()),
-					// The only copy of each secret: see unreconciledDestinationParks.
-					"unfinished_cash_sends": output.NonNil(unfinishedCashSends(l)),
+					// Calls with no answer yet, with every secret they generated:
+					// each may be the only copy of what spends a bill.
+					"open_calls": output.NonNil(openCalls(l, device)),
 					// Handed out and not known to be claimed, secrets hidden: `wallet
 					// history --show-secrets` shows them in full to resend.
 					"unclaimed_handoffs": unclaimedHandoffs(l),
 					"pending_merge":      pendingMergeJSON(l),
-					// Joins the Hub never answered: the wallet may exist, known to
-					// the Hub by connection_pubkey. The secret is never shown.
+					// Joins not finished (open, or kept to show, such as an expired
+					// one): the wallet may exist, known to the Hub by
+					// connection_pubkey. The secret is never shown.
 					"pending_joins": pendingJoins,
+					// Withdrawals found through the Hub that this device has no
+					// record of.
+					"recovered_withdrawals": output.NonNil(recovered),
 				})
 				return nil
 			}
@@ -158,7 +173,7 @@ cash send's only secret copy — keep it), pending_joins and pending_merge.`,
 					if c.Name == s.Default {
 						marker = " [default]"
 					}
-					output.Printf("  %s (%s)%s\n", c.Name, c.Kind, marker)
+					output.Printf("  %s (%s)%s%s\n", c.Name, c.Kind, walletPubkeySuffix(c), marker)
 				}
 			}
 			held := l.Held()
@@ -184,31 +199,37 @@ cash send's only secret copy — keep it), pending_joins and pending_merge.`,
 				}
 				output.Printf("  %d) %s   received %s   %s\n", i+1, amount, formatReceivedDate(e.ReceivedAt), status)
 			}
-			// Last, and only when there is something to say: an interrupted
-			// `--to cash` send whose destination secret was written ahead of
-			// the call but never reconciled. This is the one place that
-			// secret is ever readable again, so it is worth pushing past the
-			// routine summary above — see unreconciledDestinationParks.
 			printPendingMerge(l)
 			if pending := unclaimedHandoffs(l); len(pending) > 0 {
 				output.Printf("\nHanded out, not yet claimed: %d — `cashctl wallet history --show-secrets` to resend\n", len(pending))
 			}
 			if len(pendingJoins) > 0 {
-				output.Printf("\nJoins with no answer: %d — the wallet may exist; if a join says you already hold one, ask the circle's host to delete the wallet with this connection key, then join again\n", len(pendingJoins))
+				output.Printf("\nJoins not finished: %d — `cashctl cash settle` asks the Hub about open ones\n", len(pendingJoins))
 				for _, j := range pendingJoins {
-					hub := j.HubLabel
+					hub := output.Sanitize(j.HubLabel)
 					if hub == "" {
-						hub = j.HubPubkey
+						hub = "Hub " + shortFingerprint(j.HubPubkey)
 					}
-					output.Printf("  %s   connection key %s   %s\n", output.Sanitize(hub), j.ConnectionPubkey, j.At)
+					if !j.ConnVerified {
+						hub += " (Hub not confirmed)"
+					}
+					state := j.State
+					if j.Detail != "" {
+						state += ": " + output.Sanitize(j.Detail)
+					}
+					if j.IsRotation() {
+						state = "rotation of wallet " + shortFingerprint(j.WalletPubkey) + ", " + state
+					}
+					output.Printf("  %s   connection key %s   %s   %s\n", hub, j.ConnectionPubkey, state, time.Unix(j.CreatedAt, 0).UTC().Format(time.RFC3339))
 				}
 			}
-			if parks := unreconciledDestinationParks(l); len(parks) > 0 {
-				output.Printf("\nUnfinished cash sends: %d\n", len(parks))
-				for _, line := range parks {
-					output.Println(line)
-				}
+			for _, id := range recovered {
+				output.Printf("\nFound a withdrawal this device has no record of: %s — `cashctl cash withdraw show %s`\n", id, id)
 			}
+			// Last, and only when there is something to say: calls whose answer
+			// never came, with the secrets they generated — the one place those
+			// are readable again.
+			printOpenCalls(l, device)
 			return nil
 		},
 	}
@@ -275,6 +296,11 @@ func dialForCommand(cmd *cobra.Command) (*nwcHandle, error) {
 		return nil, output.NotFoundError(cmd, "", errors.New(noWalletMessage()))
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, err = allowRotationUse(cmd, ctx, value)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
 	client, err := DialGeneric(ctx, value)
 	if err != nil {
 		cancel()
@@ -308,10 +334,14 @@ func newWalletGetInfoCmd() *cobra.Command {
 			if !ok {
 				return output.NotFoundError(cmd, "", errors.New(noWalletMessage()))
 			}
+			allowed, err := allowRotationUse(cmd, context.Background(), value)
+			if err != nil {
+				return err
+			}
 			var info *nip47.GetInfoResult
 			var dialErr bool
 			err = WithSpinner(jsonMode, "Fetching info...", func() error {
-				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				ctx, cancel := context.WithTimeout(allowed, 30*time.Second)
 				defer cancel()
 				client, cErr := DialGeneric(ctx, value)
 				if cErr != nil {

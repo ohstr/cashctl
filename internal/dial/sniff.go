@@ -5,7 +5,10 @@
 package dial
 
 import (
+	"encoding/json"
 	"strings"
+
+	"github.com/ohstr/nmilat/nipcash"
 
 	"github.com/flokiorg/go-flokicoin/chainutil/bech32"
 )
@@ -47,7 +50,50 @@ const (
 	// what it is instead of being decoded as a cash token and failing on
 	// the bytes.
 	KindLightningInvoice
+	// KindCashOrder: a cashorder1... Order connection (NIP-CO), which
+	// `cash order place` buys cash over.
+	KindCashOrder
+	// KindWitnessAddress: a segwit (bech32/bech32m) address of a chain cashctl
+	// holds bills for — where `cash withdraw` pays out.
+	KindWitnessAddress
+	// KindWithdrawEvent: a JSON kind-23187 withdraw quote or kind-23188
+	// withdraw receipt (NIP-CASH §Redeeming On-chain).
+	KindWithdrawEvent
+	// KindPayout: a JSON payout object as cash_withdraw and its lookups answer.
+	KindPayout
 )
+
+// witnessHRPs are the witness HRPs of the chains cashctl holds bills for.
+func witnessHRPs() map[string]bool {
+	out := map[string]bool{}
+	for _, chain := range []string{"bitcoin", "flokicoin"} {
+		hrps, _ := nipcash.WithdrawHRPs(chain)
+		for _, h := range hrps {
+			out[h] = true
+		}
+	}
+	return out
+}
+
+// SniffJSON classifies a JSON value: a withdraw quote or receipt event, a
+// payout object, or KindUnknown.
+func SniffJSON(s string) Kind {
+	var v struct {
+		Kind         *int            `json:"kind"`
+		State        string          `json:"state"`
+		PayoutMillis json.RawMessage `json:"payout_millis"`
+	}
+	if json.Unmarshal([]byte(strings.TrimSpace(s)), &v) != nil {
+		return KindUnknown
+	}
+	switch {
+	case v.Kind != nil && (*v.Kind == 23187 || *v.Kind == 23188):
+		return KindWithdrawEvent
+	case v.Kind == nil && v.State != "" && len(v.PayoutMillis) > 0:
+		return KindPayout
+	}
+	return KindUnknown
+}
 
 // hub HRPs are matched exactly; anything else that decodes as valid
 // bech32 is treated as an attempted cash token — the only other bech32
@@ -58,6 +104,7 @@ const (
 const (
 	hrpCircleHub = "circlehub"
 	hrpCashHub   = "cashhub"
+	hrpCashOrder = "cashorder"
 )
 
 // nostrEntityHRPs: the standard NIP-19 entity prefixes (npub, nsec, note,
@@ -103,10 +150,14 @@ func Sniff(s string) Kind {
 		return KindCircleHub
 	case hrp == hrpCashHub:
 		return KindCashHub
+	case hrp == hrpCashOrder:
+		return KindCashOrder
 	case nostrEntityHRPs[hrp]:
 		return KindNostrEntity
 	case strings.HasPrefix(hrp, "ln"):
 		return KindLightningInvoice
+	case witnessHRPs()[hrp]:
+		return KindWitnessAddress
 	default:
 		return KindCashToken
 	}

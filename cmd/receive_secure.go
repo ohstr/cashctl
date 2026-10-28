@@ -1,12 +1,11 @@
 package cmd
 
 import (
-	"context"
 	"errors"
-	"time"
+	"fmt"
+	"strings"
 
 	"github.com/ohstr/nmilat/nipcash"
-	nipcashclient "github.com/ohstr/nmilat/nipcash/client"
 	relayclient "github.com/ohstr/nmilat/relay/client"
 	"github.com/spf13/cobra"
 
@@ -37,6 +36,14 @@ type protectedStatus struct {
 	// automatically on the next spend of this entry — this is never a
 	// dead end the way LikelyWrongSecret's case is.
 	PendingSecretUnresolved bool
+	// Unresolved is set when Status is "failed" because an earlier re-key or
+	// move of this bill was never confirmed and the Hub could not settle it:
+	// nothing was written and no call was placed, since a new secret written
+	// over the pending one could destroy the only secret that spends it.
+	Unresolved bool
+	// Recovery is the <token>#<secret> handoff for a confirmed re-key whose
+	// local save failed after the Hub moved the bill to a new token.
+	Recovery string
 }
 
 func (s protectedStatus) json() map[string]any {
@@ -56,16 +63,26 @@ func (s protectedStatus) json() map[string]any {
 	if s.PendingSecretUnresolved {
 		out["pending_secret_unresolved"] = true
 	}
+	if s.Unresolved {
+		out["unresolved"] = true
+	}
+	if s.Recovery != "" {
+		out["recovery"] = s.Recovery
+	}
 	return out
 }
 
-// isWrongSecretDecline reports whether err looks like a cash_secret
-// mismatch (NWC code NOT_FOUND) rather than some other failure — NIP-CASH
-// §Redemption Metadata guarantees a wrong secret always declines this way.
+// isWrongSecretDecline reports whether err is a cash_secret mismatch rather
+// than some other failure.
 func isWrongSecretDecline(err error) bool {
 	var walletErr *relayclient.WalletError
-	return errors.As(err, &walletErr) && walletErr.Code == "NOT_FOUND"
+	return errors.As(err, &walletErr) && isWrongSecretCode(walletErr.Code)
 }
+
+// isWrongSecretCode is the code a Hub answers a cash_secret that does not
+// verify with: UNAUTHORIZED, never NOT_FOUND, which means a verified holder
+// with no slice (NIP-CASH §Errors).
+func isWrongSecretCode(code string) bool { return code == "UNAUTHORIZED" }
 
 // protectCashReceipt is receive's automatic follow-up for a freshly
 // received cash-mode entry: confirm with the user, then re-key it
@@ -100,126 +117,76 @@ func protectCashReceipt(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entr
 	return protectRekeyOnly(cmd, l, entry, jsonMode)
 }
 
-// protectRekeyOnly is protectCashReceipt's no-merge path: re-key entry's
-// cash secret in place, without going through nipcashclient.RekeyCashSlice.
+// protectRekeyOnly is protectCashReceipt's no-merge path: re-key entry's cash
+// secret onto a fresh one only this wallet holds.
 //
-// A cash-mode target's secret is generated purely locally — NIP-CASH §Cash-Mode
-// Slices: the caller supplies only a one-way commitment over the wire, the
-// secret itself never crosses it — so there is no reason to let placing the
-// call be the difference between "the new secret exists on disk" and "the
-// new secret exists only in this process's own memory, gone the instant it
-// dies." nipcash.NewCashTarget() is generated here, in cashctl's own
-// code, and entry.PendingCashSecret is saved BEFORE the call — the same
-// write-ahead discipline a database uses for its own log.
-//
-// Once persisted, a kill or lost response can leave the outcome genuinely
-// ambiguous: NIP-CASH has no read-only way to ask the Hub which of two
-// candidate secrets it accepted (nipcashclient.CheckClaim's own doc
-// comment — a cash-mode match only proves *some* recipient exists, never
-// *which* secret). resolveCredential's own fallback resolves that
-// ambiguity the only way the protocol allows: by trying the pending secret
-// on the entry's next real spend attempt if the usual one is declined.
+// The new secret is generated here and only its commitment crosses the wire
+// (NIP-CASH §Cash-Mode Slices). It is written ahead with the call (its
+// call_secrets row) before anything is sent, so a kill or a lost answer never
+// costs it: the call stays open, the bill is not used again until the Hub says
+// what happened, and `wallet show` lists the new code meanwhile.
 func protectRekeyOnly(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entry, jsonMode bool) (protectedStatus, *ledger.Entry) {
-	bt := nipcash.NewCashTarget()
-	entry.PendingCashSecret = bt.Secret()
-	if err := l.Save(); err != nil {
-		// Nothing has been sent to the Hub yet — entry.CashSecret is
-		// still the only real secret, so this is an ordinary failure.
-		entry.PendingCashSecret = ""
+	if _, open := l.OpenCallFor(entry.ID); open {
+		printProtectUnresolved(jsonMode, entry.ID)
+		return protectedStatus{Status: "failed", Error: errUnresolvedRekey(entry.ID).Error(), Unresolved: true}, entry
+	}
+	bt, err := nipcash.NewCashTarget()
+	if err != nil {
 		printProtectFailure(jsonMode, err)
 		return protectedStatus{Status: "failed", Error: err.Error()}, entry
 	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	var dialErr bool
+	id := entry.ID
 	var result *nipcash.CashTransferResult
-	err := WithSpinner(jsonMode, "Protecting...", func() error {
-		client, cErr := nipcashclient.Connect(ctx, entry.Token)
-		if cErr != nil {
-			dialErr = true
-			return cErr
-		}
-		defer client.Close()
-		r, cErr := client.CashTransfer(ctx, nipcash.CashTransferParams{
-			Credential:    nipcash.BySecret(entry.CashSecret),
-			To:            bt,
-			CurrentAmount: *entry.AmountMillis,
-		})
-		if cErr != nil {
-			return cErr
-		}
-		result = r
-		return nil
+	var call *ledger.Call
+	err = WithSpinner(jsonMode, "Protecting...", func() error {
+		var cErr error
+		result, call, cErr = moveCash(cmd, l, entry, nipcash.BySecret(entry.CashSecret), bt, purposeProtect)
+		return cErr
 	})
+	entry, _ = l.Find(id)
 	if err != nil {
-		var walletErr *relayclient.WalletError
-		// A dial failure never reached the Hub at all; a *WalletError is
-		// the Hub actually answering with a real decline. Either way, the
-		// call is DEFINITELY known not to have taken effect — safe to
-		// retract the pending secret and keep reporting the old one.
-		if dialErr || errors.As(err, &walletErr) {
-			entry.PendingCashSecret = ""
-			_ = l.Save() // best-effort tidy-up; entry.CashSecret itself is unchanged either way
-			wrongSecret := isWrongSecretDecline(err)
-			if wrongSecret {
-				printProtectFailureWrongSecret(jsonMode, err)
-			} else {
-				printProtectFailure(jsonMode, err)
-			}
-			return protectedStatus{Status: "failed", Error: err.Error(), LikelyWrongSecret: wrongSecret}, entry
+		if output.AsCLIError(err).Code == output.CodeIndeterminate {
+			// No decided answer: the call stays open with the new secret, and is
+			// looked up before this bill is used again.
+			printProtectAmbiguousFailure(jsonMode, err)
+			return protectedStatus{Status: "failed", Error: err.Error(), PendingSecretUnresolved: true}, entry
 		}
-		// Ambiguous: a transport-level failure (timeout, dropped
-		// connection) with no definitive answer from the Hub. Leave
-		// PendingCashSecret exactly as already saved above — don't
-		// touch it either way — so resolveCredential can try it on the
-		// next real spend of this entry.
-		printProtectAmbiguousFailure(jsonMode, err)
-		return protectedStatus{Status: "failed", Error: err.Error(), PendingSecretUnresolved: true}, entry
+		printProtectFailure(jsonMode, err)
+		return protectedStatus{Status: "failed", Error: err.Error()}, entry
 	}
-	// The Hub never returns the secret itself for this call — see
-	// CashTransferResult's own doc comment; bt.Secret() IS the new secret.
-	//
-	// But it does not always re-key IN PLACE. When this bill has changed hands
-	// before, the Hub carves the slice into a brand-new wallet instead, because
-	// re-keying in place would leave the new secret on a connection a previous
-	// holder still reaches — that connection's secret is derived from the app ID
-	// and cannot be rotated, so giving a bill away never gives up access to it.
-	// Carving is what makes this protection real.
-	//
-	// So the bill may have MOVED, and following it is not optional: the carve
-	// drains and deletes the old wallet, so keeping the old token here leaves
-	// every later command addressing a bill that no longer exists — the Hub
-	// answers "no bill with this target wallet_pubkey" and the funds look gone.
-	// The new token arrives inside the private transport's own sealed reply, so
-	// only this caller can read it.
+	// The Hub does not always re-key IN PLACE. When this bill has changed hands
+	// before, it carves the slice into a brand-new wallet, because the old
+	// connection's secret cannot be rotated and a previous holder still reaches
+	// it. So the bill may have MOVED, and following it is not optional: the
+	// carve drains and deletes the old wallet.
 	moved := result != nil && result.NewWalletToken != ""
 	if moved {
-		entry.Token = result.NewWalletToken
+		entry.Token = strings.ToLower(result.NewWalletToken)
 		if result.NewWalletPubkey != "" {
 			entry.WalletPubkey = result.NewWalletPubkey
 		}
+		entry.Verified, entry.MinterPubkey = returnedBillCheck(entry.Token, entry.MinterPubkey)
+		if !entry.Verified {
+			output.Notef(jsonMode, unverifiedReturnNote)
+		}
 	}
-
 	entry.CashSecret = bt.Secret()
-	entry.PendingCashSecret = ""
 	entry.CashProtection = ledger.CashProtected
+	closeCall(l, call, ledger.CallDone, "")
 	if moved {
 		l.AppendHistory("secure", "re-keyed this cash into a new bill so the shared secret can no longer spend it, and the previous holder's connection no longer reaches it")
 	} else {
 		l.AppendHistory("secure", "re-keyed this cash so the shared secret can no longer spend it")
 	}
 	if err := l.Save(); err != nil {
-		// The rekey is CONFIRMED (the call above returned no error) — but
-		// this save's own failure is harmless data-safety-wise: SQLite
-		// commits l.save()'s whole batch atomically (internal/ledger.Save's
-		// own doc comment), so a failed commit here leaves the row exactly
-		// as the write-ahead save above left it — CashSecret still the
-		// OLD value, PendingCashSecret still bt.Secret() — which is
-		// exactly the state resolveCredential's fallback already knows how
-		// to recover from. Report it the same way as the ambiguous case
-		// above rather than inventing a third message for what is, from
-		// disk's point of view, the identical situation.
+		// The re-key is CONFIRMED, but disk still holds the call open with the
+		// new secret. In place, that is recoverable: the call is looked up. After
+		// a carve the new token exists only in this process, so hand it over.
+		if moved {
+			recovery := entryRecoveryString(entry)
+			printProtectUnsaved(jsonMode, err, recovery)
+			return protectedStatus{Status: "failed", Error: err.Error(), Recovery: recovery}, entry
+		}
 		printProtectAmbiguousFailure(jsonMode, err)
 		return protectedStatus{Status: "failed", Error: err.Error(), PendingSecretUnresolved: true}, entry
 	}
@@ -246,19 +213,36 @@ func printProtectAmbiguousFailure(jsonMode bool, err error) {
 	if jsonMode {
 		return
 	}
-	output.Printf("Received, but couldn't confirm protecting worked (%v).\nMay have worked anyway — no action needed, your next spend tries both.\n", err)
+	output.Printf("Couldn't confirm protecting worked (%v).\n%s\n", err, protectAmbiguousAdvice)
 }
 
-// printProtectFailureWrongSecret is printProtectFailure's counterpart for
-// isWrongSecretDecline — printed instead of, never alongside, the
-// ordinary message, whose "still shared" framing is false reassurance
-// when the real problem is that this cash was never genuinely redeemable
-// with the secret presented at all.
-func printProtectFailureWrongSecret(jsonMode bool, err error) {
+// protectAmbiguousAdvice is what an unconfirmed re-key tells the holder. It
+// never says "no action needed": after a carve the bill may have moved to a
+// token this wallet never learned.
+const protectAmbiguousAdvice = "It may have worked. cashctl settles it before your next spend; don't hand out the old code again."
+
+// errUnresolvedRekey is the refusal for a bill with a call still open: placing
+// another could act on a bill whose state only the Hub knows.
+func errUnresolvedRekey(id string) error {
+	return fmt.Errorf("an earlier call on %s has no answer yet, so nothing was changed. "+
+		"`cashctl wallet show` lists it with any new code it carries, which may be the only one that spends the bill now; "+
+		"don't hand out the old code again", id)
+}
+
+func printProtectUnresolved(jsonMode bool, id string) {
 	if jsonMode {
 		return
 	}
-	output.Printf("Received, but the secret doesn't match (%v) — likely wrong/truncated. Ask for the full \"token#secret\" string again.\n", err)
+	output.Printf("Not protected: %v.\n", errUnresolvedRekey(id))
+}
+
+// printProtectUnsaved is the text-mode line for a confirmed re-key whose save
+// failed after a carve; the recovery itself also travels in the error.
+func printProtectUnsaved(jsonMode bool, err error, recovery string) {
+	if jsonMode {
+		return
+	}
+	output.Printf("Moved on the Hub, but saving that locally failed (%v). Save this now, it will not be shown again:\n%s\n", err, recovery)
 }
 
 func printProtectPartialFailure(jsonMode bool, err error) {

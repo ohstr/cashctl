@@ -29,8 +29,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/ohstr/nmilat/nipcash"
 )
 
 // shortCashExpirySecs is short enough to expire mid-test (mint -> receive
@@ -57,16 +55,8 @@ func waitPastCashExpiry() { time.Sleep(9 * time.Second) }
 func mintPubkeyTokenExpiry(t *testing.T, hub adminCreateAppResponse, pubkeyHex string, amountMillis uint64, expirySecs int) string {
 	t.Helper()
 	what := fmt.Sprintf("mint_cash (expiry=%ds)", expirySecs)
-	return retryEphemeralNWC(t, what, func(ctx context.Context) (string, error) {
-		cashClient := dialCash(t, ctx, hub.PairingUri)
-		result, err := cashClient.MintCash(ctx, nipcash.MintCashParams{
-			Recipients: []nipcash.Allocation{nipcash.Send(nipcash.Pubkey(pubkeyHex), amountMillis)},
-			Expiry:     time.Duration(expirySecs) * time.Second,
-		})
-		if err != nil {
-			return "", err
-		}
-		return result.CashToken, nil
+	return retryEphemeralNWC(t, what, func(context.Context) (string, error) {
+		return newMinter(t, hub).To(pubkeyHex, amountMillis, time.Duration(expirySecs)*time.Second)
 	})
 }
 
@@ -80,19 +70,13 @@ func mintPubkeyTokenExpiry(t *testing.T, hub adminCreateAppResponse, pubkeyHex s
 // auto-consolidate path needs MintSignature: true on both mints.
 func mintSignedPubkeyTokenExpiry(t *testing.T, f *fixture, hub adminCreateAppResponse, pubkeyHex string, amountMillis uint64, expirySecs int) (token, minterPubkeyHex string, ok bool) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	cashClient := dialCash(t, ctx, hub.PairingUri)
-	result, err := cashClient.MintCash(ctx, nipcash.MintCashParams{
-		Recipients: []nipcash.Allocation{nipcash.Send(nipcash.Pubkey(pubkeyHex), amountMillis)},
-		Expiry:     time.Duration(expirySecs) * time.Second,
-	})
+	token, err := newMinter(t, hub).To(pubkeyHex, amountMillis, time.Duration(expirySecs)*time.Second)
 	if err != nil {
-		t.Fatalf("mint_cash (expiry=%ds, MintSignature: true): %v", expirySecs, err)
+		t.Fatalf("cash mint (expiry=%ds): %v", expirySecs, err)
 	}
-	decodeResp := f.mustJSON("decode", result.CashToken)
+	decodeResp := f.mustJSON("decode", token)
 	minter, valid := decodeResp["minter_pubkey"].(string)
-	return result.CashToken, minter, valid && minter != ""
+	return token, minter, valid && minter != ""
 }
 
 // nwcCodeFromError parses stderr as cashctl's --json error shape and
@@ -138,22 +122,29 @@ func TestCashTransfer_ExpiredWallet_ClassifiedAsAuth(t *testing.T) {
 	waitPastCashExpiry()
 
 	res := f.run("transfer", fakeHex32(t), "--yes")
-	if res.ExitCode != 7 {
-		t.Fatalf("transfer on an expired wallet: exit = %d, want 7 (auth)\nstdout: %s\nstderr: %s", res.ExitCode, res.Stdout, res.Stderr)
+	if res.ExitCode == 10 {
+		// The Hub's expiry sweep already destroyed the bill (lokihub sweeps
+		// expired bills within seconds): its tombstone (reason expired, NIP-CASH
+		// §Answering About a Destroyed Bill) is reported spent, and the entry
+		// stops being held.
+		if !jsonErrorContains(t, res.Stderr, "spent", "") {
+			t.Errorf("unexpected error body: %s", res.Stderr)
+		}
+		if n := heldCount(t, f); n != 0 {
+			t.Errorf("a swept bill is no longer held, got %d held", n)
+		}
+		return
 	}
-	// --json's "error" field is now the wallet's own raw message
-	// (CLIError.RawMessage, see internal/output/errors.go), not cashctl's
-	// generic "This wallet has expired..." translation — lokihub phrases
-	// this specific decline as a "redemption deadline ... has passed",
-	// never the literal word "expired", so check for either the way
-	// TestDecodeCheck_ExpiredCashToken_ReportsAccurateDeadlineMessage
-	// (this same file) already does, rather than assuming one exact
-	// phrasing.
-	if !jsonErrorContainsAny(t, res.Stderr, "auth", "deadline", "expired") {
+	if res.ExitCode != 7 {
+		t.Fatalf("transfer on an expired wallet: exit = %d, want 7 (auth), or 10 (spent) once swept\nstdout: %s\nstderr: %s", res.ExitCode, res.Stdout, res.Stderr)
+	}
+	// NIP-CASH §Transferring, step 1: a slice past its expiry is refused with
+	// RESTRICTED (NIP-CASH has no EXPIRED code).
+	if !jsonErrorContains(t, res.Stderr, "auth", "") {
 		t.Errorf("unexpected error body: %s", res.Stderr)
 	}
-	if got := nwcCodeFromError(t, res.Stderr); got != "EXPIRED" {
-		t.Errorf("nwc_code = %q, want EXPIRED", got)
+	if got := nwcCodeFromError(t, res.Stderr); got != "RESTRICTED" {
+		t.Errorf("nwc_code = %q, want RESTRICTED: %s", got, res.Stderr)
 	}
 	if n := heldCount(t, f); n != 1 {
 		t.Errorf("a rejected transfer must leave the token held, got %d held", n)
@@ -273,8 +264,10 @@ func TestCashConsolidate_AllSourcesExpired_ClassifiedAsAuth(t *testing.T) {
 	if res.ExitCode != 7 {
 		t.Fatalf("consolidate with every source expired: exit = %d, want 7 (auth)\nstdout: %s\nstderr: %s", res.ExitCode, res.Stdout, res.Stderr)
 	}
-	if got := nwcCodeFromError(t, res.Stderr); got != "EXPIRED" {
-		t.Errorf("nwc_code = %q, want EXPIRED", got)
+	// NIP-CASH refuses a slice past its expiry with RESTRICTED (it has no
+	// EXPIRED code).
+	if got := nwcCodeFromError(t, res.Stderr); got != "RESTRICTED" {
+		t.Errorf("nwc_code = %q, want RESTRICTED", got)
 	}
 	if n := heldCount(t, f); n != 2 {
 		t.Errorf("a rejected consolidate must leave both tokens held, got %d held", n)
@@ -658,12 +651,14 @@ func TestDecodeCheck_ExpiredCashToken_ReportsAccurateDeadlineMessage(t *testing.
 		t.Fatalf("decode --check on an expired token: ok = true, want false: %v", check)
 	}
 	errText, _ := check["error"].(string)
-	// The Hub's OWN deadline message, which names the timestamp. Asserting on
+	// An accurate expiry: the Hub's own deadline message when it refuses the
+	// read, or, now that cash_status answers an expired bill with its roster
+	// (NIP-CASH), cashctl's reading of that roster's expires_at. Asserting on
 	// "expired" alone is too weak: the omission wording lists expiry as one of
 	// several possibilities it cannot distinguish, so a bare substring match
 	// would pass on the case this test exists to rule out.
-	if !strings.Contains(errText, "deadline") {
-		t.Errorf("decode --check error = %q, want the Hub's own accurate deadline message (lokihub's AppKindCashWallet branch of permissions.HasPermission), not a generic decline", errText)
+	if !strings.Contains(errText, "deadline") && !strings.Contains(errText, "slice is expired") {
+		t.Errorf("decode --check error = %q, want an accurate expiry (the Hub's deadline message, or the expired slice its roster shows), not a generic decline", errText)
 	}
 	if strings.Contains(errText, "does not name you") {
 		t.Errorf("decode --check error = %q — an expired bill the caller DOES hold a slice of must report the expiry, not an information-free omission", errText)
@@ -776,14 +771,14 @@ func TestDecodeCheck_ExpiredCircleHub_StillReportsJoinable(t *testing.T) {
 	}
 	// The gap itself can't be closed (see above), but ok:true must not be
 	// left looking like an unqualified guarantee — note should say so.
-	if note, _ := check["note"].(string); !strings.Contains(note, "expired") && !strings.Contains(note, "allowlisted") {
+	if note, _ := check["note"].(string); !strings.Contains(note, "expired") && !strings.Contains(note, "allowlisted") && !strings.Contains(note, "allowed in") {
 		t.Errorf(`decode --check "note" = %q, want it to caveat that this doesn't confirm expiry/allowlist status`, note)
 	}
 
 	// Half 2: an actual join is correctly rejected anyway — cashctl's own
 	// error classification is fine here; it's only the pre-flight --check
 	// that can't see this coming.
-	res := f.run("join", "--hub", *hubResp.CircleHubToken, "--max-amount", "100", "--yes")
+	res := f.run("join", "--hub", *hubResp.CircleHubToken, "--max-amount", "100", "--yes", "--accept-no-rotation")
 	if res.ExitCode != 7 {
 		t.Fatalf("join against an already-expired circle_hub: exit = %d, want 7 (auth)\nstdout: %s\nstderr: %s", res.ExitCode, res.Stdout, res.Stderr)
 	}

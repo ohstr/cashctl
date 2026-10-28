@@ -1,8 +1,10 @@
-// Package store manages cashctl's single local SQLite database
-// (cashctl.db), replacing the three flat JSON files (identity.json,
-// connections.json, ledger.json) v0.0.1 used. No migration path: this is
-// a clean replacement, not an upgrade — v0.0.1 has no real installed base
-// to preserve continuity for (docs/ux-review.md Part 3).
+// Package store manages cashctl's single local SQLite database, cashctl.db.
+//
+// The schema is version 3, created fresh: there is no migration from any
+// earlier cashctl, and a database without schema_version 3 is refused, never
+// read (nothing earlier was in production). Version 2 was only ever written by
+// pre-release builds, which lacked the join, withdrawal and discover columns
+// and tables this version has.
 package store
 
 import (
@@ -19,26 +21,39 @@ import (
 	"github.com/ohstr/cashctl/internal/appdir"
 )
 
-// schema is applied with CREATE TABLE/INDEX IF NOT EXISTS on every Open,
-// so it's always safe to run against an existing database.
+// SchemaVersion is the only schema this cashctl reads or writes.
+const SchemaVersion = "3"
+
+// schema is created once, in an empty database, together with
+// meta(schema_version).
 const schema = `
-CREATE TABLE IF NOT EXISTS identity (
+CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+
+CREATE TABLE device (
+	id          INTEGER PRIMARY KEY CHECK (id = 1),
+	device_id   TEXT NOT NULL,
+	fingerprint TEXT NOT NULL,
+	created_at  INTEGER NOT NULL
+);
+
+CREATE TABLE identity (
 	source   TEXT NOT NULL,
 	npub     TEXT,
 	label    TEXT,
 	priv_hex TEXT
 );
 
-CREATE TABLE IF NOT EXISTS connections (
-	name                     TEXT PRIMARY KEY,
-	value                    TEXT NOT NULL,
-	added_at                 TEXT NOT NULL,
-	last_known_balance_mloki INTEGER,
-	last_known_balance_at    TEXT,
-	is_default               INTEGER NOT NULL DEFAULT 0
+CREATE TABLE connections (
+	name                      TEXT PRIMARY KEY,
+	kind                      TEXT NOT NULL CHECK (kind IN ('nwc', 'circle')),
+	value                     TEXT,
+	added_at                  TEXT NOT NULL,
+	is_default                INTEGER NOT NULL DEFAULT 0,
+	last_known_balance_millis INTEGER,
+	last_known_balance_at     TEXT
 );
 
-CREATE TABLE IF NOT EXISTS entries (
+CREATE TABLE entries (
 	id                         TEXT PRIMARY KEY,
 	token                      TEXT NOT NULL UNIQUE,
 	wallet_pubkey              TEXT NOT NULL,
@@ -50,29 +65,82 @@ CREATE TABLE IF NOT EXISTS entries (
 	received_at                TEXT NOT NULL,
 	verified                   INTEGER NOT NULL,
 	status                     TEXT NOT NULL,
-	cash_secret              TEXT,
+	cash_secret                TEXT,
 	connection_key_platform    TEXT,
 	connection_key_external_id TEXT,
 	attestation_event_id       TEXT,
 	ia_pubkey                  TEXT,
-	pending_cash_secret      TEXT,
 	expires_at                 INTEGER,
-	cash_protection          TEXT,
-	pending_destination_cash_secret TEXT,
-	throwaway_key            TEXT,
-	pending_throwaway_key    TEXT,
-	redeem_fee_millis        INTEGER
+	cash_protection            TEXT,
+	throwaway_key              TEXT,
+	pending_throwaway_key      TEXT,
+	redeem_fee_millis          INTEGER,
+	zap_event                  TEXT,
+	redeem_payment_hash        TEXT,
+	redeem_invoice_expires_at  INTEGER,
+	redeem_into                TEXT,
+	redeem_presumed_at         INTEGER,
+	created_by_call            TEXT,
+	version                    INTEGER NOT NULL DEFAULT 0
 );
-CREATE INDEX IF NOT EXISTS idx_entries_status_minter ON entries(status, minter_pubkey);
+CREATE INDEX idx_entries_status_minter ON entries(status, minter_pubkey);
 
-CREATE TABLE IF NOT EXISTS history (
+CREATE TABLE pending_calls (
+	call_id           TEXT PRIMARY KEY,
+	request_id        TEXT NOT NULL UNIQUE,
+	method            TEXT NOT NULL,
+	purpose           TEXT NOT NULL,
+	deadline          INTEGER NOT NULL,
+	sent_h            INTEGER NOT NULL,
+	hub_identity      TEXT NOT NULL,
+	target            TEXT NOT NULL,
+	target_credential TEXT NOT NULL,
+	device_id         TEXT NOT NULL,
+	amount_millis     INTEGER NOT NULL,
+	chain             TEXT NOT NULL,
+	authorizer_kind   TEXT NOT NULL,
+	authorizer_pubkey TEXT,
+	authorizer_secret TEXT,
+	source_entry_ids  TEXT NOT NULL,
+	params_json       TEXT NOT NULL,
+	replaces          TEXT,
+	attempt           INTEGER NOT NULL DEFAULT 0,
+	state             TEXT NOT NULL,
+	detail            TEXT,
+	first_error       TEXT,
+	first_detail      TEXT,
+	saw_reused        INTEGER NOT NULL DEFAULT 0,
+	retry_after       INTEGER,
+	created_at        INTEGER NOT NULL,
+	updated_at        INTEGER NOT NULL,
+	result_json       TEXT,
+	version           INTEGER NOT NULL DEFAULT 0,
+	zap_context       TEXT
+);
+
+CREATE TABLE call_secrets (
+	call_id    TEXT NOT NULL REFERENCES pending_calls(call_id),
+	role       TEXT NOT NULL,
+	secret     TEXT NOT NULL,
+	commitment TEXT NOT NULL,
+	PRIMARY KEY (call_id, role)
+);
+
+CREATE TABLE derived_ids (
+	request_id        TEXT PRIMARY KEY,
+	parent_request_id TEXT NOT NULL,
+	deadline          INTEGER,
+	keep_until        INTEGER NOT NULL
+);
+
+CREATE TABLE history (
 	id     INTEGER PRIMARY KEY AUTOINCREMENT,
 	at     TEXT NOT NULL,
 	action TEXT NOT NULL,
 	detail TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS handoffs (
+CREATE TABLE handoffs (
 	id            INTEGER PRIMARY KEY AUTOINCREMENT,
 	at            TEXT NOT NULL,
 	kind          TEXT NOT NULL,
@@ -85,14 +153,143 @@ CREATE TABLE IF NOT EXISTS handoffs (
 	checked_at    TEXT
 );
 
-CREATE TABLE IF NOT EXISTS pending_joins (
+CREATE TABLE joins (
 	connection_pubkey TEXT PRIMARY KEY,
 	connection_secret TEXT NOT NULL,
 	hub_pubkey        TEXT NOT NULL,
+	member_pubkey     TEXT NOT NULL,
+	hub_connection    TEXT NOT NULL,
+	hub_identity      TEXT NOT NULL,
+	chain             TEXT NOT NULL,
 	hub_label         TEXT NOT NULL,
-	at                TEXT NOT NULL
+	conn_verified     INTEGER NOT NULL,
+	deadline          INTEGER NOT NULL,
+	device_id         TEXT NOT NULL,
+	terms             TEXT,
+	state             TEXT NOT NULL,
+	detail            TEXT,
+	retry_after       INTEGER,
+	wallet_name       TEXT,
+	lookup_answered   INTEGER NOT NULL DEFAULT 0,
+	alt_lookup_tried  INTEGER NOT NULL DEFAULT 0,
+	created_at        INTEGER NOT NULL,
+	updated_at        INTEGER NOT NULL
+);
+
+CREATE TABLE orders (
+	order_id        TEXT PRIMARY KEY,
+	call_id         TEXT NOT NULL,
+	notify          TEXT NOT NULL,
+	payment         TEXT NOT NULL,
+	amount_millis   INTEGER NOT NULL,
+	recipient_kind  TEXT NOT NULL,
+	recipient       TEXT NOT NULL,
+	hub_identity    TEXT NOT NULL,
+	chain           TEXT NOT NULL,
+	network         TEXT,
+	conn_verified   INTEGER NOT NULL,
+	state           TEXT NOT NULL,
+	saw_progress    INTEGER NOT NULL DEFAULT 0,
+	terms_changed   INTEGER NOT NULL DEFAULT 0,
+	pay_by          INTEGER,
+	order_json      TEXT,
+	accepted_relays TEXT,
+	created_at      INTEGER NOT NULL,
+	checked_at      INTEGER,
+	finished_at     INTEGER
+);
+
+CREATE TABLE discover_relays (url TEXT PRIMARY KEY, added_at INTEGER NOT NULL);
+CREATE TABLE discover_curators (pubkey TEXT PRIMARY KEY, added_at INTEGER NOT NULL);
+CREATE TABLE discover_state (key TEXT PRIMARY KEY, value BLOB NOT NULL, updated_at INTEGER NOT NULL);
+CREATE TABLE discover_events (
+	id         TEXT PRIMARY KEY,
+	kind       INTEGER NOT NULL,
+	pubkey     TEXT NOT NULL,
+	created_at INTEGER NOT NULL,
+	raw        TEXT NOT NULL,
+	origin     TEXT NOT NULL,
+	fetched_at INTEGER NOT NULL
+);
+CREATE TABLE discover_outbox (
+	outbox_id     TEXT PRIMARY KEY,
+	kind          INTEGER NOT NULL,
+	node          TEXT NOT NULL,
+	offer         TEXT,
+	draft         TEXT NOT NULL,
+	publish_after INTEGER NOT NULL,
+	state         TEXT NOT NULL,
+	event_id      TEXT,
+	published_to  TEXT,
+	created_at    INTEGER NOT NULL
+);
+
+CREATE TABLE trusted_minters (
+	minter_xonly TEXT NOT NULL,
+	chain        TEXT NOT NULL,
+	added_at     INTEGER NOT NULL,
+	PRIMARY KEY (minter_xonly, chain)
+);
+
+CREATE TABLE withdraw_quotes (
+	quote_handle  TEXT PRIMARY KEY,
+	entry_id      TEXT NOT NULL,
+	wallet_pubkey TEXT NOT NULL,
+	hub_identity  TEXT NOT NULL,
+	address       TEXT NOT NULL,
+	quote_json    TEXT NOT NULL,
+	quote_id      TEXT NOT NULL,
+	send_before   INTEGER,
+	used          INTEGER NOT NULL DEFAULT 0,
+	created_at    INTEGER NOT NULL
+);
+
+CREATE TABLE withdrawals (
+	withdrawal_id      TEXT PRIMARY KEY,
+	call_id            TEXT NOT NULL,
+	source_entry_id    TEXT NOT NULL,
+	wallet_pubkey      TEXT NOT NULL,
+	hub_identity       TEXT NOT NULL,
+	address            TEXT,
+	quote_json         TEXT,
+	quote_id           TEXT,
+	amount_millis      INTEGER NOT NULL,
+	network_fee_millis INTEGER,
+	hub_fee_millis     INTEGER,
+	fee_millis         INTEGER NOT NULL,
+	payout_millis      INTEGER NOT NULL,
+	sent_by            INTEGER NOT NULL,
+	holds_until        INTEGER,
+	send_before        INTEGER,
+	notify             TEXT NOT NULL,
+	accepted_relays    TEXT,
+	state              TEXT NOT NULL,
+	payout_json        TEXT,
+	remint_entry_id    TEXT,
+	quote_expired_seen INTEGER NOT NULL DEFAULT 0,
+	confirmed_at       INTEGER,
+	checked_at         INTEGER,
+	finished_at        INTEGER,
+	recovered          INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE unverified_confirmations (
+	conn_sha256  TEXT PRIMARY KEY,
+	hrp          TEXT NOT NULL,
+	hub_identity TEXT NOT NULL,
+	reason       TEXT NOT NULL,
+	confirmed_at INTEGER NOT NULL,
+	via          TEXT NOT NULL
 );
 `
+
+// ErrOldDatabase is a cashctl.db written by an earlier cashctl. It is never
+// read: the caller moves it aside.
+type ErrOldDatabase struct{ Path string }
+
+func (e *ErrOldDatabase) Error() string {
+	return fmt.Sprintf("%s was written by an earlier cashctl; move it aside (nothing in it is read)", e.Path)
+}
 
 // Path returns cashctl.db's location under appdir.Dir(), without opening
 // it — mainly useful for tests asserting on-disk file permissions.
@@ -161,49 +358,27 @@ func enableWAL(db *sql.DB) {
 	})
 }
 
-// Open opens (creating and migrating if needed) cashctl's single local
-// database, cashctl.db, under appdir.Dir(). Callers own the returned *sql.DB
-// and must Close it. 0600: it can hold a plaintext identity privkey and
-// cash-mode spending secrets — same sensitivity ledger.json and
-// identity.json always had (see ledger.Entry.CashSecret's own doc
-// comment).
+// Open opens cashctl's single local database, cashctl.db, under appdir.Dir(),
+// creating the version-3 schema in a new or empty file and refusing any other
+// (ErrOldDatabase). It also checks this file's device record (EnsureDevice).
+// Callers own the returned *sql.DB and must Close it. 0600: it holds a
+// plaintext identity key and cash-mode spending secrets.
 func Open() (*sql.DB, error) {
 	path, err := Path()
 	if err != nil {
 		return nil, err
 	}
-
-	// busy_timeout(5000): SQLite's own internal busy-handler, not a
-	// hand-rolled one — on SQLITE_BUSY it retries with backoff at the C
-	// level for up to 5s before ever returning the error to Go, which is
-	// what ledger.Save's own Go-level withBusyRetry then wraps as a second,
-	// coarser line of defense (see its own doc comment). Without this, two
-	// `cashctl` processes committing within the same few milliseconds could
-	// fail outright — confirmed live and under `go test -race`, where the
-	// race detector's own overhead widens that window enough to turn a rare
-	// case into a routine one.
+	// busy_timeout(5000): SQLite's own busy handler, so two cashctl processes
+	// committing within the same few milliseconds wait rather than fail;
+	// WithBusyRetry wraps it as a second, coarser line of defence.
 	db, err := sql.Open("sqlite", sqliteDSN(path))
 	if err != nil {
 		return nil, err
 	}
-	// Before the first statement, so the migrations below run under WAL, but
-	// tolerant of failing: see enableWAL for why it must never be fatal.
 	enableWAL(db)
-	if _, err := db.Exec(schema); err != nil {
+	if err := initSchema(db, path); err != nil {
 		_ = db.Close()
-		return nil, fmt.Errorf("cashctl.db schema migration: %w", err)
-	}
-	// Before addColumnsIfMissing, never after: on a pre-rename DB the add
-	// step would otherwise create an empty cash_* column right next to the
-	// bearer_* one still holding the data, and the rename below would then
-	// have nowhere to go.
-	if err := renameColumnsIfNeeded(db); err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("cashctl.db schema migration: %w", err)
-	}
-	if err := addColumnsIfMissing(db); err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("cashctl.db schema migration: %w", err)
+		return nil, err
 	}
 	if err := os.Chmod(path, 0600); err != nil {
 		_ = db.Close()
@@ -214,6 +389,54 @@ func Open() (*sql.DB, error) {
 		return nil, err
 	}
 	return db, nil
+}
+
+// initSchema creates the schema in an empty database, refuses one of another
+// version, and checks the device record — under one write lock, so two
+// processes opening a fresh file at once never both create it.
+func initSchema(db *sql.DB, path string) error {
+	ctx := context.Background()
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = conn.Close() }()
+	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+		return fmt.Errorf("cashctl.db: taking the write lock: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = conn.ExecContext(ctx, `ROLLBACK`)
+		}
+	}()
+
+	var tables int
+	if err := conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type = 'table'`).Scan(&tables); err != nil {
+		return fmt.Errorf("cashctl.db: %w", err)
+	}
+	if tables == 0 {
+		if _, err := conn.ExecContext(ctx, schema); err != nil {
+			return fmt.Errorf("cashctl.db: creating the schema: %w", err)
+		}
+		if _, err := conn.ExecContext(ctx, `INSERT INTO meta (key, value) VALUES ('schema_version', ?)`, SchemaVersion); err != nil {
+			return fmt.Errorf("cashctl.db: %w", err)
+		}
+	} else {
+		var version string
+		err := conn.QueryRowContext(ctx, `SELECT value FROM meta WHERE key = 'schema_version'`).Scan(&version)
+		if err != nil || version != SchemaVersion {
+			return &ErrOldDatabase{Path: path}
+		}
+	}
+	if err := ensureDevice(ctx, conn, path); err != nil {
+		return err
+	}
+	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
+		return fmt.Errorf("cashctl.db: %w", err)
+	}
+	committed = true
+	return nil
 }
 
 // chmodJournalSidecars restricts cashctl.db's journal files to 0600, the same as
@@ -228,7 +451,7 @@ func Open() (*sql.DB, error) {
 // full of spending secrets off the machine. That is why it lands with WAL rather
 // than after it.
 //
-// Called after the migrations, so a -wal created by those writes already exists.
+// Called after the schema is created, so a -wal those writes made already exists.
 // A sidecar that is absent is not an error: which ones exist depends on the
 // journal mode and on whether a connection is currently open.
 func chmodJournalSidecars(path string) error {
@@ -238,232 +461,4 @@ func chmodJournalSidecars(path string) error {
 		}
 	}
 	return nil
-}
-
-// addedColumns lists every column added to an existing table after that
-// table's own CREATE TABLE IF NOT EXISTS above first shipped — that clause
-// is a no-op against a database from before the column existed, so it has
-// to be ALTERed in separately. ALTER TABLE ADD COLUMN is instant and safe
-// here (nullable, no default, so SQLite never rewrites existing rows) —
-// nothing more elaborate than this loop is needed unless a future column
-// needs backfilling.
-var addedColumns = []struct{ table, column, ddl string }{
-	// pending_cash_secret: a rekey/protect step generates the new cash
-	// secret client-side before ever placing the wire call (see
-	// cmd/receive_secure.go's own doc comment) — persisting it here first
-	// means a kill mid-call loses at most a retry, never the secret itself.
-	{"entries", "pending_cash_secret", `ALTER TABLE entries ADD COLUMN pending_cash_secret TEXT`},
-	// expires_at: the Hub-side redemption deadline (nipcash.CheckClaimResult
-	// .ExpiresAt, unix seconds), cached at receive time so `balance` can
-	// exclude an expired held token from the total without a live re-check
-	// per token on every call — before this column existed there was
-	// nowhere to persist it, so an expired-but-still-`held` token kept
-	// counting as spendable money forever.
-	{"entries", "expires_at", `ALTER TABLE entries ADD COLUMN expires_at INTEGER`},
-	// cash_protection: "" (unset/n/a), "shared" (a cash-mode entry's
-	// secret is still the one embedded in the original token/gift string
-	// — anyone else shown it can spend it too), or "protected" (re-keyed
-	// by protectCashReceipt/protectRekeyOnly, exclusively known to this
-	// ledger). Before this column existed there was no way to tell the
-	// two apart after the fact — a declined/failed protect left the same
-	// CashSecret shape as a genuinely re-keyed one.
-	{"entries", "cash_protection", `ALTER TABLE entries ADD COLUMN cash_protection TEXT`},
-	// version: an optimistic-concurrency token, not ledger data. ledger.Save
-	// bumps it on every row it updates and refuses an update whose observed
-	// version has moved, so two processes that both Load and then both write
-	// THE SAME row cannot silently lose one of the two transitions (D-CLI-4).
-	// Save is already diff-based, so a row only one process touched was never
-	// at risk — this closes the narrower case where both touched it.
-	//
-	// Nullable with no default, like every other column in this list: NULL
-	// means version 0 and Save reads it through COALESCE, so rows written
-	// before this column existed need no backfill and SQLite never rewrites
-	// them.
-	{"entries", "version", `ALTER TABLE entries ADD COLUMN version INTEGER`},
-	// redeem_fee_millis: the redeem fee the Hub quoted for this slice when it
-	// was received, so a later quote charging more for the same slice is
-	// caught rather than silently accepted (cmd's checkQuoteDrift).
-	{"entries", "redeem_fee_millis", `ALTER TABLE entries ADD COLUMN redeem_fee_millis INTEGER`},
-	// pending_destination_cash_secret: the cash secret of a bill some OTHER
-	// row's spend is about to create — `transfer --to cash` and
-	// `consolidate --to cash` both mint one locally and only a one-way
-	// commitment of it ever crosses the wire, so between the request
-	// leaving and the reply landing it exists nowhere but one process's
-	// heap. Persisted against the SOURCE row before the call, for the same
-	// reason pending_cash_secret is: a kill in that window must cost a
-	// reconciliation, never the money. Deliberately NOT pending_cash_secret
-	// itself — that column means "a candidate for THIS row's own
-	// credential" and is consumed as one (cmd/pending_secret_fallback.go,
-	// cmd/redeem_private.go), which a different bill's secret is not.
-	{"entries", "pending_destination_cash_secret", `ALTER TABLE entries ADD COLUMN pending_destination_cash_secret TEXT`},
-	// throwaway_key / pending_throwaway_key: a cash note being merged is first
-	// moved onto a throwaway key (cash_consolidate takes no cash-mode source), and
-	// that key is then the only thing that spends it. Written ahead of the move
-	// as pending, promoted once the move is confirmed (I-26).
-	{"entries", "throwaway_key", `ALTER TABLE entries ADD COLUMN throwaway_key TEXT`},
-	{"entries", "pending_throwaway_key", `ALTER TABLE entries ADD COLUMN pending_throwaway_key TEXT`},
-	// kind: what a registered connection is (circle wallet, plain NWC wallet,
-	// cash-token-family string), so `connect list`/`wallet show` can say which
-	// is the circle wallet. NULL on rows saved before it; config.Load infers.
-	{"connections", "kind", `ALTER TABLE connections ADD COLUMN kind TEXT`},
-}
-
-// addColumnsIfMissing applies addedColumns' migrations exactly once each,
-// keyed off PRAGMA table_info rather than sniffing the "duplicate column"
-// error text — errors.Is has nothing to match here (modernc.org/sqlite
-// doesn't export a typed error for it), and pragma_table_info is the
-// direct, unambiguous way to ask "does this column exist" instead.
-//
-// It runs on one connection under BEGIN IMMEDIATE, exactly as
-// renameColumnsIfNeeded does, so that question and the ADD answering it
-// cannot be split by another process asking it too.
-func addColumnsIfMissing(db *sql.DB) error {
-	ctx := context.Background()
-	conn, err := db.Conn(ctx)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = conn.Close() }()
-
-	// Without the write lock, two cashctl processes opening a pre-column
-	// ledger within the same instant both read the column as missing and both
-	// ALTER it in: the loser fails on "duplicate column name" and Open
-	// reports a migration error for a ledger that is, by then, correctly
-	// migrated. busy_timeout(5000) (see Open) instead parks the loser until
-	// the winner commits, after which it sees the column and skips it.
-	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
-		return fmt.Errorf("taking the ledger write lock: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_, _ = conn.ExecContext(ctx, `ROLLBACK`)
-		}
-	}()
-
-	for _, c := range addedColumns {
-		has, err := columnExists(ctx, conn, c.table, c.column)
-		if err != nil {
-			return err
-		}
-		if has {
-			continue
-		}
-		if _, err := conn.ExecContext(ctx, c.ddl); err != nil {
-			return fmt.Errorf("adding %s.%s: %w", c.table, c.column, err)
-		}
-	}
-
-	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
-		return fmt.Errorf("committing the ledger column add: %w", err)
-	}
-	committed = true
-	return nil
-}
-
-// renamedColumns lists every column renamed in place on an existing table.
-// NIP-CASH renamed "bearer" mode to "cash mode" (see nipcash.CashTarget),
-// so the three ledger columns that carried the old spelling move to the new
-// one. The stored values are untouched: a secret is still the same secret,
-// and cash_protection still holds "shared"/"protected".
-var renamedColumns = []struct{ table, from, to string }{
-	{"entries", "bearer_secret", "cash_secret"},
-	{"entries", "pending_bearer_secret", "pending_cash_secret"},
-	{"entries", "bearer_protection", "cash_protection"},
-}
-
-// renameColumnsIfNeeded applies renamedColumns to a ledger written before
-// the rename. It deliberately does NOT copy the DB aside first: cashctl.db
-// holds live spending secrets, so a backup would duplicate them on disk,
-// and the whole rename runs in one transaction anyway — it either lands
-// completely or not at all.
-//
-// Downgrading is not supported, and fails loudly rather than quietly: an
-// older cashctl opening a migrated ledger stops at "no such column:
-// bearer_secret" instead of reading a half-renamed row. It could not talk
-// to a renamed Hub regardless — the wire moved in the same release.
-//
-// BEGIN IMMEDIATE on a dedicated connection, rather than a deferred
-// database/sql transaction: two cashctl processes may open the same ledger
-// at once, and taking the write lock up front means the second one waits on
-// SQLite's own busy handler (busy_timeout in the DSN) and then re-reads
-// pragma_table_info under that lock, instead of racing a rename that has
-// already happened and failing on the ALTER.
-func renameColumnsIfNeeded(db *sql.DB) error {
-	ctx := context.Background()
-	conn, err := db.Conn(ctx)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = conn.Close() }()
-
-	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
-		return fmt.Errorf("taking the ledger write lock: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_, _ = conn.ExecContext(ctx, `ROLLBACK`)
-		}
-	}()
-
-	for _, c := range renamedColumns {
-		hasOld, err := columnExists(ctx, conn, c.table, c.from)
-		if err != nil {
-			return err
-		}
-		hasNew, err := columnExists(ctx, conn, c.table, c.to)
-		if err != nil {
-			return err
-		}
-
-		switch {
-		case hasOld && !hasNew:
-			if _, err := conn.ExecContext(ctx, fmt.Sprintf(
-				`ALTER TABLE %s RENAME COLUMN %s TO %s`, c.table, c.from, c.to)); err != nil {
-				return fmt.Errorf("renaming %s.%s to %s: %w", c.table, c.from, c.to, err)
-			}
-		case hasOld && hasNew:
-			// An older cashctl opened this already-migrated ledger and its
-			// own addColumnsIfMissing re-added the empty old column. Fold
-			// anything it wrote back in (COALESCE keeps the new column's
-			// value wherever it has one) and drop the stale duplicate, so
-			// the next run sees a single, unambiguous column.
-			if _, err := conn.ExecContext(ctx, fmt.Sprintf(
-				`UPDATE %s SET %s = COALESCE(%s, %s)`, c.table, c.to, c.to, c.from)); err != nil {
-				return fmt.Errorf("merging %s.%s into %s: %w", c.table, c.from, c.to, err)
-			}
-			if _, err := conn.ExecContext(ctx, fmt.Sprintf(
-				`ALTER TABLE %s DROP COLUMN %s`, c.table, c.from)); err != nil {
-				return fmt.Errorf("dropping stale %s.%s: %w", c.table, c.from, err)
-			}
-		}
-		// !hasOld: a fresh DB (the schema above already used the new name),
-		// one already migrated, or one so old it never had this column at
-		// all — addColumnsIfMissing adds the new name next.
-	}
-
-	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
-		return fmt.Errorf("committing the ledger column rename: %w", err)
-	}
-	committed = true
-	return nil
-}
-
-// columnExists asks SQLite directly rather than sniffing an error string,
-// for the same reason addColumnsIfMissing does: modernc.org/sqlite exports
-// no typed error for "no such column".
-func columnExists(ctx context.Context, conn *sql.Conn, table, column string) (bool, error) {
-	rows, err := conn.QueryContext(ctx,
-		`SELECT 1 FROM pragma_table_info(?) WHERE name = ?`, table, column)
-	if err != nil {
-		return false, fmt.Errorf("inspecting %s.%s: %w", table, column, err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	found := rows.Next()
-	if err := rows.Err(); err != nil {
-		return false, err
-	}
-	return found, nil
 }

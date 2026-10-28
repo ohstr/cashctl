@@ -258,13 +258,22 @@ func EmitError(cmd *cobra.Command, err error) {
 		payload := map[string]any{
 			"error":     SanitizeText(errMessage),
 			"code":      Sanitize(string(ce.Code)),
-			"retryable": retryableCodes[ce.Code],
+			"retryable": retryableCodes[ce.Code] && !ce.Final,
 		}
 		if ce.Input != "" {
 			payload["input"] = Sanitize(ce.Input)
 		}
 		if ce.NWCCode != "" {
 			payload["nwc_code"] = Sanitize(ce.NWCCode)
+		}
+		if ce.Call != nil {
+			payload["call"] = ce.Call
+		}
+		if ce.Reason != "" {
+			payload["reason"] = Sanitize(ce.Reason)
+		}
+		if ce.Detail != "" {
+			payload["detail"] = Sanitize(ce.Detail)
 		}
 		// Sanitized but never capped (see CLIError.Recovery): a truncated
 		// <token>#<secret> is as useless as a redacted one. Sanitize cannot

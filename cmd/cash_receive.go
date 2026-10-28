@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ohstr/nmilat/nipCZ"
 	"github.com/ohstr/nmilat/nipcash"
-	nipcashclient "github.com/ohstr/nmilat/nipcash/client"
 	"github.com/spf13/cobra"
 
 	"github.com/ohstr/cashctl/internal/dial"
@@ -30,6 +30,11 @@ func newCashReceiveCmd() *cobra.Command {
 		Args: output.ExactArgs(1),
 		RunE: runCashReceive,
 	}
+	cmd.Flags().String("zap-event", "", "the Cash Zap (kind 9522) a zap bill came with: a file, - for stdin, or the JSON")
+	cmd.Flags().Bool("find-zap", false, "find a zap bill's Cash Zap on --relay (never on the bill's own relay hints)")
+	cmd.Flags().StringSlice("relay", nil, "a relay to look for the Cash Zap on (with --find-zap)")
+	cmd.Flags().String("as", "", "the connection-key credential that claims a Cash Zap to a connection key")
+	cmd.Flags().Bool("trust-minter", false, "check a zap whose minter you don't trust yet with its Hub (its network can't be verified)")
 	return cmd
 }
 
@@ -42,6 +47,36 @@ func runCashReceive(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	// A Cash Zap given as the input, or a zap bill with its event.
+	if looksLikeZapEvent(raw) {
+		ev, evRaw, err := readZapEvent(cmd, raw)
+		if err != nil {
+			return err
+		}
+		return receiveZap(cmd, ev, evRaw)
+	}
+	if zapFlag, _ := cmd.Flags().GetString("zap-event"); zapFlag != "" {
+		ev, evRaw, err := readZapEvent(cmd, zapFlag)
+		if err != nil {
+			return err
+		}
+		// The bill received is the one typed, never another the event carries.
+		if z, zErr := nipCZ.ParseCashZap(ev); zErr == nil && !strings.EqualFold(strings.TrimSpace(raw), z.Cash) {
+			return output.InvalidInputError(cmd, "", errors.New("--zap-event names a different bill than the one given"))
+		}
+		return receiveZap(cmd, ev, evRaw)
+	}
+	if find, _ := cmd.Flags().GetBool("find-zap"); find {
+		tok, err := nipcash.Decode(strings.TrimSpace(raw))
+		if err != nil || tok.Scheme != nipcash.SchemeZapV1 {
+			return output.InvalidInputError(cmd, "", errors.New("--find-zap is for a zap bill (one signed for a Cash Zap)"))
+		}
+		ev, evRaw, err := findZapFor(cmd, tok)
+		if err != nil {
+			return err
+		}
+		return receiveZap(cmd, ev, evRaw)
+	}
 	// Trimmed: dial.Sniff trims for its own classification but the raw
 	// string would otherwise still reach nipcash.Decode, which rejects a
 	// stray leading/trailing space as invalid bech32.
@@ -50,8 +85,12 @@ func runCashReceive(cmd *cobra.Command, args []string) error {
 	switch dial.Sniff(input) {
 	case dial.KindCircleHub:
 		return output.InvalidInputError(cmd, input, fmt.Errorf("that's a Circle Hub connection — use `cashctl join <connection>` to join it"))
+	case dial.KindWitnessAddress:
+		return output.InvalidInputError(cmd, input, fmt.Errorf("that's an on-chain address — pay a bill out to it with `cashctl cash withdraw quote <address>`"))
+	case dial.KindCashOrder:
+		return output.InvalidInputError(cmd, input, fmt.Errorf("that's an Order connection — buy cash over it with `cashctl cash order place <connection> <amount>`"))
 	case dial.KindCashHub:
-		return output.InvalidInputError(cmd, input, fmt.Errorf("that's a Cash Hub connection (for minting cash) — cashctl can't mint, this needs the Hub operator's own tooling"))
+		return output.InvalidInputError(cmd, input, fmt.Errorf("that's a Cash Hub connection (for minting cash) — mint with `cashctl cash mint <amount> --hub -`"))
 	case dial.KindNWCURI:
 		return output.InvalidInputError(cmd, input, fmt.Errorf("that looks like a wallet connection, not a cash token — use `cashctl connect add <name> <uri>` instead"))
 	case dial.KindNostrEntity:
@@ -64,6 +103,15 @@ func runCashReceive(cmd *cobra.Command, args []string) error {
 
 	tok, err := nipcash.Decode(input)
 	if err != nil {
+		return output.InvalidInputError(cmd, input, err)
+	}
+	// The provenance gate first: a copy whose signature does not cover its own
+	// relays is refused before any of them is named or dialled.
+	if err := checkBillProvenance(tok); err != nil {
+		if errors.Is(err, errNeedsZapEvent) {
+			return output.InvalidInputError(cmd, input, errors.New(
+				"this bill came from a Cash Zap and needs its Cash Zap event: pass --zap-event <file>, or --find-zap --relay <url>"))
+		}
 		return output.InvalidInputError(cmd, input, err)
 	}
 	// Before anything below dials the bill's relays.
@@ -96,13 +144,12 @@ func runCashReceive(cmd *cobra.Command, args []string) error {
 		// The live answer discriminates the two cases exactly, which the guess cannot:
 		// a genuinely cash-mode bill has no credential to offer without its secret, so
 		// the call is refused or omitted, while a reassigned one resolves against the
-		// local identity. Note checkClaimOnce below passes NoLocalIdentity and so
-		// cannot see such a claim at all — right for reading a cash bill, blind here.
+		// local identity.
 		//
 		// The cost is one bounded network attempt on a path that used to be able to
 		// answer offline. Paid deliberately: the alternative is a bill that cannot be
 		// received by anyone.
-		if live, liveErr := checkClaimAsLocalIdentity(cmd, input, tok); liveErr == nil && !live.IsCash {
+		if live, liveErr := checkClaimAsLocalIdentity(cmd, input, tok); liveErr == nil && !live.Row.IsCash() {
 			isCash = false
 			output.Notef(jsonMode, "This bill is identity-bound now, though its own metadata still says cash-mode — reassigned by a transfer. Continuing with your local identity.")
 		}
@@ -114,7 +161,7 @@ func runCashReceive(cmd *cobra.Command, args []string) error {
 			checkResult, checkErr := checkClaimOnce(cmd, input, embeddedSecret, tok)
 			if !jsonMode {
 				if checkErr == nil {
-					output.Printf("check: matches (%s)\n", output.FormatAmount(int64(checkResult.AmountMillis)))
+					output.Printf("check: matches (%s)\n", output.FormatAmount(int64(checkResult.Row.AmountMillis)))
 				} else {
 					explained, _ := explainCashSecretRefusal(checkErr)
 					if errors.Is(checkErr, nipcash.ErrClaimNotFound) {
@@ -152,7 +199,7 @@ func runCashReceive(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := validateClaimedAmount(cmd, tok, result); err != nil {
+	if err := validateClaimedAmount(cmd, tok, result.Row.AmountMillis, minterPubkeyFromToken(tok)); err != nil {
 		return err
 	}
 
@@ -165,14 +212,14 @@ func runCashReceive(cmd *cobra.Command, args []string) error {
 		// result.IsCash, not tok.IdentityRequired or the guess above:
 		// this drives every later operation on the entry, so it should
 		// carry CheckClaim's live answer, not a pre-network guess.
-		IdentityRequired: ptrTo(!result.IsCash),
-		AmountMillis:     &result.AmountMillis,
+		IdentityRequired: ptrTo(!result.Row.IsCash()),
+		AmountMillis:     &result.Row.AmountMillis,
 		Verified:         true,
-		MinterPubkey:     result.MinterPubkey,
-		ExpiresAt:        result.ExpiresAt,
-		RedeemFeeMillis:  &result.RedeemFeeMillis,
+		MinterPubkey:     minterPubkeyFromToken(tok),
+		ExpiresAt:        expiryPtr(result.Row.ExpiresAt),
+		RedeemFeeMillis:  &result.Row.RedeemFeeMillis,
 	}
-	if result.IsCash {
+	if result.Row.IsCash() {
 		// Shared, not yet protected: this is the secret exactly as it
 		// arrived in the token/gift string, still spendable by anyone else
 		// who was shown it too. protectCashReceipt (below, after this
@@ -188,7 +235,7 @@ func runCashReceive(cmd *cobra.Command, args []string) error {
 		}
 		return output.RuntimeError(cmd, err)
 	}
-	l.AppendHistory("receive", fmt.Sprintf("received %s", output.FormatAmount(int64(result.AmountMillis))))
+	l.AppendHistory("receive", fmt.Sprintf("received %s", output.FormatAmount(int64(result.Row.AmountMillis))))
 
 	if err := l.Save(); err != nil {
 		// A concurrent `cashctl receive` of this same token: both
@@ -205,14 +252,14 @@ func runCashReceive(cmd *cobra.Command, args []string) error {
 	}
 
 	if !jsonMode {
-		output.Printf("Received %s.\n", output.FormatAmount(int64(result.AmountMillis)))
+		output.Printf("Received %s.\n", output.FormatAmount(int64(result.Row.AmountMillis)))
 		// NIP-CASH §Removing a Recipient: an unclaimed slice can still be taken
 		// back by its issuer; only redeeming or moving it makes it final.
 		output.Println("Until you redeem or transfer it, the bill's issuer can still take it back.")
 	}
 
 	// result.IsCash, not the pre-check guess above.
-	protected, finalEntry := protectCashReceipt(cmd, l, added, result.IsCash)
+	protected, finalEntry := protectCashReceipt(cmd, l, added, result.Row.IsCash())
 
 	if jsonMode {
 		// JSON key stays "secured" — an intentional, unchanged part of the
@@ -294,23 +341,21 @@ func minterPubkeyFromToken(tok nipcash.Token) *string {
 // on the network-input side.
 //
 // tok.HasProvenance() being true only means a signature and an attested
-// amount are BOTH present, not that the signature verified — result.MinterPubkey
-// is CheckClaim's own live answer, set only when nipcash.VerifyProvenance
-// already confirmed it (see nipcashclient.CheckClaim's own implementation),
-// so checking that instead of re-verifying here can't be fooled by a
-// tampered signature paired with a forged attested amount.
-func validateClaimedAmount(cmd *cobra.Command, tok nipcash.Token, result *nipcash.CheckClaimResult) error {
-	if result.AmountMillis > maxSaneAmountMillis {
+// amount are BOTH present, not that the signature verified — minter is
+// recovered from it (nipcash.VerifyProvenance), so a tampered signature paired with
+// a forged attested amount can't pass.
+func validateClaimedAmount(cmd *cobra.Command, tok nipcash.Token, amountMillis uint64, minter *string) error {
+	if amountMillis > maxSaneAmountMillis {
 		return output.InvalidInputError(cmd, "", fmt.Errorf(
-			"the Hub reports an amount (%d mloki) too large to be real — refusing to trust it", result.AmountMillis))
+			"the Hub reports an amount (%d mloki) too large to be real — refusing to trust it", amountMillis))
 	}
 	// The signature attests the whole bill, and the Hub reports only this
 	// holder's slice of it, which on a multi-recipient bill is legitimately
 	// smaller. Only more than the whole bill is impossible.
-	if result.MinterPubkey != nil && tok.AttestedAmountMillis != nil && result.AmountMillis > *tok.AttestedAmountMillis {
+	if minter != nil && tok.AttestedAmountMillis != nil && amountMillis > *tok.AttestedAmountMillis {
 		return output.InvalidInputError(cmd, "", fmt.Errorf(
 			"the Hub reports %s for your share, but this bill's signed provenance attests only %s for the whole bill — refusing to trust it",
-			output.FormatAmount(int64(result.AmountMillis)), output.FormatAmount(int64(*tok.AttestedAmountMillis))))
+			output.FormatAmount(int64(amountMillis)), output.FormatAmount(int64(*tok.AttestedAmountMillis))))
 	}
 	return nil
 }
@@ -378,12 +423,18 @@ func validateQuotedAmounts(cmd *cobra.Command, tok nipcash.Token, verifiedMinter
 
 func checkClaimWithCashHub(cmd *cobra.Command, input, embeddedSecret string, tok nipcash.Token) (*nipcash.CheckClaimResult, error) {
 	jsonMode, _ := cmd.Flags().GetBool("json")
+	errSecretMismatch := fmt.Errorf("the cash secret after '#' does not match this bill (is it complete?) — refusing to receive it")
+	// A secret that is not 64 lowercase hex can match no bill: refused before
+	// anything is dialled, as the same mismatch (often a truncated paste).
+	if embeddedSecret != "" && !nipcash.ValidCashSecret(embeddedSecret) {
+		return nil, output.InvalidInputError(cmd, input, errSecretMismatch)
+	}
 	var result *nipcash.CheckClaimResult
 	noMatch := false
 	err := WithSpinner(jsonMode, "Checking...", func() error {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		client, err := nipcashclient.Connect(ctx, input)
+		client, err := dialBill(ctx, input)
 		if err != nil {
 			return err
 		}
@@ -393,22 +444,31 @@ func checkClaimWithCashHub(cmd *cobra.Command, input, embeddedSecret string, tok
 		if credErr != nil {
 			return credErr
 		}
-		myPubHex, _ := localPubKeyHex(cmd) // best-effort; empty means no pubkey match attempted
-		r, err := client.CheckClaim(ctx, cred, tok, myPubHex)
-		if errors.Is(err, nipcash.ErrSpent) {
+		r, err := client.CheckClaim(ctx, cred, tok)
+		var gone *nipcash.BillGone
+		if errors.As(err, &gone) {
 			return err
 		}
-		if errors.Is(err, nipcash.ErrClaimNotFound) {
+		// A cash-mode bill's status is answered from the bill proof alone, so a
+		// wrong secret reads the bill's one row under another commitment
+		// (ErrMineWidened): the same mismatch.
+		if errors.Is(err, nipcash.ErrClaimNotFound) || (embeddedSecret != "" && (isWrongSecretDecline(err) || errors.Is(err, nipcash.ErrMineWidened))) {
 			noMatch = true
 			if embeddedSecret != "" {
 				// The Hub answers a cash-mode bill only to its own secret, so a miss
 				// with one given means that secret is wrong (often truncated).
-				return fmt.Errorf("the cash secret after '#' does not match this bill (is it complete?) — refusing to receive it")
+				return errSecretMismatch
 			}
 			return fmt.Errorf("the Cash Hub has no matching recipient for this token — refusing to receive it")
 		}
 		if err != nil {
 			return err
+		}
+		if !r.Claimable {
+			// Claimed already, ended by a withdrawal, or expired: the slice
+			// exists, and can no longer be spent by anyone.
+			noMatch = true
+			return fmt.Errorf("this bill's slice is %s, so it can no longer be spent — refusing to receive it", r.Reason)
 		}
 		result = r
 		return nil
@@ -419,7 +479,8 @@ func checkClaimWithCashHub(cmd *cobra.Command, input, embeddedSecret string, tok
 	if noMatch {
 		return nil, output.InvalidInputError(cmd, input, err)
 	}
-	if errors.Is(err, nipcash.ErrSpent) {
+	var gone *nipcash.BillGone
+	if errors.As(err, &gone) {
 		return nil, output.SpentError(cmd, input, errBillSpent)
 	}
 	// classifyCashTokenNWCErr, not a blanket NetworkError: a Hub that
@@ -439,13 +500,12 @@ func checkClaimWithCashHub(cmd *cobra.Command, input, embeddedSecret string, tok
 // checkClaimAsLocalIdentity asks the Hub whether this bill resolves against the
 // LOCAL identity, which is the question identity_required's stale hint cannot answer.
 //
-// checkClaimOnce's sibling, and the difference is the whole point: that one passes
-// nipcash.NoLocalIdentity, correct for reading a cash-mode bill nobody here can claim,
-// and blind to a claim bound to this machine's pubkey.
+// checkClaimOnce's sibling: the Hub matches the caller's row by the credential,
+// so this one asks with the local identity's.
 func checkClaimAsLocalIdentity(cmd *cobra.Command, input string, tok nipcash.Token) (*nipcash.CheckClaimResult, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	client, err := nipcashclient.Connect(ctx, input)
+	client, err := dialBill(ctx, input)
 	if err != nil {
 		return nil, err
 	}
@@ -454,17 +514,13 @@ func checkClaimAsLocalIdentity(cmd *cobra.Command, input string, tok nipcash.Tok
 	if err != nil {
 		return nil, err
 	}
-	myPubHex, err := localPubKeyHex(cmd)
-	if err != nil {
-		return nil, err
-	}
-	return client.CheckClaim(ctx, cred, tok, myPubHex)
+	return client.CheckClaim(ctx, cred, tok)
 }
 
 func checkClaimOnce(cmd *cobra.Command, input, embeddedSecret string, tok nipcash.Token) (*nipcash.CheckClaimResult, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	client, err := nipcashclient.Connect(ctx, input)
+	client, err := dialBill(ctx, input)
 	if err != nil {
 		return nil, err
 	}
@@ -473,7 +529,7 @@ func checkClaimOnce(cmd *cobra.Command, input, embeddedSecret string, tok nipcas
 	if err != nil {
 		return nil, err
 	}
-	return client.CheckClaim(ctx, cred, tok, nipcash.NoLocalIdentity)
+	return client.CheckClaim(ctx, cred, tok)
 }
 
 // warnLocalRelays says so when a bill's relay hints point at this machine or

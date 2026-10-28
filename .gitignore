@@ -5,3 +5,4 @@ integration/config.local.yaml
 /.docs-kit/
 /.drafts/
 /docs/private/
+/mint-state/

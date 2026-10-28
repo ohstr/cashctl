@@ -7,6 +7,8 @@ import (
 	"errors"
 	"github.com/ohstr/nmilat/nipcash"
 	"testing"
+
+	"github.com/ohstr/cashctl/internal/testmint"
 )
 
 func amountPtr(v uint64) *uint64 { return &v }
@@ -20,19 +22,14 @@ func amountPtr(v uint64) *uint64 { return &v }
 // necessarily consolidatable. The fingerprint is what says they are.
 func hubToken(hub string) string {
 	amt := uint64(1)
-	tok, err := nipcash.Encode(nipcash.Token{
+	return testmint.MustBill(nipcash.Token{
 		HRP:                  "lokicash",
 		WalletPubkey:         hex.EncodeToString(bytes.Repeat([]byte{0xab}, 32)),
 		Secret:               hex.EncodeToString(bytes.Repeat([]byte{0xcd}, 32)),
 		RelayURLs:            []string{"wss://relay.test"},
-		MintSignature:        bytes.Repeat([]byte{0x01}, 65),
 		AttestedAmountMillis: &amt,
 		HubGroup:             nipcash.HubGroupFor(hub),
-	})
-	if err != nil {
-		panic(err)
-	}
-	return tok
+	}, "")
 }
 
 func minterPtr(s string) *string { return &s }

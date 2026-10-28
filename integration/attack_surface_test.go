@@ -10,6 +10,8 @@
 package integration
 
 import (
+	"errors"
+	"github.com/ohstr/cashctl/internal/testmint"
 	"os"
 	"strings"
 	"testing"
@@ -98,11 +100,15 @@ func TestNoBillTrafficOnTheSharedTransport(t *testing.T) {
 		HRP: unsigned.HRP, WalletPubkey: unsigned.WalletPubkey, Secret: unsigned.Secret,
 		RelayURLs: unsigned.RelayURLs, IdentityRequired: unsigned.IdentityRequired,
 	})
-	if err != nil {
+	switch {
+	case errors.Is(err, nipcash.ErrTokenUnsigned):
+		// The encoder no longer builds a bill without mint provenance at all.
+	case err != nil:
 		t.Fatal(err)
-	}
-	if res := f.run("receive", stripped); res.ExitCode == 0 {
-		t.Errorf("receive of a bill with no mint provenance succeeded: %s", res.Stdout)
+	default:
+		if res := f.run("receive", stripped); res.ExitCode == 0 {
+			t.Errorf("receive of a bill with no mint provenance succeeded: %s", res.Stdout)
+		}
 	}
 
 	for i, stop := range stops {
@@ -214,15 +220,12 @@ func TestForgedFollowSet_IsIgnored(t *testing.T) {
 // chosen by whoever made the connection string, so it may carry terminal
 // escapes or bidirectional overrides meant to rewrite what the user sees.
 func TestCircleHubLabel_ControlBytesNeverReachTheTerminal(t *testing.T) {
-	conn, err := nipcw.EncodeCircleHubConnection(nipcw.CircleHubConnection{
-		WalletPubkey: fakeHex32(t),
-		Secret:       fakeHex32(t),
-		RelayURLs:    []string{"wss://fake.invalid"},
-		Label:        "Family\x1b[2J\x1b]0;pwned\x07 circle ‮gnp.exe",
+	hubPriv, _ := testmint.Key(t)
+	conn := testmint.SignCircleHub(t, hubPriv, nipcw.CircleHubConnection{
+		Relays:   []string{"wss://fake.invalid"},
+		Label:    "Family\x1b[2J\x1b]0;pwned\x07 circle ‮gnp.exe",
+		HasLabel: true,
 	})
-	if err != nil {
-		t.Fatalf("encode circle hub connection: %v", err)
-	}
 	f := newFixture(t)
 	f.mustJSON("wallet", "init")
 	for name, res := range map[string]result{

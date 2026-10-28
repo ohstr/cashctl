@@ -12,7 +12,6 @@ import (
 	relayclient "github.com/ohstr/nmilat/relay/client"
 	"github.com/spf13/cobra"
 
-	"github.com/ohstr/cashctl/internal/ledger"
 	"github.com/ohstr/cashctl/internal/output"
 )
 
@@ -53,29 +52,5 @@ func TestClassifyCashSpendErr(t *testing.T) {
 				t.Errorf("no cash status hint: %v", err)
 			}
 		})
-	}
-}
-
-// The pending-secret retry resends a spend only on an explicit wrong-secret
-// decline: after a timeout the first request may have been applied, and
-// resending it blind may pay twice (NIP-CASH §Cash Status).
-func TestSpendCashEntry_NeverResendsAfterSilence(t *testing.T) {
-	for _, first := range []error{
-		context.DeadlineExceeded,
-		&nipcashclient.NotServedError{Method: "cash_transfer"},
-		nipcashclient.ErrIncompleteReply,
-	} {
-		entry := &ledger.Entry{ID: "tok-a", CashSecret: "old", PendingCashSecret: "new"}
-		calls := 0
-		_, err := spendCashEntry(entry, nipcash.BySecret("old"), func(nipcash.Credential) (struct{}, error) {
-			calls++
-			return struct{}{}, first
-		})
-		if calls != 1 {
-			t.Errorf("%v: spend placed %d times, want 1", first, calls)
-		}
-		if !errors.Is(err, first) {
-			t.Errorf("%v: returned %v", first, err)
-		}
 	}
 }

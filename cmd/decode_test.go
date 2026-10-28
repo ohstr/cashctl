@@ -2,12 +2,10 @@ package cmd
 
 import (
 	"bufio"
-	"crypto/sha256"
 	"encoding/hex"
 	"strings"
 	"testing"
 
-	"github.com/decred/dcrd/dcrec/secp256k1/v4/ecdsa"
 	btcec "github.com/flokiorg/go-flokicoin/crypto"
 	"github.com/ohstr/nmilat/nip19"
 	"github.com/ohstr/nmilat/nipIC"
@@ -16,6 +14,7 @@ import (
 
 	"github.com/ohstr/cashctl/internal/appdir"
 	"github.com/ohstr/cashctl/internal/identity"
+	"github.com/ohstr/cashctl/internal/testmint"
 )
 
 // newTestDecodeCmd builds a *cobra.Command carrying the same "json"/"yes"/
@@ -279,23 +278,11 @@ func TestRunCashReceive_NostrEntityMisPaste_FriendlyError(t *testing.T) {
 // mint-provenance fields are present) and for the friendlier "unknown"
 // wording replacing the old "none (unsigned token)".
 
-// signMintProvenance mirrors nipcash's own unexported signProvenance test
-// helper (nipcash/provenance_test.go) — reproduces its exact double-SHA256
-// LN-signed-message digest convention, since doubleSHA256 itself isn't
-// exported for this package to call directly.
-func signMintProvenance(t *testing.T, priv *btcec.PrivateKey, hrp, walletPubkeyHex string, amountMillis uint64) []byte {
-	t.Helper()
-	payload := nipcash.MintPayload(hrp, walletPubkeyHex, amountMillis)
-	first := sha256.Sum256([]byte(nipcash.LNSignedMessagePrefix + payload))
-	second := sha256.Sum256(first[:])
-	return ecdsa.SignCompact(priv, second[:], true)
-}
-
 func TestFormatMinterStatus_NoProvenanceIsUnknown(t *testing.T) {
 	tok := nipcash.Token{HRP: "lokicash", WalletPubkey: strings.Repeat("a1", 32)}
 	minterLine, amountLine := formatMinterStatus(tok)
-	if minterLine != "minter: unknown" {
-		t.Errorf("minterLine = %q, want %q", minterLine, "minter: unknown")
+	if !strings.HasPrefix(minterLine, "minter: unknown") {
+		t.Errorf("minterLine = %q, want it to start %q", minterLine, "minter: unknown")
 	}
 	if amountLine != "" {
 		t.Errorf("amountLine = %q, want empty (nothing to print for a token with no provenance)", amountLine)
@@ -307,9 +294,9 @@ func TestFormatMinterStatus_InvalidSignatureNeverReportedTrustworthy(t *testing.
 	// Garbage bytes of the wrong length: VerifyProvenance fails outright
 	// (never recovers a pubkey at all) rather than recovering a wrong one
 	// — either way formatMinterStatus must not call this trustworthy.
-	tok := nipcash.Token{HRP: "lokicash", WalletPubkey: strings.Repeat("a1", 32), MintSignature: []byte{1, 2, 3}, AttestedAmountMillis: &amount}
+	tok := nipcash.Token{HRP: "lokicash", WalletPubkey: strings.Repeat("a1", 32), MintSignature: []byte{1, 2, 3}, AttestedAmountMillis: &amount, Scheme: nipcash.SchemeMintV1}
 	minterLine, amountLine := formatMinterStatus(tok)
-	if minterLine != "minter: INVALID SIGNATURE — don't trust attested_amount" {
+	if !strings.HasPrefix(minterLine, "minter: INVALID SIGNATURE") {
 		t.Errorf("minterLine = %q, want the INVALID SIGNATURE warning", minterLine)
 	}
 	if !strings.Contains(amountLine, "unverified") {
@@ -318,18 +305,15 @@ func TestFormatMinterStatus_InvalidSignatureNeverReportedTrustworthy(t *testing.
 }
 
 func TestFormatMinterStatus_ValidSignatureReportsMinter(t *testing.T) {
-	priv, pub := btcec.PrivKeyFromBytes([]byte{
-		1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
-		17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32,
-	})
+	privHex, _ := testmint.Key(t)
+	privBytes, _ := hex.DecodeString(privHex)
+	_, pub := btcec.PrivKeyFromBytes(privBytes)
 	walletPubkey := strings.Repeat("b2", 32)
 	amount := uint64(40000)
-	sig := signMintProvenance(t, priv, "lokicash", walletPubkey, amount)
-	tok := nipcash.Token{HRP: "lokicash", WalletPubkey: walletPubkey, MintSignature: sig, AttestedAmountMillis: &amount}
+	tok := testmint.Token(t, nipcash.Token{HRP: "lokicash", WalletPubkey: walletPubkey, AttestedAmountMillis: &amount}, privHex)
 
 	minterLine, amountLine := formatMinterStatus(tok)
-	serialized := btcec.ToSerialized(pub)
-	wantMinter := "minter: " + hex.EncodeToString(serialized[:])
+	wantMinter := "minter: " + hex.EncodeToString(pub.SerializeCompressed())
 	if !strings.HasPrefix(minterLine, wantMinter) {
 		t.Errorf("minterLine = %q, want it to start with %q", minterLine, wantMinter)
 	}

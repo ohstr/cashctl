@@ -14,11 +14,13 @@ import (
 	"github.com/ohstr/cashctl/internal/config"
 	"github.com/ohstr/cashctl/internal/ledger"
 	"github.com/ohstr/cashctl/internal/output"
+
+	"github.com/ohstr/cashctl/internal/testmint"
 )
 
 // TestStrandedBalanceFallback_CodeAuthDeclinesUseCache guards against the
 // bug found auditing an intermittent live-Hub flake: a get_balance decline
-// used to fall back to the cached LastKnownBalanceMloki only on the exact
+// used to fall back to the cached LastKnownBalanceMillis only on the exact
 // literal code "EXPIRED", even though RESTRICTED/UNAUTHORIZED mean the same
 // thing (the Hub has permanently cut the connection off — see
 // internal/output's own nwcErrorCode table, which already groups all three
@@ -27,7 +29,7 @@ import (
 // wallet's cached balance out of `wallet balance --breakdown` entirely.
 func TestStrandedBalanceFallback_CodeAuthDeclinesUseCache(t *testing.T) {
 	cached := int64(8_000)
-	c := config.Connection{Name: "circle:test", LastKnownBalanceMloki: &cached}
+	c := config.Connection{Name: "circle:test", LastKnownBalanceMillis: &cached}
 
 	for _, code := range []string{"EXPIRED", "RESTRICTED", "UNAUTHORIZED"} {
 		t.Run(code, func(t *testing.T) {
@@ -51,7 +53,7 @@ func TestStrandedBalanceFallback_CodeAuthDeclinesUseCache(t *testing.T) {
 // it). Widening the CodeAuth match must not also start masking these.
 func TestStrandedBalanceFallback_NonAuthFailuresStayUnreachable(t *testing.T) {
 	cached := int64(8_000)
-	c := config.Connection{Name: "circle:test", LastKnownBalanceMloki: &cached}
+	c := config.Connection{Name: "circle:test", LastKnownBalanceMillis: &cached}
 
 	cases := []struct {
 		name string
@@ -244,7 +246,7 @@ func TestOutstandingCashNotes(t *testing.T) {
 func TestWalletBalanceFrom_APastedBillIsNamed(t *testing.T) {
 	appdir.SetOverride(t.TempDir())
 	t.Cleanup(func() { appdir.SetOverride("") })
-	tok, err := nipcash.Encode(nipcash.Token{
+	tok, err := testmint.Encode(t, nipcash.Token{
 		HRP: "lokicash", WalletPubkey: strings.Repeat("aa", 32), Secret: strings.Repeat("bb", 32),
 		RelayURLs: []string{"wss://relay.example"},
 	})

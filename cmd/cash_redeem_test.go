@@ -844,3 +844,36 @@ func TestPrintRedeemOutcomes_NamesBillsSkippedAsSpent(t *testing.T) {
 		}
 	}
 }
+
+// XC-3: a bill whose earlier call has no answer yet is never redeemed: named,
+// it is refused before anything is quoted; picked automatically, it is skipped.
+func TestRedeem_RefusesABillWithAnOpenCall(t *testing.T) {
+	l, id, _, h := lostProtect(t)
+	other, err := l.Add(ledger.Entry{Token: "tok-b", WalletPubkey: "pk-tok-b", AmountMillis: ptrTo(uint64(1000)),
+		IdentityRequired: ptrTo(false), CashSecret: "stok-b", CashProtection: ledger.CashShared})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.bill("tok-b", nipcash.BySecret("stok-b"), 1000)
+	if err := l.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := newCashRedeemCmd()
+	cmd.Flags().Bool("json", true, "")
+	cmd.Flags().Bool("yes", true, "")
+	_ = cmd.Flags().Set("token", id)
+	err = runCashRedeem(cmd, nil)
+	if ce := output.AsCLIError(err); ce == nil || ce.Code != output.CodeConflict {
+		t.Fatalf("redeem of a bill with an open call: %v, want a conflict refusal", err)
+	}
+
+	fresh, _ := ledger.Load()
+	got, err := resolveHeldTokensForRedeem(redeemCmdWithTokens(true, true, nil, true), fresh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ids := heldIDs(got); len(ids) != 1 || ids[0] != other.ID {
+		t.Errorf("--all picked %v, want only the unlocked %s", ids, other.ID)
+	}
+}

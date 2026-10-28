@@ -30,6 +30,27 @@ const (
 	// §Answering About a Destroyed Bill). Set only on that answer, never on
 	// silence, which proves nothing.
 	StatusSpent = "spent"
+	// StatusExpired: the Hub answered with a tombstone whose reason is expired
+	// (NIP-CP §Balance).
+	StatusExpired = "expired"
+	// StatusReclaimed: the slice was removed and its amount swept back to the
+	// Hub: a tombstone whose reason is reclaimed, or NOT_FOUND for a proof by
+	// the entry's own key or cash secret (NIP-CP §Balance). Never from a
+	// connection-key NOT_FOUND, which proves nothing about the slice.
+	StatusReclaimed = "reclaimed"
+	// StatusWithdrawn: the bill was paid out on-chain (cash_withdraw); its
+	// token and secret stay for the withdrawal's lookups.
+	StatusWithdrawn = "withdrawn"
+	// StatusZapClaiming: a Cash Zap to a connection key whose claim (a full
+	// in-place transfer to the local pubkey) is placed but not answered. It is
+	// not held until the claim is.
+	StatusZapClaiming = "zap_claiming"
+	// StatusNotReceived: a zap claim the Hub refused; nothing is held.
+	StatusNotReceived = "not_received"
+	// StatusRedeeming: a cash_redeem whose payment may still settle (answered
+	// INTERNAL, omitted or timed out, and the own row still claimed). Counted
+	// in no balance, offered to no operation, re-read until it ends.
+	StatusRedeeming = "redeeming"
 )
 
 // CashProtection values — see Entry.CashProtection's own doc comment.
@@ -82,54 +103,6 @@ type Entry struct {
 	// spending credential for a cash-mode slice, so leaking it here would be
 	// strictly worse than leaking Secret.
 	CashSecret string `json:"-"`
-
-	// PendingCashSecret is a not-yet-confirmed replacement for
-	// CashSecret, written BEFORE the wire call that's meant to make it
-	// the real one (see cmd/receive_secure.go's protectCashReceipt) —
-	// generating a cash-mode target's secret is a purely local operation
-	// (NIP-CASH §Cash-Mode Slices: only a commitment ever goes over the
-	// wire), so it's known before the call is even placed. A kill or lost
-	// response during that call leaves this genuinely ambiguous — NIP-CASH
-	// has no read-only way to ask the Hub which of the two secrets it
-	// accepted (nipcashclient.CheckClaim's own doc comment: a cash-mode match
-	// only proves *some* recipient exists, never *which* secret) — so
-	// resolveCredential retries a decline with this value instead of
-	// trusting CashSecret alone. Empty once reconciled either way. Same
-	// leak sensitivity as CashSecret itself.
-	PendingCashSecret string `json:"-"`
-
-	// PendingDestinationCashSecret is the spending secret of a cash-mode
-	// bill that THIS entry's own spend is about to create on the Hub —
-	// `transfer --to cash`'s gift, or `consolidate --to cash`'s merged
-	// result. Like PendingCashSecret it is generated purely locally and
-	// written down BEFORE the wire call (NIP-CASH §Cash-Mode Slices: only a
-	// one-way commitment ever crosses the wire, and the Hub never learns or
-	// returns the preimage), so a kill between the request leaving and the
-	// reply landing costs a reconciliation instead of the money. Without it
-	// that window destroyed the only copy in existence, leaving a bill that
-	// is real, funded and unspendable by anyone — audit finding D-CLI-1.
-	//
-	// Deliberately NOT PendingCashSecret, though the write-ahead discipline
-	// is identical: that field means "a not-yet-confirmed replacement for
-	// THIS entry's CashSecret" and is consumed as exactly that by
-	// spendCashEntry and retryWithPendingSecrets, both of which PROMOTE it
-	// onto CashSecret when a retry with it succeeds. A different bill's
-	// secret is not a candidate for this row's own credential, and storing
-	// it there would make those two paths retry — and on a false positive
-	// adopt — a credential belonging to another wallet.
-	//
-	// Parked on the SOURCE row because at write-ahead time it is the only
-	// row on disk: the destination bill does not exist yet and has no token
-	// until the reply arrives. That is also the honest limit of what this
-	// buys — the secret alone is necessary but not sufficient to spend the
-	// result, since its token comes back only in the reply. Recovering from
-	// a kill therefore still needs the Hub's cooperation to re-furnish the
-	// token; the point is that before this it was impossible even WITH the
-	// Hub's help. Cleared once the outcome is known either way, so a
-	// non-empty value always means "an interrupted spend may have created a
-	// bill whose secret is this" — which is what `wallet show` reports.
-	// Same leak sensitivity as CashSecret itself.
-	PendingDestinationCashSecret string `json:"-"`
 
 	// ThrowawayKey is the private key that now spends this bill, once a merge
 	// moved it off its cash secret onto a key made for that merge alone
@@ -192,6 +165,11 @@ type Entry struct {
 	// for the same or a smaller amount is refused.
 	RedeemFeeMillis *uint64 `json:"redeem_fee_millis,omitempty"`
 
+	// ZapEvent is the kind-9522 Cash Zap a zap bill (scheme 2) arrived with,
+	// as JSON: only it proves the bill's provenance, so it is kept with the
+	// bill and every dial of the bill checks against it.
+	ZapEvent string `json:"-"`
+
 	// CashProtection reports whether a cash-mode entry's CashSecret
 	// is exclusively known to this ledger (CashProtected, re-keyed by
 	// cmd/receive_secure.go's protectCashReceipt/protectRekeyOnly or a
@@ -207,6 +185,17 @@ type Entry struct {
 	// same Entry shape as a genuinely protected one, with no way to tell
 	// them apart later (`wallet show`, `wallet history`, ...).
 	CashProtection string `json:"cash_protection,omitempty"`
+
+	// RedeemPaymentHash, RedeemInvoiceExpiresAt and RedeemInto are set only
+	// while a redeem's payment may still settle (StatusRedeeming), and kept on
+	// a redeem presumed paid (RedeemPresumedAt) until the Hub decides it: the
+	// invoice's hash and expiry, and the --into connection ("" for --invoice).
+	RedeemPaymentHash      string `json:"-"`
+	RedeemInvoiceExpiresAt *int64 `json:"-"`
+	RedeemInto             string `json:"-"`
+	// RedeemPresumedAt is when a redeem still claimed 24 h past its invoice's
+	// expiry was presumed paid; a later read showing the row unclaimed re-opens it.
+	RedeemPresumedAt *int64 `json:"-"`
 }
 
 // HistoryEntry is one line of cashctl's local action log (`cashctl wallet
@@ -259,6 +248,18 @@ type Ledger struct {
 	Entries  []Entry
 	History  []HistoryEntry
 	Handoffs []Handoff
+	// Calls are the bill-creating calls written ahead (calls.go), saved in the
+	// same transaction as the entries they create or spend.
+	Calls []Call
+
+	// stagedOrders are orders the next Save writes with the calls (StageOrder).
+	stagedOrders []Order
+	// stagedWithdrawals are withdrawals the next Save writes with the calls
+	// (StageWithdrawal).
+	stagedWithdrawals []Withdrawal
+
+	loadedCalls  map[string]Call
+	callVersions map[string]int64
 
 	// loaded is what Load actually read, keyed by ID — Save diffs against
 	// it to only touch rows THIS process actually changed (see Save's own
@@ -337,36 +338,43 @@ func load() (*Ledger, error) {
 	rows, err := db.Query(`SELECT id, token, wallet_pubkey, minter_pubkey, secret, relay_urls,
 		identity_required, amount_millis, received_at, verified, status, cash_secret,
 		connection_key_platform, connection_key_external_id, attestation_event_id, ia_pubkey,
-		pending_cash_secret, expires_at, cash_protection, pending_destination_cash_secret,
-		throwaway_key, pending_throwaway_key, COALESCE(version, 0), redeem_fee_millis
+		expires_at, cash_protection,
+		throwaway_key, pending_throwaway_key, version, redeem_fee_millis, zap_event,
+		redeem_payment_hash, redeem_invoice_expires_at, redeem_into, redeem_presumed_at
 		FROM entries ORDER BY rowid`)
 	if err != nil {
 		return nil, fmt.Errorf("cashctl.db: reading entries: %w", err)
 	}
 	for rows.Next() {
 		var e Entry
-		var relayURLs, pendingCashSecret, cashProtection, pendingDestCashSecret, throwawayKey, pendingThrowawayKey sql.NullString
+		var relayURLs, cashProtection, throwawayKey, pendingThrowawayKey, zapEvent sql.NullString
 		var identityRequired, amountMillis, expiresAt, redeemFee sql.NullInt64
+		var redeemHash, redeemInto sql.NullString
+		var redeemInvoiceExpires, redeemPresumed sql.NullInt64
 		var version int64
 		if err := rows.Scan(&e.ID, &e.Token, &e.WalletPubkey, &e.MinterPubkey, &e.Secret, &relayURLs,
 			&identityRequired, &amountMillis, &e.ReceivedAt, &e.Verified, &e.Status, &e.CashSecret,
 			&e.ConnectionKeyPlatform, &e.ConnectionKeyExternalID, &e.AttestationEventID, &e.IAPubkey,
-			&pendingCashSecret, &expiresAt, &cashProtection, &pendingDestCashSecret,
-			&throwawayKey, &pendingThrowawayKey, &version, &redeemFee); err != nil {
+			&expiresAt, &cashProtection,
+			&throwawayKey, &pendingThrowawayKey, &version, &redeemFee, &zapEvent,
+			&redeemHash, &redeemInvoiceExpires, &redeemInto, &redeemPresumed); err != nil {
 			_ = rows.Close()
 			return nil, fmt.Errorf("cashctl.db: reading entries: %w", err)
 		}
-		// sql.NullString, not a plain string like CashSecret's own scan
-		// above: every row's cash_secret has been through this code's own
-		// Save (never legacy-NULL), but pending_cash_secret/cash_protection
-		// are columns ADDED after rows already existed (store.addColumnsIfMissing)
-		// — those rows genuinely have SQL NULL here, which Scan can't take
-		// directly into a plain string.
-		e.PendingCashSecret = pendingCashSecret.String
+		// Nullable columns, read through sql.NullString.
 		e.CashProtection = cashProtection.String
-		e.PendingDestinationCashSecret = pendingDestCashSecret.String
 		e.ThrowawayKey = throwawayKey.String
 		e.PendingThrowawayKey = pendingThrowawayKey.String
+		e.ZapEvent = zapEvent.String
+		e.RedeemPaymentHash, e.RedeemInto = redeemHash.String, redeemInto.String
+		if redeemInvoiceExpires.Valid {
+			v := redeemInvoiceExpires.Int64
+			e.RedeemInvoiceExpiresAt = &v
+		}
+		if redeemPresumed.Valid {
+			v := redeemPresumed.Int64
+			e.RedeemPresumedAt = &v
+		}
 		if relayURLs.Valid && relayURLs.String != "" {
 			if err := json.Unmarshal([]byte(relayURLs.String), &e.RelayURLs); err != nil {
 				_ = rows.Close()
@@ -442,6 +450,13 @@ func load() (*Ledger, error) {
 	if err := hRows.Err(); err != nil {
 		return nil, fmt.Errorf("cashctl.db: reading handoffs: %w", err)
 	}
+
+	calls, callVersions, err := loadCalls(db, "")
+	if err != nil {
+		return nil, err
+	}
+	l.Calls = calls
+	l.snapshotCalls(callVersions)
 
 	l.loadedVersions = versions
 	l.historyLoaded = len(l.History)
@@ -550,9 +565,10 @@ func (l *Ledger) save() error {
 		res, err := tx.Exec(`INSERT INTO entries (id, token, wallet_pubkey, minter_pubkey, secret, relay_urls,
 			identity_required, amount_millis, received_at, verified, status, cash_secret,
 			connection_key_platform, connection_key_external_id, attestation_event_id, ia_pubkey,
-			pending_cash_secret, expires_at, cash_protection, pending_destination_cash_secret,
-			throwaway_key, pending_throwaway_key, redeem_fee_millis, version)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+			expires_at, cash_protection,
+			throwaway_key, pending_throwaway_key, redeem_fee_millis, zap_event,
+			redeem_payment_hash, redeem_invoice_expires_at, redeem_into, redeem_presumed_at, version)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
 			ON CONFLICT(id) DO UPDATE SET
 				token = excluded.token, wallet_pubkey = excluded.wallet_pubkey,
 				minter_pubkey = excluded.minter_pubkey, secret = excluded.secret,
@@ -563,20 +579,25 @@ func (l *Ledger) save() error {
 				connection_key_platform = excluded.connection_key_platform,
 				connection_key_external_id = excluded.connection_key_external_id,
 				attestation_event_id = excluded.attestation_event_id, ia_pubkey = excluded.ia_pubkey,
-				pending_cash_secret = excluded.pending_cash_secret,
 				expires_at = excluded.expires_at,
 				cash_protection = excluded.cash_protection,
-				pending_destination_cash_secret = excluded.pending_destination_cash_secret,
 				throwaway_key = excluded.throwaway_key,
 				pending_throwaway_key = excluded.pending_throwaway_key,
 				redeem_fee_millis = excluded.redeem_fee_millis,
-				version = COALESCE(entries.version, 0) + 1
-			WHERE COALESCE(entries.version, 0) = ?`,
+				zap_event = excluded.zap_event,
+				redeem_payment_hash = excluded.redeem_payment_hash,
+				redeem_invoice_expires_at = excluded.redeem_invoice_expires_at,
+				redeem_into = excluded.redeem_into,
+				redeem_presumed_at = excluded.redeem_presumed_at,
+				version = entries.version + 1
+			WHERE entries.version = ?`,
 			e.ID, e.Token, e.WalletPubkey, e.MinterPubkey, e.Secret, relayURLs,
 			identityRequired, amountMillis, e.ReceivedAt, e.Verified, e.Status, e.CashSecret,
 			e.ConnectionKeyPlatform, e.ConnectionKeyExternalID, e.AttestationEventID, e.IAPubkey,
-			e.PendingCashSecret, expiresAt, e.CashProtection, e.PendingDestinationCashSecret,
-			e.ThrowawayKey, e.PendingThrowawayKey, redeemFee, expectedVersion)
+			expiresAt, e.CashProtection,
+			e.ThrowawayKey, e.PendingThrowawayKey, redeemFee, nullString(e.ZapEvent),
+			nullString(e.RedeemPaymentHash), nullIntPtr(e.RedeemInvoiceExpiresAt), nullString(e.RedeemInto), nullIntPtr(e.RedeemPresumedAt),
+			expectedVersion)
 		if err != nil {
 			// entries.id collisions are handled by ON CONFLICT above — the
 			// only other constraint this table has is token's own UNIQUE,
@@ -651,9 +672,26 @@ func (l *Ledger) save() error {
 		}
 	}
 
+	callVersions, err := l.saveCalls(tx)
+	if err != nil {
+		return err
+	}
+	for _, o := range l.stagedOrders {
+		if err := putOrder(tx, o); err != nil {
+			return err
+		}
+	}
+	for _, w := range l.stagedWithdrawals {
+		if err := putWithdrawal(tx, w); err != nil {
+			return err
+		}
+	}
+
 	if err := tx.Commit(); err != nil {
 		return err
 	}
+	l.stagedOrders, l.stagedWithdrawals = nil, nil
+	l.snapshotCalls(callVersions)
 
 	// Re-baseline against what was just committed. This is NOT hypothetical, and
 	// the comment here used to say it was ("a no-op for every current caller"):
@@ -744,13 +782,12 @@ var ErrConcurrentUpdate = errors.New("this wallet's local record was changed by 
 // FindByToken looks up an entry by its original token string — used to
 // reject re-receiving the same token twice.
 func (l *Ledger) FindByToken(token string) (*Entry, bool) {
-	// Case-insensitive (see Add's own doc comment on why): a caller pasting
-	// the uppercase spelling of an already-held token still matches it,
-	// rather than looking like a brand new one. EqualFold rather than
-	// lowercasing both sides so rows saved before Add started normalizing
-	// (stored exactly as pasted) still match too.
+	// Tokens are stored lowercase (Add, and every token a Hub returns); the
+	// uppercase spelling of a held token, as a QR code carries it, is the same
+	// token.
+	token = strings.ToLower(token)
 	for i := range l.Entries {
-		if strings.EqualFold(l.Entries[i].Token, token) {
+		if l.Entries[i].Token == token {
 			return &l.Entries[i], true
 		}
 	}
@@ -795,7 +832,7 @@ func (l *Ledger) Held() []Entry {
 func (l *Ledger) Add(e Entry) (*Entry, error) {
 	e.Token = strings.ToLower(e.Token)
 	if existing, ok := l.FindByToken(e.Token); ok {
-		if existing.Status == StatusHeld {
+		if existing.Status == StatusHeld || existing.Status == StatusRedeeming {
 			return nil, ErrAlreadyHeld
 		}
 		// The exact same token string came back — the one way this
@@ -873,4 +910,30 @@ func (l *Ledger) newID() string {
 
 func nowRFC3339() string {
 	return time.Now().UTC().Format(time.RFC3339)
+}
+
+// nullString is s, NULL when empty.
+func nullString(s string) sql.NullString { return sql.NullString{String: s, Valid: s != ""} }
+
+// nullIntPtr is *v, NULL when nil.
+func nullIntPtr(v *int64) sql.NullInt64 {
+	if v == nil {
+		return sql.NullInt64{}
+	}
+	return sql.NullInt64{Int64: *v, Valid: true}
+}
+
+// ZapEventFor is the Cash Zap stored with a held token, "" when none.
+func ZapEventFor(token string) (string, error) {
+	db, err := store.Open()
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = db.Close() }()
+	var ev sql.NullString
+	err = db.QueryRow(`SELECT zap_event FROM entries WHERE token = ?`, strings.ToLower(token)).Scan(&ev)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return ev.String, err
 }

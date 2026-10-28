@@ -86,17 +86,6 @@ func TestAdd_StoresTokenLowercase(t *testing.T) {
 	}
 }
 
-func TestFindByToken_IsCaseInsensitive_EvenForLegacyUppercaseRows(t *testing.T) {
-	// A row saved before Add started normalizing is stored exactly as
-	// pasted; lookups must still find it from either spelling.
-	l := &Ledger{Entries: []Entry{{ID: "old", Token: "LOKICASH1LEGACY", Status: StatusHeld}}}
-	for _, in := range []string{"LOKICASH1LEGACY", "lokicash1legacy"} {
-		if _, ok := l.FindByToken(in); !ok {
-			t.Errorf("FindByToken(%q) = not found, want the legacy uppercase row", in)
-		}
-	}
-}
-
 // A full-amount transfer reassigns a wallet in place, so the SAME token
 // string can genuinely come back to a previous holder. entries.token is
 // UNIQUE, so Add must reactivate the existing row, not reject it (and not
@@ -764,44 +753,6 @@ func TestSave_ManyDisjointConcurrentWritersAllSucceed(t *testing.T) {
 	}
 	if len(reloaded.History) != n {
 		t.Errorf("final history count = %d, want %d", len(reloaded.History), n)
-	}
-}
-
-// TestSaveAndLoad_PendingCashSecretRoundTrip covers the write-ahead field
-// a rekey/protect step persists before its own wire call (see
-// cmd/receive_secure.go) — must survive a reload exactly like CashSecret
-// itself, and stay empty (not corrupted into some sentinel) when never set.
-func TestSaveAndLoad_PendingCashSecretRoundTrip(t *testing.T) {
-	withTempConfigDir(t)
-
-	l, err := Load()
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-	if _, err := l.Add(Entry{Token: "lokicash1pending", CashSecret: "old-secret", PendingCashSecret: "new-secret"}); err != nil {
-		t.Fatalf("Add() error = %v", err)
-	}
-	if _, err := l.Add(Entry{Token: "lokicash1nopending", CashSecret: "only-secret"}); err != nil {
-		t.Fatalf("Add() error = %v", err)
-	}
-	if err := l.Save(); err != nil {
-		t.Fatalf("Save() error = %v", err)
-	}
-
-	reloaded, err := Load()
-	if err != nil {
-		t.Fatalf("Load() (reloaded) error = %v", err)
-	}
-	pending, _ := reloaded.FindByToken("lokicash1pending")
-	if pending.PendingCashSecret != "new-secret" {
-		t.Errorf("PendingCashSecret = %q, want %q", pending.PendingCashSecret, "new-secret")
-	}
-	if pending.CashSecret != "old-secret" {
-		t.Errorf("CashSecret = %q, want %q (unchanged until reconciled)", pending.CashSecret, "old-secret")
-	}
-	noPending, _ := reloaded.FindByToken("lokicash1nopending")
-	if noPending.PendingCashSecret != "" {
-		t.Errorf("PendingCashSecret = %q, want empty (never set)", noPending.PendingCashSecret)
 	}
 }
 

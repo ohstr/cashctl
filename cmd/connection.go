@@ -14,6 +14,7 @@ import (
 
 	"github.com/ohstr/cashctl/internal/config"
 	"github.com/ohstr/cashctl/internal/dial"
+	"github.com/ohstr/cashctl/internal/extwallet"
 	"github.com/ohstr/cashctl/internal/output"
 )
 
@@ -150,14 +151,17 @@ func ResolveConnectionValue(cmd *cobra.Command) (value string, ok bool, err erro
 }
 
 // validateConnectionValue reports whether value is something DialGeneric can
-// actually use — the same two forms it accepts, checked without a network
-// call. Registering anything else (a stray "n" typed at init's wallet
+// actually use — an outside wallet's nostr+walletconnect:// URI — checked
+// without a network call. Registering anything else (a stray "n" typed at init's wallet
 // prompt, a mis-paste, a Hub string) used to succeed silently and only fail
 // later, on the first command that needed the wallet, as a confusing
 // "not a valid connection string" far from where the mistake was made.
 func validateConnectionValue(value string) error {
-	if _, err := nip47.ParsePairingURI(value); err == nil {
+	if _, err := extwallet.Parse(value); err == nil {
 		return nil
+	}
+	if _, ok, err := config.ParseCircleWallet(value); ok {
+		return err
 	}
 	// Classified before decoding: nipcash.Decode accepts any HRP, so a Hub
 	// string would otherwise register as a wallet that never works.
@@ -167,16 +171,16 @@ func validateConnectionValue(value string) error {
 	switch dial.Sniff(value) {
 	case dial.KindCircleHub:
 		return &wrongConnectionKindError{"that's a Circle Hub connection, not a wallet — join the circle with `cashctl join <hub-connection> <max-amount>`"}
+	case dial.KindCashOrder:
+		return &wrongConnectionKindError{"that's an Order connection (for buying cash), not a wallet — use `cashctl cash order place`"}
 	case dial.KindCashHub:
 		return &wrongConnectionKindError{"that's a Cash Hub connection (for minting cash), not a wallet — cashctl can't use it"}
 	case dial.KindLightningInvoice:
 		return &wrongConnectionKindError{lightningMessage(value)}
 	case dial.KindCashToken:
-		if _, err := nipcash.Decode(value); err == nil {
-			return nil
-		}
+		return &wrongConnectionKindError{"that's a cash bill, not a wallet — a bill is never a wallet; take it with `cashctl receive`"}
 	}
-	return fmt.Errorf("not a valid wallet connection — expected a nostr+walletconnect:// URI (or a cash-token-family connection string)")
+	return fmt.Errorf("not a valid wallet connection — expected a nostr+walletconnect:// URI")
 }
 
 // wrongConnectionKindError is validateConnectionValue's refusal of a string
@@ -185,27 +189,38 @@ type wrongConnectionKindError struct{ msg string }
 
 func (e *wrongConnectionKindError) Error() string { return e.msg }
 
-// DialGeneric connects to any NWC-capable connection string — a plain
-// nostr+walletconnect:// URI, or a cash-token-family bech32 string (which
-// carries the identical pairing data, just packaged differently — see
-// `connect add`'s own "pairing-uri-or-cash-token" acceptance).
+// DialGeneric connects to a registered wallet: a Circle Wallet from its stored
+// fields (a pairing built in memory, never a URI), or an outside wallet's
+// nostr+walletconnect:// URI. A bill is never a wallet, so a cash token is
+// refused here too.
 func DialGeneric(ctx context.Context, value string) (*relayclient.NWCClient, error) {
-	if pairing, err := nip47.ParsePairingURI(value); err == nil {
-		return relayclient.NewNWCClient(ctx, pairing, nip47.EncryptionNIP44V2)
+	if w, ok, err := config.ParseCircleWallet(value); ok {
+		if err != nil {
+			return nil, err
+		}
+		if j, open, _ := config.OpenRotation(w.WalletPubkey); open && !rotationUseAllowed(ctx) {
+			return nil, fmt.Errorf("%w (new key %s); pass --yes to use it anyway", errRotationOpen, j.ConnectionPubkey)
+		}
+		return relayclient.NewNWCClient(ctx, &nip47.PairingInfo{WalletPubkey: w.WalletPubkey, RelayURLs: w.Relays, Secret: w.Secret}, nip47.EncryptionNIP44V2)
 	}
-	tok, err := nipcash.Decode(value)
-	if err != nil {
-		return nil, fmt.Errorf("not a valid connection string")
+	if !extwallet.IsURI(value) {
+		return nil, fmt.Errorf("not a wallet connection — expected a nostr+walletconnect:// URI")
 	}
-	pairing := &nip47.PairingInfo{WalletPubkey: tok.WalletPubkey, RelayURLs: tok.RelayURLs, Secret: tok.Secret}
-	return relayclient.NewNWCClient(ctx, pairing, nip47.EncryptionNIP44V2)
+	return extwallet.Dial(ctx, value)
 }
 
-// connectionKindOf is what a validated `connect add` value is: a
-// cash-token-family string used as a wallet, or a plain NWC URI.
-func connectionKindOf(value string) string {
-	if dial.Sniff(value) == dial.KindCashToken {
-		return config.KindCashToken
+func safeDestinationLabel(raw string) string {
+	switch dial.Sniff(raw) {
+	case dial.KindNWCURI:
+		if label := extwallet.Label(raw); label != "" {
+			return label
+		}
+		return "a wallet connection"
+	case dial.KindCashHub:
+		return "a Cash Hub connection"
+	case dial.KindCircleHub:
+		return "a Circle Hub connection"
+	default:
+		return "the given connection"
 	}
-	return config.KindNWC
 }

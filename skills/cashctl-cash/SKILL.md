@@ -66,7 +66,13 @@ one still-shared holding, re-keys **every** one of them instead of asking
 which — unlike `redeem`, nothing here leaves your control, so an
 ambiguous selection has nothing to lose, and `--json`/`--yes` with several
 eligible returns an array (`{"protected": [...]}`, each row carrying
-`id`) rather than refusing as ambiguous. Because the secret is always captured — and kept current
+`id`) rather than refusing as ambiguous. A holding whose earlier
+protect (or any call) got no answer is never re-keyed while that call is
+open (that could overwrite the only secret that spends it): named, it is
+refused `conflict` (exit 5, `"retryable": false`); otherwise it is left
+out and listed as `{"id": ..., "status": "unresolved"}`. The open call and
+its new code are in `wallet show` (`open_calls`): keep the code, it may be
+the only one that spends the bill. Because the secret is always captured — and kept current
 — up front, `redeem`/`transfer` never *need* a `--as cash:<secret>`
 override for a held token's own call — the one real use is overriding
 the entry's on-disk secret with a fresher one you learned out-of-band
@@ -112,6 +118,31 @@ paid, naming exactly which already-held entries will now incorrectly
 keep showing as held until reconciled. Either way: treat a nonzero exit
 carrying `recovery` as "money moved, ledger didn't" — never as "nothing
 happened, retry freely".
+
+### Cash Zaps (kind 9522)
+
+```sh
+cashctl decode zap.json --target note.json --json   # {"type":"cash_zap","rules":[{"n","ok","reason"?}],"countable","minter_pubkey","amount_millis","chain","recipient","via"?,"possibly_expired"?}
+cashctl receive zap.json --json                      # {"received":true,"zap":true,"entry",...}
+cashctl receive <bill> --zap-event zap.json --json
+cashctl receive <bill> --find-zap --relay wss://... --json
+```
+
+`decode` never means money received; only `receive` (rule 9: the Hub's own
+row for your pubkey, unclaimed, of exactly the amount) proves it. A minter
+you don't trust needs the user's OK before anything is contacted:
+`--trust-minter` only after they agreed (else `usage`,
+`reason: minter_untrusted`). A zap bill without its event is refused; give
+it with `--zap-event`, or let `--find-zap` look on the relays you name.
+A zap to a connection key (`p` with a platform) is claimed with
+`--as connection-key:<privkey>,<platform>,<id>,<attestation-file>`: a full
+in-place transfer to your pubkey, written ahead; exit 8 means the claim is
+open — `cash settle` finishes it, never re-run it. `--relay` also reads your
+own Cash Zap Info (10522) for rule 8. Trust a minter for good only when the
+user asks: `cashctl cash minters add <minter> --chain <chain>`.
+
+Suggest `consolidate` afterwards: it re-issues the bill as an ordinary one,
+unlinking it from the public zap.
 
 ## `cashctl redeem` — cash it out
 
@@ -463,6 +494,88 @@ present, ...), use the general-purpose `cashctl decode lokicash1...`
 instead (see `skills/cashctl-wallet/SKILL.md`) — it never touches the
 network, works on any token string held or not, and is the cheapest way to
 inspect one before deciding whether to `receive` it at all.
+
+## `cashctl cash mint` — mint a bill on a Cash Hub you hold
+
+```sh
+CASHCTL_CASH_HUB=cashhub1... cashctl cash mint 100 --json
+# {"cash_token","handoff"?,"entry"?,"wallet_pubkey","amount_millis","expires_at","call","network","chain","test_network","hub_verified","warnings"}
+cashctl cash mint 100 --hub - --to npub1... --json < hub.txt
+```
+
+Needs a `cashhub1...` string (`--hub`, `-` for stdin, or
+`$CASHCTL_CASH_HUB`); the URI form is refused `invalid_input`,
+`reason: connection_invalid`. The Hub must answer as the identity and chain
+the string names (else `auth`, `reason: connection_mismatch`, nothing
+written). A string whose signature doesn't verify needs the user's
+confirmation once (`--allow-unverified` only after they agreed; otherwise
+`usage`, `reason: connection_unverified`). `--to cash` (default) returns a
+`handoff` cash note — secret-bearing, give it once; `--to` your own key
+keeps the bill (`entry`); any other identity gets it as a gift. The returned
+bill must carry the Hub identity's mint signature. A lost reply is exit 8
+with `call.method: mint_cash`; `cash settle` looks it up. If the Hub never
+saw it, the call is `stuck`/`confirm_replace` and only
+`cash settle --replace <call>` mints it again (under its derived id). `-c`
+is refused.
+
+## `cashctl cash order` — buy cash
+
+```sh
+cashctl cash order place cashorder1... 100 --json   # {"order","state":"open","invoice"|"address","pay_millis","pay_by","warnings",...}
+cashctl cash order watch <order> --json             # until minted/expired (Lightning) or closed (on-chain)
+cashctl cash order show --json                      # {"orders":[...]}
+cashctl cash order settle --replace <order> --yes   # only for an order the Hub says was never placed
+```
+
+Pay exactly `pay_millis` before `pay_by`: a different amount mints a
+different bill, never a refund. `--to cash` (default) makes a cash note kept
+here with its secret; `--to self` your own bill; any other target gets the
+bill as a gift. A retired link answers `reason: not_selling` (exit 7). A
+placement whose reply was lost is exit 8: never place it again yourself —
+`cash order settle` reads it, and only an order the Hub says it never saw
+can be placed again, with `--replace` (it asks for a new payment). Never
+print or log `notify`.
+
+## `cashctl cash withdraw` — pay out on-chain (irreversible)
+
+```sh
+cashctl cash withdraw quote <address> --token <id> --json   # moves nothing: {"quote":"wq-…","payout_millis","fee_millis","sent_by",...}
+cashctl cash withdraw send --quote wq-… --yes --json        # only after the user saw and accepted that quote
+cashctl cash withdraw show --json                            # {"withdrawals":[{"withdrawal","state","tx_check",...}]}
+cashctl cash withdraw watch <w> --json                       # until final or cancelled (notices + polling)
+cashctl cash withdraw show <w> --tx --json                   # "tx" only when tx_check is "ok"; never broadcast it yourself unasked
+cashctl decode <quote|receipt|payout JSON or address> --json # withdraw_quote / withdraw_receipt / payout / address
+```
+
+Never send without showing the quote to the user first: `--json` is not
+consent, and `send <address>` without a terminal is refused (`usage`). A
+quote handle is single-use. A cash note received from someone else must be
+protected first (`reason: protect_first`). Exit 8 after `send` means the
+bill is locked and the withdrawal may have happened: never send again —
+`cash withdraw settle` asks the Hub. A payout is never "failed" until it is
+`cancelled`, and then the amount comes back as a new bill (`remint_entry`).
+A refusal with `detail: "quote_expired"` (exit 7) moved nothing: quote
+again and show the new numbers before sending. `recovered: true` is a
+withdrawal found through the Hub that this device had no record of.
+
+## `cashctl cash settle` — finish what got no answer
+
+```sh
+cashctl cash settle --json          # {"calls":[{"call","method","purpose","state","detail","deadline","next_step",...}],"joins":[]}
+cashctl cash settle --wait --json   # keep asking, up to 6 minutes
+```
+
+A transfer, merge or protect that exits 8 (`indeterminate`) is an open
+call: it was written down before it was sent, with every new secret, and
+its bills are not spent again until it is settled. Never re-run the
+command to "retry" it. `cash settle` (and the start of every money
+command) asks the Hub what happened: done → recorded; never seen → placed
+again under a derived id (at most three times); refused → closed with its
+code; no longer remembered (`expired`) → shown with its secrets under
+`recovery`, which you keep. Exit 0 once nothing placed from this wallet
+file is open, else 8. A call placed with `--as` needs the same `--as` to
+settle. `joins` lists `join`s whose reply was lost, looked up the same way.
+`--replace <call>` re-places a mint the Hub never saw (only a mint needs it).
 
 ## End-to-end scenarios
 

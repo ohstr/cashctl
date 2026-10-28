@@ -43,10 +43,17 @@ func (o circleHubOpts) withDefaults() circleHubOpts {
 // circleHubRequest is the create request every circle fixture shares, for
 // policy ("allowlist" or "follow_set") under opts.
 func circleHubRequest(name, policy string, scopes []string, opts circleHubOpts) adminCreateAppRequest {
+	// Rotation on, as a Hub that serves member requests runs: cashctl refuses
+	// under --json to join a Hub that can't rotate a lost connection unless
+	// given a backup file or --accept-no-rotation (NIP-CW §Recovering a Lost
+	// Connection).
+	rotation := true
 	return adminCreateAppRequest{
-		Name:          ephemeralFixtureNamePrefix + " " + name,
-		Kind:          "circle_hub",
-		MaxAmountLoki: opts.HubMaxAmountLoki,
+		CircleRotationEnabled:   &rotation,
+		CircleRotationDelaySecs: 3600,
+		Name:                    ephemeralFixtureNamePrefix + " " + name,
+		Kind:                    "circle_hub",
+		MaxAmountLoki:           opts.HubMaxAmountLoki,
 		// Scope literal mirrors lokihub's constants.CIRCLE_WALLET_SCOPE
 		// ("circle_wallet", not "circle_hub" — see cash_test.go's
 		// setUpCashHub comment on why this suite names scopes directly
@@ -148,6 +155,7 @@ type cliError struct {
 	Code      string `json:"code"`
 	Retryable bool   `json:"retryable"`
 	NWCCode   string `json:"nwc_code"`
+	Reason    string `json:"reason"`
 }
 
 // requireFailure asserts res failed with exit code exit and cashctl code
@@ -225,33 +233,21 @@ func TestCircleJoin_CreateWalletAndGetInfo(t *testing.T) {
 	}
 }
 
-// TestCircleJoin_ViaRawNWCURI joins the same kind of circle_hub as above,
-// but passing its plain pairingUri instead of the circlehub1... bech32
-// form — the fallback path for a Hub that hasn't adopted the new format
-// yet (resolveHubConnection's dial.KindNWCURI branch).
+// TestCircleJoin_ViaRawNWCURI: a circle is joined only from its signed
+// circlehub1... string (NIP-CW §The Circle Hub Connection); a plain NWC URI,
+// even the Hub's own pairing URI, is refused before anything is sent.
 func TestCircleJoin_ViaRawNWCURI(t *testing.T) {
-	cfg, err := LoadConfig("")
-	if err != nil {
-		t.Skipf("skipping: could not load integration config (%v) — see integration/README.md", err)
-	}
-	admin, ok := newAdminClient(cfg)
-	if !ok {
-		t.Skip("skipping: admin_api not configured — see integration/README.md")
-	}
-
-	f := newFixture(t)
-	initResp := f.mustJSON("wallet", "init")
-	npub, _ := initResp["npub"].(string)
-	pubHex, err := npubToHex(npub)
-	if err != nil {
-		t.Fatalf("decode local identity npub: %v", err)
-	}
-
+	admin := adminOrSkip(t)
+	f, pubHex := newMember(t)
 	hubResp := setUpCircleHub(t, admin, pubHex)
 
-	joinResp := f.mustJSON("join", "--hub", hubResp.PairingUri, "--max-amount", "100", "--yes")
-	if walletName, _ := joinResp["wallet"].(string); walletName == "" {
-		t.Fatalf("join --hub <raw NWC URI>: no wallet name in response: %v", joinResp)
+	res := f.run("join", "--hub", hubResp.PairingUri, "--max-amount", "100", "--yes")
+	e := requireFailure(t, "join --hub <raw NWC URI>", res, 3, "invalid_input", "")
+	if e.Reason != "connection_invalid" {
+		t.Errorf("reason = %q, want connection_invalid: %s", e.Reason, res.Stderr)
+	}
+	if children, err := admin.listCircleChildren(hubResp.ID); err != nil || len(children) != 0 {
+		t.Errorf("hub children after a refused join = %v (err %v), want none", children, err)
 	}
 }
 

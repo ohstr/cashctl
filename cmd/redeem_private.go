@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/ohstr/nmilat/nipcash"
 	nipcashclient "github.com/ohstr/nmilat/nipcash/client"
@@ -183,7 +184,7 @@ func quoteHubGroup(
 	client, err := dialHubGroup(ctx, g.Entries)
 	if err != nil {
 		for _, it := range items {
-			errs[it.ID] = output.NetworkError(cmd, err)
+			errs[it.ID] = classifyCashTokenNWCErr(cmd, err)
 		}
 		return quotes, errs
 	}
@@ -216,14 +217,25 @@ func quoteHubGroup(
 			continue
 		}
 		switch {
-		case r.Succeeded() && r.Result != nil && r.Result.IsSpent():
-			errs[r.ID] = recordSpent(cmd, l, entry)
+		case r.Gone != nil:
+			errs[r.ID] = recordGone(cmd, l, entry, r.Gone)
+		case r.Succeeded() && r.Result != nil && r.Result.Tombstone != nil:
+			errs[r.ID] = recordGone(cmd, l, entry, r.Result.Tombstone)
 		case r.Succeeded() && r.Result != nil:
-			myPubHex, _ := signerPubKeyHex(cmd, entry)
-			recipient, ok := nipcash.MatchClaimAuto(r.Result.Recipients, myPubHex)
-			if !ok {
+			// The caller's own row, identified by the credential that asked.
+			cred, credErr := resolveCredential(cmd, entry)
+			if credErr != nil {
+				errs[r.ID] = credErr
+				continue
+			}
+			recipient, rowErr := nipcash.OwnRow(r.Result.Recipients, cred, nipcash.ScopeMine)
+			if rowErr != nil {
 				errs[r.ID] = output.NotFoundError(cmd, r.ID,
 					fmt.Errorf("couldn't determine this token's amount — check `cashctl wallet show`, or that it's still valid"))
+				continue
+			}
+			if ok, reason := nipcash.Claimable(recipient, time.Now().Unix()); !ok {
+				errs[r.ID] = output.NotFoundError(cmd, r.ID, fmt.Errorf("this token can no longer be spent: its slice is %s", reason))
 				continue
 			}
 			q, qErr := recordQuote(cmd, l, entry, recipient)
@@ -232,23 +244,53 @@ func quoteHubGroup(
 				continue
 			}
 			quotes[r.ID] = q
-		case r.State == nipcashclient.OutcomeError && r.Error != nil:
+		case r.State == nipcashclient.OutcomeError && r.Error != nil && !r.Undecodable:
 			errs[r.ID] = output.NWCErrorForCashToken(cmd, &relayclient.WalletError{
 				Method: "cash_status", Code: r.Error.Code, Message: r.Error.Message,
 			})
-		case incomplete != nil:
-			// In a chunk that never arrived, not omitted: "ask again", not final.
-			errs[r.ID] = output.NetworkError(cmd, fmt.Errorf(
-				"the Hub's reply arrived incomplete and this token's quote was not in it; asking again is safe: %w", incomplete))
+			if r.Error.Code == "NOT_FOUND" {
+				if nfErr, ok := recordNotFound(cmd, l, entry, proofOf(cmd, entry)); ok {
+					errs[r.ID] = nfErr
+				}
+			}
 		default:
-			// Omitted. Harmless here in a way it is NOT for a spend: nothing was
-			// executed, so asking again is safe. Not not_found: an omission is
-			// information-free, so it cannot support "this bill is gone".
-			explained, _ := explainNoAnswer(&nipcashclient.NotServedError{Method: "cash_status"})
-			errs[r.ID] = output.NetworkError(cmd, explained)
+			errs[r.ID] = quoteUndecidedErr(cmd, r.ItemOutcome, incomplete)
 		}
 	}
 	return quotes, errs
+}
+
+// quoteUndecidedErr is the error for a fee quote the Hub's reply did not decide:
+// unanswered, contradicted, unreadable or omitted. A quote is a read, so asking
+// again is always safe (network, retryable); none of these says the bill is gone.
+func quoteUndecidedErr(cmd *cobra.Command, o nipcashclient.ItemOutcome, incomplete error) error {
+	switch {
+	case o.State == nipcashclient.OutcomeConflict:
+		return output.NetworkError(cmd, fmt.Errorf(
+			"the Hub's reply contradicted itself about this token's quote; asking again is safe: %w", replyErr(incomplete)))
+	case o.State == nipcashclient.OutcomeError:
+		return output.NetworkError(cmd, errors.New("the Hub's answer to this token's quote could not be read; asking again is safe"))
+	case o.State == nipcashclient.OutcomeUnanswered || incomplete != nil:
+		// In a chunk that never arrived, or no reply at all, not omitted: "ask
+		// again", not final.
+		return output.NetworkError(cmd, fmt.Errorf(
+			"the Hub's reply arrived incomplete and this token's quote was not in it; asking again is safe: %w", replyErr(incomplete)))
+	default:
+		// Omitted. Harmless here in a way it is NOT for a spend: nothing was
+		// executed, so asking again is safe. Not not_found: an omission is
+		// information-free, so it cannot support "this bill is gone".
+		explained, _ := explainNoAnswer(&nipcashclient.NotServedError{Method: "cash_status"})
+		return output.NetworkError(cmd, explained)
+	}
+}
+
+// replyErr is the reply-level error to cite, or a generic one when the SDK
+// returned none (an envelope that got no reply at all).
+func replyErr(incomplete error) error {
+	if incomplete != nil {
+		return incomplete
+	}
+	return nipcashclient.ErrIncompleteReply
 }
 
 // redeemHubGroup spends a whole hub group in one request.
@@ -297,7 +339,7 @@ func redeemHubGroup(
 		for _, it := range items {
 			idx := outcomeIndex(outcomes, it.ID)
 			if idx >= 0 {
-				outcomes[idx].Err = output.NetworkError(cmd, err)
+				outcomes[idx].Err = classifyCashTokenNWCErr(cmd, err)
 			}
 		}
 		return
@@ -319,20 +361,11 @@ func redeemHubGroup(
 			idx := outcomeIndex(outcomes, it.ID)
 			if idx >= 0 {
 				outcomes[idx].Err = classifyCashSpendErr(cmd, sendErr, "redeem", it.ID)
+				outcomes[idx].undecided = true
 			}
 		}
 		return
 	}
-	results = retryWithPendingSecrets(g.Plans, items, results, func(retries []nipcashclient.BatchRedeem) []nipcashclient.RedeemOutcome {
-		var out []nipcashclient.RedeemOutcome
-		_ = WithSpinner(jsonMode, fmt.Sprintf("Retrying %d token(s) with a pending secret...", len(retries)), func() error {
-			// A failed retry is not reported: the original decline is the one worth
-			// showing, so the error is deliberately dropped here.
-			out, _ = client.RedeemMany(ctx, retries)
-			return nil
-		})
-		return out
-	})
 	applyRedeemResults(cmd, l, g.Plans, results, outcomes, destName, incompleteReply(sendErr))
 }
 
@@ -356,7 +389,7 @@ func incompleteReply(sendErr error) error {
 func dialHubGroup(ctx context.Context, entries []*ledger.Entry) (*nipcashclient.Client, error) {
 	var lastErr error
 	for _, e := range entries {
-		client, err := nipcashclient.Connect(ctx, e.Token)
+		client, err := dialBill(ctx, e.Token)
 		if err != nil {
 			lastErr = err
 			continue
@@ -432,7 +465,7 @@ func recordQuote(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entry, reci
 		AmountMillis:        recipient.AmountMillis,
 		RedeemFeeMillis:     recipient.RedeemFeeMillis,
 		NetRedeemableMillis: recipient.NetRedeemableMillis,
-		ExpiresAt:           recipient.ExpiresAt,
+		ExpiresAt:           expiryPtr(recipient.ExpiresAt),
 	}
 	var tok nipcash.Token
 	if decoded, err := nipcash.Decode(entry.Token); err == nil {
@@ -450,7 +483,7 @@ func recordQuote(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entry, reci
 	}
 	entry.AmountMillis = &recipient.AmountMillis
 	entry.RedeemFeeMillis = &recipient.RedeemFeeMillis
-	entry.ExpiresAt = recipient.ExpiresAt
+	entry.ExpiresAt = expiryPtr(recipient.ExpiresAt)
 	_ = l.SetVerified(entry.ID, true)
 	return q, nil
 }
@@ -469,87 +502,6 @@ func recordRedeemed(l *ledger.Ledger, entry *ledger.Entry, destName string) {
 }
 
 // plansEntry finds a group's plan by ledger id.
-// retryWithPendingSecrets is the pending-secret fallback, in the shape batching
-// needs: per item, and as one extra request rather than one per bill.
-//
-// An interrupted protect step (cmd/receive_secure.go) can leave an entry holding
-// TWO candidate cash secrets — the old one and the rekey's replacement — with no
-// way to know which the hub accepted, because NIP-CASH has no read-only way to
-// ask (nipcashclient.CheckClaim only proves *some* recipient exists, never
-// *which* secret). The only place cashctl can learn the answer is a real spend,
-// which is why this lives on the spend path rather than in a reconcile step
-// nothing calls.
-//
-// spendCashEntry does exactly this for the single-call methods (transfer). Redeem
-// stopped being a single call when it became a batch, and the fallback was simply
-// left behind — a silent regression: a recovery that used to work returned
-// NOT_FOUND instead, telling someone a bill they own cannot be spent.
-//
-// Only genuinely wrong-secret declines are retried. An omission is NOT retried
-// and must not be: it is indistinguishable from a redemption whose reply was
-// lost, so resending could double-spend.
-// send is a parameter rather than a client so the decision logic — which items
-// qualify, and what a failed retry must NOT do — is testable without a relay.
-// Same shape as consolidateItemsFn; no package-level seam.
-func retryWithPendingSecrets(
-	plans []redeemPlan,
-	items []nipcashclient.BatchRedeem,
-	results []nipcashclient.RedeemOutcome,
-	send func([]nipcashclient.BatchRedeem) []nipcashclient.RedeemOutcome,
-) []nipcashclient.RedeemOutcome {
-	itemByID := make(map[string]nipcashclient.BatchRedeem, len(items))
-	for _, it := range items {
-		itemByID[it.ID] = it
-	}
-
-	retries := make([]nipcashclient.BatchRedeem, 0, 1)
-	pendingByID := make(map[string]string, 1)
-	for _, r := range results {
-		if r.State != nipcashclient.OutcomeError || r.Error == nil || r.Error.Code != "NOT_FOUND" {
-			continue
-		}
-		entry := plansEntry(plans, r.ID)
-		if entry == nil || entry.PendingCashSecret == "" || entry.PendingCashSecret == entry.CashSecret {
-			continue
-		}
-		it, ok := itemByID[r.ID]
-		if !ok {
-			continue
-		}
-		it.Params.Credential = nipcash.BySecret(entry.PendingCashSecret)
-		retries = append(retries, it)
-		pendingByID[r.ID] = entry.PendingCashSecret
-	}
-	if len(retries) == 0 {
-		return results
-	}
-
-	for _, rr := range send(retries) {
-		if !rr.Succeeded() {
-			// The FIRST decline is the one worth reporting — a second guess's own
-			// failure adds nothing, and could itself just be the same wrong-secret
-			// signal for a genuinely-wrong pending value.
-			continue
-		}
-		entry := plansEntry(plans, rr.ID)
-		if entry != nil {
-			// Promote, so the next spend starts from the secret that actually works.
-			// Not Saved here: the caller's own recordRedeemed does that, and picks
-			// these fields up because Entry is a pointer into the ledger's slice —
-			// the same contract spendCashEntry relies on.
-			entry.PendingCashSecret = pendingByID[rr.ID]
-			promotePendingSecret(entry)
-		}
-		for i := range results {
-			if results[i].ID == rr.ID {
-				results[i] = rr
-				break
-			}
-		}
-	}
-	return results
-}
-
 func plansEntry(plans []redeemPlan, id string) *ledger.Entry {
 	for _, p := range plans {
 		if p.Entry.ID == id {
@@ -586,6 +538,16 @@ func applyRedeemResults(
 		case r.Succeeded() && r.Result != nil:
 			outcomes[idx].Result = r.Result
 			recordRedeemed(l, plansEntry(plans, r.ID), destName)
+		case r.Gone != nil && plansEntry(plans, r.ID) != nil:
+			// A tombstone: the bill is destroyed and nothing moved here.
+			outcomes[idx].Err = recordGone(cmd, l, plansEntry(plans, r.ID), r.Gone)
+		case r.State == nipcashclient.OutcomeError && r.Undecodable:
+			// The Hub ran it and said so, but its result could not be read: it
+			// may have paid. Never resent.
+			outcomes[idx].undecided = true
+			outcomes[idx].Err = output.IndeterminateError(cmd, r.ID, fmt.Errorf(
+				"the Hub ran this redeem but its answer could not be read, so whether it paid is unknown. "+
+					"Do not resend it: check first with %s", cashStatusHint([]string{r.ID})))
 		case r.State == nipcashclient.OutcomeError && r.Error != nil:
 			// A per-item error mirrors NIP-47's own error shape deliberately, so it
 			// goes through the same classifier a single-bill decline does. The exit
@@ -597,11 +559,32 @@ func applyRedeemResults(
 				Code:    r.Error.Code,
 				Message: r.Error.Message,
 			})
-		case incomplete != nil:
-			// Its answer was in a chunk that never arrived. Reported as that rather
-			// than as an omission, though the action is the same: it may have paid.
+			// INTERNAL: the payment has begun and may still settle (NIP-CASH
+			// §Answer or Omit); every other code is definitive.
+			if r.Error.Code == "INTERNAL" {
+				outcomes[idx].undecided, outcomes[idx].coded = true, outcomes[idx].Err
+			}
+			if e := plansEntry(plans, r.ID); r.Error.Code == "NOT_FOUND" && e != nil {
+				if nfErr, ok := recordNotFound(cmd, l, e, proofOf(cmd, e)); ok {
+					outcomes[idx].Err = nfErr
+				}
+			}
+		case r.State == nipcashclient.OutcomeConflict:
+			// Answered twice, beside an envelope-level error, or with a result
+			// naming another method: no single answer, and picking one by
+			// arrival order is forbidden (NIP-CASH §Chunked Replies). It may
+			// have paid. Never resent.
+			outcomes[idx].undecided = true
+			outcomes[idx].Err = output.IndeterminateError(cmd, r.ID, fmt.Errorf(
+				"the Hub's reply contradicted itself about this redeem, so whether it paid is unknown. "+
+					"Do not resend it: check first with %s: %w", cashStatusHint([]string{r.ID}), replyErr(incomplete)))
+		case r.State == nipcashclient.OutcomeUnanswered || incomplete != nil:
+			// Its answer was in a chunk that never arrived, or no reply came at
+			// all. Reported as that rather than as an omission, though the action
+			// is the same: it may have paid.
+			outcomes[idx].undecided = true
 			outcomes[idx].Err = classifyCashSpendErr(cmd, fmt.Errorf(
-				"the Hub's reply arrived incomplete and this token's answer was not in it: %w", incomplete),
+				"the Hub's reply arrived incomplete and this token's answer was not in it: %w", replyErr(incomplete)),
 				"redeem", r.ID)
 		default:
 			// Not served: the hub said nothing. Deliberately information-free — it is
@@ -611,6 +594,7 @@ func applyRedeemResults(
 			// reported as something to RESOLVE BY ASKING, never as a silent success
 			// and never as safe to resend: an omission is indistinguishable from a
 			// redemption whose reply was lost.
+			outcomes[idx].undecided = true
 			outcomes[idx].Err = classifyCashSpendErr(cmd, &nipcashclient.NotServedError{Method: "cash_redeem"}, "redeem", r.ID)
 		}
 	}

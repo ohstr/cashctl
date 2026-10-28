@@ -117,6 +117,45 @@ type CLIError struct {
 	// in human mode, so it can be copied, and as the "recovery" key under
 	// --json. A cap here would destroy money the same way the redaction did.
 	Recovery string
+	// Final marks an error of a normally retryable code that retrying as is
+	// cannot fix; --json's "retryable" is false for it.
+	Final bool
+	// Call, on an indeterminate error, describes the call left open (its
+	// handle, method, state, deadline and next step): --json's "call".
+	Call map[string]any
+	// Reason is cashctl's own finer cause within Code (connection_invalid,
+	// connection_mismatch, not_accepting, ...): --json's "reason".
+	Reason string
+	// Detail is the Hub's own detail on a refusal (one of NIP-CASH's eight wire
+	// values, such as quote_expired): --json's "detail".
+	Detail string
+}
+
+// WithDetail sets the --json "detail" of err, a *CLIError.
+func WithDetail(err error, detail string) error {
+	var ce *CLIError
+	if errors.As(err, &ce) {
+		ce.Detail = detail
+	}
+	return err
+}
+
+// WithReason sets the --json "reason" of err, a *CLIError.
+func WithReason(err error, reason string) error {
+	var ce *CLIError
+	if errors.As(err, &ce) {
+		ce.Reason = reason
+	}
+	return err
+}
+
+// WithCall attaches an open call's description to err, a *CLIError.
+func WithCall(err error, call map[string]any) error {
+	var ce *CLIError
+	if errors.As(err, &ce) {
+		ce.Call = call
+	}
+	return err
 }
 
 func (e *CLIError) Error() string { return e.Err.Error() }
@@ -236,6 +275,16 @@ func NotFoundError(cmd *cobra.Command, input string, err error) error {
 func ConflictError(cmd *cobra.Command, input string, err error) error {
 	silence(cmd)
 	return wrapCLIError(CodeConflict, RedactSecretInput(input), err)
+}
+
+// FinalConflictError is ConflictError that retrying as is cannot fix: the
+// conflicting state has to change first, so "retryable" is false.
+func FinalConflictError(cmd *cobra.Command, input string, err error) error {
+	wrapped := ConflictError(cmd, input, err)
+	if ce, ok := wrapped.(*CLIError); ok && ce.Code == CodeConflict {
+		ce.Final = true
+	}
+	return wrapped
 }
 
 // NetworkError classifies err as CodeNetwork (retryable).
@@ -404,6 +453,11 @@ var nwcSecretPattern = regexp.MustCompile(`(?i)([?&]secret=)[0-9a-f]+`)
 // shape internal/dial's own SplitCashSliceString parses.
 var giftSecretPattern = regexp.MustCompile(`#[0-9a-fA-F]{64}\b`)
 
+// jsonSecretPattern matches the value of any JSON key ending in "secret" (a
+// circle wallet backup's "secret", a "cash_secret"), whatever its shape: a
+// malformed or uppercase secret is still a secret.
+var jsonSecretPattern = regexp.MustCompile(`("[A-Za-z_]*secret"\s*:\s*)"(?:[^"\\]|\\.)*"`)
+
 // RedactSecretInput scrubs every secret-shaped substring it recognizes out
 // of s — a raw nsec1/64-hex value (redacted
 // entirely), a cash:/pubkey:/connection-key: credential (its secret
@@ -433,6 +487,7 @@ func RedactSecretInput(s string) string {
 	})
 	out = nwcSecretPattern.ReplaceAllString(out, "${1}<redacted>")
 	out = giftSecretPattern.ReplaceAllString(out, "#<redacted>")
+	out = jsonSecretPattern.ReplaceAllString(out, `${1}"<redacted>"`)
 	out = secretBearingBech32Pattern.ReplaceAllStringFunc(out, func(m string) string {
 		hrp := secretBearingBech32Pattern.FindStringSubmatch(m)[1]
 		return hrp + "1<redacted>"

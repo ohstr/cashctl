@@ -11,7 +11,6 @@ import (
 	"github.com/ohstr/nmilat/nip19"
 	"github.com/ohstr/nmilat/nip47"
 	"github.com/ohstr/nmilat/nipcash"
-	nipcashclient "github.com/ohstr/nmilat/nipcash/client"
 	relayclient "github.com/ohstr/nmilat/relay/client"
 )
 
@@ -115,7 +114,10 @@ func setUpCashHubOpts(t *testing.T, admin *adminClient, opts cashHubOpts) adminC
 			if err == nil {
 				continue
 			}
-			if claim.Archived || claim.Status != "unclaimed" {
+			if claim.Archived || claim.Status != "unclaimed" || strings.Contains(err.Error(), "ordered slice") {
+				// A wallet holding an ordered slice is never deleted by the
+				// Hub (NIP-CO: the slice was paid for, not issued from the
+				// Hub's balance), so it stays, and its Hub with it.
 				// Expected: the Hub deletes a bill once nothing is left on
 				// it, so a spent claim's wallet is usually already gone.
 				continue
@@ -131,18 +133,6 @@ func setUpCashHubOpts(t *testing.T, admin *adminClient, opts cashHubOpts) adminC
 		t.Fatalf("fund ephemeral cash_hub: %v", err)
 	}
 	return resp
-}
-
-// dialCash dials hubPairingURI as a NIP-CASH client (mint_cash, cash_redeem,
-// list_recipients, ...).
-func dialCash(t *testing.T, ctx context.Context, hubPairingURI string) *nipcashclient.Client {
-	t.Helper()
-	c, err := nipcashclient.Connect(ctx, hubPairingURI)
-	if err != nil {
-		t.Fatalf("dial cash hub (nipcash): %v", err)
-	}
-	t.Cleanup(c.Close)
-	return c
 }
 
 // dialNWC dials hubPairingURI as a plain NIP-47 client (make_invoice,
@@ -191,20 +181,14 @@ func TestCashLifecycle_MintReceiveRedeem(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	cashClient := dialCash(t, ctx, hub.PairingUri)
 
 	const amountMillis = uint64(500_000) // 500 mloki
-	mintResult, err := cashClient.MintCash(ctx, nipcash.MintCashParams{
-		Recipients: []nipcash.Allocation{nipcash.Send(nipcash.Pubkey(pubHex), amountMillis)},
-	})
+	mintResultToken, err := newMinter(t, hub).To(pubHex, amountMillis, 0)
 	if err != nil {
-		t.Fatalf("mint_cash: %v", err)
-	}
-	if mintResult.CashToken == "" {
-		t.Fatalf("mint_cash: empty cash token in result: %+v", mintResult)
+		t.Fatalf("cash mint: %v", err)
 	}
 
-	receiveResp := f.mustJSON("receive", mintResult.CashToken)
+	receiveResp := f.mustJSON("receive", mintResultToken)
 	entry, _ := receiveResp["entry"].(map[string]any)
 	if entry == nil {
 		t.Fatalf("receive: no entry in response: %v", receiveResp)
@@ -340,21 +324,12 @@ func TestCashInspect_DecodeAndListRecipients(t *testing.T) {
 	hub := setUpCashHub(t, admin)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	cashClient := dialCash(t, ctx, hub.PairingUri)
+	minter := newMinter(t, hub)
 
 	const amountMillis = uint64(250_000)
 	mintCash := func() (token, secret string) {
 		t.Helper()
-		result, err := cashClient.MintCash(ctx, nipcash.MintCashParams{
-			Recipients: []nipcash.Allocation{nipcash.Send(nipcash.Anyone(), amountMillis)},
-		})
-		if err != nil {
-			t.Fatalf("mint_cash (cash): %v", err)
-		}
-		if len(result.Recipients) != 1 || result.Recipients[0].CashSecret == "" {
-			t.Fatalf("mint_cash (cash): expected exactly one recipient with a cash_secret: %+v", result.Recipients)
-		}
-		return result.CashToken, result.Recipients[0].CashSecret
+		return minter.MustCash(amountMillis)
 	}
 
 	// Two separate cash mints: a token can only ever be received once per
@@ -451,27 +426,19 @@ func TestCashReceive_CashGiftString(t *testing.T) {
 	hub := setUpCashHub(t, admin)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	cashClient := dialCash(t, ctx, hub.PairingUri)
+	minter := newMinter(t, hub)
 
 	const amountMillis = uint64(80_000)
-	mintResult, err := cashClient.MintCash(ctx, nipcash.MintCashParams{
-		Recipients: []nipcash.Allocation{nipcash.Send(nipcash.Anyone(), amountMillis)},
-	})
-	if err != nil {
-		t.Fatalf("mint_cash (cash): %v", err)
-	}
-	if len(mintResult.Recipients) != 1 || mintResult.Recipients[0].CashSecret == "" {
-		t.Fatalf("mint_cash (cash): expected exactly one recipient with a cash_secret: %+v", mintResult.Recipients)
-	}
-	giftString := mintResult.CashToken + "#" + mintResult.Recipients[0].CashSecret
+	mintResultToken, mintResultSecret := minter.MustCash(amountMillis)
+	giftString := mintResultToken + "#" + mintResultSecret
 
 	receiveResp := f.mustJSON("receive", giftString)
 	entry, _ := receiveResp["entry"].(map[string]any)
 	if entry == nil {
 		t.Fatalf("receive (gift string): no entry in response: %v", receiveResp)
 	}
-	if tok, _ := entry["token"].(string); tok != mintResult.CashToken {
-		t.Errorf("receive (gift string): entry.token = %q, want %q (must be the token half only, never the combined string)", tok, mintResult.CashToken)
+	if tok, _ := entry["token"].(string); tok != mintResultToken {
+		t.Errorf("receive (gift string): entry.token = %q, want %q (must be the token half only, never the combined string)", tok, mintResultToken)
 	}
 
 	hubClient := dialNWC(t, ctx, hub.PairingUri)
@@ -583,15 +550,8 @@ func mintPubkeyToken(t *testing.T, admin *adminClient, pubkeyHex string, amountM
 // per NIP-CASH §Consolidating Tokens step 2).
 func mintPubkeyTokenFromHub(t *testing.T, hub adminCreateAppResponse, pubkeyHex string, amountMillis uint64) string {
 	t.Helper()
-	return retryEphemeralNWC(t, "mint_cash", func(ctx context.Context) (string, error) {
-		cashClient := dialCash(t, ctx, hub.PairingUri)
-		result, err := cashClient.MintCash(ctx, nipcash.MintCashParams{
-			Recipients: []nipcash.Allocation{nipcash.Send(nipcash.Pubkey(pubkeyHex), amountMillis)},
-		})
-		if err != nil {
-			return "", err
-		}
-		return result.CashToken, nil
+	return retryEphemeralNWC(t, "cash mint", func(context.Context) (string, error) {
+		return newMinter(t, hub).To(pubkeyHex, amountMillis, 0)
 	})
 }
 

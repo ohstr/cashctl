@@ -1,18 +1,15 @@
 package cmd
 
 import (
-	"errors"
-	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
 
-	relayclient "github.com/ohstr/nmilat/relay/client"
-
 	"github.com/ohstr/nmilat/nipcw"
 
 	"github.com/ohstr/cashctl/internal/output"
+	"github.com/ohstr/cashctl/internal/testmint"
 )
 
 // validCircleHub returns a real, checksum-valid circlehub1... string (the
@@ -23,17 +20,8 @@ import (
 // a genuinely valid one).
 func validCircleHub(t *testing.T) string {
 	t.Helper()
-	s, err := nipcw.EncodeCircleHubConnection(nipcw.CircleHubConnection{
-		WalletPubkey: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-		Secret:       "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-		// Required by the encoder: a hub connection naming no relay cannot be
-		// reached by anyone, so it is no longer encodable at all.
-		RelayURLs: []string{"wss://relay.example"},
-	})
-	if err != nil {
-		t.Fatalf("EncodeCircleHubConnection: %v", err)
-	}
-	return s
+	hubPriv, _ := testmint.Key(t)
+	return testmint.CircleHub(t, hubPriv, "")
 }
 
 // --- disambiguateJoinArgs: the positional-args shape-sniffing that lets
@@ -130,32 +118,6 @@ func TestDisambiguateJoinArgs_MalformedAmountBlamesTheAmountNotTheHub(t *testing
 	}
 }
 
-// TestIsIdentityEventReplayErr covers the exact match this fix depends on
-// — see its own doc comment for why it keys on message text, not just the
-// BAD_REQUEST code (which is used for plenty of other join declines too,
-// e.g. an over-cap max-amount).
-func TestIsIdentityEventReplayErr(t *testing.T) {
-	tests := []struct {
-		name string
-		err  error
-		want bool
-	}{
-		{"exact match", &relayclient.WalletError{Code: "BAD_REQUEST", Message: "identity_event has already been used"}, true},
-		{"wrapped", fmt.Errorf("join: %w", &relayclient.WalletError{Code: "BAD_REQUEST", Message: "identity_event has already been used"}), true},
-		{"different BAD_REQUEST reason", &relayclient.WalletError{Code: "BAD_REQUEST", Message: "max_amount exceeds per_wallet_max_mloki"}, false},
-		{"same message, different code", &relayclient.WalletError{Code: "RESTRICTED", Message: "identity_event has already been used"}, false},
-		{"not a WalletError at all", errors.New("identity_event has already been used"), false},
-		{"nil", nil, false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := isIdentityEventReplayErr(tt.err); got != tt.want {
-				t.Errorf("isIdentityEventReplayErr(%v) = %v, want %v", tt.err, got, tt.want)
-			}
-		})
-	}
-}
-
 // TestRootExample_JoinCarriesMaxAmount guards the root command's own
 // Example against the shape runCircleJoin actually enforces: a cap is
 // mandatory (NIP-CW has no "0 means unlimited" convention), so a `join`
@@ -187,7 +149,10 @@ func newTestJoinCmd() *cobra.Command {
 	c.Flags().Duration("expiry", 0, "")
 	c.Flags().String("budget-renewal", "", "")
 	c.Flags().String("as", "", "")
-	c.Flags().String("private", "", "")
+	c.Flags().String("max-receive", "", "")
+	c.Flags().Bool("allow-unverified", false, "")
+	c.Flags().String("backup-file", "", "")
+	c.Flags().Bool("accept-no-rotation", false, "")
 	return c
 }
 
@@ -255,33 +220,16 @@ func TestRunCircleJoin_MissingHubHintNamesEveryMissingArgument(t *testing.T) {
 	}
 }
 
-// A pre-SD-20 Hub's RESTRICTED "already has a wallet" refusal reads as
-// WALLET_EXISTS; a plain not-a-member refusal stays RESTRICTED.
-func TestWalletExistsFromLegacyRefusal(t *testing.T) {
-	legacy := &relayclient.WalletError{Code: "RESTRICTED", Message: "identity already has an active circle wallet under this hub"}
-	notMember := &relayclient.WalletError{Code: "RESTRICTED", Message: "requester is not authorized by the circle policy"}
-	if got := output.AsCLIError(classifyNWCErr(&cobra.Command{}, walletExistsFromLegacyRefusal(legacy))); got.NWCCode != "WALLET_EXISTS" || got.Code != output.CodeExists {
-		t.Errorf("legacy refusal: code = %q, nwc_code = %q, want exists / WALLET_EXISTS", got.Code, got.NWCCode)
-	}
-	if got := output.AsCLIError(classifyNWCErr(&cobra.Command{}, walletExistsFromLegacyRefusal(notMember))); got.NWCCode != "RESTRICTED" {
-		t.Errorf("not-a-member refusal: nwc_code = %q, want RESTRICTED", got.NWCCode)
-	}
-	if legacy.Code != "RESTRICTED" {
-		t.Error("the Hub's own error was mutated")
-	}
-}
-
 // join reports the cap the Hub resolved, saying when it differs from the
 // one asked for, and the in-circle fee (NIP-CW §Response).
 func TestJoinCapSummary_ShowsTheResolvedCapAndFee(t *testing.T) {
-	resolved := uint64(400_000)
-	got := joinCapSummary(500_000, &nipcw.CreateCircleWalletResponse{MaxAmountMillis: &resolved, FeesPpm: 1000}, "never")
+	got := joinCapSummary(500_000, &nipcw.CreateCircleWalletResponse{MaxAmountMillis: 400_000, FeesPpm: 1000}, "never")
 	for _, want := range []string{output.FormatAmount(400_000), "you asked for " + output.FormatAmount(500_000), "1000 ppm"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("summary %q lacks %q", got, want)
 		}
 	}
-	same := joinCapSummary(500_000, &nipcw.CreateCircleWalletResponse{MaxAmountMillis: ptrTo(uint64(500_000))}, "never")
+	same := joinCapSummary(500_000, &nipcw.CreateCircleWalletResponse{MaxAmountMillis: 500_000}, "never")
 	if strings.Contains(same, "asked for") || strings.Contains(same, "ppm") {
 		t.Errorf("summary %q mentions a difference or fee that is not there", same)
 	}

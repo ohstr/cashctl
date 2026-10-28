@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/flokiorg/go-flokicoin/chainutil/bech32"
+
+	"github.com/ohstr/cashctl/internal/testmint"
 )
 
 // F-61: the decoder rules cashctl relies on (through nmilat) for strings it is
@@ -112,14 +114,16 @@ func TestDecode_BadProvenanceIsNoProvenanceNotAFailure(t *testing.T) {
 }
 
 func TestDecode_RejectsMalformedCircleHubTLVs(t *testing.T) {
-	if _, err := runDecode(t, rawBech32(t, "circlehub", []tlv{tlvPub, tlvRelay, tlvSecret})); err != nil {
+	hubPriv, _ := testmint.Key(t)
+	if _, err := runDecode(t, testmint.CircleHub(t, hubPriv, "")); err != nil {
 		t.Fatalf("the well-formed control string was rejected: %v", err)
 	}
 	cases := map[string][]tlv{
-		"missing wallet pubkey": {tlvRelay, tlvSecret},
-		"missing secret":        {tlvPub, tlvRelay},
-		"short secret":          {tlvPub, tlvRelay, {2, n(0xbb, 16)}},
-		"repeated pubkey":       {tlvPub, tlvPub, tlvRelay, tlvSecret},
+		"no hub identity, signature or chain (4-6)": {tlvPub, tlvRelay, tlvSecret},
+		"missing wallet pubkey":                     {tlvRelay, tlvSecret},
+		"missing secret":                            {tlvPub, tlvRelay},
+		"short secret":                              {tlvPub, tlvRelay, {2, n(0xbb, 16)}},
+		"repeated pubkey":                           {tlvPub, tlvPub, tlvRelay, tlvSecret},
 	}
 	for name, tlvs := range cases {
 		if _, err := runDecode(t, rawBech32(t, "circlehub", tlvs)); err == nil {

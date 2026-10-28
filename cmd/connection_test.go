@@ -11,11 +11,13 @@ import (
 	"github.com/ohstr/cashctl/internal/appdir"
 	"github.com/ohstr/cashctl/internal/config"
 	"github.com/ohstr/cashctl/internal/output"
+
+	"github.com/ohstr/cashctl/internal/testmint"
 )
 
 func TestValidateConnectionValue(t *testing.T) {
 	walletPubkey, secret := strings.Repeat("aa", 32), strings.Repeat("bb", 32)
-	cashToken, err := nipcash.Encode(nipcash.Token{
+	cashToken, err := testmint.Encode(t, nipcash.Token{
 		HRP: "lokicash", WalletPubkey: walletPubkey, Secret: secret, IdentityRequired: ptrTo(false),
 		// Required by nipcash.Encode: a bill with no relay hint is unreachable.
 		RelayURLs: []string{"wss://relay.example"},
@@ -25,10 +27,12 @@ func TestValidateConnectionValue(t *testing.T) {
 	}
 	nwcURI := "nostr+walletconnect://" + walletPubkey + "?relay=wss%3A%2F%2Frelay.example&secret=" + secret
 
-	for _, ok := range []string{nwcURI, cashToken} {
-		if err := validateConnectionValue(ok); err != nil {
-			t.Errorf("validateConnectionValue(%.40q…) = %v, want accepted", ok, err)
-		}
+	if err := validateConnectionValue(nwcURI); err != nil {
+		t.Errorf("validateConnectionValue(nwc URI) = %v, want accepted", err)
+	}
+	// A bill is never a wallet.
+	if err := validateConnectionValue(cashToken); err == nil || !strings.Contains(err.Error(), "never a wallet") {
+		t.Errorf("validateConnectionValue(cash token) = %v, want refused as a bill", err)
 	}
 	// "n"/"no" are what a person types at init's yes/no-sounding wallet
 	// prompt; the rest are ordinary mis-pastes. None can ever be dialed.
@@ -43,13 +47,9 @@ func TestValidateConnectionValue(t *testing.T) {
 // any-HRP rule, but is never a wallet: each is refused, naming what it is.
 func TestValidateConnectionValue_RefusesWhatIsNotAWallet(t *testing.T) {
 	walletPubkey, secret := strings.Repeat("aa", 32), strings.Repeat("bb", 32)
-	cashHub, err := nipcash.EncodeCashHubConnection(nipcash.CashHubConnection{
-		WalletPubkey: walletPubkey, Secret: secret, RelayURLs: []string{"wss://relay.example"},
-	})
-	if err != nil {
-		t.Fatalf("EncodeCashHubConnection: %v", err)
-	}
-	cashToken, err := nipcash.Encode(nipcash.Token{
+	hubPriv, _ := testmint.Key(t)
+	cashHub := testmint.CashHub(t, hubPriv, "")
+	cashToken, err := testmint.Encode(t, nipcash.Token{
 		HRP: "lokicash", WalletPubkey: walletPubkey, Secret: secret, RelayURLs: []string{"wss://relay.example"},
 	})
 	if err != nil {
@@ -101,7 +101,7 @@ func TestNoWalletMessage_DistinguishesNoWalletsFromNoDefault(t *testing.T) {
 // decode reads "<token>#<secret>" as the token plus an embedded secret: the
 // combined string itself never decodes (NIP-CASH §Presenting a Cash-Mode Slice).
 func TestDecode_SplitsTheCombinedCashString(t *testing.T) {
-	token, err := nipcash.Encode(nipcash.Token{
+	token, err := testmint.Encode(t, nipcash.Token{
 		HRP: "lokicash", WalletPubkey: strings.Repeat("aa", 32), Secret: strings.Repeat("bb", 32),
 		RelayURLs: []string{"wss://relay.example"},
 	})

@@ -1,32 +1,24 @@
 package cmd
 
-// Audit D, CLI / local-state hardening role: the rest of D-CLI-1.
-//
-// auditD_cli_killwindow_test.go covers the consolidate site, which is the one
-// the finding was demonstrated against. D-CLI-1 has three sites, though — every
-// path that can reach a cash-mode destination — and the other two live in
-// cash_transfer.go. These cover the auto-consolidating transfer's send
-// (mergeThenSend, cash_merge.go), plus the contract of
-// parkDestinationCashSecret itself, which runCashTransfer's direct path has no
-// seam to exercise (it dials nipcashclient.Connect itself).
-//
-// The property under test is always the same one, and it is deliberately
-// asserted at the instant it matters rather than afterwards: while the request
-// is in flight with the Hub, a process that died right then must still be able
-// to find the destination secret in local state.
+// T-11, T-12: every bill-creating call is written to the ledger, with its exact
+// deadline, target, device, authorizer and every secret it generated, BEFORE it
+// is sent — asserted from inside the "Hub", through a fresh process's view of
+// local state, for each call site. A kill at that instant must lose nothing.
 
 import (
+	"context"
 	"encoding/json"
-	"go/ast"
-	"go/parser"
-	"go/token"
-	"os"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ohstr/nmilat/nipcash"
+	"github.com/spf13/cobra"
 
 	"github.com/ohstr/cashctl/internal/ledger"
+	"github.com/ohstr/cashctl/internal/output"
+	"github.com/ohstr/cashctl/internal/store"
 )
 
 // auditDSeedTwoHeldCash puts two held cash-mode entries in a fresh ledger and
@@ -40,8 +32,8 @@ func auditDSeedTwoHeldCash(t *testing.T) (*ledger.Ledger, []string) {
 	for _, tok := range []string{"lokicash1wa-a", "lokicash1wa-b"} {
 		amt := uint64(1000)
 		if _, addErr := l.Add(ledger.Entry{
-			Token: tok, WalletPubkey: tok + "-pub", Secret: "s-" + tok,
-			AmountMillis: &amt, IdentityRequired: ptrTo(false), CashSecret: "old-" + tok,
+			Token: tok, WalletPubkey: hexWallet(tok), Secret: "s-" + tok,
+			AmountMillis: &amt, IdentityRequired: ptrTo(false), CashSecret: strings.Repeat("0a", 32),
 			CashProtection: ledger.CashShared, Verified: true,
 		}); addErr != nil {
 			t.Fatalf("l.Add(%s) error = %v", tok, addErr)
@@ -53,298 +45,172 @@ func auditDSeedTwoHeldCash(t *testing.T) (*ledger.Ledger, []string) {
 	return l, []string{l.Entries[0].ID, l.Entries[1].ID}
 }
 
-// TestAuditD_CLI_TransferSitesParkBeforeTheirWireCall covers the two sites in
-// cash_transfer.go that neither the consolidate regression test nor the helper
-// unit tests above can reach.
-//
-// Both are unreachable end to end without a relay, and not for a shallow
-// reason: runCashTransfer dials nipcashclient.Connect itself, and
-// transferWithAutoConsolidate's "Preparing sources..." step calls
-// sourceFromEntry, which dials once per source before the merge. That is also why the
-// pre-existing TestTransferWithAutoConsolidate_Declined stops at the confirm.
-//
-// So this is a source-ordering test, with the same honest limit as the
-// signal-handler test next door: it proves the write-ahead is placed before the
-// call that can commit the money, not that the write itself works — the
-// consolidate regression test and the helper tests above are what prove that,
-// against the identical helper. What it specifically catches is the refactor
-// that moves or drops one of these two calls while the other two sites keep
-// their tests green.
-func TestAuditD_CLI_TransferSitesParkBeforeTheirWireCall(t *testing.T) {
-	// wireCall is the call that can commit money at each site: once it has
-	// been placed, a kill destroys an unparked cash secret for good. The
-	// auto-consolidating transfer sends through mergeThenSend (#96).
-	for _, tc := range []struct{ file, fn, wireCall string }{
-		{"cash_transfer.go", "runCashTransfer", "client.CashTransfer("},
-		{"cash_merge.go", "mergeThenSend", "sendFromEntryFn("},
-	} {
-		src, err := os.ReadFile(tc.file)
-		if err != nil {
-			t.Fatalf("reading %s: %v", tc.file, err)
-		}
-		fset := token.NewFileSet()
-		file, err := parser.ParseFile(fset, tc.file, src, 0)
-		if err != nil {
-			t.Fatalf("parsing %s: %v", tc.file, err)
-		}
-		var body string
-		for _, decl := range file.Decls {
-			fd, ok := decl.(*ast.FuncDecl)
-			if !ok || fd.Name.Name != tc.fn || fd.Body == nil {
-				continue
-			}
-			body = string(src[fset.Position(fd.Body.Pos()).Offset:fset.Position(fd.Body.End()).Offset])
-		}
-		if body == "" {
-			t.Fatalf("%s not found in %s — this test is pinning a function that no "+
-				"longer exists, so fix the test rather than assuming the site is safe", tc.fn, tc.file)
-		}
-		park := strings.Index(body, "parkDestinationCashSecret(")
-		wire := strings.Index(body, tc.wireCall)
-		if park < 0 {
-			t.Errorf("%s never calls parkDestinationCashSecret: its cash-mode destination secret "+
-				"exists only in this process's heap while %s is in flight, so a kill there leaves "+
-				"a funded, permanently unspendable bill (D-CLI-1)", tc.fn, tc.wireCall)
-			continue
-		}
-		if wire < 0 {
-			t.Errorf("%s no longer contains %s — the wire call this ordering is about has moved, "+
-				"so re-derive where the park belongs", tc.fn, tc.wireCall)
-			continue
-		}
-		if park > wire {
-			t.Errorf("%s calls parkDestinationCashSecret AFTER %s — persisting the secret once the "+
-				"Hub may already have committed is not write-ahead at all", tc.fn, tc.wireCall)
-		}
-	}
+// inFlight is what a fresh process finds while a call is at the Hub.
+type inFlight struct {
+	calls []ledger.Call
 }
 
-// TestAuditD_CLI_DirectTransferParksAfterItsConfirm: the direct path must park
-// after the spend confirmation, not before. A declined confirm places no call,
-// so a park written ahead of it would leave `wallet show` warning about a bill
-// the user explicitly refused to create — a false alarm about money at risk,
-// which the report above is careful not to raise.
-func TestAuditD_CLI_DirectTransferParksAfterItsConfirm(t *testing.T) {
-	src, err := os.ReadFile("cash_transfer.go")
-	if err != nil {
-		t.Fatalf("reading cash_transfer.go: %v", err)
-	}
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, "cash_transfer.go", src, 0)
-	if err != nil {
-		t.Fatalf("parsing cash_transfer.go: %v", err)
-	}
-	var body string
-	for _, decl := range file.Decls {
-		if fd, ok := decl.(*ast.FuncDecl); ok && fd.Name.Name == "runCashTransfer" && fd.Body != nil {
-			body = string(src[fset.Position(fd.Body.Pos()).Offset:fset.Position(fd.Body.End()).Offset])
-		}
-	}
-	if body == "" {
-		t.Fatal("runCashTransfer not found in cash_transfer.go")
-	}
-	confirm := strings.Index(body, "if !Confirm(cmd, false, message)")
-	park := strings.Index(body, "parkDestinationCashSecret(")
-	if confirm < 0 {
-		t.Skip("runCashTransfer's confirm no longer has the shape this test keys off; re-derive it")
-	}
-	if park < 0 {
-		t.Fatal("runCashTransfer never calls parkDestinationCashSecret")
-	}
-	if park < confirm {
-		t.Error("runCashTransfer parks the destination secret BEFORE its spend confirmation, so " +
-			"declining leaves a park for a bill that was never created")
-	}
-}
-
-// TestAuditD_CLI_ParkIsNotSavedByReleaseAlone pins the half of the contract
-// that protects the worst case: the Hub committed, the reply arrived, and the
-// local Save that was meant to record it FAILED. release() must not have
-// persisted anything on its own, so the park is still on disk for the next
-// process to find — the one moment it is genuinely the only copy again.
-func TestAuditD_CLI_ParkIsNotSavedByReleaseAlone(t *testing.T) {
-	auditDTempLedger(t)
-	l, ids := auditDSeedTwoHeldCash(t)
-
-	target := nipcash.NewCashTarget()
-	parked, err := parkDestinationCashSecret(l, ids, target)
-	if err != nil {
-		t.Fatalf("parkDestinationCashSecret() error = %v", err)
-	}
-	if !auditDLedgerBytesContain(t, target.Secret()) {
-		t.Fatal("parkDestinationCashSecret() did not reach the disk at all")
-	}
-
-	// The caller's own Save is what persists the clear. Standing in for one
-	// that failed: release, then never Save.
-	parked.release()
-	if got := mustFind(t, l, ids[0]).PendingDestinationCashSecret; got != "" {
-		t.Fatalf("release() left the in-memory park set to %q, want cleared", got)
-	}
-	fresh, err := ledger.Load()
-	if err != nil {
-		t.Fatalf("ledger.Load() error = %v", err)
-	}
-	var stillParked bool
-	for _, e := range fresh.Entries {
-		if e.PendingDestinationCashSecret == target.Secret() {
-			stillParked = true
-		}
-	}
-	if !stillParked {
-		t.Fatal("release() persisted the clear by itself — so a send whose final Save fails " +
-			"loses the destination secret, which is exactly the case the write-ahead exists for")
-	}
-}
-
-// TestAuditD_CLI_ParkRefusesWhenItCannotRecord is the deliberate choice to fail
-// the command rather than place a call whose interruption destroys money with
-// the safety net absent. Unreachable through today's commands; the point is
-// that it cannot degrade quietly if that ever changes.
-func TestAuditD_CLI_ParkRefusesWhenItCannotRecord(t *testing.T) {
-	auditDTempLedger(t)
-	l, err := ledger.Load()
-	if err != nil {
-		t.Fatalf("ledger.Load() error = %v", err)
-	}
-
-	if _, err := parkDestinationCashSecret(l, []string{"tok-nope"}, nipcash.NewCashTarget()); err == nil {
-		t.Fatal("parkDestinationCashSecret(no such row) = nil error, want a refusal — proceeding " +
-			"would place the call with nothing recording the secret")
-	}
-	if _, err := parkDestinationCashSecret(l, nil, nipcash.NewCashTarget()); err == nil {
-		t.Fatal("parkDestinationCashSecret(no source ids) = nil error, want a refusal")
-	}
-}
-
-// TestAuditD_CLI_ParkIsANoOpForANonCashTarget: a pubkey/connection-key
-// destination is reachable from the Hub's own reply, so there is no local-only
-// secret at risk and nothing should be written. Without this the helper could
-// "pass" its other tests by parking indiscriminately, leaving every ordinary
-// transfer with a stale warning on it.
-func TestAuditD_CLI_ParkIsANoOpForANonCashTarget(t *testing.T) {
-	auditDTempLedger(t)
-	l, ids := auditDSeedTwoHeldCash(t)
-
-	parked, err := parkDestinationCashSecret(l, ids, nipcash.Pubkey(strings.Repeat("a1", 32)))
-	if err != nil {
-		t.Fatalf("parkDestinationCashSecret(pubkey target) error = %v, want nil", err)
-	}
-	if got := mustFind(t, l, ids[0]).PendingDestinationCashSecret; got != "" {
-		t.Fatalf("a pubkey target parked %q, want nothing parked", got)
-	}
-	// And the zero value's release is harmless rather than panicking, which is
-	// what lets every caller skip branching on the target kind a second time.
-	parked.release()
-}
-
-// TestAuditD_CLI_ReleaseLeavesAConcurrentParkAlone: two processes can be in
-// this window at once (a `transfer` and a `wallet protect`, say). The one that
-// finishes first must not clear a park it did not write, which would silently
-// discard the other's only copy.
-func TestAuditD_CLI_ReleaseLeavesAConcurrentParkAlone(t *testing.T) {
-	auditDTempLedger(t)
-	l, ids := auditDSeedTwoHeldCash(t)
-
-	mine := nipcash.NewCashTarget()
-	parked, err := parkDestinationCashSecret(l, ids, mine)
-	if err != nil {
-		t.Fatalf("parkDestinationCashSecret() error = %v", err)
-	}
-	theirs := nipcash.NewCashTarget()
-	mustFind(t, l, ids[0]).PendingDestinationCashSecret = theirs.Secret()
-
-	parked.release()
-
-	if got := mustFind(t, l, ids[0]).PendingDestinationCashSecret; got != theirs.Secret() {
-		t.Fatalf("release() cleared a park it did not write: got %q, want the other call's %q", got, theirs.Secret())
-	}
-}
-
-// TestAuditD_CLI_UnreconciledParkIsReportedToTheUser is why the column is worth
-// more than a passing test: a secret persisted where no human can see it
-// protects nothing. unreconciledDestinationParks is what `wallet show` prints.
-func TestAuditD_CLI_UnreconciledParkIsReportedToTheUser(t *testing.T) {
-	auditDTempLedger(t)
-	l, ids := auditDSeedTwoHeldCash(t)
-
-	if lines := unreconciledDestinationParks(l); len(lines) != 0 {
-		t.Fatalf("a clean ledger reported %d unfinished sends, want 0 — a false warning about "+
-			"money at risk is its own defect", len(lines))
-	}
-
-	target := nipcash.NewCashTarget()
-	if _, err := parkDestinationCashSecret(l, ids, target); err != nil {
-		t.Fatalf("parkDestinationCashSecret() error = %v", err)
-	}
-	// As a fresh process would see it after the kill, not as this one left it.
-	fresh, err := ledger.Load()
-	if err != nil {
-		t.Fatalf("ledger.Load() error = %v", err)
-	}
-	lines := unreconciledDestinationParks(fresh)
-	if len(lines) != 1 {
-		t.Fatalf("unreconciledDestinationParks() returned %d lines, want 1: %v", len(lines), lines)
-	}
-	// The secret itself must be in the text. Naming the entry without it would
-	// tell a user their money is stuck and give them no way to reach it.
-	if !strings.Contains(lines[0], target.Secret()) {
-		t.Fatalf("the report does not contain the secret, so it is unactionable: %q", lines[0])
-	}
-	if !strings.Contains(lines[0], ids[0]) {
-		t.Fatalf("the report does not name the entry it is about: %q", lines[0])
-	}
-	// NIP-CASH: the secret is necessary but not sufficient, and MUST NOT be
-	// presented as a complete recovery path.
-	if !strings.Contains(lines[0], "You also need that bill's token") {
-		t.Fatalf("the report presents the secret as a complete recovery path: %q", lines[0])
-	}
-}
-
-// TestAuditD_CLI_ParkSurvivesALedgerReloadRoundTrip pins the persistence layer
-// itself: a field added to Entry is only as good as its column, and the audit
-// trail has a precedent for exactly this going wrong silently (lokihub's
-// db_migrate copying 6 of 27 tables and reporting success).
-func TestAuditD_CLI_ParkSurvivesALedgerReloadRoundTrip(t *testing.T) {
-	auditDTempLedger(t)
-	l, ids := auditDSeedTwoHeldCash(t)
-
-	want := nipcash.NewCashTarget().Secret()
-	mustFind(t, l, ids[1]).PendingDestinationCashSecret = want
-	if err := l.Save(); err != nil {
-		t.Fatalf("l.Save() error = %v", err)
-	}
-	fresh, err := ledger.Load()
-	if err != nil {
-		t.Fatalf("ledger.Load() error = %v", err)
-	}
-	got := mustFind(t, fresh, ids[1]).PendingDestinationCashSecret
-	if got != want {
-		t.Fatalf("PendingDestinationCashSecret did not survive a Save/Load round trip: got %q, want %q", got, want)
-	}
-	// And it is scoped to its own row rather than smeared across every entry.
-	if other := mustFind(t, fresh, ids[0]).PendingDestinationCashSecret; other != "" {
-		t.Fatalf("entry %s also came back parked (%q), want only %s parked", ids[0], other, ids[1])
-	}
-}
-
-func mustFind(t *testing.T, l *ledger.Ledger, id string) *ledger.Entry {
+func snapshotInFlight(t *testing.T) inFlight {
 	t.Helper()
-	e, ok := l.Find(id)
-	if !ok {
-		t.Fatalf("l.Find(%q) not found", id)
+	fresh, err := ledger.Load()
+	if err != nil {
+		t.Fatalf("in-flight ledger.Load() error = %v", err)
 	}
-	return e
+	var open []ledger.Call
+	for _, c := range fresh.Calls {
+		if c.Open() {
+			open = append(open, c)
+		}
+	}
+	return inFlight{calls: open}
 }
 
-// F-13: the call site, both modes. `wallet show --json` is the only view an agent
-// has, so the secret must be in it as data, not only in text mode's lines.
-func TestWalletShow_ReportsAnUnfinishedCashSendInBothModes(t *testing.T) {
+// requireWrittenAhead checks the one open call a fresh process sees.
+func (f inFlight) requireWrittenAhead(t *testing.T, site, method, purpose string, sources []string, secret string) {
+	t.Helper()
+	if len(f.calls) != 1 {
+		t.Fatalf("%s: %d open calls on disk while the request was at the Hub, want 1", site, len(f.calls))
+	}
+	c := f.calls[0]
+	device, _ := store.DeviceID()
+	switch {
+	case !nipcash.ValidRequestID(c.RequestID):
+		t.Errorf("%s: request id %q", site, c.RequestID)
+	case c.Method != method || c.Purpose != purpose:
+		t.Errorf("%s: method/purpose %s/%s, want %s/%s", site, c.Method, c.Purpose, method, purpose)
+	case c.Deadline <= time.Now().Unix():
+		t.Errorf("%s: deadline %d is not ahead", site, c.Deadline)
+	case c.Target == "" || c.HubIdentity == "" || c.SentH < 60:
+		t.Errorf("%s: target %q hub %q H %d", site, c.Target, c.HubIdentity, c.SentH)
+	case c.DeviceID != device:
+		t.Errorf("%s: device %q, want this wallet file's", site, c.DeviceID)
+	case c.AuthorizerKind == "":
+		t.Errorf("%s: no authorizer recorded", site)
+	case strings.Join(c.SourceEntryIDs, ",") != strings.Join(sources, ","):
+		t.Errorf("%s: sources %v, want %v", site, c.SourceEntryIDs, sources)
+	}
+	if secret != "" {
+		found := false
+		for _, s := range c.Secrets {
+			found = found || s.Secret == secret
+		}
+		if !found {
+			t.Errorf("%s: the generated secret is not in the call's written-ahead secrets", site)
+		}
+	}
+}
+
+// T-12: protect, merge move, unmerge move, send and consolidate each write
+// their call ahead; a success closes it and wipes its secrets.
+func TestWriteAhead_EveryCallSiteWritesItsCallFirst(t *testing.T) {
+	t.Run("protect", func(t *testing.T) {
+		auditDTempLedger(t)
+		l, ids := auditDSeedTwoHeldCash(t)
+		var seen inFlight
+		var secret string
+		withMoveFn(t, func(_ *ledger.Entry, _ nipcash.Credential, to nipcash.Target) (*nipcash.CashTransferResult, error) {
+			secret = to.(*nipcash.CashTarget).Secret()
+			seen = snapshotInFlight(t)
+			return &nipcash.CashTransferResult{AmountMillis: 1000}, nil
+		})
+		e, _ := l.Find(ids[0])
+		if st, _ := protectRekeyOnly(newTestReceiveCmd(), l, e, true); st.Status != "rekeyed" {
+			t.Fatalf("protect: %+v", st)
+		}
+		seen.requireWrittenAhead(t, "protect", nipcash.MethodCashTransfer, purposeProtect, ids[:1], secret)
+		requireClosed(t, ledger.CallDone)
+	})
+	t.Run("merge move", func(t *testing.T) {
+		auditDTempLedger(t)
+		l, ids := auditDSeedTwoHeldCash(t)
+		priv, pub, _ := newThrowawayKey()
+		var seen inFlight
+		withMoveFn(t, func(*ledger.Entry, nipcash.Credential, nipcash.Target) (*nipcash.CashTransferResult, error) {
+			seen = snapshotInFlight(t)
+			fresh, _ := ledger.Load()
+			if e, _ := fresh.Find(ids[0]); e.PendingThrowawayKey != priv {
+				t.Error("the merge key was not on disk while the move was at the Hub")
+			}
+			return &nipcash.CashTransferResult{AmountMillis: 1000}, nil
+		})
+		if _, err := moveCashNotesToKey(&cobra.Command{}, l, ids[:1], priv, pub); err != nil {
+			t.Fatal(err)
+		}
+		seen.requireWrittenAhead(t, "merge move", nipcash.MethodCashTransfer, purposeMergeMove, ids[:1], "")
+		requireClosed(t, ledger.CallDone)
+	})
+	t.Run("consolidate to cash", func(t *testing.T) {
+		auditDTempLedger(t)
+		l, ids := auditDSeedTwoHeldCash(t)
+		target := mustCashTarget(t)
+		var seen inFlight
+		withFakeAttemptCashConsolidate(t, func(string, []nipcash.Source, nipcash.Target) (*nipcash.CashConsolidateResult, error) {
+			seen = snapshotInFlight(t)
+			return &nipcash.CashConsolidateResult{AmountMillis: 2000, NewWalletToken: "lokicash1merged", NewWalletPubkey: hexWallet("merged")}, nil
+		})
+		sources := []nipcash.Source{
+			{WalletPubkey: hexWallet("lokicash1wa-a"), Amount: 1000, Credential: nipcash.BySigning(strings.Repeat("11", 32))},
+			{WalletPubkey: hexWallet("lokicash1wa-b"), Amount: 1000, Credential: nipcash.BySigning(strings.Repeat("12", 32))},
+		}
+		e, _, err := doCashConsolidate(&cobra.Command{}, l, []string{"lokicash1wa-a"}, sources, ids, target, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := l.Save(); err != nil {
+			t.Fatal(err)
+		}
+		seen.requireWrittenAhead(t, "consolidate", nipcash.MethodCashConsolidate, purposeConsolidate, ids, target.Secret())
+		if e.CashSecret != target.Secret() {
+			t.Error("the merged note does not carry the secret")
+		}
+		requireClosed(t, ledger.CallDone)
+	})
+}
+
+// requireClosed checks that the one call written is final and keeps no secret.
+func requireClosed(t *testing.T, state string) {
+	t.Helper()
+	fresh, _ := ledger.Load()
+	if len(fresh.Calls) != 1 || fresh.Calls[0].State != state || len(fresh.Calls[0].Secrets) != 0 || fresh.Calls[0].AuthorizerSecret != "" {
+		t.Errorf("after the call: %+v; want one %s call with its secrets wiped", fresh.Calls, state)
+	}
+}
+
+// T-11: a call that cannot be written ahead is not sent: the "Hub" never sees
+// it, nothing is left behind, and the user is told the money has not moved.
+func TestWriteAhead_AFailedWriteSendsNothing(t *testing.T) {
 	auditDTempLedger(t)
 	l, ids := auditDSeedTwoHeldCash(t)
-	target := nipcash.NewCashTarget()
-	if _, err := parkDestinationCashSecret(l, ids, target); err != nil {
-		t.Fatalf("parkDestinationCashSecret() error = %v", err)
+	hooks := installFakeCaller(t)
+	hooks.transfer = func(*ledger.Entry, nipcash.CashTransferParams) (*nipcash.CashTransferResult, error) {
+		t.Error("a call whose write-ahead failed reached the Hub")
+		return nil, errors.New("unreachable")
+	}
+	restore := failSaves(t)
+	e, _ := l.Find(ids[0])
+	_, _, err := moveCash(&cobra.Command{}, l, e, nipcash.BySecret(e.CashSecret), mustCashTarget(t), purposeProtect)
+	restore()
+	if err == nil || !strings.Contains(err.Error(), "not placed") || output.AsCLIError(err).Code != output.CodeInternal {
+		t.Fatalf("err %v; want internal, not placed", err)
+	}
+	if fresh, _ := ledger.Load(); len(fresh.Calls) != 0 {
+		t.Errorf("%d calls left on disk, want none", len(fresh.Calls))
+	}
+}
+
+// A lost answer keeps the call open with its secret, and `wallet show` lists it
+// in both modes: until it is settled, that secret may be the only copy.
+func TestWalletShow_ListsAnOpenCallWithItsSecret(t *testing.T) {
+	auditDTempLedger(t)
+	l, ids := auditDSeedTwoHeldCash(t)
+	var secret string
+	withMoveFn(t, func(_ *ledger.Entry, _ nipcash.Credential, to nipcash.Target) (*nipcash.CashTransferResult, error) {
+		secret = to.(*nipcash.CashTarget).Secret()
+		return nil, context.DeadlineExceeded
+	})
+	e, _ := l.Find(ids[0])
+	if st, _ := protectRekeyOnly(newTestReceiveCmd(), l, e, true); !st.PendingSecretUnresolved {
+		t.Fatalf("protect with its answer lost: %+v", st)
 	}
 	for _, jsonMode := range []bool{true, false} {
 		cmd := newWalletShowCmd()
@@ -355,62 +221,16 @@ func TestWalletShow_ReportsAnUnfinishedCashSendInBothModes(t *testing.T) {
 				t.Errorf("wallet show (json=%v): %v", jsonMode, err)
 			}
 		})
-		if !strings.Contains(printed, target.Secret()) {
-			t.Errorf("wallet show (json=%v) does not surface the unfinished send's secret:\n%s", jsonMode, printed)
+		if !strings.Contains(printed, secret) {
+			t.Errorf("wallet show (json=%v) does not list the open call's secret:\n%s", jsonMode, printed)
 		}
 		if jsonMode {
 			var doc struct {
-				Sends []unfinishedCashSend `json:"unfinished_cash_sends"`
+				Calls []openCall `json:"open_calls"`
 			}
-			if err := json.Unmarshal([]byte(printed), &doc); err != nil || len(doc.Sends) != 1 || doc.Sends[0].CashSecret != target.Secret() || doc.Sends[0].TokenID != ids[0] {
-				t.Errorf("unfinished_cash_sends = %+v (err %v), want the one park on %s", doc.Sends, err, ids[0])
+			if err := json.Unmarshal([]byte(printed), &doc); err != nil || len(doc.Calls) != 1 || doc.Calls[0].Purpose != purposeProtect || doc.Calls[0].Device != "this" {
+				t.Errorf("open_calls = %+v (%v)", doc.Calls, err)
 			}
-		}
-	}
-}
-
-// TestReKeySites_PersistTheNewSecretBeforeTheirWireCall (F-6): the re-key site
-// behind auto-protect and `wallet protect` generates a cash secret and must
-// write it to disk before the call that can commit it (NIP-CASH §Security
-// Considerations for Cash-Mode Slices). Both dial nipcashclient.Connect
-// themselves, so like the transfer sites above this pins the source order:
-// the pending-secret assignment, then a Save, then the wire call.
-func TestReKeySites_PersistTheNewSecretBeforeTheirWireCall(t *testing.T) {
-	src, err := os.ReadFile("receive_secure.go")
-	if err != nil {
-		t.Fatalf("reading receive_secure.go: %v", err)
-	}
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, "receive_secure.go", src, 0)
-	if err != nil {
-		t.Fatalf("parsing receive_secure.go: %v", err)
-	}
-	// protectCashReceipt only re-keys now (I-26), through protectRekeyOnly.
-	if !strings.Contains(string(src), "return protectRekeyOnly(cmd, l, entry, jsonMode)") {
-		t.Error("protectCashReceipt no longer delegates to protectRekeyOnly: re-derive which sites re-key")
-	}
-	for _, tc := range []struct{ fn, wireCall string }{
-		{"protectRekeyOnly", "client.CashTransfer("},
-	} {
-		var body string
-		for _, decl := range file.Decls {
-			if fd, ok := decl.(*ast.FuncDecl); ok && fd.Name.Name == tc.fn && fd.Body != nil {
-				body = string(src[fset.Position(fd.Body.Pos()).Offset:fset.Position(fd.Body.End()).Offset])
-			}
-		}
-		if body == "" {
-			t.Fatalf("%s not found in receive_secure.go: fix the test rather than assuming the site is safe", tc.fn)
-		}
-		park := strings.Index(body, "entry.PendingCashSecret = bt.Secret()")
-		wire := strings.Index(body, tc.wireCall)
-		if park < 0 || wire < 0 {
-			t.Errorf("%s: pending-secret write at %d, %s at %d — one of them moved; re-derive the ordering", tc.fn, park, tc.wireCall, wire)
-			continue
-		}
-		save := strings.Index(body[park:], "l.Save()")
-		if save < 0 || park+save > wire {
-			t.Errorf("%s does not save the new secret before %s: a kill while the call is in flight "+
-				"loses the only copy of a secret for funds that may already have moved", tc.fn, tc.wireCall)
 		}
 	}
 }

@@ -24,6 +24,11 @@ var (
 // (cached across every test in the package) and returns the path to the
 // resulting binary — real black-box testing against the actual compiled
 // artifact, not the source tree.
+//
+// It is built with the crashpoints tag, so a test can kill it at a named
+// point (CASHCTL_CRASHPOINT, internal/crashpoint), and with
+// GOWORK=$CASHCTL_INTEGRATION_GOWORK, default off: the pinned nmilat, unless a
+// private go.work is named.
 func cashctlBinary(t *testing.T) string {
 	t.Helper()
 	buildOnce.Do(func() {
@@ -33,8 +38,9 @@ func cashctlBinary(t *testing.T) string {
 			return
 		}
 		binPath = filepath.Join(dir, "cashctl")
-		cmd := exec.Command("go", "build", "-o", binPath, ".")
+		cmd := exec.Command("go", "build", "-tags", "crashpoints", "-o", binPath, ".")
 		cmd.Dir = ".." // module root, one level up from integration/
+		cmd.Env = append(os.Environ(), "GOWORK="+integrationGowork())
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			buildErr = fmt.Errorf("go build cashctl: %w\n%s", err, out)
@@ -44,6 +50,15 @@ func cashctlBinary(t *testing.T) string {
 		t.Fatalf("building cashctl binary: %v", buildErr)
 	}
 	return binPath
+}
+
+// integrationGowork is the GOWORK the binary is built with:
+// CASHCTL_INTEGRATION_GOWORK, or off.
+func integrationGowork() string {
+	if v := os.Getenv("CASHCTL_INTEGRATION_GOWORK"); v != "" {
+		return v
+	}
+	return "off"
 }
 
 // fixture is one isolated cashctl "user": its own --config-dir (cashctl's own

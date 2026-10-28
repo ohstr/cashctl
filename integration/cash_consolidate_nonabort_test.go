@@ -173,9 +173,11 @@ func TestCashConsolidate_OneGroupFailingDoesNotAbortTheOthers(t *testing.T) {
 			if errText == "" {
 				t.Errorf("a failed group must carry an error: %v", row)
 			}
-			// The Hub's own reason, not a generic decline — this is the failure
-			// cashctl could not have predicted.
-			if !strings.Contains(errText, "ceiling") && !strings.Contains(errText, "exceeds") {
+			// The Hub's own refusal, not a generic decline — this is the failure
+			// cashctl could not have predicted. A call placed through the
+			// write-ahead engine reports the Hub's code (QUOTA_EXCEEDED, the
+			// per-wallet ceiling) rather than its free text.
+			if !strings.Contains(errText, "ceiling") && !strings.Contains(errText, "exceeds") && !strings.Contains(errText, "QUOTA_EXCEEDED") {
 				t.Errorf("want the Hub's own ceiling reason, got %q", errText)
 			}
 		default:

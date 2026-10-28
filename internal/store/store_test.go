@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -57,7 +58,7 @@ func TestOpen_IsIdempotent(t *testing.T) {
 	}
 	defer func() { _ = db2.Close() }()
 
-	if _, err := db2.Exec(`INSERT INTO connections (name, value, added_at) VALUES ('a', 'b', 'c')`); err != nil {
+	if _, err := db2.Exec(`INSERT INTO connections (name, kind, value, added_at) VALUES ('a', 'nwc', 'b', 'c')`); err != nil {
 		t.Fatalf("inserting into a re-opened database failed: %v", err)
 	}
 
@@ -73,146 +74,6 @@ func TestOpen_IsIdempotent(t *testing.T) {
 	}
 	if count != 1 {
 		t.Errorf("row count after re-opening = %d, want 1 (re-opening must not wipe existing data)", count)
-	}
-}
-
-// TestOpen_MigratesPreExistingDatabaseMissingNewColumn simulates a
-// cashctl.db created before pending_cash_secret existed (an old
-// CREATE TABLE IF NOT EXISTS run, before that column was ever added to the
-// schema) — Open must add it via ALTER TABLE rather than silently leaving
-// it missing (CREATE TABLE IF NOT EXISTS is a no-op against an
-// already-existing table, so the column would otherwise never appear).
-func TestOpen_MigratesPreExistingDatabaseMissingNewColumn(t *testing.T) {
-	withTempConfigDir(t)
-
-	p, err := Path()
-	if err != nil {
-		t.Fatalf("Path() error = %v", err)
-	}
-	pre, err := sql.Open("sqlite", "file:"+p)
-	if err != nil {
-		t.Fatalf("pre-create db: %v", err)
-	}
-	oldSchema := strings.Replace(schema, ",\n\tpending_cash_secret      TEXT", "", 1)
-	if oldSchema == schema {
-		t.Fatal("test fixture bug: pending_cash_secret line not found in schema to strip")
-	}
-	if _, err := pre.Exec(oldSchema); err != nil {
-		t.Fatalf("apply old schema: %v", err)
-	}
-	if _, err := pre.Exec(`INSERT INTO entries (id, token, wallet_pubkey, secret, received_at, verified, status) VALUES ('tok-1','t','w','s','2020-01-01T00:00:00Z',1,'held')`); err != nil {
-		t.Fatalf("insert pre-migration row: %v", err)
-	}
-	if err := pre.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	db, err := Open()
-	if err != nil {
-		t.Fatalf("Open() on a pre-existing DB missing the new column: error = %v", err)
-	}
-	defer func() { _ = db.Close() }()
-
-	var got sql.NullString
-	if err := db.QueryRow(`SELECT pending_cash_secret FROM entries WHERE id = 'tok-1'`).Scan(&got); err != nil {
-		t.Fatalf("querying the migrated column: %v", err)
-	}
-	if got.Valid {
-		t.Errorf("pending_cash_secret = %q, want NULL for a pre-existing row", got.String)
-	}
-
-	// A second Open() (the ordinary "every command opens the db" case)
-	// must not fail now that the column already exists.
-	db2, err := Open()
-	if err != nil {
-		t.Fatalf("second Open() after migration: error = %v", err)
-	}
-	_ = db2.Close()
-}
-
-// TestOpen_MigratesPreExistingDatabaseMissingExpiresAt is
-// TestOpen_MigratesPreExistingDatabaseMissingNewColumn's own scenario for
-// expires_at specifically — a cashctl.db from before that column existed
-// must gain it via ALTER TABLE, not fail or silently leave it missing.
-func TestOpen_MigratesPreExistingDatabaseMissingExpiresAt(t *testing.T) {
-	withTempConfigDir(t)
-
-	p, err := Path()
-	if err != nil {
-		t.Fatalf("Path() error = %v", err)
-	}
-	pre, err := sql.Open("sqlite", "file:"+p)
-	if err != nil {
-		t.Fatalf("pre-create db: %v", err)
-	}
-	oldSchema := strings.Replace(schema, ",\n\texpires_at                 INTEGER", "", 1)
-	if oldSchema == schema {
-		t.Fatal("test fixture bug: expires_at line not found in schema to strip")
-	}
-	if _, err := pre.Exec(oldSchema); err != nil {
-		t.Fatalf("apply old schema: %v", err)
-	}
-	if _, err := pre.Exec(`INSERT INTO entries (id, token, wallet_pubkey, secret, received_at, verified, status) VALUES ('tok-1','t','w','s','2020-01-01T00:00:00Z',1,'held')`); err != nil {
-		t.Fatalf("insert pre-migration row: %v", err)
-	}
-	if err := pre.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	db, err := Open()
-	if err != nil {
-		t.Fatalf("Open() on a pre-existing DB missing expires_at: error = %v", err)
-	}
-	defer func() { _ = db.Close() }()
-
-	var got sql.NullInt64
-	if err := db.QueryRow(`SELECT expires_at FROM entries WHERE id = 'tok-1'`).Scan(&got); err != nil {
-		t.Fatalf("querying the migrated column: %v", err)
-	}
-	if got.Valid {
-		t.Errorf("expires_at = %v, want NULL for a pre-existing row", got.Int64)
-	}
-}
-
-// TestOpen_MigratesPreExistingDatabaseMissingCashProtection is the same
-// scenario for cash_protection.
-func TestOpen_MigratesPreExistingDatabaseMissingCashProtection(t *testing.T) {
-	withTempConfigDir(t)
-
-	p, err := Path()
-	if err != nil {
-		t.Fatalf("Path() error = %v", err)
-	}
-	pre, err := sql.Open("sqlite", "file:"+p)
-	if err != nil {
-		t.Fatalf("pre-create db: %v", err)
-	}
-	oldSchema := strings.Replace(schema, ",\n\tcash_protection          TEXT", "", 1)
-	if oldSchema == schema {
-		t.Fatal("test fixture bug: cash_protection line not found in schema to strip")
-	}
-	if _, err := pre.Exec(oldSchema); err != nil {
-		t.Fatalf("apply old schema: %v", err)
-	}
-	if _, err := pre.Exec(`INSERT INTO entries (id, token, wallet_pubkey, secret, received_at, verified, status) VALUES ('tok-1','t','w','s','2020-01-01T00:00:00Z',1,'held')`); err != nil {
-		t.Fatalf("insert pre-migration row: %v", err)
-	}
-	if err := pre.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	db, err := Open()
-	if err != nil {
-		t.Fatalf("Open() on a pre-existing DB missing cash_protection: error = %v", err)
-	}
-	defer func() { _ = db.Close() }()
-
-	var got sql.NullString
-	if err := db.QueryRow(`SELECT cash_protection FROM entries WHERE id = 'tok-1'`).Scan(&got); err != nil {
-		t.Fatalf("querying the migrated column: %v", err)
-	}
-	if got.Valid {
-		t.Errorf("cash_protection = %q, want NULL for a pre-existing row", got.String)
 	}
 }
 
@@ -249,5 +110,126 @@ func TestOpen_DirectoryNamesWithURISignificantCharacters(t *testing.T) {
 				t.Errorf("state leaked outside the requested directory: %v", entries)
 			}
 		})
+	}
+}
+
+// T-129: a new file gets the version-2 schema.
+func TestOpen_CreatesSchemaVersion2(t *testing.T) {
+	withTempConfigDir(t)
+	db, err := Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	var v string
+	if err := db.QueryRow(`SELECT value FROM meta WHERE key = 'schema_version'`).Scan(&v); err != nil || v != SchemaVersion {
+		t.Fatalf("schema_version = %q (%v), want %q", v, err, SchemaVersion)
+	}
+	for _, table := range []string{"device", "pending_calls", "call_secrets", "derived_ids", "entries", "connections"} {
+		var n int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&n); err != nil || n != 1 {
+			t.Errorf("table %s missing from the v3 schema", table)
+		}
+	}
+}
+
+// T-129: a database an earlier cashctl wrote is refused, naming its path, and
+// left exactly as it was: nothing in it is read, nothing added.
+func TestOpen_RefusesAnEarlierDatabase(t *testing.T) {
+	for name, setup := range map[string]string{
+		"rc.17 schema, no meta": `CREATE TABLE entries (id TEXT PRIMARY KEY, token TEXT); INSERT INTO entries VALUES ('tok-1', 'lokicash1x')`,
+		"meta of version 1":     `CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL); INSERT INTO meta VALUES ('schema_version', '1')`,
+		"pre-release version 2": `CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL); INSERT INTO meta VALUES ('schema_version', '2')`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			withTempConfigDir(t)
+			path, _ := Path()
+			raw, err := sql.Open("sqlite", sqliteDSN(path))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := raw.Exec(setup); err != nil {
+				t.Fatal(err)
+			}
+			_ = raw.Close()
+
+			_, err = Open()
+			var old *ErrOldDatabase
+			if !errors.As(err, &old) || old.Path != path || !strings.Contains(err.Error(), "move it aside") {
+				t.Fatalf("Open() = %v, want ErrOldDatabase naming %s", err, path)
+			}
+			raw, _ = sql.Open("sqlite", sqliteDSN(path))
+			defer func() { _ = raw.Close() }()
+			var n int
+			_ = raw.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'device'`).Scan(&n)
+			if n != 0 {
+				t.Error("the refused database was written to")
+			}
+		})
+	}
+}
+
+// The device id is made once and kept; a copy of the file elsewhere (another
+// fingerprint) gets a new one and says so in history.
+func TestOpen_DeviceIDRotatesWhenTheFileIsCopied(t *testing.T) {
+	withTempConfigDir(t)
+	first, err := DeviceID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first) != 64 || strings.ToLower(first) != first {
+		t.Fatalf("device id %q, want 64 lowercase hex", first)
+	}
+	again, err := DeviceID()
+	if err != nil || again != first {
+		t.Fatalf("device id changed on reopen: %q → %q (%v)", first, again, err)
+	}
+
+	orig := machineIDFn
+	machineIDFn = func() string { return "another-machine" }
+	t.Cleanup(func() { machineIDFn = orig })
+	moved, err := DeviceID()
+	if err != nil || moved == first {
+		t.Fatalf("device id after a copy to another machine: %q (%v), want a new one", moved, err)
+	}
+	db, err := Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM history WHERE action = 'device'`).Scan(&n); err != nil || n != 1 {
+		t.Errorf("history lines for the rotation = %d (%v), want 1", n, err)
+	}
+}
+
+// CC-A4: the same file reached through a symlinked directory, or with another
+// device number, keeps its fingerprint; a copy (another inode) does not.
+func TestFingerprint_StableAcrossPathSpellingsAndDevice(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "cashctl.db")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(dir, link); err != nil {
+		t.Skip("no symlinks here")
+	}
+	origFile := fileIDFn
+	t.Cleanup(func() { fileIDFn = origFile })
+	dev := uint64(1)
+	fileIDFn = func(string) (uint64, uint64, error) { return dev, 42, nil }
+	a, err := fingerprint(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dev = 2
+	b, err := fingerprint(filepath.Join(link, "cashctl.db"))
+	if err != nil || a != b {
+		t.Errorf("fingerprint through a symlink with another device number changed: %s → %s (%v)", a, b, err)
+	}
+	fileIDFn = func(string) (uint64, uint64, error) { return 1, 43, nil }
+	if c, _ := fingerprint(file); c == a {
+		t.Error("a copy (another inode) kept the fingerprint")
 	}
 }

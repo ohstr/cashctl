@@ -3,12 +3,8 @@
 package integration
 
 import (
-	"context"
 	"strings"
 	"testing"
-	"time"
-
-	"github.com/ohstr/nmilat/nipcash"
 )
 
 // This file covers parsing/paste edge cases: stray whitespace, a mangled
@@ -90,21 +86,14 @@ func TestCashReceive_TruncatedCashSecretIsRefused(t *testing.T) {
 	admin := adminOrSkip(t)
 	hub := setUpCashHub(t, admin)
 	const amountMillis = uint64(25_000)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	cashClient := dialCash(t, ctx, hub.PairingUri)
-	mintResult, err := cashClient.MintCash(ctx, nipcash.MintCashParams{
-		Recipients: []nipcash.Allocation{nipcash.Send(nipcash.Anyone(), amountMillis)},
-	})
-	cancel()
-	if err != nil {
-		t.Fatalf("mint_cash (cash): %v", err)
-	}
-	realSecret := mintResult.Recipients[0].CashSecret
+	minter := newMinter(t, hub)
+	mintResultToken, mintResultSecret := minter.MustCash(amountMillis)
+	realSecret := mintResultSecret
 	truncatedSecret := realSecret[:len(realSecret)/2]
 
 	f := newFixture(t)
 	f.mustJSON("wallet", "init")
-	res := f.run("receive", mintResult.CashToken+"#"+truncatedSecret)
+	res := f.run("receive", mintResultToken+"#"+truncatedSecret)
 	if res.ExitCode != 3 || !jsonErrorContains(t, res.Stderr, "invalid_input", "does not match") {
 		t.Errorf("receive (truncated cash secret): exit %d, want 3 naming the mismatched secret\nstderr: %s", res.ExitCode, res.Stderr)
 	}

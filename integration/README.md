@@ -11,6 +11,21 @@ Excluded from normal `go test`/CI runs by the `integration` build tag:
 go test -tags integration ./integration/...
 ```
 
+The binary it builds carries the `crashpoints` tag (so a test can kill it at a
+named point with `CASHCTL_CRASHPOINT`, `calls.after_writeahead`,
+`calls.after_send`, `calls.before_apply` or `joins.after_writeahead`, and drop
+its first n request publishes with `CASHCTL_DROP_PUBLISHES=n`) and uses `GOWORK=off`, the nmilat
+pinned in `go.mod`; set `CASHCTL_INTEGRATION_GOWORK=<path>` to build it
+against a private `go.work` instead.
+
+Bills are minted the way a user would: `cashctl cash mint` over the test
+Hub's `cashhub1` connection (`cashHubToken` from the admin API, passed in
+`CASHCTL_CASH_HUB`), from a fixture of its own (`newMinter` in
+`live_mint_test.go`: `Cash` for a cash note, `To` for a pubkey bill). Only
+`mintTwoRecipientBill` (`plain_client_test.go`) still mints through the SDK,
+because `cash mint` mints to one recipient; a few tests also drive
+`cash_transfer` through the SDK to set up a state cashctl itself never makes.
+
 ## Setup
 
 1. Copy `config.local.yaml.example` to `config.local.yaml` (gitignored —
@@ -32,6 +47,25 @@ skips cleanly (not a failure) — this suite is opt-in.
 The token expires (30 days by default). An expired token makes tests fail
 loudly, not skip — that's a config problem for the operator to refresh, not
 a capability gap in cashctl.
+
+### Against lokihub's regtest dev stack
+
+`just dev bootstrap` in lokihub writes `integration/config.local.yaml` with
+`admin_api`, `relay_url` and the regtest chain and payer settings. Point this
+suite at that file (`INTEGRATION_CONFIG=/path/to/lokihub/integration/config.local.yaml`):
+unknown keys are ignored, `relay_url` feeds the discovery test.
+
+The dev stack's backend serves test hooks under `/api/test` (a `testhooks`
+build, regtest only). `testhooks_test.go` wraps them, and the tests in
+`e2e_lokihub_test.go` use them to pay orders from the payer node, mine
+on-chain orders and withdrawals to final, and keep a payout out of blocks.
+Those tests skip when the Hub answers no hooks; `CASHCTL_E2E_HOOKS=0` turns
+them off. The redeem-fee tests take their external invoice from the payer
+node when the hooks are there, instead of `docker exec` on a lab container.
+
+The lost-reply tests kill the crashpoints build (`CASHCTL_CRASHPOINT`)
+right after it wrote a call ahead or sent it, then run `cash settle`. They
+need only the admin API.
 
 ## What it proves
 
@@ -61,9 +95,9 @@ or with a real user's own cashctl/ncli state:
   is `network` (NOT_READY, retryable) until published and refreshed. The
   external-provider test publishes to the node's general relay, read from
   `GET /api/info`.
-- `TestCircleJoin_PrivateWhenOffered` — a join by default and one with
-  `--private=require` both go over the private transport, confirmed by a
-  listener on the Hub's inbox, not just by cashctl's own `private: true`.
+- `TestCircleJoin_PrivateWhenOffered` — a join through `join` and one through
+  `circle join` both go over the private transport, confirmed by a listener
+  on the Hub's inbox.
 - `TestCircleJoin_RefusedTerms` / `TestCircleJoin_ExpiredWalletBlocksRejoinUntilDeleted`
   — each join limit (expiry, minimum cap, per-wallet and hub ceilings) maps to
   its exit code and leaves no pending join, and an expired wallet blocks a
@@ -83,11 +117,14 @@ or with a real user's own cashctl/ncli state:
   `spent`), a forged newer follow set (ignored), terminal escapes in a hub label
   (never printed raw), and a pre-existing 0755 config directory (made 0700).
 - `hostile_hub_test.go` (no live node needed) — the binary against a Hub that
-  lies, served by `fakehub_test.go`'s relay-plus-hub: a slice larger than the
+  lies, served by the `integration/fakehub` relay-plus-hub: a slice larger than the
   signed bill (refused), the issuing key recorded, a redeem fee raised after
   receive (refused, nothing sent), a reply chunk that never comes
   (`indeterminate`, not resent), an announcement signed by another key and a
   stale one listed first (neither used), and a relay on this machine (noted).
+- `fakehub_test.go` (no live node needed) — the fake itself: an honest receive,
+  an error answered with a random message each time (classified by its code
+  alone), and a transfer whose reply is dropped (`indeterminate`, sent once).
 - `TestReceive_PersistsMinterPubkeyForSignedToken` — mints with a mint
   signature requested and confirms `receive` persists the recovered minter
   pubkey onto the held entry (skips cleanly if the Hub doesn't attach one —

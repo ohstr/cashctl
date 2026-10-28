@@ -53,16 +53,25 @@ func newIdentity(t *testing.T) (privHex, pubHex string) {
 
 // mintTwoRecipientBill mints one bill split between two pubkey identities and
 // returns its token. Two recipients is the minimum shape in which "you see your
-// own slice" is distinguishable from "you see everything".
+// own slice" is distinguishable from "you see everything". `cash mint` mints to
+// one recipient, so this one stays on the SDK.
 func mintTwoRecipientBill(t *testing.T, hub adminCreateAppResponse, pubA, pubB string, amountA, amountB uint64) string {
 	t.Helper()
 	return retryEphemeralNWC(t, "mint_cash", func(ctx context.Context) (string, error) {
-		result, err := dialCash(t, ctx, hub.PairingUri).MintCash(ctx, nipcash.MintCashParams{
+		if hub.CashHubToken == nil {
+			t.Fatalf("the cash_hub app %d has no cashhub1 connection", hub.ID)
+		}
+		c, err := nipcashclient.ConnectCashHub(ctx, *hub.CashHubToken)
+		if err != nil {
+			return "", err
+		}
+		defer c.Close()
+		result, err := c.MintCash(ctx, nipcash.MintCashParams{
 			Recipients: []nipcash.Allocation{
 				nipcash.Send(nipcash.Pubkey(pubA), amountA),
 				nipcash.Send(nipcash.Pubkey(pubB), amountB),
 			},
-		})
+		}, &memJournal{}, "integration")
 		if err != nil {
 			return "", err
 		}
@@ -262,13 +271,13 @@ func TestSpentBill_HolderGetsATombstone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the holder of a destroyed bill must get a definitive answer, not %v", err)
 	}
-	if !res.IsSpent() {
+	if res.Tombstone == nil {
 		t.Fatalf("want a spent tombstone, got %+v", res)
 	}
-	if res.RetainedUntil == nil {
+	if res.Tombstone.RetainedUntil == nil {
 		t.Error("a tombstone must say when the Hub will stop answering, so a client knows this answer is temporary")
-	} else if *res.RetainedUntil <= time.Now().Unix() {
-		t.Errorf("retained_until is already in the past (%d); the Hub answered outside its own window", *res.RetainedUntil)
+	} else if *res.Tombstone.RetainedUntil <= time.Now().Unix() {
+		t.Errorf("retained_until is already in the past (%d); the Hub answered outside its own window", *res.Tombstone.RetainedUntil)
 	}
 	if len(res.Recipients) != 0 {
 		t.Errorf("a destroyed bill must disclose no roster: %+v", res.Recipients)
@@ -314,15 +323,9 @@ func TestSpentBill_NonHolderGetsSilence(t *testing.T) {
 	// An attacker with all of this and no secret is the realistic case: a wallet
 	// pubkey is public, relay hints travel with the bill, and provenance is
 	// verifiable by anyone.
-	forged, err := nipcash.Encode(nipcash.Token{
-		HRP:                  tok.HRP,
-		WalletPubkey:         tok.WalletPubkey,
-		Secret:               fakeHex32(t),
-		RelayURLs:            tok.RelayURLs,
-		IdentityRequired:     tok.IdentityRequired,
-		MintSignature:        tok.MintSignature,
-		AttestedAmountMillis: tok.AttestedAmountMillis,
-	})
+	forgedTok := tok
+	forgedTok.Secret = fakeHex32(t)
+	forged, err := nipcash.Encode(forgedTok)
 	if err != nil {
 		t.Fatalf("re-encode token with a forged connection secret: %v", err)
 	}
@@ -341,9 +344,7 @@ func TestSpentBill_NonHolderGetsSilence(t *testing.T) {
 	if err == nil {
 		t.Fatalf("a guessed wallet pubkey got an answer about a destroyed bill: %+v", res)
 	}
-	if !strings.Contains(err.Error(), "no answer") {
-		t.Errorf("want an information-free omission, got %v", err)
-	}
+	requireSilence(t, err)
 	if strings.Contains(err.Error(), "spent") {
 		t.Errorf("the refusal confirmed the bill had existed: %v", err)
 	}

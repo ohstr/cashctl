@@ -2,11 +2,12 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/ohstr/nmilat/nipcash"
-	nipcashclient "github.com/ohstr/nmilat/nipcash/client"
 	"github.com/spf13/cobra"
 
 	"github.com/ohstr/cashctl/internal/ledger"
@@ -51,6 +52,18 @@ func runCashStatus(cmd *cobra.Command, _ []string) error {
 		return output.RuntimeError(cmd, err)
 	}
 
+	// Calls whose answer never came are settled first, so the status shown is
+	// the one after them.
+	settleCalls(cmd, l, settleOptions{})
+	// So is every redeem whose payment may still settle.
+	redeems, redeeming := settleRedeeming(cmd, l)
+	for _, r := range redeems {
+		output.Notef(jsonMode, "redeem of %s: %s — %s", r.ID, r.Status, r.Detail)
+	}
+	if tok, _ := cmd.Flags().GetString("token"); tok == "" && redeeming > 0 && len(l.Held()) == 0 {
+		return output.WithReason(output.IndeterminateError(cmd, "", fmt.Errorf(
+			"%d redeem(s) may still settle and nothing else is held: `cashctl cash status` asks again", redeeming)), reasonRedeemInFlight)
+	}
 	entries, err := resolveHeldTokensOrAll(cmd, l)
 	if err != nil {
 		return err
@@ -59,13 +72,27 @@ func runCashStatus(cmd *cobra.Command, _ []string) error {
 	outcomes := make([]cashStatusOutcome, len(entries))
 	for i, entry := range entries {
 		result, fetchErr := fetchCashStatusFn(cmd, jsonMode, entry)
-		if result != nil && result.IsSpent() {
+		if rid := withdrawRequestIDOf(result); rid != "" {
+			if _, known := l.FindCall(ledger.CallIDFor(rid)); !known {
+				if w, rErr := recoverWithdrawal(cmd, l, entry, rid); rErr == nil {
+					output.Notef(jsonMode, "Found a withdrawal this device has no record of (withdrawal %s); `cashctl cash withdraw show %s` follows it.", w.WithdrawalID, w.WithdrawalID)
+					outcomes[i] = cashStatusOutcome{ID: entry.ID, Result: result, Err: fetchErr}
+					continue
+				}
+			}
+		}
+		if result != nil && result.Tombstone != nil {
 			// One bill asked about: a fresh tombstone is the same spent error
 			// the next call gets from the stored status, never a result.
 			if len(entries) == 1 {
-				result, fetchErr = nil, recordSpent(cmd, l, entry)
+				result, fetchErr = nil, recordGone(cmd, l, entry, result.Tombstone)
 			} else {
-				markSpent(l, entry)
+				markGone(l, entry, result.Tombstone)
+			}
+		}
+		if hubNotFound(fetchErr) {
+			if nfErr, ok := recordNotFound(cmd, l, entry, proofOf(cmd, entry)); ok {
+				fetchErr = nfErr
 			}
 		}
 		outcomes[i] = cashStatusOutcome{ID: entry.ID, Result: result, Err: fetchErr}
@@ -97,7 +124,7 @@ func fetchCashStatus(cmd *cobra.Command, jsonMode bool, entry *ledger.Entry) (*n
 	err := WithSpinner(jsonMode, "Fetching recipients...", func() error {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		client, cErr := nipcashclient.Connect(ctx, entry.Token)
+		client, cErr := dialBill(ctx, entry.Token)
 		if cErr != nil {
 			dialErr = true
 			return cErr
@@ -114,13 +141,49 @@ func fetchCashStatus(cmd *cobra.Command, jsonMode bool, entry *ledger.Entry) (*n
 		result = r
 		return nil
 	})
+	if err == nil && cashNoteRekeyedAway(result, cashSecretInUse(cmd, entry)) {
+		// A cash-mode bill's status is answered from the bill proof alone
+		// (NIP-CASH §Scoping the Roster), so a copy of a note someone else
+		// re-keyed still reads its one row. That row's commitment is no longer
+		// this secret's: the bill is not this holder's any more.
+		return nil, output.NotFoundError(cmd, entry.ID, errNoteRekeyedAway)
+	}
 	if err != nil {
-		if dialErr {
+		if dialErr && !isProvenanceRefusal(err) {
 			return nil, output.NetworkError(cmd, err)
 		}
 		return nil, classifyCashTokenNWCErr(cmd, err)
 	}
 	return result, nil
+}
+
+// errNoteRekeyedAway is a held cash note whose bill another holder of the same
+// note has since re-keyed: this copy's secret no longer spends it.
+var errNoteRekeyedAway = errors.New("this cash note was re-keyed by another holder: its cash secret no longer matches the bill, so it is not yours")
+
+// cashSecretInUse is the cash secret a call on entry would spend with: the one
+// --as cash: names, else a cash-mode entry's own; "" for any other credential.
+func cashSecretInUse(cmd *cobra.Command, entry *ledger.Entry) string {
+	if as := asCredentialValue(cmd); as != "" {
+		if secret, ok := strings.CutPrefix(as, "cash:"); ok {
+			return secret
+		}
+		return ""
+	}
+	if entry.ThrowawayKey != "" || entry.IdentityRequired == nil || *entry.IdentityRequired {
+		return ""
+	}
+	return entry.CashSecret
+}
+
+// cashNoteRekeyedAway reports a cash-mode roster row whose commitment is not
+// secret's: a cash-mode bill has exactly that one slice.
+func cashNoteRekeyedAway(r *nipcash.CashStatusResult, secret string) bool {
+	if r == nil || r.Tombstone != nil || secret == "" || len(r.Recipients) != 1 || r.Recipients[0].IdentityType != "cash" {
+		return false
+	}
+	want, err := nipcash.CashCommitment(secret)
+	return err == nil && !nipcash.CommitmentsEqual(want, r.Recipients[0].IdentityValue)
 }
 
 // firstCashStatusError returns the first outcome that is not ok, in order:
@@ -134,8 +197,8 @@ func firstCashStatusError(cmd *cobra.Command, outcomes []cashStatusOutcome) erro
 		if o.Err != nil {
 			return o.Err
 		}
-		if o.Result != nil && o.Result.IsSpent() {
-			return output.SpentError(cmd, o.ID, errBillSpent)
+		if o.Result != nil && o.Result.Tombstone != nil {
+			return goneError(cmd, o.ID, stateForTombstone(o.Result.Tombstone))
 		}
 	}
 	return nil
@@ -173,11 +236,21 @@ func printCashStatusOutcomes(jsonMode bool, outcomes []cashStatusOutcome) {
 				if ce.RawMessage != "" {
 					errMsg = ce.RawMessage
 				}
-				row := map[string]any{"id": o.ID, "status": "failed", "error": errMsg, "code": string(ce.Code)}
+				status := "failed"
+				if ce.Reason == ledger.StatusReclaimed || ce.Reason == ledger.StatusExpired {
+					status = ce.Reason
+				}
+				row := map[string]any{"id": o.ID, "status": status, "error": errMsg, "code": string(ce.Code)}
 				if ce.NWCCode != "" {
 					row["nwc_code"] = ce.NWCCode
 				}
 				rows[i] = row
+				continue
+			}
+			if o.Result.Tombstone != nil {
+				// The tombstone itself is the result: status spent, its reason
+				// and how long the Hub keeps answering.
+				rows[i] = map[string]any{"id": o.ID, "status": stateForTombstone(o.Result.Tombstone), "result": o.Result.Tombstone}
 				continue
 			}
 			o.Result.Recipients = output.NonNil(o.Result.Recipients)
@@ -226,11 +299,18 @@ func printCashStatusResult(result *nipcash.CashStatusResult) {
 	// holder gets a definitive "spent" instead of having to guess. Past
 	// retention the Hub does fall silent, and explainNoAnswer covers that
 	// well; the gap was the window where the Hub tells the truth.
-	if result.IsSpent() {
-		output.Println("This bill is spent — its value has already moved, and the bill itself is gone.")
-		if result.RetainedUntil != nil {
+	if result.Tombstone != nil {
+		switch stateForTombstone(result.Tombstone) {
+		case ledger.StatusExpired:
+			output.Println("This bill expired — its value went back to the Hub, and the bill itself is gone.")
+		case ledger.StatusReclaimed:
+			output.Println("This bill was reclaimed — its value was swept back to the Hub, and the bill itself is gone.")
+		default:
+			output.Println("This bill is spent — its value has already moved, and the bill itself is gone.")
+		}
+		if result.Tombstone.RetainedUntil != nil {
 			output.Printf("The Hub will keep answering about it until %s; after that it goes silent.\n",
-				time.Unix(*result.RetainedUntil, 0).UTC().Format("2006-01-02 15:04 UTC"))
+				time.Unix(*result.Tombstone.RetainedUntil, 0).UTC().Format("2006-01-02 15:04 UTC"))
 		}
 		return
 	}
@@ -262,8 +342,8 @@ func printCashStatusResult(result *nipcash.CashStatusResult) {
 	// formatExpiry). Unlike a money-moving confirmation
 	// (redeem/transfer/consolidate), this is pure inspection with nothing
 	// to gate, so it's always shown, not just when it's close.
-	if len(result.Recipients) > 0 && result.Recipients[0].ExpiresAt != nil {
-		output.Println(formatExpiry(*result.Recipients[0].ExpiresAt))
+	if len(result.Recipients) > 0 && !result.Recipients[0].ExpiresAt.Never() {
+		output.Println(formatExpiry(result.Recipients[0].ExpiresAt.At))
 	}
 }
 
@@ -282,6 +362,9 @@ func resolveHeldTokensOrAll(cmd *cobra.Command, l *ledger.Ledger) ([]*ledger.Ent
 		}
 		if spent := spentStatusDescription(e.Status); spent != "" {
 			return nil, alreadySpentError(cmd, id, e.Status)
+		}
+		if e.Status == ledger.StatusRedeeming {
+			return nil, errRedeemInFlight(cmd, id)
 		}
 		return []*ledger.Entry{e}, nil
 	}
@@ -319,11 +402,12 @@ func joinStrings(ss []string) string {
 	return out
 }
 
-// cashStatusRowStatus is a --json row's status: "spent" for a tombstone, so a
-// spent bill never reads as "ok" with the fact buried in its result.
+// cashStatusRowStatus is a --json row's status: the tombstone's state (spent,
+// expired or reclaimed), so a spent bill never reads as "ok" with the fact
+// buried in its result.
 func cashStatusRowStatus(r *nipcash.CashStatusResult) string {
-	if r.IsSpent() {
-		return "spent"
+	if r.Tombstone != nil {
+		return stateForTombstone(r.Tombstone)
 	}
 	return "ok"
 }

@@ -141,7 +141,7 @@ func TestFirstCashStatusError_ASpentRowIsNotOK(t *testing.T) {
 	cmd := newTestStatusCmd(true, false)
 	outcomes := []cashStatusOutcome{
 		{ID: "a", Result: &nipcash.CashStatusResult{}},
-		{ID: "b", Result: &nipcash.CashStatusResult{Error: nipcash.ErrorSpent}},
+		{ID: "b", Result: &nipcash.CashStatusResult{Tombstone: &nipcash.Tombstone{Status: "spent"}}},
 		{ID: "c", Err: output.NetworkError(cmd, errors.New("later"))},
 	}
 	err := firstCashStatusError(cmd, outcomes)

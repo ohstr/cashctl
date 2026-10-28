@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/ohstr/nmilat/nipcash"
-	nipcashclient "github.com/ohstr/nmilat/nipcash/client"
 	"github.com/ohstr/nmilat/nipcash/transport"
 	"github.com/ohstr/nmilat/utils"
 	"github.com/spf13/cobra"
@@ -38,6 +37,7 @@ them).`,
 	cmd.Flags().String("sources", "", fmt.Sprintf("comma-separated: local ledger IDs, or <token>:<amount-%s>:<credential>", output.CurrencyUnit))
 	cmd.Flags().String("to", "", "defaults to your own identity")
 	cmd.Flags().String("ia", "", "Identity Authority to trust (hex pubkey or name@domain) for an nconnection1... target that doesn't specify one")
+	cmd.Flags().Bool("no-wait", false, "exit 8 at once when the Hub gives no clear answer, instead of waiting (up to 62 s) to look the call up")
 	return cmd
 }
 
@@ -227,10 +227,12 @@ func runCashConsolidate(cmd *cobra.Command, args []string) error {
 		return output.RuntimeError(cmd, err)
 	}
 	// A merge interrupted before its move was confirmed is settled first (I-26).
-	settlePendingMoves(cmd, l)
+	if err := settleBeforeSpend(cmd, l); err != nil {
+		return err
+	}
 
 	if len(args) > 0 || sourcesFlag != "" {
-		items, err := resolveConsolidateSources(args, sourcesFlag, l.Held())
+		items, err := resolveConsolidateSources(args, sourcesFlag, unlockedHeld(l))
 		if err != nil {
 			return output.InvocationError(cmd, err)
 		}
@@ -255,8 +257,10 @@ func runCashConsolidate(cmd *cobra.Command, args []string) error {
 	// can actually be merged instead (see mergeableHubGroups) and
 	// process each such group, rather than erroring out and making the
 	// common "tidy up my dust" case require first hunting down IDs.
-	groups := mergeableHubGroups(l.Held())
-	alone := aloneOnTheirHub(l.Held())
+	// A bill with an open call is spoken for until that call ends: never
+	// picked automatically.
+	groups := mergeableHubGroups(unlockedHeld(l))
+	alone := aloneOnTheirHub(unlockedHeld(l))
 	if len(groups) == 0 {
 		if jsonMode {
 			output.PrintJSON(withAlone(map[string]any{"consolidated": []any{}}, alone))
@@ -462,6 +466,9 @@ func consolidateItems(cmd *cobra.Command, l *ledger.Ledger, items []string, toFl
 				if spent := spentStatusDescription(e.Status); spent != "" {
 					return alreadySpentError(cmd, e.ID, e.Status)
 				}
+				if err := refuseLocked(cmd, l, []string{e.ID}); err != nil {
+					return err
+				}
 				src, err := sourceFromEntry(cmd, l, e)
 				if err != nil {
 					return err
@@ -571,7 +578,11 @@ func consolidateItems(cmd *cobra.Command, l *ledger.Ledger, items []string, toFl
 		// when there is no identity to address it to.
 		myPub, err := localPubKeyHex(cmd)
 		if hasCashNote || err != nil {
-			target = nipcash.NewCashTarget()
+			ct, ctErr := nipcash.NewCashTarget()
+			if ctErr != nil {
+				return nil, output.RuntimeError(cmd, ctErr)
+			}
+			target = ct
 		} else {
 			target = nipcash.Pubkey(myPub)
 		}
@@ -639,7 +650,9 @@ func consolidateItems(cmd *cobra.Command, l *ledger.Ledger, items []string, toFl
 		// being cash notes. No answer: they stay on the key, spendable, and the
 		// next consolidate finishes the merge.
 		if len(movedIDs) > 0 && output.AsCLIError(err).Code != output.CodeIndeterminate {
-			undoMoves(cmd, l, movedIDs)
+			if uErr := undoMoves(cmd, l, movedIDs); uErr != nil {
+				return nil, withRecovery(err, uErr)
+			}
 		}
 		return nil, err
 	}
@@ -905,9 +918,9 @@ func sourceFromEntry(cmd *cobra.Command, l *ledger.Ledger, e *ledger.Entry) (nip
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	client, err := nipcashclient.Connect(ctx, e.Token)
+	client, err := dialBill(ctx, e.Token)
 	if err != nil {
-		return nipcash.Source{}, output.NetworkError(cmd, err)
+		return nipcash.Source{}, classifyCashTokenNWCErr(cmd, err)
 	}
 	defer client.Close()
 	amount, err := resolveAmount(cmd, l, e, client)
@@ -917,162 +930,41 @@ func sourceFromEntry(cmd *cobra.Command, l *ledger.Ledger, e *ledger.Entry) (nip
 	return nipcash.Source{WalletPubkey: e.WalletPubkey, Amount: amount, Credential: cred}, nil
 }
 
-// doCashConsolidate calls cash_consolidate for sources (each corresponding
-// to the local ledger entry with the same index's ID in localIDs) against
-// target, updates the ledger, and returns the new merged entry.
-// dialCandidates are each source's own token, tried in order — any
-// connected source's client works to PLACE the call, since sources are
-// authorized per-source by their own proof, not by the calling connection
-// (see NIP-CASH §Consolidating Tokens). What isn't per-source is the
-// generic Hub-side permission-expiry gate (nip47/permissions.HasPermission
-// in lokihub): it checks only the connection actually dialed, not any
-// other source in the batch — confirmed live against
-// cash_consolidate_controller.go's own resolveConsolidateSource, which
-// never re-checks a non-dialed source's own wallet expiry. Without this,
-// whether a batch including one already-expired member could be placed AT
-// ALL depended on the arbitrary order dialCandidates happened to be built
-// in (previously always dialCandidates[0], i.e. ledger insertion order) —
-// this tries each remaining candidate on an EXPIRED decline specifically
-// before giving up, so an unrelated implementation detail no longer
-// decides that.
-//
-// This does NOT "rescue" an already-expired source into a spendable
-// result, and callers must not describe it that way: NIP-CASH's own merge
-// rule inherits the EARLIEST expiry across every source (§Consolidating
-// Tokens) — confirmed live — so a batch including one already-expired
-// member produces a merged wallet that is ALSO already expired the moment
-// it's created, dragging every other (otherwise healthy) source's share
-// down with it. What this buys is narrower but still real: the call
-// actually places (funds move into one traceable wallet an operator can
-// act on, rather than the whole request just failing on an unrelated
-// technicality) and, for a batch where every member is still short of its
-// own deadline, it removes a spurious failure mode entirely. See
-// runCashConsolidate's own pre-confirm warning for the interactive-path
-// half of this same finding.
-// reconcileAmbiguousSources is doCashConsolidate's only recourse when a
-// consolidate call fails with the ambiguous "decrypt delivery" shape
-// (warnAmbiguousDelivery's own doc comment): it can't read what the Hub
-// merged the sources into, but it CAN ask each source's own original
-// token, independently, whether the Hub still lists a claim for it — a
-// call this codebase already makes elsewhere for the exact same reason
-// (cash_receive.go's checkClaimWithCashHub, cash_redeem.go's
-// resolveAmount). A confirmed-gone source is marked Consolidated (no
-// destination to record — StatusConsolidated already means "became part
-// of some merge", true here even though which merge is unrecoverable);
-// anything else (still live, or the check itself couldn't be completed)
-// is left exactly as it was — never guessed at either way. Returns the
-// local IDs it could confirm gone, for the caller's own error message.
-//
-// What counts as proof: a "spent" TOMBSTONE, and nothing else. A Hub retains a
-// deleted bill for a window precisely so its holder gets a definitive answer
-// instead of having to infer one, and that is the only answer here that actually
-// means "this bill's value has moved".
-//
-// It used to accept nipcash.ErrClaimNotFound as proof, which is a different
-// statement — "this token does not name you" — and at least three live,
-// non-consumed states produce it:
-//
-//   - a connection_key row can NEVER match: nipcash.MatchClaimAuto only matches
-//     cash and pubkey rows, so every live connection_key source read as consumed,
-//     deterministically and with no race;
-//   - a pubkey source under --as, because the credential honours the override
-//     while the pubkey compared against it was read from the LOCAL identity;
-//   - a cash-mode source whose PendingCashSecret is the wrong one, since a wrong
-//     secret also declines NOT_FOUND.
-//
-// Writing one of those off set StatusConsolidated, which removes the entry from
-// Held() — so it vanished from redeem, redeem --all, wallet balance and --token
-// resolution, while the user was told it had been "confirmed consumed on the Hub".
-// For the cash-mode case it was worse than cosmetic: it disabled the one code path
-// that could ever have discovered which secret was live.
-//
-// The new failure mode is the safe one. A bill that really is gone, but whose Hub
-// has passed its retention window and fallen silent, is now left alone rather than
-// marked — a stale entry the user can see and retry, instead of a live one that
-// disappeared.
-func reconcileAmbiguousSources(cmd *cobra.Command, l *ledger.Ledger, localIDs []string) []string {
-	var confirmedGone []string
-	for _, id := range localIDs {
-		e, ok := l.Find(id)
-		if !ok {
-			continue
-		}
-		if _, decErr := nipcash.Decode(e.Token); decErr != nil {
-			continue
-		}
-		status, statusErr := sourceCashStatusFn(cmd, e)
-		if statusErr != nil {
-			continue // inconclusive: an error is not evidence either way
-		}
-		if status.IsSpent() {
-			_ = l.SetStatus(id, ledger.StatusConsolidated)
-			confirmedGone = append(confirmedGone, id)
-		}
-	}
-	if len(confirmedGone) > 0 {
-		_ = l.Save() // best-effort: worst case, the next successful Save picks up the same corrected statuses
-	}
-	return confirmedGone
-}
-
-// sourceCashStatus asks one source's own Hub for its cash_status. Any error
-// — an unreachable Hub, no credential, a refusal — is inconclusive to the
-// caller. A package var so reconcileAmbiguousSources is testable without a Hub.
-var sourceCashStatusFn = func(cmd *cobra.Command, e *ledger.Entry) (*nipcash.CashStatusResult, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	client, err := nipcashclient.Connect(ctx, e.Token)
-	if err != nil {
-		return nil, err
-	}
-	defer client.Close()
-	cred, err := resolveCredential(cmd, e)
-	if err != nil {
-		return nil, err
-	}
-	return client.CashStatus(ctx, cred, nipcash.ScopeMine)
-}
-
+// doCashConsolidate places one cash_consolidate for sources (localIDs are their
+// ledger entries) to target, as a call written ahead, applies its result and
+// returns the new merged entry; the caller Saves. dialCandidates are the
+// sources' own tokens: the call is dialled through the first that can be
+// reached, and that source becomes sources[0], the call's target.
 func doCashConsolidate(cmd *cobra.Command, l *ledger.Ledger, dialCandidates []string, sources []nipcash.Source, localIDs []string, target nipcash.Target, isSelfTarget bool) (newEntry *ledger.Entry, expiresAt *int64, err error) {
 	if len(dialCandidates) == 0 {
 		// Not reachable through runCashConsolidate today — sources and
-		// dialCandidates (sourceTokens there) are always built in lockstep,
-		// one append per item, so len(sources)>=2 (checked before this is
-		// ever called) implies len(dialCandidates)>=2 too. Guarded anyway:
-		// falling through the loop below with zero candidates would
-		// silently return (nil, nil, nil) — a fake "success" with no call
-		// ever placed, and a nil newEntry that then nil-derefs in
-		// runCashConsolidate's own text-mode print (*newEntry.AmountMillis).
+		// dialCandidates are always built in lockstep — but falling through the
+		// loop below with zero candidates would fake a success with no call.
 		return nil, nil, output.RuntimeError(cmd, fmt.Errorf("doCashConsolidate: no dial candidates given"))
 	}
-	// Written to disk BEFORE the first attempt, and outside the retry loop:
-	// every candidate carries the same target, so the secret at risk is the
-	// same one on every pass — see parkDestinationCashSecret for why the
-	// window it closes destroys money rather than merely inconveniencing a
-	// retry (D-CLI-1).
-	parked, err := parkDestinationCashSecret(l, localIDs, target)
-	if err != nil {
-		return nil, nil, output.RuntimeError(cmd, err)
-	}
-
+	// Another candidate is tried only when this one's call was never sent (it
+	// could not be dialled): once a call is written ahead and sent, its sources
+	// are spoken for until the Hub says what happened.
 	var lastErr error
-	for i, dialToken := range dialCandidates {
-		result, callErr := attemptCashConsolidateFn(dialToken, sources, target)
+	for _, dialToken := range dialCandidates {
+		result, call, callErr := attemptCashConsolidateFn(cmd, l, dialToken, sources, localIDs, target)
 		if callErr == nil {
 			for _, id := range localIDs {
 				_ = l.SetStatus(id, ledger.StatusConsolidated)
 			}
-			newLedgerEntry := ledger.Entry{
-				Token: result.NewWalletToken, WalletPubkey: result.NewWalletPubkey, AmountMillis: &result.AmountMillis, Verified: true,
-				// Inherited, not verified against the new wallet itself — see sharedMinter.
-				MinterPubkey: sharedMinterOfIDs(l, localIDs),
+			verified, minter := returnedBillCheck(result.NewWalletToken, sharedMinterOfIDs(l, localIDs))
+			if !verified {
+				jsonMode, _ := cmd.Flags().GetBool("json")
+				output.Notef(jsonMode, unverifiedReturnNote)
 			}
-			// A cash-mode target's own secret only ever exists in target
-			// itself — the wire response never carries it (NIP-CASH
-			// §Cash-Mode Slices: the caller supplies the commitment, the node
-			// never mints/returns a secret) — discarding it here would be
-			// the exact same fund-loss bug already found and fixed for
-			// transfer's own cash (cash-mode) path.
+			newLedgerEntry := ledger.Entry{
+				Token: strings.ToLower(result.NewWalletToken), WalletPubkey: result.NewWalletPubkey, AmountMillis: &result.AmountMillis, Verified: verified,
+				MinterPubkey: minter,
+			}
+			// A cash-mode target's secret exists only here and in the call's
+			// written-ahead record: the Hub never returns it (NIP-CASH §Cash-Mode
+			// Slices). It moves onto the new entry in the same Save that closes
+			// the call.
 			if bt, ok := target.(*nipcash.CashTarget); ok {
 				newLedgerEntry.CashSecret = bt.Secret()
 				newLedgerEntry.IdentityRequired = ptrTo(false)
@@ -1080,52 +972,24 @@ func doCashConsolidate(cmd *cobra.Command, l *ledger.Ledger, dialCandidates []st
 				// construction, and labelled so, like a re-keyed receipt.
 				newLedgerEntry.CashProtection = ledger.CashProtected
 			}
-			// A pubkey/connection_key target other than the caller's own
-			// identity is a gift — the caller doesn't own the resulting
-			// wallet and can't redeem it themselves, so it must not be
-			// saved as one of the caller's own held tokens (same rule
-			// cash_transfer's own third-party spin-off already follows:
-			// only ever persists the caller's own remainder, never the
-			// recipient's token). A cash-mode target keeps the existing
-			// behavior above (CashSecret set): unlike a pubkey/
-			// connection_key gift, only the caller ever holds that secret,
-			// so it's genuinely theirs to keep track of. newEntry is still
-			// returned for display/hand-off either way, just not added to
-			// l for a non-self, identity-bound target.
+			// A pubkey/connection_key target other than the caller's own identity
+			// is a gift: not one of the caller's held tokens. A cash-mode target is
+			// the caller's own new note.
 			_, isCashTarget := target.(*nipcash.CashTarget)
 			if isSelfTarget || isCashTarget {
 				newEntry, _ = l.Add(newLedgerEntry)
 			} else {
 				newEntry = &newLedgerEntry
 			}
-			// The destination secret now lives on the new entry's own
-			// CashSecret, so the parked copy has done its job. Cleared
-			// here rather than Saved here: this function never Saves —
-			// its callers do, immediately — and that caller's single
-			// write is the one that must carry both the result and this
-			// clear, so a failed write keeps the park (see release()).
-			parked.release()
+			closeCall(l, call, ledger.CallDone, "")
 			l.AppendHistory("consolidate", fmt.Sprintf("consolidated %d tokens into one %s note", len(localIDs), output.FormatAmount(int64(result.AmountMillis))))
-			return newEntry, result.ExpiresAt, nil
+			return newEntry, expiryPtr(result.ExpiresAt), nil
 		}
-
-		reportErr := callErr
-		if isAmbiguousDeliveryErr(callErr) {
-			if gone := reconcileAmbiguousSources(cmd, l, localIDs); len(gone) > 0 {
-				reportErr = fmt.Errorf("%w (confirmed consumed on the Hub despite the unreadable reply: %s — marked accordingly so they won't be offered again, though the merged result itself could not be recovered)",
-					callErr, strings.Join(gone, ", "))
-			} else {
-				reportErr = warnAmbiguousDelivery(callErr, localIDs)
-			}
+		lastErr = callErr
+		var notSent *notSentError
+		if !errors.As(callErr, &notSent) && output.AsCLIError(callErr).Code != output.CodeNetwork {
+			return nil, nil, callErr
 		}
-		lastErr = classifyCashSpendErr(cmd, reportErr, "consolidate", localIDs...)
-		if !isExpiredWalletErr(callErr) || i == len(dialCandidates)-1 {
-			parked.forgetIfNothingCreated(lastErr)
-			return nil, nil, lastErr
-		}
-		// callErr is specifically EXPIRED and a sibling candidate remains —
-		// try it instead of failing a batch a different connection could
-		// have carried just fine (see this function's own doc comment).
 	}
 	return nil, nil, lastErr
 }
@@ -1207,7 +1071,7 @@ func hubConsolidateCap(dialToken string) int {
 	if !ok {
 		return transport.DefaultMaxConsolidateSources
 	}
-	client, err := nipcashclient.Connect(ctx, dialToken)
+	client, err := dialBill(ctx, dialToken)
 	if err != nil {
 		return transport.DefaultMaxConsolidateSources
 	}
@@ -1225,32 +1089,71 @@ func hubConsolidateCap(dialToken string) int {
 // hubConsolidateCapFn is hubConsolidateCap, swapped out in tests.
 var hubConsolidateCapFn = hubConsolidateCap
 
-// attemptCashConsolidate places one cash_consolidate call, dialed through
-// dialToken specifically. Returns the raw (unclassified) error so
-// doCashConsolidate's own retry loop can inspect the real NWC code (via
-// isExpiredWalletErr) before deciding whether to try a different dial
-// candidate — classifying here would erase which underlying failure this
-// even was.
-func attemptCashConsolidate(dialToken string, sources []nipcash.Source, target nipcash.Target) (*nipcash.CashConsolidateResult, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	client, err := nipcashclient.Connect(ctx, dialToken)
-	if err != nil {
-		return nil, &notSentError{err}
-	}
-	defer client.Close()
-	// The call itself is authorized by the first source's own credential: the caller
-	// proves control of every source individually inside Sources, and any one of them
-	// is equally a proof that this caller may make the call.
+// attemptCashConsolidate places one cash_consolidate dialled through dialToken,
+// as a call written ahead. The call's target is sources[0] (NIP-CASH
+// §Consolidating Tokens), so the dialled bill's source goes first.
+func attemptCashConsolidate(cmd *cobra.Command, l *ledger.Ledger, dialToken string, sources []nipcash.Source, localIDs []string, target nipcash.Target) (*nipcash.CashConsolidateResult, *ledger.Call, error) {
 	if len(sources) == 0 {
-		return nil, errors.New("attemptCashConsolidate: no sources")
+		return nil, nil, output.RuntimeError(cmd, errors.New("attemptCashConsolidate: no sources"))
 	}
-	return client.CashConsolidate(ctx, sources[0].Credential, nipcash.CashConsolidateParams{Sources: sources, To: target})
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	caller, err := dialCallerFn(ctx, dialToken)
+	if err != nil {
+		return nil, nil, classifyCashSpendErr(cmd, &notSentError{err}, "consolidate", localIDs...)
+	}
+	defer caller.Close()
+	sources = dialledFirst(l, sources, dialToken)
+	first := firstSourceEntry(l, localIDs, sources[0].WalletPubkey)
+	kind, pub, secret := authorizerOf(cmd, first, sources[0].Credential)
+	spec := callSpec{Purpose: purposeConsolidate, SourceEntryIDs: localIDs, AuthorizerKind: kind,
+		AuthorizerPubkey: pub, AuthorizerSecret: secret, TargetCredential: dialToken,
+		InterimKey: mergeKeyFor(l, target)}
+	return placeConsolidate(ctx, cmd, l, caller, spec, nipcash.CashConsolidateParams{Sources: sources, To: target})
 }
 
-// attemptCashConsolidateFn is attemptCashConsolidate by default — a
-// package-level indirection swapped out in cash_consolidate_test.go (same
-// "reassign a package var for the test" pattern prompt.go's own stdin
-// uses for PromptLine/Confirm) so doCashConsolidate's own retry-on-EXPIRED
-// policy can be exercised deterministically, with no real dial.
+// mergeKeyFor is the merge key in the ledger whose pubkey is target (an interim
+// round's target), or "".
+func mergeKeyFor(l *ledger.Ledger, target nipcash.Target) string {
+	if !nipcash.IsPubkeyTarget(target) {
+		return ""
+	}
+	for _, e := range l.Entries {
+		for _, k := range []string{e.ThrowawayKey, e.PendingThrowawayKey} {
+			if k != "" && nipcash.Pubkey(pubOf(k)) == target {
+				return k
+			}
+		}
+	}
+	return ""
+}
+
+// dialledFirst puts the source whose wallet is dialToken's first.
+func dialledFirst(l *ledger.Ledger, sources []nipcash.Source, dialToken string) []nipcash.Source {
+	wallet := ""
+	if e, ok := l.FindByToken(dialToken); ok {
+		wallet = e.WalletPubkey
+	} else if tok, err := nipcash.Decode(dialToken); err == nil {
+		wallet = tok.WalletPubkey
+	}
+	for i, src := range sources {
+		if src.WalletPubkey == wallet && i > 0 {
+			out := append([]nipcash.Source{src}, sources[:i]...)
+			return append(out, sources[i+1:]...)
+		}
+	}
+	return sources
+}
+
+// firstSourceEntry is the held entry for wallet among ids, or nil.
+func firstSourceEntry(l *ledger.Ledger, ids []string, wallet string) *ledger.Entry {
+	for _, id := range ids {
+		if e, ok := l.Find(id); ok && e.WalletPubkey == wallet {
+			return e
+		}
+	}
+	return nil
+}
+
+// attemptCashConsolidateFn is attemptCashConsolidate, swapped out in tests.
 var attemptCashConsolidateFn = attemptCashConsolidate

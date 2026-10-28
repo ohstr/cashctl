@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ohstr/nmilat/nipcw"
 	relayclient "github.com/ohstr/nmilat/relay/client"
 	"github.com/spf13/cobra"
 
@@ -99,6 +100,7 @@ func runWalletBalance(cmd *cobra.Command, args []string) error {
 	expiredHeld += heldExpired
 
 	notes, notesAmount := outstandingCashNotes(l.Handoffs)
+	redeemingMillis, redeemingN := redeemingTotal(l)
 
 	if jsonMode {
 		output.PrintJSON(map[string]any{
@@ -110,6 +112,9 @@ func runWalletBalance(cmd *cobra.Command, args []string) error {
 			"breakdown":          output.NonNil(lines),
 			"outstanding_cash_notes": map[string]any{
 				"count": notes, "amount_mloki": notesAmount,
+			},
+			"being_redeemed": map[string]any{
+				"count": redeemingN, "amount_mloki": redeemingMillis,
 			},
 		})
 		return nil
@@ -130,6 +135,10 @@ func runWalletBalance(cmd *cobra.Command, args []string) error {
 		output.Printf("(couldn't reach %s — not counted, may still hold funds)\n", strings.Join(unreachable, ", "))
 	}
 	printPendingMerge(l)
+	if redeemingN > 0 {
+		output.Printf("Being redeemed: %s (%d) — not in the total; `cashctl cash status` shows the outcome\n",
+			output.FormatAmount(int64(redeemingMillis)), redeemingN) //nolint:gosec // amounts fit
+	}
 	if notes > 0 {
 		output.Printf("Handed out, not yet claimed: %d cash note(s), %s — not in the total; `cashctl wallet history` lists them\n",
 			notes, output.FormatAmount(notesAmount))
@@ -228,7 +237,7 @@ func runWalletBalanceFrom(cmd *cobra.Command, from string, jsonMode bool) error 
 
 // liveBalanceMloki dials c and calls get_balance. On a CodeAuth decline
 // (EXPIRED, RESTRICTED, UNAUTHORIZED — the Hub has permanently cut this
-// connection off), falls back to the cached LastKnownBalanceMloki (if any),
+// connection off), falls back to the cached LastKnownBalanceMillis (if any),
 // flagged as stranded — see Connection's own doc comment for why that's
 // the only way to show a figure at all for a wallet that can never be
 // queried live again.
@@ -252,7 +261,7 @@ func liveBalanceMloki(c config.Connection) (amount int64, stranded bool, err err
 }
 
 // strandedBalanceFallback decides whether a get_balance failure should fall
-// back to c's cached LastKnownBalanceMloki rather than being treated as
+// back to c's cached LastKnownBalanceMillis rather than being treated as
 // plainly unreachable. Only a CodeAuth decline qualifies: the Hub has
 // permanently and authoritatively cut the connection off, so the cached
 // figure is frozen and accurate forever. Any other failure (network,
@@ -263,8 +272,10 @@ func liveBalanceMloki(c config.Connection) (amount int64, stranded bool, err err
 // classification doesn't need a live Hub to verify.
 func strandedBalanceFallback(err error, c config.Connection) (amount int64, ok bool) {
 	var walletErr *relayclient.WalletError
-	if errors.As(err, &walletErr) && output.NWCErrorCode(walletErr.Code) == output.CodeAuth && c.LastKnownBalanceMloki != nil {
-		return *c.LastKnownBalanceMloki, true
+	// FROZEN is an auth decline that an unfreeze lifts: not stranded.
+	if errors.As(err, &walletErr) && output.NWCErrorCode(walletErr.Code) == output.CodeAuth && walletErr.Code != nipcw.ErrFrozen &&
+		c.LastKnownBalanceMillis != nil {
+		return *c.LastKnownBalanceMillis, true
 	}
 	return 0, false
 }

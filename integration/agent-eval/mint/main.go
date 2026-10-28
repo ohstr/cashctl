@@ -15,14 +15,14 @@
 //	mint sweep       [--agent A]
 //
 // Env: MINT_CONFIG (default integration/config.local.yaml), MINT_STATE
-// (default ./mint-state), MINT_RUN (name prefix tag, default "run").
+// (default integration/agent-eval/.state, gitignored), MINT_RUN (name prefix
+// tag, default "run").
 package main
 
 import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -31,19 +31,20 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
-	"github.com/decred/dcrd/dcrec/secp256k1/v4/ecdsa"
 	btcec "github.com/flokiorg/go-flokicoin/crypto"
 	"github.com/ohstr/nmilat/nip19"
 	"github.com/ohstr/nmilat/nip47"
 	"github.com/ohstr/nmilat/nipcash"
-	nipcashclient "github.com/ohstr/nmilat/nipcash/client"
-	"github.com/ohstr/nmilat/nipcw"
+
+	"github.com/ohstr/cashctl/internal/testmint"
 	relayclient "github.com/ohstr/nmilat/relay/client"
 	"gopkg.in/yaml.v3"
 )
@@ -66,6 +67,9 @@ const (
 type appRec struct {
 	AppID   uint   `json:"app_id"`
 	Pairing string `json:"pairing,omitempty"`
+	// CashHub is a cash_hub app's cashhub1 connection, what `cashctl cash
+	// mint` takes.
+	CashHub string `json:"cash_hub,omitempty"`
 	Label   string `json:"label,omitempty"`
 	FeePpm  int    `json:"fee_ppm,omitempty"`
 	MinXfer int64  `json:"min_transfer,omitempty"`
@@ -86,6 +90,10 @@ type admin struct {
 	base, token string
 }
 
+// defaultStateDir is where the minted fixtures' state lives when MINT_STATE is
+// unset: inside the agent-eval tree, gitignored, never at the repo root.
+const defaultStateDir = "integration/agent-eval/.state"
+
 func main() {
 	if len(os.Args) < 2 {
 		fatalf("usage: mint token|invoice|nwc-wallet|circle-hub|fake|status|sweep [flags]")
@@ -95,7 +103,7 @@ func main() {
 	cfg := loadConfig()
 	a := &admin{base: strings.TrimRight(cfg.AdminAPI.BaseURL, "/"), token: cfg.AdminAPI.Token}
 
-	stateDir := envOr("MINT_STATE", "mint-state")
+	stateDir := envOr("MINT_STATE", defaultStateDir)
 	must(os.MkdirAll(stateDir, 0o700))
 	unlock := lock(filepath.Join(stateDir, "lock"))
 	defer unlock()
@@ -164,36 +172,33 @@ func cmdToken(a *admin, st *state, args []string) {
 			"cashMinTransferMloki":  *minXfer,
 		})
 		must(err)
-		hub = appRec{AppID: resp.ID, Pairing: resp.PairingUri, Label: *label, FeePpm: *feePpm, MinXfer: *minXfer}
+		if resp.CashHubToken == nil || *resp.CashHubToken == "" {
+			fatalf("token: the cash_hub app %d came back without a cashhub1 connection", resp.ID)
+		}
+		hub = appRec{AppID: resp.ID, Pairing: resp.PairingUri, CashHub: *resp.CashHubToken, Label: *label, FeePpm: *feePpm, MinXfer: *minXfer}
 		ag.Hubs[*label] = hub // recorded before funding so a failed fund is still swept
-		saveState(filepath.Join(envOr("MINT_STATE", "mint-state"), "state.json"), st)
+		saveState(filepath.Join(envOr("MINT_STATE", defaultStateDir), "state.json"), st)
 		must(a.doBody(http.MethodPost, "/api/transfers", map[string]any{"toAppId": resp.ID, "amountLoki": hubFundLoki}, nil))
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
-	defer cancel()
-	client, err := nipcashclient.Connect(ctx, hub.Pairing)
-	must(err)
-	defer client.Close()
-
-	target := nipcash.Anyone()
-	if !*cashMode {
-		target = nipcash.Pubkey(toHex(*forPub))
+	if hub.CashHub == "" {
+		fatalf("token: hub %q was recorded without its cashhub1 connection; use a new --hub label", *label)
 	}
-	res, err := client.MintCash(ctx, nipcash.MintCashParams{
-		Recipients: []nipcash.Allocation{nipcash.Send(target, *amount)},
-		Expiry:     time.Duration(*expires) * time.Second,
-	})
-	must(err)
+	to := "cash"
+	if !*cashMode {
+		to = toHex(*forPub)
+	}
+	res := cashMint(hub.CashHub, *amount, to, time.Duration(*expires)*time.Second)
 	ag.MintedMloki += *amount
 
 	out := map[string]any{"cash_token": res.CashToken, "hub": *label, "hub_app_id": hub.AppID, "amount_millis": *amount}
 	if *cashMode {
-		if len(res.Recipients) != 1 || res.Recipients[0].CashSecret == "" {
-			fatalf("token: hub returned no cash secret: %+v", res.Recipients)
+		token, secret, ok := strings.Cut(res.Handoff, "#")
+		if !ok || token != res.CashToken {
+			fatalf("token: cashctl cash mint returned no cash note")
 		}
-		out["cash_secret"] = res.Recipients[0].CashSecret
-		out["gift"] = res.CashToken + "#" + res.Recipients[0].CashSecret
+		out["cash_secret"] = secret
+		out["gift"] = res.Handoff
 	}
 	printJSON(out)
 }
@@ -254,7 +259,7 @@ func cmdWallet(a *admin, st *state, args []string) {
 	resp, err := a.createApp(req)
 	must(err)
 	ag.Wallets = append(ag.Wallets, appRec{AppID: resp.ID, Pairing: resp.PairingUri, Label: *kind})
-	saveState(filepath.Join(envOr("MINT_STATE", "mint-state"), "state.json"), st)
+	saveState(filepath.Join(envOr("MINT_STATE", defaultStateDir), "state.json"), st)
 	if fund {
 		must(a.doBody(http.MethodPost, "/api/transfers", map[string]any{"toAppId": resp.ID, "amountLoki": 100}, nil))
 	}
@@ -293,7 +298,7 @@ func cmdCircle(a *admin, st *state, args []string) {
 	resp, err := a.createApp(req)
 	must(err)
 	ag.Circles = append(ag.Circles, appRec{AppID: resp.ID, Pairing: resp.PairingUri})
-	saveState(filepath.Join(envOr("MINT_STATE", "mint-state"), "state.json"), st)
+	saveState(filepath.Join(envOr("MINT_STATE", defaultStateDir), "state.json"), st)
 	must(a.doBody(http.MethodPost, "/api/transfers", map[string]any{"toAppId": resp.ID, "amountLoki": circleFundLoki}, nil))
 	if len(allow) > 0 {
 		var cur struct {
@@ -330,20 +335,14 @@ func cmdFake(args []string) {
 	}
 	yes, no := true, false
 	tok := func(idReq *bool) string {
-		v, err := nipcash.Encode(nipcash.Token{HRP: "lokicash", WalletPubkey: rnd(), Secret: rnd(), RelayURLs: []string{"wss://fake.invalid"}, IdentityRequired: idReq})
-		must(err)
-		return v
+		return testmint.MustBill(nipcash.Token{HRP: "lokicash", WalletPubkey: rnd(), Secret: rnd(), RelayURLs: []string{"wss://fake.invalid"}, IdentityRequired: idReq}, "")
 	}
 	out := map[string]any{"kind": *kind}
 	switch *kind {
 	case "cash-hub":
-		v, err := nipcash.EncodeCashHubConnection(nipcash.CashHubConnection{WalletPubkey: rnd(), Secret: rnd(), RelayURLs: []string{"wss://fake.invalid"}})
-		must(err)
-		out["value"] = v
+		out["value"] = testmint.MustCashHub(rnd(), "", "wss://fake.invalid")
 	case "circle-hub":
-		v, err := nipcw.EncodeCircleHubConnection(nipcw.CircleHubConnection{WalletPubkey: rnd(), Secret: rnd(), RelayURLs: []string{"wss://fake.invalid"}})
-		must(err)
-		out["value"] = v
+		out["value"] = testmint.MustCircleHub(rnd(), "", "wss://fake.invalid")
 	case "nwc":
 		out["value"] = "nostr+walletconnect://" + rnd() + "?relay=wss%3A%2F%2Ffake.invalid&secret=" + rnd()
 	case "nconnection":
@@ -355,17 +354,11 @@ func cmdFake(args []string) {
 	case "token-cash":
 		out["value"] = tok(&no)
 	case "token-signed":
-		priv, pub := btcec.PrivKeyFromBytes([]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32})
-		const amount = uint64(1000)
-		wp := rnd()
-		first := sha256.Sum256([]byte(nipcash.LNSignedMessagePrefix + nipcash.MintPayload("lokicash", wp, amount)))
-		second := sha256.Sum256(first[:])
-		amt := amount
-		v, err := nipcash.Encode(nipcash.Token{HRP: "lokicash", WalletPubkey: wp, Secret: rnd(), RelayURLs: []string{"wss://fake.invalid"},
-			MintSignature: ecdsa.SignCompact(priv, second[:], true), AttestedAmountMillis: &amt})
-		must(err)
-		ser := btcec.ToSerialized(pub)
-		out["value"], out["minter_pubkey"] = v, hex.EncodeToString(ser[:])
+		privBytes := []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32}
+		_, pub := btcec.PrivKeyFromBytes(privBytes)
+		amt := uint64(1000)
+		v := testmint.MustBill(nipcash.Token{HRP: "lokicash", WalletPubkey: rnd(), Secret: rnd(), RelayURLs: []string{"wss://fake.invalid"}, AttestedAmountMillis: &amt}, hex.EncodeToString(privBytes))
+		out["value"], out["minter_pubkey"] = v, hex.EncodeToString(pub.SerializeCompressed())
 	default:
 		fatalf("fake: unknown --kind %q", *kind)
 	}
@@ -490,6 +483,7 @@ func cmdSweep(a *admin, st *state, args []string) {
 type createResp struct {
 	ID             uint    `json:"id"`
 	PairingUri     string  `json:"pairingUri"`
+	CashHubToken   *string `json:"cashHubToken,omitempty"`
 	CircleHubToken *string `json:"circleHubToken,omitempty"`
 }
 
@@ -654,4 +648,40 @@ func must(err error) {
 func fatalf(f string, a ...any) {
 	fmt.Fprintf(os.Stderr, "mint: "+f+"\n", a...)
 	os.Exit(1)
+}
+
+// cashMintResult is what `cashctl cash mint --json` answers.
+type cashMintResult struct {
+	CashToken string `json:"cash_token"`
+	Handoff   string `json:"handoff"`
+}
+
+// cashMint mints through `cashctl cash mint` (MINT_CASHCTL, else cashctl on
+// PATH), the way a user would: the call is written ahead and the returned bill
+// checked by cashctl, from a wallet of the mint service's own under
+// MINT_STATE. The connection goes in CASHCTL_CASH_HUB, never argv.
+func cashMint(cashHub string, amountMillis uint64, to string, expiry time.Duration) cashMintResult {
+	amount := strconv.FormatUint(amountMillis/1000, 10)
+	if frac := amountMillis % 1000; frac != 0 {
+		amount = strings.TrimRight(fmt.Sprintf("%s.%03d", amount, frac), "0")
+	}
+	args := []string{"--config-dir", filepath.Join(envOr("MINT_STATE", defaultStateDir), "cashctl"),
+		"cash", "mint", amount, "--to", to, "--json"}
+	if expiry > 0 {
+		args = append(args, "--expiry", expiry.String())
+	}
+	cmd := exec.Command(envOr("MINT_CASHCTL", "cashctl"), args...)
+	cmd.Env = append(os.Environ(), "CASHCTL_CASH_HUB="+cashHub)
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	stdout, err := cmd.Output()
+	if err != nil {
+		fatalf("token: cashctl cash mint: %v: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	var res cashMintResult
+	must(json.Unmarshal(stdout, &res))
+	if res.CashToken == "" {
+		fatalf("token: cashctl cash mint answered no cash_token: %s", stdout)
+	}
+	return res
 }

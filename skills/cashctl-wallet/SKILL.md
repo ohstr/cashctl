@@ -41,9 +41,11 @@ register one afterward with `cashctl connect add` instead.
 ```sh
 cashctl connect add work nostr+walletconnect://...
 cashctl connect add work - < work.uri     # "-" reads the connection from stdin, out of ps and shell history
+cashctl connect add circle:family wallet.json   # a circle wallet's backup file (join --backup-file); kind circle, shown by wallet_pubkey only
 cashctl connect list --json    # each connection carries "kind": circle (from join), nwc or cash_token
 cashctl wallet use work    # same as `cashctl connect use work`
 cashctl connect rm work
+cashctl connect rm circle:1 --force   # a circle wallet only with --force; prefer `cashctl wallet delete` (skills/cashctl-circle)
 ```
 
 `connect add`'s first-ever wallet is auto-set as default under `--json`
@@ -61,7 +63,7 @@ a `<token>#<secret>` bill (take it with `cashctl receive`) with
 ## `cashctl wallet show` / `history`
 
 ```sh
-cashctl wallet show --json     # {"npub", "identity_source", "wallets", "default_wallet", "held_tokens", "unfinished_cash_sends", "unclaimed_handoffs", "pending_joins"}; each held token carries its "cash_hub"
+cashctl wallet show --json     # {"npub", "identity_source", "wallets", "default_wallet", "held_tokens", "open_calls", "unclaimed_handoffs", "pending_joins"}; each held token carries its "cash_hub"
 cashctl wallet history --json  # {"history": [{"at","action","detail"}, ...], "handoffs": [{"id","at","kind","handoff","secret_hidden","amount_millis","target","status","checked_at"}, ...]}
 cashctl wallet history --show-secrets --json  # the same, unclaimed cash notes in full (secret-bearing)
 ```
@@ -77,11 +79,12 @@ and gifts, which stay `sent` because their claim can't be seen — branch on
 each entry's `status`. `wallet balance` shows the unclaimed cash notes as
 `outstanding_cash_notes`, outside the total.
 
-`unfinished_cash_sends` is normally `[]`. Each entry
-(`{"token_id", "cash_secret"}`) is an interrupted `--to cash` send that may
-have created a bill: `cash_secret` is the only copy of its secret, so keep
-it. The bill's token itself comes only from the Hub; check
-`wallet history` before assuming the send failed.
+`open_calls` is normally `[]`. Each entry is a transfer, merge or re-key
+whose answer never came (`{"call", "method", "purpose", "state",
+"deadline", "token_ids", "amount_millis", "device", "secrets"}`): it was
+written down before it was sent, its bills are not spent again until the
+Hub says what happened, and each `secrets[].secret` it generated may be the
+only copy of what spends a bill, so keep them.
 
 ## `cashctl wallet balance` — the unified figure
 
@@ -134,23 +137,29 @@ expired), `code: "conflict"` (rate-limited, retry), `code: "invalid_input"`
 ```sh
 cashctl decode lokicash1... --json      # {"type":"cash_token","hrp","wallet_pubkey","relays","identity_required",...}
 cashctl decode lokicash1...#deadbeef --json  # cash-mode combined presentation — adds "embedded_cash_secret_present":true
-cashctl decode circlehub1... --json     # {"type":"circlehub","hrp","wallet_pubkey","relays","label"}
+cashctl decode circlehub1... --json     # {"type":"circlehub","connection_pubkey","relays","label"?,"hub_identity","chain","signature","signature_reason"?,"warnings"} — never the secret
 cashctl decode nostr+walletconnect://... --json  # {"type":"nwc_uri","wallet_pubkey","relays"}
 cashctl decode npub1... --json          # {"type":"npub","pubkey"} — the hex form
 cashctl decode lokicash1... --check --json    # adds "check":{"ok","amount_millis"?,"expires_at"?,"spent"?,"error"?} — a network call
-cashctl decode circlehub1... --check --json   # adds "check":{"ok","note"?,"error"?,"private_join"?,"circle_policy"?} — is joining even possible here, and privately
+cashctl decode circlehub1... --check --json   # adds "check":{"ok","online_check","note"?,"error"?,"accepting"?,"private_join"?,"circle_policy"?,"network"?,"chain"?,"test_network"?} — does the Hub answer as the string names, and does it take joins now
 ```
 
 The one general-purpose local decoder: paste in whichever of the three
 connection/token shapes cashctl accepts elsewhere and it figures out which
 one it is (same sniffing `receive`/`join --hub`/`connect add` already use)
 and dumps its fields. No network call, nothing dialed or held by default —
-safe to run on anything before deciding what to do with it. A cash token's
-optional mint-provenance pair only appears (`mint_signature`,
-`attested_amount_millis`) when the token actually carries one. A **Cash
-Hub** connection (`cashhub1...`) gets a specific corrective error instead
-of a decode — cashctl has no mint capability and there's no local decoder
-for that format. An `npub1...` decodes to its hex `pubkey`. **The pairing secret is never included in the output,
+safe to run on anything before deciding what to do with it. A cash token
+reports its mint signature: `signature_scheme` (`mint_v1`, `zap_v1`,
+`malformed` or `none`), `provenance` (`valid`, `invalid`, `needs_zap_event`
+or `none`) and, for a signed bill, `relay_hash` and `minter_pubkey`. A
+`valid` signature covers this copy's relays and secret; cashctl never
+contacts the relays of a bill that isn't `valid` (`receive` refuses it,
+`invalid_input`) — and a valid signature still isn't a trusted mint: anyone
+can sign a bill. A **Cash Hub** connection (`cashhub1...`) decodes to
+`hub_identity`, `chain`, `relays`, `label` and `signature` (`verified` or
+`unverified` with `signature_reason`), never its secret: it can mint bills,
+so keep it private; `--check` runs its online check. An `npub1...` decodes
+to its hex `pubkey`. **The pairing secret is never included in the output,
 for any of the three shapes** — this is inspection only, never a way to
 extract a working spending/dialing credential. A cash-mode cash token
 MAY arrive as `<token>#<cash_secret>` (NIP-CASH's combined

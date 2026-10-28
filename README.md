@@ -16,6 +16,11 @@ and [Circle wallets](https://github.com/ohstr/nips/blob/main/NIP-CW.md).**
 - [`cashctl redeem`](#cashctl-redeem) — Redeem a held cash token into a Lightning wallet
 - [`cashctl consolidate`](#cashctl-consolidate) — Merge several held cash tokens into one
 - [`cashctl cash status`](#cashctl-cash-status) — Check your allocation of a held token, and with `--all` its co-recipients (network)
+- [`cashctl cash mint`](#cashctl-cash-mint) — Mint a bill over a Cash Hub connection you hold
+- [`cashctl cash order`](#cashctl-cash-order) — Buy cash over an Order connection
+- [`cashctl cash withdraw`](#cashctl-cash-withdraw) — Pay a bill out on-chain, after confirming its quote
+- [`cashctl cash discover`](#cashctl-cash-discover) — Find order links and circles others list (ads, checked when you open one)
+- [`cashctl cash settle`](#cashctl-cash-settle) — Finish transfers, merges and re-keys whose answer never came
 - [`cashctl join`](#cashctl-join) — Join a circle to get a personal Lightning wallet
 - [`cashctl init`](#cashctl-init) — Set up your identity and, optionally, a wallet
 - [`cashctl wallet show/history/use`](#cashctl-wallet-show) — Show your identity, registered wallets, and local action history
@@ -25,7 +30,7 @@ and [Circle wallets](https://github.com/ohstr/nips/blob/main/NIP-CW.md).**
 - [`cashctl connect add/list/use/rm`](#cashctl-connect-addlistuserm) — Register an NWC connection: a plain Lightning wallet you already have
 - [`cashctl version`](#cashctl-version) — Print the cashctl version
 
-`cashctl` mints nothing itself — minting is the Cash Hub operator's own tooling.
+`cashctl cash mint` mints only over a Cash Hub connection the Hub's operator gave you.
 
 ## Installation
 
@@ -154,6 +159,20 @@ under a fresh secret (defaults to yes; always proceeds under
 issuer. A failure here doesn't fail the receive — retry later with
 `cashctl consolidate --to cash`.
 
+### Cash Zaps
+
+A Cash Zap (a kind-9522 event) carries a bill signed for that zap. `decode`
+shows its checks; `receive` takes it, asking before it contacts a minter you
+don't trust yet, and keeps the bill only once its Hub confirms your slice.
+
+```sh
+cashctl decode zap.json --target note.json   # rules 1-8, countable or not
+cashctl receive zap.json                      # or: receive <bill> --zap-event zap.json
+cashctl receive <bill> --find-zap --relay wss://relay.example
+cashctl receive zap.json --as connection-key:<privkey>,discord,<id>,<attestation>   # a zap to a connection key
+cashctl cash minters add <minter> --chain flokicoin                              # trust a minter's zaps
+```
+
 ## `cashctl redeem`
 
 Redeem a held cash token into a Lightning wallet.
@@ -220,12 +239,78 @@ cashctl cash status                        # your allocation of a held token
 cashctl cash status --all                  # plus every co-recipient
 ```
 
+## `cashctl cash mint`
+
+Mints a bill over a Cash Hub connection you hold (a `cashhub1...` string,
+from `--hub`, stdin with `--hub -`, or `$CASHCTL_CASH_HUB`). The Hub must
+answer as the identity and chain the string names before anything is sent.
+
+```sh
+CASHCTL_CASH_HUB=cashhub1... cashctl cash mint 100            # a cash note to hand out
+cashctl cash mint 100 --hub - --to npub1... < hub.txt          # a bill for someone
+```
+
+A mint whose reply is lost is finished by `cash settle`; one the Hub never
+saw is minted again only with `cash settle --replace <call>`.
+
+## `cashctl cash order`
+
+Buys cash over an Order connection (a `cashorder1...` string): `place` shows
+the terms and returns an invoice (or, with `--onchain`, an address) to pay;
+`watch` or `show` then collects the bill.
+
+```sh
+cashctl cash order place cashorder1... 100
+cashctl cash order watch <order>
+```
+
+## `cashctl cash discover`
+
+Finds order links and circles that others list on Nostr relays. Listings are
+ads, ranked by the curators you choose; `show` checks one with its Hub, and
+`open` orders from it or joins it.
+
+```sh
+cashctl cash discover relays add wss://relay.example
+cashctl cash discover list
+cashctl cash discover show of-1a2b3c4d5e
+cashctl cash discover open of-1a2b3c4d5e 100
+```
+
+## `cashctl cash withdraw`
+
+Pays a whole bill out to an on-chain address. `quote` shows exactly what the
+recipient gets and moves nothing; `send` sends only after you type `yes` to
+that quote (or, from a script, `send --quote <wq-…> --yes`). `show` follows
+the payout until it is final; a payout the Hub cancels comes back as cash.
+
+```sh
+cashctl cash withdraw quote fc1q...
+cashctl cash withdraw send fc1q...          # shows the quote, asks for "yes"
+cashctl cash withdraw show
+```
+
+## `cashctl cash settle`
+
+Asks the Hubs about every transfer, merge or re-key whose answer never came,
+and finishes it: one that happened is recorded, one the Hub never saw is
+placed again (under a derived id, never twice), one it refused is closed.
+Nothing is ever resent under its own id. Every money command does this for
+what is due before it starts.
+
+```sh
+cashctl cash settle                 # ask once; exit 8 while something stays open
+cashctl cash settle --wait          # keep asking, up to 6 minutes
+cashctl cash settle --close <call>  # give up on one call (its new codes are printed)
+cashctl cash settle --replace <call> # mint again a mint the Hub never saw
+```
+
 ## `cashctl join`
 
 Join a circle to get a personal Lightning wallet.
 
 ```sh
-cashctl join <circlehub1... or NWC URI> 100
+cashctl join circlehub1... 100
 ```
 
 The self-service entry point into a circle. Give it a Circle Hub's
@@ -234,10 +319,12 @@ or via `--hub`/`--max-amount`. A cap is required — there's no "unlimited"
 option.
 
 `join` calls `create_circle_wallet` on your behalf and saves the resulting
-wallet. If it's your first wallet, it also becomes your default. When the
-Hub offers private join, the request goes over NIP-CASH's private transport,
-so the circle's other members don't see your pubkey on the shared connection;
-if that transport can't be used, `join` says it joined without it.
+wallet. If it's your first wallet, it also becomes your default. Every join
+goes over NIP-CASH's private transport, so the circle's other members don't
+see your pubkey; when the Hub's announcement can't be found, nothing is sent.
+Before anything is sent, the Hub must answer as the identity and chain its
+string names; a string whose signature can't be confirmed is used only after
+you agree once. A join whose reply is lost is finished by `cash settle`.
 
 ```sh
 cashctl join circlehub1... --max-amount 100 --budget-renewal monthly
@@ -245,12 +332,15 @@ cashctl join circlehub1... --max-amount 100 --budget-renewal monthly
 
 | Flag | Meaning |
 |---|---|
-| *(positional)*, or `--hub` | the Circle Hub connection (required) |
+| *(positional)*, or `--hub` | the Circle Hub's `circlehub1...` string (required) |
 | *(positional)*, or `--max-amount` | requested spend cap, in loki (required) |
 | `--expiry` | requested expiry duration (default: the Hub's own) |
 | `--budget-renewal` | `daily`\|`weekly`\|`monthly`\|`yearly`\|`never` (default: the Hub's own) |
 | `--as` | override credential (defaults to your local identity) |
-| `--private` | `prefer` (default) or `require`: refuse rather than join over the shared connection |
+| `--max-receive` | requested receive cap, in loki (required unless the Hub sets a default) |
+| `--allow-unverified` | use a string whose signature can't be confirmed (asked once otherwise) |
+| `--backup-file` | where to write the new wallet's connection when the Hub can't rotate a lost one |
+| `--accept-no-rotation` | join a Hub that can't rotate a lost connection without a backup (required under `--json`/`--yes` when there is no `--backup-file`) |
 
 `join` is a top-level shortcut for `cashctl circle join`.
 
@@ -347,6 +437,7 @@ one handed to you from another device:
 
 ```sh
 cashctl connect add work nostr+walletconnect://...
+cashctl connect add circle:family wallet.json   # a circle wallet's backup (join --backup-file)
 cashctl connect list
 cashctl connect use work
 cashctl connect rm work
@@ -386,7 +477,9 @@ State lives under `$XDG_CONFIG_HOME/cashctl` (or `~/.config/cashctl` on
 Linux/macOS) in a single SQLite database, `cashctl.db` (0600 — it can hold
 a plaintext identity key and cash-mode spending secrets). Override the
 location with `--config-dir`. Set `NO_COLOR` to disable ANSI color on
-stderr.
+stderr. `--pow-max <bits>` caps the proof of work cashctl does when a Hub's
+relays ask for it (default difficulty 28; also `CASHCTL_POW_MAX`, or
+`cashctl config set pow_max_difficulty <bits>`); above it, nothing is sent.
 
 **Breaking, if you used a pre-release build**: `cashctl.db` replaces the
 three flat JSON files (`identity.json`, `connections.json`, `ledger.json`)

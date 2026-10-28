@@ -1,5 +1,148 @@
 # Changelog
 
+## [0.7.0-rc.1]
+
+- Adds the `reclaimed` and `expired` holding statuses, so a removed slice
+  (`NOT_FOUND` for your own key or cash secret, or a `reclaimed` tombstone) and
+  an expired bill leave the balance instead of staying held or showing `spent`.
+  Scripts reading `status` must accept both; their errors are `spent` with the
+  state as `reason`. ([#147](https://github.com/ohstr/cashctl/pull/147))
+- Fixes a withdrawal whose reply was lost waiting for the user
+  (`quote_unchecked`) instead of being re-placed automatically while its quote
+  holds, as NIP-CP §Lookups allows a wallet with no chain view. ([#147](https://github.com/ohstr/cashctl/pull/147))
+- Refuses to quote or withdraw a bill still on a merge's throwaway key
+  (`mid_merge`); `cash settle` now turns merge leftovers back into cash notes,
+  as every money command does. See `docs/client-rules.md`. ([#147](https://github.com/ohstr/cashctl/pull/147))
+- Says when a cancelled payout's re-minted bill is already gone
+  (`remint_gone`, with the Hub's reason), instead of closing it silently. ([#147](https://github.com/ohstr/cashctl/pull/147))
+- Refuses an `--invoice` redeem of a connection-key bill whose own row its Hub
+  won't show (`status_unreadable`), so it can no longer stay `redeeming` for
+  ever. ([#147](https://github.com/ohstr/cashctl/pull/147))
+- Settles every coded withdrawal refusal in the same run, not only a refused
+  quote, and follows another copy's withdrawal named in answer to a
+  re-placement. ([#147](https://github.com/ohstr/cashctl/pull/147))
+- Fixes a consolidate tombstone marking the wrong bill spent when the first
+  candidate could not be dialled or the first source was not held here. ([#147](https://github.com/ohstr/cashctl/pull/147))
+- Ends an order `not_placed` when its call closes without placing, writes a
+  forgotten closed order and a recovered withdrawal in one save, and looks a
+  closed on-chain order up at most hourly. ([#147](https://github.com/ohstr/cashctl/pull/147))
+- Adds `circle request rotate|freeze|unfreeze`: a member request signed by the
+  key that joined, for the circle's host to submit. A rotate's new key is
+  written down before the request is printed, `cash settle` installs it once
+  the rotation completes, and using the wallet while it is open asks first. ([#147](https://github.com/ohstr/cashctl/pull/147))
+- Adds `wallet delete` for your own circle wallet at or below its dust
+  threshold, written down before it is sent; `connect rm` now refuses a
+  circle wallet without `--force`. `FROZEN` is `auth` and `ROTATION_PENDING`
+  a final `conflict`. ([#147](https://github.com/ohstr/cashctl/pull/147))
+- Adds a wait to `transfer`, `consolidate` and `wallet protect` when the Hub
+  gives no clear answer: they look the call up after its deadline (at most 62
+  s) and finish it, or exit with the refusal's own code; `--no-wait` exits 8 at
+  once. ([#147](https://github.com/ohstr/cashctl/pull/147))
+- Adds a `redeeming` state for a redeem whose payment may still settle (answered
+  `INTERNAL`, omitted or timed out with the bill still claimed): it is never
+  resent, counts in no balance, is refused by every other command
+  (`redeem_in_flight`), and `cash status` and `cash settle` read it again until
+  it ends. ([#147](https://github.com/ohstr/cashctl/pull/147))
+- Adds a second try for a join whose lookups all go unanswered: `cash settle`
+  asks once over another `circlehub1` held for the same circle, then shows the
+  join as `lookup_unanswered`.
+  ([#141](https://github.com/ohstr/cashctl/pull/141))
+- Adds circle wallet backups to `connect add`: the file `join --backup-file`
+  writes registers the wallet again, shown by its `wallet_pubkey` only.
+  ([#141](https://github.com/ohstr/cashctl/pull/141))
+- Adds claiming a Cash Zap to a connection key (`receive --as
+  connection-key:…`), reading your Cash Zap Info for trusted minters, a wider
+  `--find-zap`, and `cash minters` to manage the minters you trust.
+  ([#142](https://github.com/ohstr/cashctl/pull/142))
+- Adds `--pow-max` and `cashctl config set pow_max_difficulty`, beside
+  `CASHCTL_POW_MAX`, to cap proof of work. `cash order watch` now reads an
+  order when its notices arrive, and an order's invoice is checked locally
+  (amount, expiry, chain) before it is shown to pay.
+  ([#145](https://github.com/ohstr/cashctl/pull/145))
+- Adds `cash withdraw watch`, `show --tx` and `--receipt`, re-quoting when a
+  quote expires or the prompt stays open, recovery of a withdrawal this device
+  has no record of, and `decode` of withdraw quotes, receipts, payouts and
+  on-chain addresses; a final withdrawal keeps no address, quote or secret.
+  ([#146](https://github.com/ohstr/cashctl/pull/146))
+- Adds `cash discover recommend`, `report`, `publish-due`, `operator` and
+  `curators publish|pull`, and verifies a listing's operator; recommendations
+  and reports are published after a random delay. `cash discover list
+  --offline` reads only the events it cached.
+  ([#144](https://github.com/ohstr/cashctl/pull/144))
+- Adds `cash discover list|show|open|relays|curators`, which finds order links
+  and circles listed on Nostr relays, checks one with its Hub when you show it,
+  and orders from it or joins it.
+  ([#138](https://github.com/ohstr/cashctl/pull/138))
+- Adds `cash withdraw quote|send|show|cancel|settle`, which pays a bill out
+  on-chain after the user confirms the exact quote, then follows the payout; a
+  payout the Hub cancels comes back as a new bill.
+  ([#137](https://github.com/ohstr/cashctl/pull/137))
+- Adds `cash order place|show|watch|settle`, which buys cash over a
+  `cashorder1` Order connection and collects the bills once paid; `decode`
+  reads a `cashorder1` string.
+  ([#136](https://github.com/ohstr/cashctl/pull/136))
+- Adds Cash Zaps: `decode` shows a kind-9522 zap's checks, and `receive` takes
+  one (or a zap bill with `--zap-event` or `--find-zap`) once its Hub confirms
+  your slice, asking first about a minter you don't trust.
+  ([#135](https://github.com/ohstr/cashctl/pull/135))
+- Adds proof of work for Hubs whose relays ask for it, capped by
+  `CASHCTL_POW_MAX` (default 28); above the cap nothing is sent.
+  ([#134](https://github.com/ohstr/cashctl/pull/134))
+- Adds `cash mint`, which mints a bill over a `cashhub1` connection after the
+  online check; a mint whose reply is lost is finished by `cash settle`, and one
+  the Hub never saw is minted again only with `cash settle --replace`.
+  ([#133](https://github.com/ohstr/cashctl/pull/133))
+- Changes `join` to take only a `circlehub1` string, check that the Hub answers
+  as the identity and chain it names, and go over the private transport every
+  time; `--private` is removed. A string whose signature doesn't verify is used
+  only after you confirm it once (or `--allow-unverified`).
+  ([#132](https://github.com/ohstr/cashctl/pull/132))
+- Adds `--max-receive` and `--backup-file` to `join`, and writes every join
+  down before it is sent; a join whose reply is lost is looked up, and `cash
+  settle` finishes it. A circle wallet is stored as its fields, never a URI.
+  ([#132](https://github.com/ohstr/cashctl/pull/132))
+- Adds a `reason` to `--json` errors, naming the cause within `code`.
+  ([#132](https://github.com/ohstr/cashctl/pull/132))
+- Adds `cash settle` (also `settle`), which asks the Hubs about calls whose
+  answer never came and finishes them; every money command does this first. A
+  call the Hub never saw is placed again under a derived id, never twice.
+  ([#131](https://github.com/ohstr/cashctl/pull/131))
+- Changes transfers, merges and protects to be written down with their request
+  id, deadline and every new secret before they are sent; one that gets no
+  clear answer stays open, and its bills are not spent again until the Hub says
+  what happened. `wallet show` lists open calls and their new codes.
+  ([#130](https://github.com/ohstr/cashctl/pull/130))
+- Changes a partial split of a cash note to give the remainder a fresh secret of
+  its own.
+  ([#130](https://github.com/ohstr/cashctl/pull/130))
+- Changes the local database to a new format. A `cashctl.db` from an earlier
+  version is refused, naming the file to move aside; nothing in it is read.
+  ([#129](https://github.com/ohstr/cashctl/pull/129))
+- Changes `connect add` to refuse a cash bill: a bill is never a wallet.
+  ([#129](https://github.com/ohstr/cashctl/pull/129))
+- Changes the cached wallet balance in `--json` to `last_known_balance_millis`.
+  ([#129](https://github.com/ohstr/cashctl/pull/129))
+- Changes every command that contacts a bill to check its mint signature first:
+  a bill whose signature does not cover its own relays and secret, or that has
+  none, is refused before any relay is contacted.
+  ([#128](https://github.com/ohstr/cashctl/pull/128))
+- Adds `signature_scheme`, `provenance` and `relay_hash` to `decode`, and decodes
+  a `cashhub1` connection with its signature verdict and `--check` online check.
+  ([#128](https://github.com/ohstr/cashctl/pull/128))
+- Fixes a batched redeem whose Hub reply contradicts itself, or whose result
+  can't be read, being reported as an ordinary failure; it is now
+  `indeterminate`, never resent, and the other bills keep their outcomes.
+  ([#127](https://github.com/ohstr/cashctl/pull/127))
+- Fixes protecting a holding twice when the first answer was lost, which could
+  overwrite the only secret that spends it. `wallet protect` now settles the
+  first protect with the Hub, refuses while it can't tell, and `wallet show`
+  lists the new code meanwhile.
+  ([#124](https://github.com/ohstr/cashctl/pull/124))
+- Fixes a bill lost when a protect or merge moved it on the Hub but saving that
+  locally failed; cashctl now prints its `<token>#<secret>` to keep.
+  ([#124](https://github.com/ohstr/cashctl/pull/124))
+- Updates `nmilat` to v0.5.0-rc.44 and builds with Go 1.26.10. ([#147](https://github.com/ohstr/cashctl/pull/147))
+
 ## [0.6.0-rc.17]
 
 Refuses a Hub that raises a bill's redeem fee after you received it, and keeps

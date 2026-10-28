@@ -14,9 +14,9 @@ import (
 	"github.com/ohstr/cashctl/internal/store"
 )
 
-// Connection is one named wallet/hub connection cashctl knows about — either
-// a raw nostr+walletconnect:// URI, or a bech32 string
-// (cashhub1.../circlehub1.../lokicash1...) — stored exactly as given.
+// Connection is one named wallet cashctl knows about: an outside NIP-47 wallet
+// (KindNWC, its nostr+walletconnect:// URI) or a circle wallet `join` made
+// (KindCircle). A bill is never a wallet, so a cash token is not one of them.
 // JSON tags matter here even though this is no longer the on-disk shape:
 // `connect list`/`wallet show` embed []Connection directly into their
 // --json output (cmd/connect.go, cmd/wallet.go) — the --json contract
@@ -35,11 +35,14 @@ type Connection struct {
 	// this makes --json match that, not introduce a new restriction.
 	Value   string `json:"-"`
 	AddedAt string `json:"added_at"`
-	// Kind is what the connection is: KindCircle (made by `join`), KindNWC or
-	// KindCashToken (registered with `connect add`).
+	// Kind is what the connection is: KindCircle (made by `join`) or KindNWC
+	// (registered with `connect add`).
 	Kind string `json:"kind"`
+	// WalletPubkey is a circle wallet's wallet_pubkey, the only part of its
+	// stored fields ever shown.
+	WalletPubkey string `json:"wallet_pubkey,omitempty"`
 
-	// LastKnownBalanceMloki/LastKnownBalanceAt cache the most recent
+	// LastKnownBalanceMillis/LastKnownBalanceAt cache the most recent
 	// successful live get_balance result — the only way to show a figure
 	// for an expired wallet at all, since get_balance itself is one of the
 	// money-moving scopes an expired wallet rejects (only get_info/
@@ -47,8 +50,8 @@ type Connection struct {
 	// flagged as stranded, when a live call fails with a decline the Hub
 	// means permanently (EXPIRED, RESTRICTED, UNAUTHORIZED) — see
 	// strandedBalanceFallback in cmd/wallet_balance.go.
-	LastKnownBalanceMloki *int64 `json:"last_known_balance_mloki,omitempty"`
-	LastKnownBalanceAt    string `json:"last_known_balance_at,omitempty"`
+	LastKnownBalanceMillis *int64 `json:"last_known_balance_millis,omitempty"`
+	LastKnownBalanceAt     string `json:"last_known_balance_at,omitempty"`
 }
 
 // Store is the in-memory shape of cashctl.db's connections table, loaded
@@ -67,15 +70,18 @@ type Store struct {
 	loaded        map[string]Connection
 	loadedDefault string
 
-	// answeredJoins are pending joins (see PendingJoin) Save removes in the
-	// same transaction that registers their wallet.
-	answeredJoins []string
+	// answeredJoins are joins (see Join) Save marks done in the same
+	// transaction that registers their wallet, by connection pubkey.
+	answeredJoins []answeredJoin
 }
 
-// AnsweredJoin marks the pending join with this connection pubkey for
-// removal by the next Save, alongside the wallet it produced.
-func (s *Store) AnsweredJoin(connectionPubkey string) {
-	s.answeredJoins = append(s.answeredJoins, connectionPubkey)
+type answeredJoin struct{ connectionPubkey, walletName string }
+
+// AnsweredJoin marks the join with this connection pubkey done by the next
+// Save, alongside the wallet (walletName) it produced; its secret then lives
+// only in that wallet.
+func (s *Store) AnsweredJoin(connectionPubkey, walletName string) {
+	s.answeredJoins = append(s.answeredJoins, answeredJoin{connectionPubkey, walletName})
 }
 
 // snapshot records s's current contents as the baseline the next Save
@@ -85,9 +91,9 @@ func (s *Store) AnsweredJoin(connectionPubkey string) {
 func (s *Store) snapshot() {
 	s.loaded = make(map[string]Connection, len(s.Connections))
 	for _, c := range s.Connections {
-		if c.LastKnownBalanceMloki != nil {
-			v := *c.LastKnownBalanceMloki
-			c.LastKnownBalanceMloki = &v
+		if c.LastKnownBalanceMillis != nil {
+			v := *c.LastKnownBalanceMillis
+			c.LastKnownBalanceMillis = &v
 		}
 		s.loaded[c.Name] = c
 	}
@@ -96,19 +102,9 @@ func (s *Store) snapshot() {
 
 // Connection kinds.
 const (
-	KindCircle    = "circle"
-	KindNWC       = "nwc"
-	KindCashToken = "cash_token"
+	KindCircle = "circle"
+	KindNWC    = "nwc"
 )
-
-// inferKind is a row saved before Kind existed: `join` always named its wallet
-// circle:<label>, so that prefix is the one thing that says it was a join.
-func inferKind(name string) string {
-	if strings.HasPrefix(name, "circle:") {
-		return KindCircle
-	}
-	return KindNWC
-}
 
 // SetKind records what the named connection is.
 func (s *Store) SetKind(name, kind string) {
@@ -121,12 +117,12 @@ func (s *Store) SetKind(name, kind string) {
 }
 
 // connectionsEqual reports whether a and b hold the same data — a plain ==
-// would compare LastKnownBalanceMloki by pointer identity.
+// would compare LastKnownBalanceMillis by pointer identity.
 func connectionsEqual(a, b Connection) bool {
-	if (a.LastKnownBalanceMloki == nil) != (b.LastKnownBalanceMloki == nil) {
+	if (a.LastKnownBalanceMillis == nil) != (b.LastKnownBalanceMillis == nil) {
 		return false
 	}
-	if a.LastKnownBalanceMloki != nil && *a.LastKnownBalanceMloki != *b.LastKnownBalanceMloki {
+	if a.LastKnownBalanceMillis != nil && *a.LastKnownBalanceMillis != *b.LastKnownBalanceMillis {
 		return false
 	}
 	return a.Name == b.Name && a.Value == b.Value && a.AddedAt == b.AddedAt &&
@@ -147,7 +143,7 @@ func Load() (*Store, error) {
 	// added_at only has 1-second precision, so two connections added in
 	// the same second would otherwise sort by name instead of reliably
 	// preserving insertion order.
-	rows, err := db.Query(`SELECT name, value, added_at, last_known_balance_mloki, last_known_balance_at, is_default, kind
+	rows, err := db.Query(`SELECT name, value, added_at, last_known_balance_millis, last_known_balance_at, is_default, kind
 		FROM connections ORDER BY rowid`)
 	if err != nil {
 		return nil, fmt.Errorf("cashctl.db: reading connections: %w", err)
@@ -160,18 +156,18 @@ func Load() (*Store, error) {
 		var lastKnownBalance sql.NullInt64
 		var lastKnownBalanceAt sql.NullString
 		var isDefault bool
-		var kind sql.NullString
-		if err := rows.Scan(&c.Name, &c.Value, &c.AddedAt, &lastKnownBalance, &lastKnownBalanceAt, &isDefault, &kind); err != nil {
+		var value sql.NullString
+		if err := rows.Scan(&c.Name, &value, &c.AddedAt, &lastKnownBalance, &lastKnownBalanceAt, &isDefault, &c.Kind); err != nil {
 			return nil, fmt.Errorf("cashctl.db: reading connections: %w", err)
 		}
 		if lastKnownBalance.Valid {
 			v := lastKnownBalance.Int64
-			c.LastKnownBalanceMloki = &v
+			c.LastKnownBalanceMillis = &v
 		}
 		c.LastKnownBalanceAt = lastKnownBalanceAt.String
-		c.Kind = kind.String
-		if c.Kind == "" {
-			c.Kind = inferKind(c.Name)
+		c.Value = value.String
+		if w, ok, _ := ParseCircleWallet(c.Value); ok {
+			c.WalletPubkey = w.WalletPubkey
 		}
 		if isDefault {
 			s.Default = c.Name
@@ -230,13 +226,13 @@ func (s *Store) save() error {
 			continue
 		}
 		var lastKnownBalance sql.NullInt64
-		if c.LastKnownBalanceMloki != nil {
-			lastKnownBalance = sql.NullInt64{Int64: *c.LastKnownBalanceMloki, Valid: true}
+		if c.LastKnownBalanceMillis != nil {
+			lastKnownBalance = sql.NullInt64{Int64: *c.LastKnownBalanceMillis, Valid: true}
 		}
 		if !existed {
-			if _, err := tx.Exec(`INSERT INTO connections (name, value, added_at, last_known_balance_mloki, last_known_balance_at, is_default, kind)
+			if _, err := tx.Exec(`INSERT INTO connections (name, value, added_at, last_known_balance_millis, last_known_balance_at, is_default, kind)
 				VALUES (?, ?, ?, ?, ?, 0, ?)`,
-				c.Name, c.Value, c.AddedAt, lastKnownBalance, c.LastKnownBalanceAt, nullIfEmpty(c.Kind)); err != nil {
+				c.Name, c.Value, c.AddedAt, lastKnownBalance, c.LastKnownBalanceAt, c.Kind); err != nil {
 				if store.IsUniqueViolation(err) {
 					return ErrDuplicateName
 				}
@@ -244,9 +240,9 @@ func (s *Store) save() error {
 			}
 			continue
 		}
-		if _, err := tx.Exec(`UPDATE connections SET value = ?, added_at = ?, last_known_balance_mloki = ?, last_known_balance_at = ?, kind = ?
+		if _, err := tx.Exec(`UPDATE connections SET value = ?, added_at = ?, last_known_balance_millis = ?, last_known_balance_at = ?, kind = ?
 			WHERE name = ?`,
-			c.Value, c.AddedAt, lastKnownBalance, c.LastKnownBalanceAt, nullIfEmpty(c.Kind), c.Name); err != nil {
+			c.Value, c.AddedAt, lastKnownBalance, c.LastKnownBalanceAt, c.Kind, c.Name); err != nil {
 			return fmt.Errorf("cashctl.db: saving connection %s: %w", c.Name, err)
 		}
 	}
@@ -258,9 +254,10 @@ func (s *Store) save() error {
 			return fmt.Errorf("cashctl.db: removing connection %s: %w", name, err)
 		}
 	}
-	for _, pub := range s.answeredJoins {
-		if _, err := tx.Exec(`DELETE FROM pending_joins WHERE connection_pubkey = ?`, pub); err != nil {
-			return fmt.Errorf("cashctl.db: removing a pending join: %w", err)
+	for _, a := range s.answeredJoins {
+		if _, err := tx.Exec(`UPDATE joins SET state = 'done', connection_secret = '', wallet_name = ?, detail = NULL,
+			updated_at = strftime('%s','now') WHERE connection_pubkey = ?`, a.walletName, a.connectionPubkey); err != nil {
+			return fmt.Errorf("cashctl.db: closing a join: %w", err)
 		}
 	}
 	if s.Default != s.loadedDefault {
@@ -289,7 +286,8 @@ func (s *Store) Find(name string) (*Connection, bool) {
 // ErrDuplicateName is returned by Add when name is already taken.
 var ErrDuplicateName = errors.New("a connection with that name already exists")
 
-// Add records a new connection under name. Does not touch Default — see
+// Add records a new outside wallet (KindNWC) under name; SetKind marks a
+// circle wallet. Does not touch Default — see
 // SetDefault and cashctl-plan.md's "registering a new wallet never silently
 // changes the default" rule; callers decide separately whether to also
 // call SetDefault (e.g. after prompting the user, or automatically for the
@@ -298,7 +296,11 @@ func (s *Store) Add(name, value string) error {
 	if _, ok := s.Find(name); ok {
 		return ErrDuplicateName
 	}
-	s.Connections = append(s.Connections, Connection{Name: name, Value: value, AddedAt: nowRFC3339()})
+	c := Connection{Name: name, Value: value, AddedAt: nowRFC3339(), Kind: KindNWC}
+	if w, ok, _ := ParseCircleWallet(value); ok {
+		c.WalletPubkey = w.WalletPubkey
+	}
+	s.Connections = append(s.Connections, c)
 	return nil
 }
 
@@ -337,9 +339,9 @@ func (s *Store) SetDefault(name string) error {
 
 // SetLastKnownBalance caches a successful live get_balance result against
 // the named connection (see Connection's own doc comment).
-func (s *Store) SetLastKnownBalance(name string, mloki int64) {
+func (s *Store) SetLastKnownBalance(name string, millis int64) {
 	if c, ok := s.Find(name); ok {
-		c.LastKnownBalanceMloki = &mloki
+		c.LastKnownBalanceMillis = &millis
 		c.LastKnownBalanceAt = nowRFC3339()
 	}
 }
@@ -400,8 +402,4 @@ func (s *Store) SuggestName(prefix, hint string) string {
 			return candidate
 		}
 	}
-}
-
-func nullIfEmpty(s string) sql.NullString {
-	return sql.NullString{String: s, Valid: s != ""}
 }

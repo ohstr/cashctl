@@ -48,6 +48,7 @@ note: a <token>#<secret> string to hand anyone.
 	cmd.Flags().String("amount", "", fmt.Sprintf("how much to send, in %s — omitted sends the whole held token", output.CurrencyUnit))
 	cmd.Flags().String("as", "", "override credential")
 	cmd.Flags().String("ia", "", "Identity Authority to trust (hex pubkey or name@domain) for an nconnection1... target that doesn't specify one")
+	cmd.Flags().Bool("no-wait", false, "exit 8 at once when the Hub gives no clear answer, instead of waiting (up to 62 s) to look the call up")
 	return cmd
 }
 
@@ -230,12 +231,12 @@ func fetchExpiresAtWithCredential(cmd *cobra.Command, token string, cred nipcash
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	client, err := nipcashclient.Connect(ctx, token)
+	client, err := dialBill(ctx, token)
 	if err != nil {
 		return nil
 	}
 	defer client.Close()
-	result, err := client.CheckClaim(ctx, cred, tok, matchPubHex)
+	result, err := client.CheckClaim(ctx, cred, tok)
 	return expiresAtFromCheck(result, err)
 }
 
@@ -259,7 +260,11 @@ func expiresAtFromCheck(result *nipcash.CheckClaimResult, err error) *int64 {
 		}
 		return nil
 	}
-	return result.ExpiresAt
+	if !result.Claimable && result.Reason == "expired" {
+		passed := time.Now().Unix() - 1
+		return &passed
+	}
+	return expiryPtr(result.Row.ExpiresAt)
 }
 
 // earliestExpiry returns whichever of a/b expires soonest — nil (never
@@ -477,7 +482,10 @@ func transferWithAutoConsolidate(cmd *cobra.Command, l *ledger.Ledger, group []l
 	}
 	err = mergeThenSend(cmd, l, tokens, sources, sourceIDs, sum, sendAmount, throwawayPriv, interimPub, toValue, target)
 	if err != nil && len(movedIDs) > 0 && output.AsCLIError(err).Code != output.CodeIndeterminate {
-		undoMoves(cmd, l, movedIDs) // only bills still held: never ones a landed merge consumed
+		// only bills still held: never ones a landed merge consumed
+		if uErr := undoMoves(cmd, l, movedIDs); uErr != nil {
+			err = withRecovery(err, uErr)
+		}
 	}
 	if err != nil && isCrossHubDeclineClassified(err) {
 		// The sources turned out to live under different Cash Hubs. cashctl cannot
@@ -535,8 +543,13 @@ func isCrossHubSourcesDecline(err error) bool {
 // the remainder entry, if any, is saved with — cash_transfer leaves a
 // split's remainder under the SAME identity the source had, so it has to
 // be spendable the same way the source was.
-func printAndSaveTransferResult(cmd *cobra.Command, l *ledger.Ledger, transferResult *nipcash.CashTransferResult, sentAmount uint64, toValue string, target credential.ResolvedTarget, consolidatedFrom []string, remainderMode ledger.Entry, originalToken string) error {
+//
+// call is the call that produced the result (nil for a merge that sent straight
+// to the recipient, whose call is closed already): it is closed here, in the
+// same Save as the entries and hand-off.
+func printAndSaveTransferResult(cmd *cobra.Command, l *ledger.Ledger, transferResult *nipcash.CashTransferResult, call *ledger.Call, sentAmount uint64, toValue string, target credential.ResolvedTarget, consolidatedFrom []string, remainderMode ledger.Entry, originalToken string) error {
 	jsonMode, _ := cmd.Flags().GetBool("json")
+	closeCall(l, call, ledger.CallDone, "")
 	l.AppendHistory("transfer", fmt.Sprintf("transferred %s %s", output.FormatAmount(int64(sentAmount)), historyTargetClause(toValue, target)))
 
 	var remainderEntry *ledger.Entry
@@ -544,6 +557,10 @@ func printAndSaveTransferResult(cmd *cobra.Command, l *ledger.Ledger, transferRe
 		remainder := remainderMode
 		remainder.Token = transferResult.RemainderWalletToken
 		remainder.WalletPubkey = transferResult.RemainderWalletPubkey
+		remainder.Verified, remainder.MinterPubkey = returnedBillCheck(remainder.Token, remainderMode.MinterPubkey)
+		if !remainder.Verified {
+			output.Notef(jsonMode, unverifiedReturnNote)
+		}
 		remainderEntry, _ = l.Add(remainder)
 		// Bounded before it is recorded, like every other Hub-supplied amount that
 		// reaches the ledger (validateQuotedAmounts, cash_receive.go). One figure past
@@ -582,7 +599,12 @@ func printAndSaveTransferResult(cmd *cobra.Command, l *ledger.Ledger, transferRe
 	// transfer is already done by this point regardless of whether l.Save
 	// succeeds, and this string is the only way that result is ever
 	// recoverable once the process exits.
-	recipientToken := transferResult.RecipientToken(originalToken)
+	recipientToken, rtErr := transferResult.RecipientToken(originalToken)
+	if rtErr != nil {
+		// A spin-off the Hub named without its token: the bill exists, but the
+		// reply cannot hand it over. Recorded as sent; the Hub still holds it.
+		recipientToken = ""
+	}
 
 	// For a cash-mode target there's no recipient identity — the recipient
 	// is whoever holds the combined token#secret string, so that's what
@@ -619,8 +641,11 @@ func printAndSaveTransferResult(cmd *cobra.Command, l *ledger.Ledger, transferRe
 	}
 	// Change left on a merge's throwaway key becomes a cash note like any other
 	// (I-26); if that cannot finish now, the next command retries it.
+	var remainderRecovery string
 	if remainderEntry != nil && remainderEntry.ThrowawayKey != "" {
-		toCashNotes(l, []string{remainderEntry.ID})
+		if _, unsaved := toCashNotes(cmd, l, []string{remainderEntry.ID}); len(unsaved) > 0 {
+			remainderRecovery = strings.Join(unsaved, " ")
+		}
 	}
 
 	if jsonMode {
@@ -650,9 +675,15 @@ func printAndSaveTransferResult(cmd *cobra.Command, l *ledger.Ledger, transferRe
 		if !isCash && recipientToken != "" {
 			out["recipient_token"] = recipientToken
 		}
+		// The remainder became a cash note on the Hub, but saving that failed:
+		// this string is the only way back to it.
+		if remainderRecovery != "" {
+			out["recovery"] = remainderRecovery
+		}
 		output.PrintJSON(out)
 		return nil
 	}
+	defer printRemainderRecovery(remainderRecovery)
 	// A remainder left over from a split is saved above regardless — never
 	// narrated here. Same reasoning as the pre-transfer confirm message:
 	// this is wallet mechanism, not something the user decided, and it's
@@ -817,7 +848,9 @@ func runCashTransfer(cmd *cobra.Command, args []string) error {
 		return output.RuntimeError(cmd, err)
 	}
 	// A merge interrupted before its move was confirmed is settled first (I-26).
-	settlePendingMoves(cmd, l)
+	if err := settleBeforeSpend(cmd, l); err != nil {
+		return err
+	}
 
 	tokenFlag, _ := cmd.Flags().GetString("token")
 	var entry *ledger.Entry
@@ -829,7 +862,7 @@ func runCashTransfer(cmd *cobra.Command, args []string) error {
 		// held: with nothing held at all, resolveHeldToken's own "receive
 		// one first" error below is the clearer message — cash selection
 		// would otherwise report a confusing "not enough funds: you hold 0."
-		plan, err := ledger.SelectForAmount(l.Held(), amountFlag)
+		plan, err := ledger.SelectForAmount(unlockedHeld(l), amountFlag)
 		if err != nil {
 			// Both error types' own Error() states their two amounts as
 			// bare unlabeled numbers (see FundsFragmentedError's own doc
@@ -875,17 +908,20 @@ func runCashTransfer(cmd *cobra.Command, args []string) error {
 		entry = e
 	}
 
+	if err := refuseLocked(cmd, l, []string{entry.ID}); err != nil {
+		return err
+	}
 	cred, err := resolveCredential(cmd, entry)
 	if err != nil {
 		return err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
 	var client *nipcashclient.Client
 	err = WithSpinner(jsonMode, "Connecting...", func() error {
-		c, cErr := nipcashclient.Connect(ctx, entry.Token)
+		c, cErr := dialBill(ctx, entry.Token)
 		if cErr != nil {
 			return cErr
 		}
@@ -893,7 +929,7 @@ func runCashTransfer(cmd *cobra.Command, args []string) error {
 		return nil
 	})
 	if err != nil {
-		return output.NetworkError(cmd, err)
+		return classifyCashTokenNWCErr(cmd, err)
 	}
 	defer client.Close()
 
@@ -945,44 +981,39 @@ func runCashTransfer(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	// After the confirm, immediately before the call: a declined confirm must
-	// not leave a secret for a bill that was never asked for, and the window
-	// this closes opens at the call itself. See parkDestinationCashSecret —
-	// for a `--to cash` gift this write is the only thing standing between a
-	// Ctrl-C during the spinner below and a funded, unspendable bill
-	// (D-CLI-1). A no-op for every other target kind.
-	parked, parkErr := parkDestinationCashSecret(l, []string{entry.ID}, target.Target)
-	if parkErr != nil {
-		return output.RuntimeError(cmd, parkErr)
-	}
-
-	var result *nipcash.CashTransferResult
-	err = WithSpinner(jsonMode, "Transferring...", func() error {
-		r, cErr := spendCashEntry(entry, cred, func(c nipcash.Credential) (*nipcash.CashTransferResult, error) {
-			return client.CashTransfer(ctx, nipcash.CashTransferParams{
-				Credential: c, To: target.Target, CurrentAmount: amount, SplitAmount: splitAmount,
-			})
-		})
-		if cErr != nil {
-			return cErr
+	// A partial split of a cash note gives the remainder a fresh secret of its
+	// own (remainder_commitment), never the source's, which the sender's past
+	// holders may know. Both secrets are written ahead with the call.
+	var remainderTarget *nipcash.CashTarget
+	if splitAmount != nil && *splitAmount < amount && isCashNote(entry) {
+		if remainderTarget, err = nipcash.NewCashTarget(); err != nil {
+			return output.RuntimeError(cmd, err)
 		}
-		result = r
-		return nil
+	}
+	purpose := purposeTransfer
+	if splitAmount != nil && *splitAmount < amount {
+		purpose = purposeSplit
+	}
+	kind, authPub, authSecret := authorizerOf(cmd, entry, cred)
+	spec := callSpec{Purpose: purpose, SourceEntryIDs: []string{entry.ID}, AuthorizerKind: kind,
+		AuthorizerPubkey: authPub, AuthorizerSecret: authSecret, TargetCredential: entry.Token}
+	entryID := entry.ID
+	var result *nipcash.CashTransferResult
+	var call *ledger.Call
+	err = WithSpinner(jsonMode, "Transferring...", func() error {
+		var cErr error
+		result, call, cErr = placeTransfer(ctx, cmd, l, client, spec, nipcash.CashTransferParams{
+			Credential: cred, To: target.Target, CurrentAmount: amount, SplitAmount: splitAmount,
+			RemainderTarget: remainderTarget,
+		})
+		return cErr
 	})
 	if err != nil {
-		classified := classifyCashSpendErr(cmd, err, "transfer", entry.ID)
-		parked.forgetIfNothingCreated(classified)
-		return classified
+		return err
 	}
+	entry, _ = l.Find(entryID)
 
 	_ = l.SetStatus(entry.ID, ledger.StatusTransferred)
-	// Cleared in memory only — printAndSaveTransferResult's own Save, below,
-	// is what persists it, together with the result it belongs to. If that
-	// Save fails the park stays on disk, which is correct: that is the one
-	// case where it is still the only copy of a secret for a bill the Hub
-	// really did create (reportUnsavedResult prints the handoff string, but
-	// only if this process lives long enough to print it).
-	parked.release()
 	// The remainder is a brand-new wallet the same Hub split off entry, so
 	// it inherits entry's verified minter (see sharedMinter) — without this
 	// a split remainder silently fell out of cash-selection's same-minter
@@ -990,7 +1021,11 @@ func runCashTransfer(cmd *cobra.Command, args []string) error {
 	// failed as "insufficient" despite the funds being right there.
 	remainderMode := credentialModeOf(*entry)
 	remainderMode.MinterPubkey = entry.MinterPubkey
-	return printAndSaveTransferResult(cmd, l, result, sentAmount, toValue, target, nil, remainderMode, entry.Token)
+	if remainderTarget != nil {
+		remainderMode.CashSecret = remainderTarget.Secret()
+		remainderMode.CashProtection = ledger.CashProtected
+	}
+	return printAndSaveTransferResult(cmd, l, result, call, sentAmount, toValue, target, nil, remainderMode, entry.Token)
 }
 
 // resolveLiveEntry re-resolves id against l itself and returns the result —
@@ -1012,4 +1047,13 @@ func resolveLiveEntry(l *ledger.Ledger, id string) (*ledger.Entry, error) {
 		return nil, fmt.Errorf("internal: cash-selected entry %q vanished from the ledger", id)
 	}
 	return e, nil
+}
+
+// printRemainderRecovery tells the holder about a remainder that became a cash
+// note on the Hub but could not be saved, on its own line so it can be copied.
+func printRemainderRecovery(recovery string) {
+	if recovery == "" {
+		return
+	}
+	output.Printf("Your remainder became a cash note, but saving it locally failed. Save this now, it will not be shown again:\n%s\n", recovery)
 }

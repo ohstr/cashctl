@@ -19,7 +19,7 @@ import (
 // refactor that doesn't touch cmd/ at all.
 func TestConnection_JSONFieldNames(t *testing.T) {
 	balance := int64(5000)
-	c := Connection{Name: "work", Value: "v", AddedAt: "t", LastKnownBalanceMloki: &balance, LastKnownBalanceAt: "u"}
+	c := Connection{Name: "work", Value: "v", AddedAt: "t", LastKnownBalanceMillis: &balance, LastKnownBalanceAt: "u"}
 	data, err := json.Marshal(c)
 	if err != nil {
 		t.Fatalf("json.Marshal() error = %v", err)
@@ -28,7 +28,7 @@ func TestConnection_JSONFieldNames(t *testing.T) {
 	if err := json.Unmarshal(data, &got); err != nil {
 		t.Fatalf("json.Unmarshal() error = %v", err)
 	}
-	for _, key := range []string{"name", "added_at", "last_known_balance_mloki", "last_known_balance_at"} {
+	for _, key := range []string{"name", "added_at", "last_known_balance_millis", "last_known_balance_at"} {
 		if _, ok := got[key]; !ok {
 			t.Errorf("marshaled Connection is missing snake_case key %q: %s", key, data)
 		}
@@ -132,8 +132,8 @@ func TestSaveAndLoad_LastKnownBalanceRoundTrip(t *testing.T) {
 	if !ok {
 		t.Fatal("Find(work) after reload = not found")
 	}
-	if work.LastKnownBalanceMloki == nil || *work.LastKnownBalanceMloki != 42_000 {
-		t.Errorf("LastKnownBalanceMloki = %v, want 42000", work.LastKnownBalanceMloki)
+	if work.LastKnownBalanceMillis == nil || *work.LastKnownBalanceMillis != 42_000 {
+		t.Errorf("LastKnownBalanceMillis = %v, want 42000", work.LastKnownBalanceMillis)
 	}
 	if work.LastKnownBalanceAt == "" {
 		t.Error("LastKnownBalanceAt is empty after reload, want the timestamp SetLastKnownBalance set")
@@ -143,8 +143,8 @@ func TestSaveAndLoad_LastKnownBalanceRoundTrip(t *testing.T) {
 	if !ok {
 		t.Fatal("Find(untouched) after reload = not found")
 	}
-	if untouched.LastKnownBalanceMloki != nil {
-		t.Errorf("LastKnownBalanceMloki = %v, want nil (never set) for a connection SetLastKnownBalance was never called on", *untouched.LastKnownBalanceMloki)
+	if untouched.LastKnownBalanceMillis != nil {
+		t.Errorf("LastKnownBalanceMillis = %v, want nil (never set) for a connection SetLastKnownBalance was never called on", *untouched.LastKnownBalanceMillis)
 	}
 	if untouched.LastKnownBalanceAt != "" {
 		t.Errorf("LastKnownBalanceAt = %q, want empty for a connection SetLastKnownBalance was never called on", untouched.LastKnownBalanceAt)
@@ -433,7 +433,7 @@ func TestSave_ChangedBalanceIsPersistedAndSurvivesRepeatedSaves(t *testing.T) {
 	mustSave(t, s) // a second Save of the same Store must diff against the first
 
 	c, _ := mustLoad(t).Find("w")
-	if c == nil || c.LastKnownBalanceMloki == nil || *c.LastKnownBalanceMloki != 42_000 {
+	if c == nil || c.LastKnownBalanceMillis == nil || *c.LastKnownBalanceMillis != 42_000 {
 		t.Errorf("balance not persisted: %+v", c)
 	}
 }
@@ -459,9 +459,9 @@ func TestHintedName_CutsAtAWordBoundary(t *testing.T) {
 	}
 }
 
-// A connection's kind survives a save and reload; a row saved before kind
-// existed is inferred from the name `join` always gave a circle wallet.
-func TestConnectionKind_RoundTripsAndInfersLegacyRows(t *testing.T) {
+// A connection's kind survives a save and reload, read as stored; Add makes an
+// outside wallet.
+func TestConnectionKind_RoundTrips(t *testing.T) {
 	appdir.SetOverride(t.TempDir())
 	t.Cleanup(func() { appdir.SetOverride("") })
 	s, err := Load()
@@ -470,12 +470,11 @@ func TestConnectionKind_RoundTripsAndInfersLegacyRows(t *testing.T) {
 	}
 	// Stored kinds chosen against what the name would suggest, so a kind that
 	// was not saved cannot pass for one that was.
-	for _, name := range []string{"circle:actually-nwc", "my-circle", "circle:legacy", "plain-legacy"} {
+	for _, name := range []string{"circle:actually-nwc", "my-circle"} {
 		if err := s.Add(name, "nostr+walletconnect://x?secret=y&relay=wss://r"); err != nil {
 			t.Fatal(err)
 		}
 	}
-	s.SetKind("circle:actually-nwc", KindNWC)
 	s.SetKind("my-circle", KindCircle)
 	if err := s.Save(); err != nil {
 		t.Fatal(err)
@@ -484,7 +483,7 @@ func TestConnectionKind_RoundTripsAndInfersLegacyRows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]string{"circle:actually-nwc": KindNWC, "my-circle": KindCircle, "circle:legacy": KindCircle, "plain-legacy": KindNWC}
+	want := map[string]string{"circle:actually-nwc": KindNWC, "my-circle": KindCircle}
 	for _, c := range got.Connections {
 		if c.Kind != want[c.Name] {
 			t.Errorf("%s: kind %q, want %q", c.Name, c.Kind, want[c.Name])

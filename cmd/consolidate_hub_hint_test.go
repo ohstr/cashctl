@@ -10,11 +10,13 @@ import (
 
 	"github.com/ohstr/cashctl/internal/ledger"
 	"github.com/ohstr/cashctl/internal/output"
+
+	"github.com/ohstr/cashctl/internal/testmint"
 )
 
 func tokenOnHub(t *testing.T, wallet, hubGroup string) string {
 	t.Helper()
-	tok, err := nipcash.Encode(nipcash.Token{
+	tok, err := testmint.Encode(t, nipcash.Token{
 		HRP: "lokicash", WalletPubkey: wallet, Secret: strings.Repeat("bb", 32),
 		RelayURLs: []string{"wss://relay.example"}, HubGroup: []byte(hubGroup),
 	})

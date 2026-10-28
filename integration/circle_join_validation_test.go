@@ -10,7 +10,10 @@ import (
 	"time"
 )
 
-// TestCircleJoin_RefusedTerms asks for terms the Hub does not grant.
+// TestCircleJoin_RefusedTerms asks for terms the Hub does not grant. Limits
+// get_info reports (max_exp_secs, per_wallet_max_millis) are refused by
+// cashctl before anything is sent (reason over_hub_limit, no nwc_code); the
+// others only the Hub can judge.
 func TestCircleJoin_RefusedTerms(t *testing.T) {
 	admin := adminOrSkip(t)
 
@@ -26,31 +29,17 @@ func TestCircleJoin_RefusedTerms(t *testing.T) {
 			name: "expiry over the hub's maximum",
 			opts: circleHubOpts{MaxExpSecs: 3600},
 			args: []string{"10", "--expiry", "2h"},
-			exit: 3, code: "invalid_input", nwcCode: "BAD_REQUEST",
-		},
-		{
-			name: "cap under one loki",
-			args: []string{"0.5"},
-			exit: 3, code: "invalid_input", nwcCode: "BAD_REQUEST",
+			exit: 3, code: "invalid_input", nwcCode: "",
 		},
 		{
 			name: "cap over the per-wallet maximum",
 			opts: circleHubOpts{PerWalletMaxMloki: 50_000},
 			args: []string{"60"},
-			exit: 1, code: "internal", nwcCode: "QUOTA_EXCEEDED",
+			exit: 3, code: "invalid_input", nwcCode: "",
 		},
-		{
-			name: "cap over what the hub holds",
-			opts: circleHubOpts{FundLoki: 100},
-			args: []string{"200"},
-			exit: 1, code: "internal", nwcCode: "QUOTA_EXCEEDED",
-		},
-		{
-			name: "cap over the hub's own budget",
-			opts: circleHubOpts{FundLoki: 100, HubMaxAmountLoki: 50},
-			args: []string{"80"},
-			exit: 1, code: "internal", nwcCode: "QUOTA_EXCEEDED",
-		},
+		// A cap over what the Hub holds, or over the Hub's own budget, is no
+		// refusal: NIP-CW §Processing Algorithm checks only the per-wallet
+		// ceilings and, at step 9, the circle's holdings ceiling.
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f, pub := newMember(t)
@@ -63,6 +52,19 @@ func TestCircleJoin_RefusedTerms(t *testing.T) {
 			}
 		})
 	}
+
+	// NIP-CW step 6 checks no floor on max_amount, and get_info has no field
+	// to advertise one: a cap under lokihub's fee reserve (11 loki) is
+	// granted, a wallet that pays only inside the circle.
+	t.Run("cap under the fee reserve is granted", func(t *testing.T) {
+		f, pub := newMember(t)
+		hub := setUpCircleHub(t, admin, pub)
+		joined := f.mustJSON("join", *hub.CircleHubToken, "5")
+		resp, _ := joined["response"].(map[string]any)
+		if got, _ := resp["max_amount_millis"].(float64); got != 5_000 {
+			t.Errorf("max_amount_millis = %v, want 5000: %v", resp["max_amount_millis"], resp)
+		}
+	})
 
 	t.Run("zero cap is refused before anything is sent", func(t *testing.T) {
 		f, pub := newMember(t)
@@ -80,32 +82,25 @@ func TestCircleJoin_AmountFirstPositional(t *testing.T) {
 	admin := adminOrSkip(t)
 	f, pub := newMember(t)
 	hub := setUpCircleHub(t, admin, pub)
-	joined := f.mustJSON("join", "10", *hub.CircleHubToken)
+	joined := f.mustJSON("join", "20", *hub.CircleHubToken)
 	resp, _ := joined["response"].(map[string]any)
-	if got, _ := resp["max_amount_millis"].(float64); got != 10_000 {
-		t.Errorf("max_amount_millis = %v, want 10000: %v", resp["max_amount_millis"], resp)
+	if got, _ := resp["max_amount_millis"].(float64); got != 20_000 {
+		t.Errorf("max_amount_millis = %v, want 20000: %v", resp["max_amount_millis"], resp)
 	}
 }
 
-// TestCircleJoin_ExpiredWalletBlocksRejoinUntilDeleted: an expired circle
-// wallet still counts as the member's one wallet, so a re-join is `exists`
-// until the host deletes it, after which the member can join again.
-func TestCircleJoin_ExpiredWalletBlocksRejoinUntilDeleted(t *testing.T) {
+// TestCircleJoin_ExpiredWalletDoesNotBlockRejoin: one wallet per member and
+// Hub counts only an Active or Suspended wallet (NIP-CW §Processing Algorithm,
+// step 5), so once the member's wallet has expired a new join succeeds, while
+// a second join next to a live wallet is still exists.
+func TestCircleJoin_ExpiredWalletDoesNotBlockRejoin(t *testing.T) {
 	admin := adminOrSkip(t)
 	f, pub := newMember(t)
 	hub := setUpCircleHub(t, admin, pub)
 
-	f.mustJSON("join", *hub.CircleHubToken, "10", "--expiry", "3s")
+	f.mustJSON("join", *hub.CircleHubToken, "20", "--expiry", "3s")
 	time.Sleep(5 * time.Second)
 
-	requireFailure(t, "re-join while the expired wallet exists", f.run("join", *hub.CircleHubToken, "10"), 9, "exists", "WALLET_EXISTS")
-
-	children, err := admin.listCircleChildren(hub.ID)
-	if err != nil || len(children) != 1 {
-		t.Fatalf("hub children = %v (err %v), want the one expired wallet", children, err)
-	}
-	if err := admin.deleteCircleChild(hub.ID, children[0].AppID); err != nil {
-		t.Fatalf("delete the expired wallet: %v", err)
-	}
-	f.mustJSON("join", *hub.CircleHubToken, "10")
+	f.mustJSON("join", *hub.CircleHubToken, "20")
+	requireFailure(t, "a second join next to the live wallet", f.run("join", *hub.CircleHubToken, "20"), 9, "exists", "WALLET_EXISTS")
 }

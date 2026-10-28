@@ -3,6 +3,7 @@ package cmd
 import (
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/spf13/cobra"
 
@@ -34,6 +35,7 @@ func newWalletProtectCmd() *cobra.Command {
 		RunE: runWalletProtect,
 	}
 	cmd.Flags().String("token", "", "which held token to protect (IDs from: cashctl wallet show --json)")
+	cmd.Flags().Bool("no-wait", false, "exit 8 at once when the Hub gives no clear answer, instead of waiting (up to 62 s) to look the call up")
 	return cmd
 }
 
@@ -47,15 +49,53 @@ func runWalletProtect(cmd *cobra.Command, args []string) error {
 		return output.RuntimeError(cmd, err)
 	}
 
-	entries, err := resolveUnprotectedCashHoldings(cmd, l, args)
-	if err != nil {
+	// Settle every re-key or move whose answer never came first: one that
+	// landed is protected already, and one still open is never re-keyed.
+	var waiting []string
+	for _, e := range l.Held() {
+		if _, open := l.OpenCallFor(e.ID); open && e.CashProtection == ledger.CashShared {
+			waiting = append(waiting, e.ID)
+		}
+	}
+	if err := settleBeforeSpend(cmd, l); err != nil {
 		return err
 	}
+	var settled []string
+	for _, id := range waiting {
+		if e, ok := l.Find(id); ok && e.CashProtection == ledger.CashProtected {
+			settled = append(settled, id)
+		}
+	}
 
-	outcomes := make([]protectOutcome, len(entries))
-	for i, entry := range entries {
+	named := protectNamedID(cmd, args)
+	var entries, unresolved []*ledger.Entry
+	if named == "" || !slices.Contains(settled, named) {
+		var err error
+		entries, unresolved, err = resolveUnprotectedCashHoldings(cmd, l, args)
+		// Nothing left to protect is not a failure when settling just did it.
+		if err != nil && (named != "" || len(settled) == 0 || output.AsCLIError(err).Code != output.CodeNotFound) {
+			return err
+		}
+	}
+	if named != "" {
+		settled = slices.DeleteFunc(settled, func(id string) bool { return id != named })
+	}
+
+	outcomes := make([]protectOutcome, 0, len(settled)+len(entries)+len(unresolved))
+	for _, id := range settled {
+		if !jsonMode {
+			output.Println("Protected.")
+		}
+		outcomes = append(outcomes, protectOutcome{ID: id, Status: protectedStatus{Status: "rekeyed"}})
+	}
+	for _, entry := range entries {
 		status, _ := protectRekeyOnly(cmd, l, entry, jsonMode)
-		outcomes[i] = protectOutcome{ID: entry.ID, Status: status}
+		outcomes = append(outcomes, protectOutcome{ID: entry.ID, Status: status})
+	}
+	for _, e := range unresolved {
+		printProtectUnresolved(jsonMode, e.ID)
+		outcomes = append(outcomes, protectOutcome{ID: e.ID, Status: protectedStatus{
+			Status: "unresolved", Error: errUnresolvedRekey(e.ID).Error(), Unresolved: true}})
 	}
 
 	// Mirrors consolidate's own rule exactly (cash_consolidate.go): more
@@ -65,7 +105,8 @@ func runWalletProtect(cmd *cobra.Command, args []string) error {
 	// both a success shape and a failure shape on the same stream" rule,
 	// and this is the one case that must stay byte-identical to before
 	// this change: an explicit --token that fails.
-	if len(outcomes) > 1 || outcomes[0].Status.Status == "rekeyed" {
+	// Holdings left out as unresolved are always listed, so a caller sees why.
+	if len(outcomes) > 1 || outcomes[0].Status.Status == "rekeyed" || len(unresolved) > 0 {
 		printProtectOutcomes(jsonMode, outcomes)
 	}
 	return firstProtectOutcomeError(cmd, outcomes)
@@ -89,6 +130,11 @@ type protectOutcome struct {
 func classifyProtectError(cmd *cobra.Command, o protectOutcome) error {
 	statusErr := errors.New(o.Status.Error)
 	switch {
+	case o.Status.Recovery != "":
+		return output.RecoveryError(cmd, statusErr, o.Status.Recovery)
+	case o.Status.Unresolved:
+		// Not retryable as is: only the Hub settling the earlier call helps.
+		return output.FinalConflictError(cmd, o.ID, statusErr)
 	case o.Status.LikelyWrongSecret:
 		return output.InvalidInputError(cmd, o.ID, statusErr)
 	case o.Status.PendingSecretUnresolved:
@@ -128,7 +174,7 @@ func printProtectOutcomes(jsonMode bool, outcomes []protectOutcome) {
 	if !jsonMode {
 		return
 	}
-	if len(outcomes) == 1 {
+	if len(outcomes) == 1 && outcomes[0].Status.Status == "rekeyed" {
 		output.PrintJSON(map[string]any{"protected": outcomes[0].Status.json()})
 		return
 	}
@@ -149,40 +195,57 @@ func printProtectOutcomes(jsonMode bool, outcomes []protectOutcome) {
 // (already protected, pubkey-mode, not held at all) gets a specific
 // reason, not a generic "not found."
 //
+// A holding with a call still open is never re-keyed: named
+// explicitly, it is refused (conflict, not retryable); with nothing named, it
+// is left out of the pick and returned in unresolved, to be reported.
+//
 // Always returns at least one entry on success. With nothing named and more
 // than one eligible, returns every one pickHeldTokensOrAll resolves (all of
 // them under --json/--yes, or the caller's own explicit pick interactively)
 // — protecting keeps the value yours either way, so unlike redeem's own
 // resolver there is no ambiguity here worth refusing over.
-func resolveUnprotectedCashHoldings(cmd *cobra.Command, l *ledger.Ledger, args []string) ([]*ledger.Entry, error) {
-	id, _ := cmd.Flags().GetString("token")
-	if id == "" && len(args) > 0 {
-		id = args[0]
-	}
+func resolveUnprotectedCashHoldings(cmd *cobra.Command, l *ledger.Ledger, args []string) (entries, unresolved []*ledger.Entry, err error) {
+	id := protectNamedID(cmd, args)
 	if id != "" {
 		e, ok := l.Find(id)
 		if !ok {
-			return nil, output.NotFoundError(cmd, id, fmt.Errorf("no held token %q", id))
+			return nil, nil, output.NotFoundError(cmd, id, fmt.Errorf("no held token %q", id))
+		}
+		if e.Status == ledger.StatusRedeeming {
+			return nil, nil, errRedeemInFlight(cmd, id)
 		}
 		if e.CashProtection != ledger.CashShared {
-			return nil, output.ConflictError(cmd, id, errors.New(unprotectableReason(e)))
+			return nil, nil, output.ConflictError(cmd, id, errors.New(unprotectableReason(e)))
 		}
-		return []*ledger.Entry{e}, nil
+		if _, open := l.OpenCallFor(id); open {
+			return nil, nil, output.FinalConflictError(cmd, id, errUnresolvedRekey(id))
+		}
+		return []*ledger.Entry{e}, nil, nil
 	}
 
 	var eligible []ledger.Entry
 	for _, e := range l.Held() {
-		if e.CashProtection == ledger.CashShared {
-			eligible = append(eligible, e)
+		if e.CashProtection != ledger.CashShared {
+			continue
 		}
+		if _, open := l.OpenCallFor(e.ID); open {
+			if live, ok := l.Find(e.ID); ok {
+				unresolved = append(unresolved, live)
+			}
+			continue
+		}
+		eligible = append(eligible, e)
 	}
 	if len(eligible) == 0 {
-		return nil, output.NotFoundError(cmd, "", errors.New("no unprotected cash-mode holdings — nothing to protect (see `cashctl wallet show`)"))
+		if len(unresolved) > 0 {
+			return nil, unresolved, nil
+		}
+		return nil, nil, output.NotFoundError(cmd, "", errors.New("no unprotected cash-mode holdings — nothing to protect (see `cashctl wallet show`)"))
 	}
 
 	picked, err := pickHeldTokensOrAll(cmd, eligible)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	// Re-resolve each by ID against l itself (not pickHeldTokensOrAll's own
 	// copies) so every returned pointer is the live entry — same reasoning
@@ -191,11 +254,21 @@ func resolveUnprotectedCashHoldings(cmd *cobra.Command, l *ledger.Ledger, args [
 	for _, p := range picked {
 		e, ok := l.Find(p.ID)
 		if !ok {
-			return nil, output.NotFoundError(cmd, p.ID, fmt.Errorf("no held token %q", p.ID))
+			return nil, nil, output.NotFoundError(cmd, p.ID, fmt.Errorf("no held token %q", p.ID))
 		}
 		out = append(out, e)
 	}
-	return out, nil
+	return out, unresolved, nil
+}
+
+// protectNamedID is the holding wallet protect was pointed at: --token, else
+// the positional id, else "".
+func protectNamedID(cmd *cobra.Command, args []string) string {
+	id, _ := cmd.Flags().GetString("token")
+	if id == "" && len(args) > 0 {
+		id = args[0]
+	}
+	return id
 }
 
 func unprotectableReason(e *ledger.Entry) string {

@@ -39,6 +39,9 @@ type AdminAPIConfig struct {
 // Config is the top-level shape of config.local.yaml.
 type Config struct {
 	AdminAPI AdminAPIConfig `yaml:"admin_api"`
+	// RelayURL is the Hub's own relay (the regtest dev stack's
+	// config.local.yaml carries it); only the discovery tests read it.
+	RelayURL string `yaml:"relay_url"`
 }
 
 const defaultConfigPath = "config.local.yaml"

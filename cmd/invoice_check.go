@@ -145,3 +145,36 @@ func bolt11PaymentHash(invoice string) (string, error) {
 	}
 	return "", fmt.Errorf("invoice has no payment hash")
 }
+
+// bolt11ExpiresAt is when a BOLT 11 invoice expires (unix seconds): its
+// timestamp plus its x field, or plus 3600 s when it has none.
+func bolt11ExpiresAt(invoice string) (int64, error) {
+	_, data, err := bech32.DecodeNoLimit(strings.TrimSpace(invoice))
+	if err != nil {
+		return 0, fmt.Errorf("not a valid Lightning invoice")
+	}
+	const timestampWords, signatureWords = 7, 104
+	if len(data) < timestampWords+signatureWords {
+		return 0, fmt.Errorf("invoice is too short")
+	}
+	var ts int64
+	for _, w := range data[:timestampWords] {
+		ts = ts<<5 | int64(w)
+	}
+	expiry := int64(3600)
+	fields := data[timestampWords : len(data)-signatureWords]
+	for len(fields) >= 3 {
+		tag, n := fields[0], int(fields[1])<<5|int(fields[2])
+		if len(fields) < 3+n {
+			break
+		}
+		if tag == 6 && n > 0 && n <= 12 { // x: expiry seconds, big-endian words
+			expiry = 0
+			for _, w := range fields[3 : 3+n] {
+				expiry = expiry<<5 | int64(w)
+			}
+		}
+		fields = fields[3+n:]
+	}
+	return ts + expiry, nil
+}
