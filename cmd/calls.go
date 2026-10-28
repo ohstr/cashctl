@@ -92,7 +92,7 @@ type ledgerJournal struct {
 
 // WriteAhead records calls, saves and reads each back. Any failure removes
 // what it wrote and is returned, so nmilat sends nothing.
-func (j *ledgerJournal) WriteAhead(_ context.Context, calls []nipcash.PendingCall) error {
+func (j *ledgerJournal) WriteAhead(ctx context.Context, calls []nipcash.PendingCall) error {
 	var written []string
 	undo := func(err error) error {
 		j.l.DropStagedOrders()
@@ -172,6 +172,7 @@ func (j *ledgerJournal) WriteAhead(_ context.Context, calls []nipcash.PendingCal
 			j.callIDs = append(j.callIDs, id)
 		}
 	}
+	markWrittenAhead(ctx)
 	crashpoint.Hit("calls.after_writeahead")
 	return nil
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"sync/atomic"
 
 	nipcashclient "github.com/ohstr/nmilat/nipcash/client"
 
@@ -65,11 +66,30 @@ func sessionOptions() []nipcashclient.SessionOption {
 	return []nipcashclient.SessionOption{nipcashclient.WithPowBudget(mustPowMax(), 0)}
 }
 
+// writtenAheadKey holds, in a call's context, whether its journal has written
+// the call ahead yet.
+type writtenAheadKey struct{}
+
+// markWrittenAhead records in ctx that the call was written ahead, so the
+// publishes that follow are the call's own.
+func markWrittenAhead(ctx context.Context) {
+	if w, ok := ctx.Value(writtenAheadKey{}).(*atomic.Bool); ok {
+		w.Store(true)
+	}
+}
+
 // callContext marks ctx for a call cashctl places: right after nmilat publishes
-// a request, the calls.after_send crash point is hit; a crashpoints build may
-// also drop publishes (publishFilter).
+// the call itself, the calls.after_send crash point is hit (not for a read it
+// publishes first, such as an Order connection's terms, before anything was
+// written ahead); a crashpoints build may also drop publishes (publishFilter).
 func callContext(ctx context.Context) context.Context {
-	ctx = nipcashclient.WithAfterPublish(ctx, func() { crashpoint.Hit("calls.after_send") })
+	written := new(atomic.Bool)
+	ctx = context.WithValue(ctx, writtenAheadKey{}, written)
+	ctx = nipcashclient.WithAfterPublish(ctx, func() {
+		if written.Load() {
+			crashpoint.Hit("calls.after_send")
+		}
+	})
 	if keep := publishFilter(); keep != nil {
 		ctx = nipcashclient.WithPublishFilter(ctx, keep)
 	}

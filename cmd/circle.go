@@ -444,7 +444,7 @@ type joinJournal struct {
 	written *nipcwclient.PendingJoin
 }
 
-func (j *joinJournal) WriteAhead(_ context.Context, pj nipcwclient.PendingJoin) error {
+func (j *joinJournal) WriteAhead(ctx context.Context, pj nipcwclient.PendingJoin) error {
 	device, err := deviceIDFn()
 	if err != nil {
 		return err
@@ -460,6 +460,7 @@ func (j *joinJournal) WriteAhead(_ context.Context, pj nipcwclient.PendingJoin) 
 		return err
 	}
 	j.written = &pj
+	markWrittenAhead(ctx)
 	crashpoint.Hit("joins.after_writeahead")
 	return nil
 }
