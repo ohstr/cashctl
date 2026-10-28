@@ -264,8 +264,10 @@ func TestCashConsolidate_AllSourcesExpired_ClassifiedAsAuth(t *testing.T) {
 	if res.ExitCode != 7 {
 		t.Fatalf("consolidate with every source expired: exit = %d, want 7 (auth)\nstdout: %s\nstderr: %s", res.ExitCode, res.Stdout, res.Stderr)
 	}
-	if got := nwcCodeFromError(t, res.Stderr); got != "EXPIRED" {
-		t.Errorf("nwc_code = %q, want EXPIRED", got)
+	// NIP-CASH refuses a slice past its expiry with RESTRICTED (it has no
+	// EXPIRED code).
+	if got := nwcCodeFromError(t, res.Stderr); got != "RESTRICTED" {
+		t.Errorf("nwc_code = %q, want RESTRICTED", got)
 	}
 	if n := heldCount(t, f); n != 2 {
 		t.Errorf("a rejected consolidate must leave both tokens held, got %d held", n)

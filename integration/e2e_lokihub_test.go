@@ -130,7 +130,8 @@ func TestE2E_OrderOnchain_PaidAndConfirmed(t *testing.T) {
 	}
 	// An on-chain order stays open until it expires or is closed and may gain
 	// more bills (NIP-CO §Client Behavior), so the wait is for the bill.
-	admin.mineUntil(t, 12, "on-chain order minted", func() bool {
+	// lokihub scans the chain for order payments every 30 s: mine for longer.
+	admin.mineUntil(t, 40, "on-chain order minted", func() bool {
 		b, _ := showOrder(t, f, id)["bills"].([]any)
 		return len(b) > 0
 	})
