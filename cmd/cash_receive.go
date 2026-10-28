@@ -423,6 +423,12 @@ func validateQuotedAmounts(cmd *cobra.Command, tok nipcash.Token, verifiedMinter
 
 func checkClaimWithCashHub(cmd *cobra.Command, input, embeddedSecret string, tok nipcash.Token) (*nipcash.CheckClaimResult, error) {
 	jsonMode, _ := cmd.Flags().GetBool("json")
+	errSecretMismatch := fmt.Errorf("the cash secret after '#' does not match this bill (is it complete?) — refusing to receive it")
+	// A secret that is not 64 lowercase hex can match no bill: refused before
+	// anything is dialled, as the same mismatch (often a truncated paste).
+	if embeddedSecret != "" && !nipcash.ValidCashSecret(embeddedSecret) {
+		return nil, output.InvalidInputError(cmd, input, errSecretMismatch)
+	}
 	var result *nipcash.CheckClaimResult
 	noMatch := false
 	err := WithSpinner(jsonMode, "Checking...", func() error {
@@ -443,12 +449,15 @@ func checkClaimWithCashHub(cmd *cobra.Command, input, embeddedSecret string, tok
 		if errors.As(err, &gone) {
 			return err
 		}
-		if errors.Is(err, nipcash.ErrClaimNotFound) || (embeddedSecret != "" && isWrongSecretDecline(err)) {
+		// A cash-mode bill's status is answered from the bill proof alone, so a
+		// wrong secret reads the bill's one row under another commitment
+		// (ErrMineWidened): the same mismatch.
+		if errors.Is(err, nipcash.ErrClaimNotFound) || (embeddedSecret != "" && (isWrongSecretDecline(err) || errors.Is(err, nipcash.ErrMineWidened))) {
 			noMatch = true
 			if embeddedSecret != "" {
 				// The Hub answers a cash-mode bill only to its own secret, so a miss
 				// with one given means that secret is wrong (often truncated).
-				return fmt.Errorf("the cash secret after '#' does not match this bill (is it complete?) — refusing to receive it")
+				return errSecretMismatch
 			}
 			return fmt.Errorf("the Cash Hub has no matching recipient for this token — refusing to receive it")
 		}
