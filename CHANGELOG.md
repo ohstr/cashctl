@@ -6,43 +6,43 @@
   (`NOT_FOUND` for your own key or cash secret, or a `reclaimed` tombstone) and
   an expired bill leave the balance instead of staying held or showing `spent`.
   Scripts reading `status` must accept both; their errors are `spent` with the
-  state as `reason`.
+  state as `reason`. ([#147](https://github.com/ohstr/cashctl/pull/147))
 - Fixes a withdrawal whose reply was lost waiting for the user
   (`quote_unchecked`) instead of being re-placed automatically while its quote
-  holds, as NIP-CP §Lookups allows a wallet with no chain view.
+  holds, as NIP-CP §Lookups allows a wallet with no chain view. ([#147](https://github.com/ohstr/cashctl/pull/147))
 - Refuses to quote or withdraw a bill still on a merge's throwaway key
   (`mid_merge`); `cash settle` now turns merge leftovers back into cash notes,
-  as every money command does. See `docs/client-rules.md`.
+  as every money command does. See `docs/client-rules.md`. ([#147](https://github.com/ohstr/cashctl/pull/147))
 - Says when a cancelled payout's re-minted bill is already gone
-  (`remint_gone`, with the Hub's reason), instead of closing it silently.
+  (`remint_gone`, with the Hub's reason), instead of closing it silently. ([#147](https://github.com/ohstr/cashctl/pull/147))
 - Refuses an `--invoice` redeem of a connection-key bill whose own row its Hub
   won't show (`status_unreadable`), so it can no longer stay `redeeming` for
-  ever.
+  ever. ([#147](https://github.com/ohstr/cashctl/pull/147))
 - Settles every coded withdrawal refusal in the same run, not only a refused
   quote, and follows another copy's withdrawal named in answer to a
-  re-placement.
+  re-placement. ([#147](https://github.com/ohstr/cashctl/pull/147))
 - Fixes a consolidate tombstone marking the wrong bill spent when the first
-  candidate could not be dialled or the first source was not held here.
+  candidate could not be dialled or the first source was not held here. ([#147](https://github.com/ohstr/cashctl/pull/147))
 - Ends an order `not_placed` when its call closes without placing, writes a
   forgotten closed order and a recovered withdrawal in one save, and looks a
-  closed on-chain order up at most hourly.
+  closed on-chain order up at most hourly. ([#147](https://github.com/ohstr/cashctl/pull/147))
 - Adds `circle request rotate|freeze|unfreeze`: a member request signed by the
   key that joined, for the circle's host to submit. A rotate's new key is
   written down before the request is printed, `cash settle` installs it once
-  the rotation completes, and using the wallet while it is open asks first.
+  the rotation completes, and using the wallet while it is open asks first. ([#147](https://github.com/ohstr/cashctl/pull/147))
 - Adds `wallet delete` for your own circle wallet at or below its dust
   threshold, written down before it is sent; `connect rm` now refuses a
   circle wallet without `--force`. `FROZEN` is `auth` and `ROTATION_PENDING`
-  a final `conflict`.
+  a final `conflict`. ([#147](https://github.com/ohstr/cashctl/pull/147))
 - Adds a wait to `transfer`, `consolidate` and `wallet protect` when the Hub
   gives no clear answer: they look the call up after its deadline (at most 62
   s) and finish it, or exit with the refusal's own code; `--no-wait` exits 8 at
-  once.
+  once. ([#147](https://github.com/ohstr/cashctl/pull/147))
 - Adds a `redeeming` state for a redeem whose payment may still settle (answered
   `INTERNAL`, omitted or timed out with the bill still claimed): it is never
   resent, counts in no balance, is refused by every other command
   (`redeem_in_flight`), and `cash status` and `cash settle` read it again until
-  it ends.
+  it ends. ([#147](https://github.com/ohstr/cashctl/pull/147))
 - Adds a second try for a join whose lookups all go unanswered: `cash settle`
   asks once over another `circlehub1` held for the same circle, then shows the
   join as `lookup_unanswered`.
@@ -141,7 +141,7 @@
 - Fixes a bill lost when a protect or merge moved it on the Hub but saving that
   locally failed; cashctl now prints its `<token>#<secret>` to keep.
   ([#124](https://github.com/ohstr/cashctl/pull/124))
-- Updates `nmilat` to v0.5.0-rc.44 and builds with Go 1.26.10.
+- Updates `nmilat` to v0.5.0-rc.44 and builds with Go 1.26.10. ([#147](https://github.com/ohstr/cashctl/pull/147))
 
 ## [0.6.0-rc.17]
 
