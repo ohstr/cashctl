@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -176,5 +177,70 @@ func TestApplyRedeemResults_InternalIsUndecided(t *testing.T) {
 	err := resolveUndecidedRedeem(context.Background(), testCmdWithFlags(true, true), l, e, plans[0].Invoice, "savings", outcomes[0].coded)
 	if err != outcomes[0].coded || e.Status != ledger.StatusHeld {
 		t.Errorf("released after INTERNAL: %v, status %s; want the code's error and the bill live", err, e.Status)
+	}
+}
+
+// R2-C3 / SG-1: a connection-key spend is known from the entry or from the
+// credential given; its unreadable own row is reported as status_unreadable,
+// never as spent or not yours.
+func TestIsConnectionKeySpend(t *testing.T) {
+	cmd := testCmdWithFlags(true, true)
+	if !isConnectionKeySpend(cmd, &ledger.Entry{ConnectionKeyPlatform: "nostr"}) {
+		t.Error("an entry recorded connection-key-bound is not a connection-key spend")
+	}
+	if isConnectionKeySpend(cmd, &ledger.Entry{}) {
+		t.Error("a plain entry is a connection-key spend")
+	}
+	t.Setenv(asCredentialEnv, "connection-key:"+strings.Repeat("11", 32)+",nostr,ext,att.json")
+	if !isConnectionKeySpend(cmd, &ledger.Entry{}) {
+		t.Error("a connection-key credential in CASHCTL_AS is not a connection-key spend")
+	}
+	if ce := output.AsCLIError(statusUnreadableError(cmd, "tok")); ce == nil || ce.Reason != reasonStatusUnreadable || ce.Code != output.CodeNotFound {
+		t.Errorf("statusUnreadableError: %+v", ce)
+	}
+}
+
+// R2-C3: a redeeming connection-key bill whose row its Hub won't show stays
+// redeeming (NOT_FOUND is not spent) and says so; one whose read needs its
+// credential says how to give it.
+func TestSettleRedeeming_UnreadableRowSaysWhy(t *testing.T) {
+	cmd := testCmdWithFlags(true, true)
+	l, id := redeemingLedger(t, time.Now().Unix()+3000)
+	e, _ := l.Find(id)
+	e.ConnectionKeyPlatform = "nostr"
+	_ = l.Save()
+	withRedeemProgress(t, progress(0, nil, nipcash.ErrClaimNotFound))
+	out, still := settleRedeeming(cmd, l)
+	if still != 1 || len(out) != 1 || !strings.HasPrefix(out[0].Detail, reasonStatusUnreadable) {
+		t.Fatalf("still %d, out %+v: want one redeeming bill reported status_unreadable", still, out)
+	}
+	fresh, _ := ledger.Load()
+	if e, _ := fresh.Find(id); e.Status != ledger.StatusRedeeming {
+		t.Errorf("status %s, want still redeeming", e.Status)
+	}
+	withRedeemProgress(t, progress(0, nil, output.InvocationError(cmd, errors.New("pass --as"))))
+	if out, _ := settleRedeeming(cmd, fresh); len(out) != 1 || !strings.Contains(out[0].Detail, "CASHCTL_AS") {
+		t.Errorf("out %+v: want the credential hint", out)
+	}
+}
+
+// R2-C3: an explicit --invoice redeem of a connection-key bill reads its own
+// row before sending; a row the Hub won't show refuses it. Other bills are
+// not read here.
+func TestRequireOwnRow_ConnectionKeyInvoiceNeedsItsRow(t *testing.T) {
+	cmd := testCmdWithFlags(true, true)
+	orig := ownRowQuoteFn
+	t.Cleanup(func() { ownRowQuoteFn = orig })
+	read := 0
+	ownRowQuoteFn = func(cmd *cobra.Command, _ *ledger.Ledger, e *ledger.Entry, _ *nipcashclient.Client) (redeemQuote, error) {
+		read++
+		return redeemQuote{}, statusUnreadableError(cmd, e.ID)
+	}
+	if q, err := requireOwnRow(cmd, nil, &ledger.Entry{ID: "plain"}, nil); q != nil || err != nil || read != 0 {
+		t.Errorf("plain bill: %v, %v, read %d: want no read", q, err, read)
+	}
+	_, err := requireOwnRow(cmd, nil, &ledger.Entry{ID: "ck", ConnectionKeyPlatform: "nostr"}, nil)
+	if read != 1 || output.AsCLIError(err).Reason != reasonStatusUnreadable {
+		t.Errorf("connection-key bill: %v, read %d: want refused status_unreadable after one read", err, read)
 	}
 }

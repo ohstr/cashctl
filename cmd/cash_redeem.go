@@ -410,6 +410,17 @@ func prepareRedeems(
 			if entry.AmountMillis != nil {
 				plan.Quote = redeemQuote{AmountMillis: *entry.AmountMillis}
 			}
+			if invoiceOverrideAmount == nil {
+				q, qErr := requireOwnRow(cmd, l, entry, plan.Client)
+				if qErr != nil {
+					plan.Client.Close()
+					outcomes[i] = redeemOutcome{EntryID: entry.ID, Err: qErr}
+					continue
+				}
+				if q != nil {
+					plan.Quote = *q
+				}
+			}
 			if invoiceOverrideAmount != nil {
 				// A real quote, not the bare AmountMillis placeholder two
 				// lines up: bounding a Hub-supplied ceiling against a
@@ -1293,6 +1304,25 @@ type redeemQuote struct {
 	AttestedAmountMillis *uint64
 }
 
+// requireOwnRow reads a connection-key bill's own row before an --invoice
+// redeem is sent (nil, nil for any other bill). SG-1: a redeem that goes
+// unanswered is decided by one read of that row; a connection-key holder
+// whose Hub answers it NOT_FOUND could never decide it and the bill would stay
+// redeeming for ever, so the redeem is refused (status_unreadable) first.
+func requireOwnRow(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entry, client *nipcashclient.Client) (*redeemQuote, error) {
+	if !isConnectionKeySpend(cmd, entry) {
+		return nil, nil
+	}
+	q, err := ownRowQuoteFn(cmd, l, entry, client)
+	if err != nil {
+		return nil, err
+	}
+	return &q, nil
+}
+
+// ownRowQuoteFn is resolveRedeemQuote, swapped out in tests.
+var ownRowQuoteFn = resolveRedeemQuote
+
 // resolveRedeemQuote is redeem's one live CheckClaim call for the
 // auto-invoice path — always made, never best-effort/skippable the way the
 // old confirmation-only preview was: redeemInvoiceAmount below depends on
@@ -1697,6 +1727,8 @@ func ownClaim(ctx context.Context, cmd *cobra.Command, l *ledger.Ledger, c *nipc
 	switch {
 	case errors.As(err, &gone):
 		return nil, recordSpent(cmd, l, entry)
+	case errors.Is(err, nipcash.ErrClaimNotFound) && isConnectionKeySpend(cmd, entry):
+		return nil, statusUnreadableError(cmd, entry.ID)
 	case errors.Is(err, nipcash.ErrClaimNotFound):
 		return nil, output.NotFoundError(cmd, entry.ID, fmt.Errorf("couldn't determine this token's amount — check `cashctl wallet show`, or that it's still valid"))
 	case err != nil:

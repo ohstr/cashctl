@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/ohstr/nmilat/nip47"
 	"github.com/ohstr/nmilat/nipcash"
+	relayclient "github.com/ohstr/nmilat/relay/client"
 	"github.com/spf13/cobra"
 
 	"github.com/ohstr/cashctl/internal/ledger"
@@ -83,6 +85,28 @@ var invoiceSettledFn = func(ctx context.Context, cmd *cobra.Command, into, payme
 		return false, err
 	}
 	return tx != nil && (tx.SettledAt != nil || tx.State == "settled"), nil
+}
+
+// reasonStatusUnreadable is the --json reason of a connection-key bill whose
+// own row its Hub does not show (cash_status NOT_FOUND, SG-1): never spent,
+// never "not yours", but nothing that needs the row can be decided.
+const reasonStatusUnreadable = "status_unreadable"
+
+// isConnectionKeySpend reports whether e is spent with a connection key: the
+// entry says so, or the --as credential (or CASHCTL_AS) is one.
+func isConnectionKeySpend(cmd *cobra.Command, e *ledger.Entry) bool {
+	if e != nil && e.ConnectionKeyPlatform != "" {
+		return true
+	}
+	return strings.HasPrefix(asCredentialValue(cmd), "connection-key:")
+}
+
+// statusUnreadableError refuses, before anything is sent, an operation whose
+// outcome needs the bill's own row when a connection-key holder can't read it.
+func statusUnreadableError(cmd *cobra.Command, id string) error {
+	return output.WithReason(output.NotFoundError(cmd, id, errors.New(
+		"this Hub does not show a connection-key holder its own row (cash_status NOT_FOUND), so cashctl could not follow a redeem or withdrawal of it; nothing was sent, and the bill is still yours — transfer it to your own key first (`cashctl cash transfer`)")),
+		reasonStatusUnreadable)
 }
 
 // errRedeemInFlight is exit 8 for a bill whose redeem may still settle.
@@ -180,7 +204,7 @@ func settleRedeeming(cmd *cobra.Command, l *ledger.Ledger) (out []redeemingSettl
 			cancel()
 			if !presumed {
 				still++
-				out = append(out, redeemingSettle{ID: e.ID, Status: e.Status, Detail: "may still settle; the Hub could not be asked"})
+				out = append(out, redeemingSettle{ID: e.ID, Status: e.Status, Detail: unreadDetail(cmd, e, err)})
 			}
 			continue
 		case prog == nipcash.RedeemDone:
@@ -218,6 +242,26 @@ func settleRedeeming(cmd *cobra.Command, l *ledger.Ledger) (out []redeemingSettl
 		_ = l.Save()
 	}
 	return out, still
+}
+
+// unreadDetail says why a redeeming bill's row could not be read, and what
+// ends it: its credential (CASHCTL_AS, as `cash settle` takes no --as), or
+// nothing the Hub will show (a connection-key holder's NOT_FOUND).
+func unreadDetail(cmd *cobra.Command, e *ledger.Entry, err error) string {
+	var ce *output.CLIError
+	switch {
+	case isConnectionKeySpend(cmd, e) && isNotFound(err):
+		return reasonStatusUnreadable + ": the Hub does not show this connection-key bill's own row; it may still settle — check the payment in the wallet that made the invoice"
+	case errors.As(err, &ce) && ce.Code == output.CodeUsage:
+		return "may still settle; reading it needs its credential: run `cash settle` with CASHCTL_AS set to it"
+	}
+	return "may still settle; the Hub could not be asked"
+}
+
+// isNotFound is a cash_status refusal NOT_FOUND, or no row for the caller.
+func isNotFound(err error) bool {
+	var walletErr *relayclient.WalletError
+	return errors.Is(err, nipcash.ErrClaimNotFound) || (errors.As(err, &walletErr) && walletErr.Code == "NOT_FOUND")
 }
 
 func invoiceSettled(ctx context.Context, cmd *cobra.Command, e *ledger.Entry) bool {
