@@ -166,6 +166,24 @@ func checkWithdrawAddress(cmd *cobra.Command, raw string) (string, []string, err
 	return addr, warnings, nil
 }
 
+// reasonMidMerge is the --json reason of a bill refused because a merge left
+// it on a throwaway key.
+const reasonMidMerge = "mid_merge"
+
+// refuseMidMerge refuses to quote or withdraw a bill held under a merge's
+// throwaway key (shared client rule, docs/shared-client-rules.md A1): the
+// withdrawal's lookups and cancel need that key until the payout is final,
+// and a cancelled payout's re-mint is delivered to it (NIP-CASH §Redeeming
+// On-chain), so the bill goes back to a cash note first.
+func refuseMidMerge(cmd *cobra.Command, e *ledger.Entry) error {
+	if e.ThrowawayKey == "" && e.PendingThrowawayKey == "" {
+		return nil
+	}
+	return output.WithReason(output.ConflictError(cmd, e.ID, errors.New(
+		"this bill is mid-merge, held by a key made for that merge alone, so it can't be withdrawn: `cashctl cash settle` (or the next money command) turns it back into a cash note — withdraw it then")),
+		reasonMidMerge)
+}
+
 // classifyQuoteErr maps a quote's failure: nothing was sent to withdraw.
 func classifyQuoteErr(cmd *cobra.Command, err error) error {
 	var final *nipcashclient.FinalError
@@ -224,9 +242,16 @@ func quoteWithdrawal(cmd *cobra.Command, raw string, print bool) (*ledger.Entry,
 	if err != nil {
 		return nil, nil, "", output.RuntimeError(cmd, err)
 	}
-	settleCalls(cmd, l, settleOptions{})
+	// A money command: what a merge left on a throwaway key goes back to a
+	// cash note first, so only a bill still mid-merge is refused below.
+	if err := settleBeforeSpend(cmd, l); err != nil {
+		return nil, nil, "", err
+	}
 	e, err := resolveHeldToken(cmd, l)
 	if err != nil {
+		return nil, nil, "", err
+	}
+	if err := refuseMidMerge(cmd, e); err != nil {
 		return nil, nil, "", err
 	}
 	if isCashNote(e) && e.CashProtection == ledger.CashShared {
@@ -574,6 +599,9 @@ func sendWithdrawal(cmd *cobra.Command, e *ledger.Entry, q *nipcash.WithdrawQuot
 		return output.NotFoundError(cmd, "", errors.New("the bill is no longer held"))
 	}
 	if err := refuseLocked(cmd, l, []string{e.ID}); err != nil {
+		return err
+	}
+	if err := refuseMidMerge(cmd, e); err != nil {
 		return err
 	}
 	if e.ExpiresAt != nil && *e.ExpiresAt > 0 && time.Until(time.Unix(*e.ExpiresAt, 0)) <= 120*time.Second {

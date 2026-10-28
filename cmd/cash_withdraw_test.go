@@ -519,3 +519,26 @@ func TestWithdraw_ReplacementTombstoneFollowsTheOtherCopy(t *testing.T) {
 		t.Errorf("recovered row %+v (%v)", w, ok)
 	}
 }
+
+// Shared rule A1: a bill held under a merge's throwaway key is never quoted
+// or withdrawn (mid_merge); cash settle turns it back into a cash note, which
+// then can be.
+func TestWithdraw_RefusesAMidMergeBill(t *testing.T) {
+	_, entryID := setUpWithdraw(t)
+	l, _ := ledger.Load()
+	e, _ := l.Find(entryID)
+	priv, _, _ := newThrowawayKey()
+	e.PendingThrowawayKey = priv
+	_ = l.Save()
+	if ce := output.AsCLIError(refuseMidMerge(withdrawCmd(newCashStatusCmd(), nil), e)); ce == nil || ce.Reason != reasonMidMerge {
+		t.Fatalf("refuseMidMerge: %v, want mid_merge", ce)
+	}
+	e.PendingThrowawayKey, e.ThrowawayKey = "", priv
+	if ce := output.AsCLIError(refuseMidMerge(withdrawCmd(newCashStatusCmd(), nil), e)); ce == nil || ce.Reason != reasonMidMerge {
+		t.Fatalf("refuseMidMerge (promoted key): %v, want mid_merge", ce)
+	}
+	e.ThrowawayKey = ""
+	if err := refuseMidMerge(withdrawCmd(newCashStatusCmd(), nil), e); err != nil {
+		t.Errorf("a plain bill: %v", err)
+	}
+}

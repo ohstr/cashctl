@@ -80,6 +80,11 @@ func runCashSettle(cmd *cobra.Command, _ []string) error {
 		time.Sleep(time.Until(next))
 		settled = append(settled, settleCalls(cmd, l, settleOptions{})...)
 	}
+	// What a merge left on a throwaway key goes back to a cash note, as before
+	// every money command (shared client rule A1).
+	if err := settlePendingMoves(cmd, l); err != nil {
+		return err
+	}
 	joins, joinsOpen := settleJoins(cmd, device)
 	redeems, redeeming := settleRedeeming(cmd, l)
 	return reportSettle(cmd, l, settled, joins, joinsOpen, redeems, redeeming > 0, device, jsonMode)
