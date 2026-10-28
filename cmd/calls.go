@@ -421,17 +421,19 @@ func placeErrFor(cmd *cobra.Command, l *ledger.Ledger, j *ledgerJournal, err err
 		closeCall(l, c, ledger.CallNotApplied, "tombstone")
 		if billID != "" {
 			if e, ok := l.Find(billID); ok {
-				markSpent(l, e)
+				markGone(l, e, &gone.Tombstone)
 			}
 		}
 		_ = l.Save()
+		state := stateForTombstone(&gone.Tombstone)
+		cause := goneCause(state)
 		switch {
 		case billID != "" && len(ids) > 1:
-			return output.SpentError(cmd, billID, fmt.Errorf("%w (token %s); nothing was %sd, and your other tokens are still yours", errBillSpent, billID, verb))
+			return goneErrorf(cmd, billID, state, fmt.Errorf("%w (token %s); nothing was %sd, and your other tokens are still yours", cause, billID, verb))
 		case billID == "" && len(ids) > 0:
-			return output.SpentError(cmd, input, fmt.Errorf("%w (the first token given, which is not one cashctl holds); nothing was %sd, and your tokens are still yours", errBillSpent, verb))
+			return goneErrorf(cmd, input, state, fmt.Errorf("%w (the first token given, which is not one cashctl holds); nothing was %sd, and your tokens are still yours", cause, verb))
 		}
-		return output.SpentError(cmd, input, errBillSpent)
+		return goneErrorf(cmd, input, state, cause)
 	case c != nil && errors.As(err, &indeterminate):
 		c.State, c.UpdatedAt = ledger.CallLookup, time.Now().Unix()
 		if indeterminate.Code != "" {

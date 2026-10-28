@@ -1,0 +1,116 @@
+{
+  "description": "NIP-CP §Balance result to state table (K-POCKET-7), copied verbatim from the resultToState section of testdata/vectors/pocket.json in github.com/ohstr/nmilat at commit 21881dd. Refresh by copying that section again; do not edit by hand.",
+  "source": "github.com/ohstr/nmilat@21881dd testdata/vectors/pocket.json#resultToState",
+  "resultToState": [
+    {
+      "id": "K-POCKET-7",
+      "name": "the wallet's own spend succeeded",
+      "result": "own_spend",
+      "state": "spent",
+      "definitive": true
+    },
+    {
+      "name": "tombstone, reason expired",
+      "result": "tombstone",
+      "tombstone": {
+        "status": "spent",
+        "reason": "expired"
+      },
+      "state": "expired",
+      "definitive": true
+    },
+    {
+      "name": "tombstone, reason reclaimed",
+      "result": "tombstone",
+      "tombstone": {
+        "status": "spent",
+        "reason": "reclaimed"
+      },
+      "state": "reclaimed",
+      "definitive": true
+    },
+    {
+      "name": "tombstone, reason redeemed",
+      "result": "tombstone",
+      "tombstone": {
+        "status": "spent",
+        "reason": "redeemed"
+      },
+      "state": "spent",
+      "definitive": true
+    },
+    {
+      "name": "tombstone, reason transferred",
+      "result": "tombstone",
+      "tombstone": {
+        "status": "spent",
+        "reason": "transferred"
+      },
+      "state": "spent",
+      "definitive": true
+    },
+    {
+      "name": "tombstone, reason consolidated",
+      "result": "tombstone",
+      "tombstone": {
+        "status": "spent",
+        "reason": "consolidated"
+      },
+      "state": "spent",
+      "definitive": true
+    },
+    {
+      "name": "tombstone, an unrecognised reason",
+      "result": "tombstone",
+      "tombstone": {
+        "status": "spent",
+        "reason": "written_off"
+      },
+      "state": "spent",
+      "definitive": true
+    },
+    {
+      "name": "tombstone, no reason",
+      "result": "tombstone",
+      "tombstone": {
+        "status": "spent"
+      },
+      "state": "spent",
+      "definitive": true
+    },
+    {
+      "name": "NOT_FOUND, proof signed by the entry's identity key",
+      "result": "not_found",
+      "proof": "identity_key",
+      "state": "reclaimed",
+      "definitive": true
+    },
+    {
+      "name": "NOT_FOUND, cash entry, item made with its secret",
+      "result": "not_found",
+      "proof": "cash_secret",
+      "state": "reclaimed",
+      "definitive": true
+    },
+    {
+      "name": "NOT_FOUND, proof signed by the connection key",
+      "result": "not_found",
+      "proof": "connection_key",
+      "state": "unknown",
+      "definitive": false
+    },
+    {
+      "name": "NOT_FOUND, proof signed by another key",
+      "result": "not_found",
+      "proof": "other_key",
+      "state": "unknown",
+      "definitive": false
+    },
+    {
+      "name": "no answer (timeout)",
+      "result": "no_answer",
+      "state": "unknown",
+      "definitive": false
+    }
+  ]
+}

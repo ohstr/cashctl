@@ -137,7 +137,7 @@ func clearRedeem(e *ledger.Entry) {
 }
 
 // endRedeemGone records e's bill destroyed: redeemed when the tombstone says
-// so, spent otherwise.
+// so, else the tombstone's state (stateForResult).
 func endRedeemGone(l *ledger.Ledger, e *ledger.Entry, t *nipcash.Tombstone) {
 	clearRedeem(e)
 	if t != nil && t.Reason == nipcash.ReasonRedeemed {
@@ -145,8 +145,8 @@ func endRedeemGone(l *ledger.Ledger, e *ledger.Entry, t *nipcash.Tombstone) {
 		l.AppendHistory("redeem", fmt.Sprintf("the redeem of %s settled: the Hub reports it redeemed", e.ID))
 		return
 	}
-	e.Status = ledger.StatusSpent
-	l.AppendHistory("spent", fmt.Sprintf("the Hub reported token %s spent (%s)", e.ID, tombstoneReason(t)))
+	e.Status = stateForTombstone(t)
+	l.AppendHistory(e.Status, fmt.Sprintf("the Hub reported token %s %s (%s)", e.ID, e.Status, tombstoneReason(t)))
 }
 
 // resolveUndecidedRedeem decides a redeem the Hub's answer left open: coded is

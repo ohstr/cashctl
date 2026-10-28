@@ -30,6 +30,14 @@ const (
 	// §Answering About a Destroyed Bill). Set only on that answer, never on
 	// silence, which proves nothing.
 	StatusSpent = "spent"
+	// StatusExpired: the Hub answered with a tombstone whose reason is expired
+	// (NIP-CP §Balance).
+	StatusExpired = "expired"
+	// StatusReclaimed: the slice was removed and its amount swept back to the
+	// Hub: a tombstone whose reason is reclaimed, or NOT_FOUND for a proof by
+	// the entry's own key or cash secret (NIP-CP §Balance). Never from a
+	// connection-key NOT_FOUND, which proves nothing about the slice.
+	StatusReclaimed = "reclaimed"
 	// StatusWithdrawn: the bill was paid out on-chain (cash_withdraw); its
 	// token and secret stay for the withdrawal's lookups.
 	StatusWithdrawn = "withdrawn"

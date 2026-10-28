@@ -378,6 +378,7 @@ func applyAction(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, action ni
 		closeCall(l, c, ledger.CallNotApplied, "never committed")
 	case nipcashclient.ActionCloseRefused:
 		releaseZapClaim(l, c)
+		markRefusedNotFound(l, c, action.Reason)
 		closeCall(l, c, ledger.CallNotApplied, action.Reason)
 		summary = fmt.Sprintf("the Hub refused it (%s); nothing moved", action.Reason)
 	}
@@ -643,9 +644,10 @@ func applyTransferResult(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, r
 	if t := res.NewWalletTombstone; t != nil {
 		switch c.Purpose {
 		case purposeProtect, purposeMergeMove, purposeUnmergeMove:
-			_ = l.SetStatus(e.ID, ledger.StatusSpent)
-			l.AppendHistory("spent", fmt.Sprintf("token %s was moved, and its Hub says the moved bill is already spent (%s)", e.ID, tombstoneReason(t)))
-			return "moved, but the moved bill is already spent (" + tombstoneReason(t) + ")", nil
+			state := stateForTombstone(t)
+			_ = l.SetStatus(e.ID, state)
+			l.AppendHistory(state, fmt.Sprintf("token %s was moved, and its Hub says the moved bill is already %s (%s)", e.ID, state, tombstoneReason(t)))
+			return "moved, but the moved bill is already " + state + " (" + tombstoneReason(t) + ")", nil
 		}
 	}
 	switch c.Purpose {

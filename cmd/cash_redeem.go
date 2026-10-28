@@ -744,7 +744,7 @@ func printRedeemOutcomes(jsonMode bool, outcomes []redeemOutcome, destName, expl
 func reportedSpentIDs(l *ledger.Ledger) []string {
 	var ids []string
 	for _, e := range l.Entries {
-		if e.Status == ledger.StatusSpent {
+		if e.Status == ledger.StatusSpent || e.Status == ledger.StatusExpired || e.Status == ledger.StatusReclaimed {
 			ids = append(ids, e.ID)
 		}
 	}
@@ -1079,6 +1079,10 @@ func spentStatusDescription(status string) string {
 		return "consolidated into another token"
 	case ledger.StatusSpent:
 		return "reported spent by its Hub"
+	case ledger.StatusExpired:
+		return "expired, its Hub reports"
+	case ledger.StatusReclaimed:
+		return "reclaimed by its Hub (your slice was removed)"
 	case ledger.StatusWithdrawn:
 		return "withdrawn on-chain"
 	default:
@@ -1719,17 +1723,19 @@ func invoiceAmountOverride(cmd *cobra.Command, invoice string) (*uint64, error) 
 }
 
 // ownClaim reads a held bill's own row from its Hub, identified by the
-// credential (nipcash.OwnRow): a tombstone marks the entry spent; no row, or a
-// row that can no longer be spent (claimed, withdrawn, expired), is not_found.
+// credential (nipcash.OwnRow): a tombstone or NOT_FOUND gives the entry its
+// state (stateForResult); a row that can no longer be spent (claimed,
+// withdrawn, expired) is not_found.
 func ownClaim(ctx context.Context, cmd *cobra.Command, l *ledger.Ledger, c *nipcashclient.Client, entry *ledger.Entry, cred nipcash.Credential, tok nipcash.Token) (*nipcash.CheckClaimResult, error) {
 	claim, err := c.CheckClaim(ctx, cred, tok)
 	var gone *nipcash.BillGone
 	switch {
 	case errors.As(err, &gone):
-		return nil, recordSpent(cmd, l, entry)
-	case errors.Is(err, nipcash.ErrClaimNotFound) && isConnectionKeySpend(cmd, entry):
-		return nil, statusUnreadableError(cmd, entry.ID)
+		return nil, recordGone(cmd, l, entry, &gone.Tombstone)
 	case errors.Is(err, nipcash.ErrClaimNotFound):
+		if nfErr, ok := recordNotFound(cmd, l, entry, proofOf(cmd, entry)); ok {
+			return nil, nfErr
+		}
 		return nil, output.NotFoundError(cmd, entry.ID, fmt.Errorf("couldn't determine this token's amount — check `cashctl wallet show`, or that it's still valid"))
 	case err != nil:
 		return nil, classifyCashTokenNWCErr(cmd, err)

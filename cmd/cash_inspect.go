@@ -85,9 +85,14 @@ func runCashStatus(cmd *cobra.Command, _ []string) error {
 			// One bill asked about: a fresh tombstone is the same spent error
 			// the next call gets from the stored status, never a result.
 			if len(entries) == 1 {
-				result, fetchErr = nil, recordSpent(cmd, l, entry)
+				result, fetchErr = nil, recordGone(cmd, l, entry, result.Tombstone)
 			} else {
-				markSpent(l, entry)
+				markGone(l, entry, result.Tombstone)
+			}
+		}
+		if hubNotFound(fetchErr) {
+			if nfErr, ok := recordNotFound(cmd, l, entry, proofOf(cmd, entry)); ok {
+				fetchErr = nfErr
 			}
 		}
 		outcomes[i] = cashStatusOutcome{ID: entry.ID, Result: result, Err: fetchErr}
@@ -193,7 +198,7 @@ func firstCashStatusError(cmd *cobra.Command, outcomes []cashStatusOutcome) erro
 			return o.Err
 		}
 		if o.Result != nil && o.Result.Tombstone != nil {
-			return output.SpentError(cmd, o.ID, errBillSpent)
+			return goneError(cmd, o.ID, stateForTombstone(o.Result.Tombstone))
 		}
 	}
 	return nil
@@ -231,7 +236,11 @@ func printCashStatusOutcomes(jsonMode bool, outcomes []cashStatusOutcome) {
 				if ce.RawMessage != "" {
 					errMsg = ce.RawMessage
 				}
-				row := map[string]any{"id": o.ID, "status": "failed", "error": errMsg, "code": string(ce.Code)}
+				status := "failed"
+				if ce.Reason == ledger.StatusReclaimed || ce.Reason == ledger.StatusExpired {
+					status = ce.Reason
+				}
+				row := map[string]any{"id": o.ID, "status": status, "error": errMsg, "code": string(ce.Code)}
 				if ce.NWCCode != "" {
 					row["nwc_code"] = ce.NWCCode
 				}
@@ -241,7 +250,7 @@ func printCashStatusOutcomes(jsonMode bool, outcomes []cashStatusOutcome) {
 			if o.Result.Tombstone != nil {
 				// The tombstone itself is the result: status spent, its reason
 				// and how long the Hub keeps answering.
-				rows[i] = map[string]any{"id": o.ID, "status": "spent", "result": o.Result.Tombstone}
+				rows[i] = map[string]any{"id": o.ID, "status": stateForTombstone(o.Result.Tombstone), "result": o.Result.Tombstone}
 				continue
 			}
 			o.Result.Recipients = output.NonNil(o.Result.Recipients)
@@ -291,7 +300,14 @@ func printCashStatusResult(result *nipcash.CashStatusResult) {
 	// retention the Hub does fall silent, and explainNoAnswer covers that
 	// well; the gap was the window where the Hub tells the truth.
 	if result.Tombstone != nil {
-		output.Println("This bill is spent — its value has already moved, and the bill itself is gone.")
+		switch stateForTombstone(result.Tombstone) {
+		case ledger.StatusExpired:
+			output.Println("This bill expired — its value went back to the Hub, and the bill itself is gone.")
+		case ledger.StatusReclaimed:
+			output.Println("This bill was reclaimed — its value was swept back to the Hub, and the bill itself is gone.")
+		default:
+			output.Println("This bill is spent — its value has already moved, and the bill itself is gone.")
+		}
 		if result.Tombstone.RetainedUntil != nil {
 			output.Printf("The Hub will keep answering about it until %s; after that it goes silent.\n",
 				time.Unix(*result.Tombstone.RetainedUntil, 0).UTC().Format("2006-01-02 15:04 UTC"))
@@ -386,11 +402,12 @@ func joinStrings(ss []string) string {
 	return out
 }
 
-// cashStatusRowStatus is a --json row's status: "spent" for a tombstone, so a
-// spent bill never reads as "ok" with the fact buried in its result.
+// cashStatusRowStatus is a --json row's status: the tombstone's state (spent,
+// expired or reclaimed), so a spent bill never reads as "ok" with the fact
+// buried in its result.
 func cashStatusRowStatus(r *nipcash.CashStatusResult) string {
 	if r.Tombstone != nil {
-		return "spent"
+		return stateForTombstone(r.Tombstone)
 	}
 	return "ok"
 }

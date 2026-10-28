@@ -2,6 +2,11 @@
 
 ## [0.7.0-rc.1]
 
+- Adds the `reclaimed` and `expired` holding statuses, so a removed slice
+  (`NOT_FOUND` for your own key or cash secret, or a `reclaimed` tombstone) and
+  an expired bill leave the balance instead of staying held or showing `spent`.
+  Scripts reading `status` must accept both; their errors are `spent` with the
+  state as `reason`.
 - Refuses to quote or withdraw a bill still on a merge's throwaway key
   (`mid_merge`); `cash settle` now turns merge leftovers back into cash notes,
   as every money command does. See `docs/client-rules.md`.

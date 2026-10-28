@@ -217,8 +217,10 @@ func quoteHubGroup(
 			continue
 		}
 		switch {
-		case r.Gone != nil || (r.Succeeded() && r.Result != nil && r.Result.Tombstone != nil):
-			errs[r.ID] = recordSpent(cmd, l, entry)
+		case r.Gone != nil:
+			errs[r.ID] = recordGone(cmd, l, entry, r.Gone)
+		case r.Succeeded() && r.Result != nil && r.Result.Tombstone != nil:
+			errs[r.ID] = recordGone(cmd, l, entry, r.Result.Tombstone)
 		case r.Succeeded() && r.Result != nil:
 			// The caller's own row, identified by the credential that asked.
 			cred, credErr := resolveCredential(cmd, entry)
@@ -246,6 +248,11 @@ func quoteHubGroup(
 			errs[r.ID] = output.NWCErrorForCashToken(cmd, &relayclient.WalletError{
 				Method: "cash_status", Code: r.Error.Code, Message: r.Error.Message,
 			})
+			if r.Error.Code == "NOT_FOUND" {
+				if nfErr, ok := recordNotFound(cmd, l, entry, proofOf(cmd, entry)); ok {
+					errs[r.ID] = nfErr
+				}
+			}
 		default:
 			errs[r.ID] = quoteUndecidedErr(cmd, r.ItemOutcome, incomplete)
 		}
@@ -533,7 +540,7 @@ func applyRedeemResults(
 			recordRedeemed(l, plansEntry(plans, r.ID), destName)
 		case r.Gone != nil && plansEntry(plans, r.ID) != nil:
 			// A tombstone: the bill is destroyed and nothing moved here.
-			outcomes[idx].Err = recordSpent(cmd, l, plansEntry(plans, r.ID))
+			outcomes[idx].Err = recordGone(cmd, l, plansEntry(plans, r.ID), r.Gone)
 		case r.State == nipcashclient.OutcomeError && r.Undecodable:
 			// The Hub ran it and said so, but its result could not be read: it
 			// may have paid. Never resent.
@@ -556,6 +563,11 @@ func applyRedeemResults(
 			// §Answer or Omit); every other code is definitive.
 			if r.Error.Code == "INTERNAL" {
 				outcomes[idx].undecided, outcomes[idx].coded = true, outcomes[idx].Err
+			}
+			if e := plansEntry(plans, r.ID); r.Error.Code == "NOT_FOUND" && e != nil {
+				if nfErr, ok := recordNotFound(cmd, l, e, proofOf(cmd, e)); ok {
+					outcomes[idx].Err = nfErr
+				}
 			}
 		case r.State == nipcashclient.OutcomeConflict:
 			// Answered twice, beside an envelope-level error, or with a result

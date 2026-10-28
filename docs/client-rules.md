@@ -12,6 +12,7 @@ does it. cashkit documents the same rules in its `docs/design.md`.
 | A4 Lost withdrawal | re-placed automatically on the owning device while its quote counts as valid | NIP-CP §Writing (the lookup rules); NIP-CASH §Lost Replies |
 | A5 NIP-42 AUTH | answered only on the user's own pocket relays, as the user | NIP-CP §Wrapping |
 | SG-1 Connection-key status | `NOT_FOUND` is never spent; a redeem or withdrawal is refused first (`status_unreadable`) | NIP-CASH §Scoping the Roster |
+| Result → state | one table for every method: a tombstone maps by its `reason` (`expired`, `reclaimed`, else `spent`); `NOT_FOUND` for the entry's own key or cash secret is `reclaimed`; a connection key's `NOT_FOUND` and no answer write nothing | NIP-CP §Balance; NIP-CASH §Removing a Recipient |
 
 ## A1. A bill on a merge key is never withdrawn
 
@@ -92,3 +93,17 @@ clients read that as "status not readable": never spent, never "not yours".
 - cashctl: the auto-invoice and `--invoice` redeems and the withdraw quote all read the row first. A bill
   already `redeeming` whose row can't be read says why in `cash settle` (`status_unreadable`, or the credential
   it needs, given through `CASHCTL_AS`).
+
+## Result → state
+
+Every answer about a held bill, from `cash_status`, `cash_redeem`, `cash_transfer`, `cash_consolidate` or a
+lookup `done`, goes through NIP-CP §Balance's one table. A tombstone whose `reason` is `expired` or
+`reclaimed` gives that state, any other tombstone `spent`. `NOT_FOUND` for a proof by the entry's own key, or
+a cash note's own secret, is `reclaimed`: the slice was removed. A connection key's `NOT_FOUND` stays
+unreadable (SG-1), and a timeout or a key that can't be tied to the entry writes nothing. A final state is
+written only on a held entry and never overwritten.
+
+- cashctl: `stateForResult` (`cmd/spent.go`), tested against nmilat's shared vectors (K-POCKET-7, copied to
+  `cmd/testdata/vectors/result_to_state.json`). `reclaimed` and `expired` leave the balance and are refused
+  later as `spent` with that state as `reason`. A consolidate's `NOT_FOUND` does not say which source it is
+  about, so it writes nothing.

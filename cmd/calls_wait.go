@@ -67,8 +67,12 @@ func awaitPlacement(_ context.Context, cmd *cobra.Command, l *ledger.Ledger, c *
 			return nil, nil
 		}
 		code := c.FirstError
+		state := markRefusedNotFound(l, c, code)
 		closeCall(l, c, ledger.CallNotApplied, code)
 		_ = l.Save()
+		if state != "" {
+			return nil, goneError(cmd, c.SourceEntryIDs[0], state)
+		}
 		return nil, output.NWCErrorForCashToken(cmd, &relayclient.WalletError{Method: c.Method, Code: code,
 			Message: "the Hub refused it (" + code + ") and never applied it; nothing moved"})
 	}

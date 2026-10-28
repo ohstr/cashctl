@@ -28,7 +28,7 @@ func TestRecordSpent_MarksAHeldEntryAndDropsItFromHeld(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = recordSpent(&cobra.Command{}, l, e)
+	err = recordGone(&cobra.Command{}, l, e, &nipcash.Tombstone{Status: "spent"})
 	if ce := output.AsCLIError(err); ce.Code != output.CodeSpent {
 		t.Errorf("code = %q, want spent", ce.Code)
 	}
