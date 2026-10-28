@@ -7,6 +7,9 @@
   an expired bill leave the balance instead of staying held or showing `spent`.
   Scripts reading `status` must accept both; their errors are `spent` with the
   state as `reason`.
+- Fixes a withdrawal whose reply was lost waiting for the user
+  (`quote_unchecked`) instead of being re-placed automatically while its quote
+  holds, as NIP-CP §Lookups allows a wallet with no chain view.
 - Refuses to quote or withdraw a bill still on a merge's throwaway key
   (`mid_merge`); `cash settle` now turns merge leftovers back into cash notes,
   as every money command does. See `docs/client-rules.md`.

@@ -542,3 +542,34 @@ func TestWithdraw_RefusesAMidMergeBill(t *testing.T) {
 		t.Errorf("a plain bill: %v", err)
 	}
 }
+
+// A4: a withdrawal whose reply was lost is re-placed automatically under its
+// derived id (cashctl has no chain view, so never quote_unchecked); one that
+// saw REQUEST_REUSED needs the user's confirmation and is not.
+func TestWithdraw_LostReplyIsReplacedAutomatically(t *testing.T) {
+	for _, reused := range []bool{false, true} {
+		f, _ := setUpWithdraw(t)
+		handle := runWithdrawQuote(t)["quote"].(string)
+		f.answer = func(pc nipcash.PendingCall) (*nipcash.Payout, error) {
+			return nil, &nipcashclient.IndeterminateError{Call: pc, Cause: errors.New("no reply")}
+		}
+		if _, err := runWithdrawSend(t, nil, map[string]string{"quote": handle, "yes": "true"}); output.ExitCode(err) != 8 {
+			t.Fatalf("lost reply: %v", err)
+		}
+		l, _ := ledger.Load()
+		c, _ := l.FindCall(ledger.CallIDFor(f.sent[0].RequestID))
+		c.Deadline, c.SawReused = time.Now().Unix()-1, reused
+		_ = l.Save()
+		f.lookup = func(nipcash.PendingCall) (nipcashclient.LookupOutcome, *nipcash.Payout, error) {
+			return nipcashclient.LookupOutcome{Status: nipcash.LookupUnknown}, nil, nil
+		}
+		l = settleNow(t)
+		parent, _ := l.FindCall(c.CallID)
+		switch {
+		case !reused && (len(f.sent) != 2 || parent.State != ledger.CallReplaced):
+			t.Errorf("lost reply: sent %d, parent %s/%s; want re-placed", len(f.sent), parent.State, parent.Detail)
+		case reused && (len(f.sent) != 1 || parent.Detail != "confirm_replace"):
+			t.Errorf("reused: sent %d, parent %s/%s; want confirm_replace, not re-placed", len(f.sent), parent.State, parent.Detail)
+		}
+	}
+}

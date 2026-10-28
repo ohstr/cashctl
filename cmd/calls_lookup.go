@@ -429,6 +429,9 @@ func replaceCallConfirmed(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, 
 	}
 	act, err := nipcashclient.Replace(callContext(ctx), pc, j, nipcashclient.ReplaceOptions{
 		Confirmed: confirmed,
+		// cashctl has no chain view of its own: a quote counts as valid until
+		// refused quote_expired (NIP-CP §Lookups).
+		NoChainView: true,
 		DerivedEntryExists: func(_ context.Context, id string) (bool, error) {
 			_, ok := l.FindCall(ledger.CallIDFor(id))
 			return ok, nil
