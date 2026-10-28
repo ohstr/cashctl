@@ -656,18 +656,7 @@ func sendWithdrawal(cmd *cobra.Command, e *ledger.Entry, q *nipcash.WithdrawQuot
 			w.State, w.FinishedAt = refusedWithdrawState(c), time.Now().Unix()
 			_ = ledger.PutWithdrawal(w)
 		}
-		// A tombstone naming a withdrawal: another copy of this wallet withdrew
-		// the bill. That withdrawal is followed from here (XQ-29(2)).
-		var gone *nipcash.BillGone
-		if errors.As(err, &gone) && gone.Tombstone.WithdrawRequestID != "" {
-			if _, known := l.FindCall(ledger.CallIDFor(gone.Tombstone.WithdrawRequestID)); !known {
-				if src, ok := l.Find(e.ID); ok {
-					if w, rErr := recoverWithdrawal(cmd, l, src, gone.Tombstone.WithdrawRequestID); rErr == nil {
-						output.Notef(jsonMode, "This bill was withdrawn from another copy of this wallet (withdrawal %s); `cashctl cash withdraw show %s` follows it.", w.WithdrawalID, w.WithdrawalID)
-					}
-				}
-			}
-		}
+		followOtherCopysWithdrawal(cmd, l, e.ID, err)
 		return pErr
 	}
 	crashpoint.Hit("calls.before_apply")
@@ -677,6 +666,28 @@ func sendWithdrawal(cmd *cobra.Command, e *ledger.Entry, q *nipcash.WithdrawQuot
 		return err
 	}
 	return printWithdrawal(cmd, w, payout)
+}
+
+// followOtherCopysWithdrawal follows, from here, the withdrawal a tombstone
+// answer names when this device has no record of it: another copy of this
+// wallet withdrew the bill (XQ-29(2)). It applies to a first send and to a
+// re-placement alike (R2-C6).
+func followOtherCopysWithdrawal(cmd *cobra.Command, l *ledger.Ledger, entryID string, err error) {
+	var gone *nipcash.BillGone
+	if !errors.As(err, &gone) || gone.Tombstone.WithdrawRequestID == "" {
+		return
+	}
+	if _, known := l.FindCall(ledger.CallIDFor(gone.Tombstone.WithdrawRequestID)); known {
+		return
+	}
+	src, ok := l.Find(entryID)
+	if !ok {
+		return
+	}
+	if w, rErr := recoverWithdrawal(cmd, l, src, gone.Tombstone.WithdrawRequestID); rErr == nil {
+		jsonMode, _ := cmd.Flags().GetBool("json")
+		output.Notef(jsonMode, "This bill was withdrawn from another copy of this wallet (withdrawal %s); `cashctl cash withdraw show %s` follows it.", w.WithdrawalID, w.WithdrawalID)
+	}
 }
 
 // applyPayout records a payout as the Hub stated it: the source is spent from

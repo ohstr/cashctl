@@ -573,6 +573,9 @@ func replaceCallConfirmed(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, 
 		// The re-placement's own outcome follows the placement rules.
 		_ = placeErrFor(cmd, l, j, sendErr, transferVerb(child.Purpose), tombstoneEntryID(l, child), child.SourceEntryIDs...)
 		finishRefusedWithdrawal(l, derivedID)
+		if child.Method == nipcash.MethodCashWithdraw && len(child.SourceEntryIDs) > 0 {
+			followOtherCopysWithdrawal(cmd, l, child.SourceEntryIDs[0], sendErr)
+		}
 		return "placed again as call " + derivedID
 	}
 }

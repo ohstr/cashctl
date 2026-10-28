@@ -486,3 +486,36 @@ func TestWithdraw_TombstoneWithAWithdrawalIsRecovered(t *testing.T) {
 		t.Errorf("the other copy's withdrawal was not recovered: %+v (%v)", w, ok)
 	}
 }
+
+// R2-C6 (W-4): a re-placement answered with a tombstone naming another
+// copy's withdrawal follows that withdrawal, as a first send does.
+func TestWithdraw_ReplacementTombstoneFollowsTheOtherCopy(t *testing.T) {
+	f, _ := setUpWithdraw(t)
+	handle := runWithdrawQuote(t)["quote"].(string)
+	f.answer = func(pc nipcash.PendingCall) (*nipcash.Payout, error) {
+		return nil, &nipcashclient.IndeterminateError{Call: pc, Cause: errors.New("no reply")}
+	}
+	_, _ = runWithdrawSend(t, nil, map[string]string{"quote": handle, "yes": "true"})
+	l, _ := ledger.Load()
+	c, _ := l.FindCall(ledger.CallIDFor(f.sent[0].RequestID))
+	c.Deadline = time.Now().Unix() - 1
+	_ = l.Save()
+	f.lookup = func(nipcash.PendingCall) (nipcashclient.LookupOutcome, *nipcash.Payout, error) {
+		return nipcashclient.LookupOutcome{Status: nipcash.LookupUnknown}, nil, nil
+	}
+	other, _ := nipcash.NewRequestID()
+	f.answer = func(nipcash.PendingCall) (*nipcash.Payout, error) {
+		return nil, &nipcash.BillGone{Method: nipcash.MethodCashWithdraw, Tombstone: nipcash.Tombstone{Status: nipcash.StatusSpent, WithdrawRequestID: other}}
+	}
+	l = settleNow(t)
+	if len(f.sent) != 2 {
+		t.Fatalf("sent %d, want a re-placement", len(f.sent))
+	}
+	rc, ok := l.FindCall(ledger.CallIDFor(other))
+	if !ok || rc.DeviceID != ledger.DeviceRecovered {
+		t.Fatalf("recovered call %+v (%v): want the other copy's withdrawal followed", rc, ok)
+	}
+	if w, ok, _ := ledger.WithdrawalForCall(rc.CallID); !ok || !w.Recovered {
+		t.Errorf("recovered row %+v (%v)", w, ok)
+	}
+}
