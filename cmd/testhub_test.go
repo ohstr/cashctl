@@ -289,6 +289,7 @@ func (c *fakeCaller) Close() {}
 // deadline and generated secrets, goes to the journal first.
 func (c *fakeCaller) writeAhead(ctx context.Context, j nipcashclient.Journal, device string, pc nipcash.PendingCall) (nipcash.PendingCall, error) {
 	pc.Deadline, pc.HubIdentity, pc.MaxRequestAge, pc.Device = time.Now().Unix()+60, strings.Repeat("ab", 32), 120, device
+	pc = fakeAsReplacement(j, pc)
 	if err := j.WriteAhead(ctx, []nipcash.PendingCall{pc}); err != nil {
 		return pc, fmt.Errorf("%w: write ahead: %v", nipcashclient.ErrNotSent, err)
 	}
@@ -432,3 +433,25 @@ func hexWallet(s string) string {
 
 // Unit tests never wait for a deadline; the ones about the wait opt in.
 func init() { placementWaitEnabled = false }
+
+// fakeAsReplacement does what nmilat's send path does before writing a
+// re-placement ahead: the call names the call it replaces and its attempt.
+func fakeAsReplacement(j nipcashclient.Journal, pc nipcash.PendingCall) nipcash.PendingCall {
+	var l *ledger.Ledger
+	switch jj := j.(type) {
+	case *ledgerJournal:
+		l = jj.l
+	case *withdrawJournal:
+		l = jj.l
+	}
+	if l == nil || pc.DerivedFrom != "" {
+		return pc
+	}
+	for _, c := range l.Calls {
+		if d, err := nipcash.DerivedRequestID(c.RequestID); err == nil && d == pc.RequestID {
+			pc.DerivedFrom, pc.Attempt = c.RequestID, c.Attempt+1
+			break
+		}
+	}
+	return pc
+}

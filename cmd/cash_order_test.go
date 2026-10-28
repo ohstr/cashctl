@@ -61,6 +61,7 @@ func (f *fakeOrderHub) Place(ctx context.Context, p nipCO.CashOrderParams, j nip
 	} else {
 		pc.BuyerKey, _, _ = nipCO.NewBuyerKey()
 	}
+	pc = fakeAsReplacement(j, pc)
 	if err := j.WriteAhead(ctx, []nipcash.PendingCall{pc}); err != nil {
 		return nil, errors.Join(nipcashclient.ErrNotSent, err)
 	}

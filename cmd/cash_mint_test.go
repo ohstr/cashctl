@@ -69,6 +69,7 @@ func (f *fakeCashHub) MintCash(ctx context.Context, p nipcash.MintCashParams, j 
 		return nil, err
 	}
 	pc.Deadline, pc.HubIdentity, pc.MaxRequestAge, pc.Device, pc.Chain = time.Now().Unix()+120, f.hubXOnly, 60, device, "flokicoin"
+	pc = fakeAsReplacement(j, pc)
 	if err := j.WriteAhead(ctx, []nipcash.PendingCall{pc}); err != nil {
 		return nil, errors.Join(nipcashclient.ErrNotSent, err)
 	}

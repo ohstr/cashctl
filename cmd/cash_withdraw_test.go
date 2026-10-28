@@ -78,6 +78,7 @@ func (f *fakeWithdrawHub) Withdraw(ctx context.Context, p nipcash.CashWithdrawPa
 		return nil, err
 	}
 	pc.Deadline, pc.HubIdentity, pc.MaxRequestAge, pc.Device, pc.Chain = time.Now().Unix()+60, f.hubXOnly, 60, device, "flokicoin"
+	pc = fakeAsReplacement(j, pc)
 	if err := j.WriteAhead(ctx, []nipcash.PendingCall{pc}); err != nil {
 		return nil, errors.Join(nipcashclient.ErrNotSent, err)
 	}
