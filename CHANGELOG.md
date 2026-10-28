@@ -141,6 +141,7 @@
 - Fixes a bill lost when a protect or merge moved it on the Hub but saving that
   locally failed; cashctl now prints its `<token>#<secret>` to keep.
   ([#124](https://github.com/ohstr/cashctl/pull/124))
+- Updates `nmilat` to v0.5.0-rc.44 and builds with Go 1.26.10.
 
 ## [0.6.0-rc.17]
 
