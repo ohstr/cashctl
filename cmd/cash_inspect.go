@@ -2,7 +2,9 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/ohstr/nmilat/nipcash"
@@ -134,6 +136,13 @@ func fetchCashStatus(cmd *cobra.Command, jsonMode bool, entry *ledger.Entry) (*n
 		result = r
 		return nil
 	})
+	if err == nil && cashNoteRekeyedAway(result, cashSecretInUse(cmd, entry)) {
+		// A cash-mode bill's status is answered from the bill proof alone
+		// (NIP-CASH §Scoping the Roster), so a copy of a note someone else
+		// re-keyed still reads its one row. That row's commitment is no longer
+		// this secret's: the bill is not this holder's any more.
+		return nil, output.NotFoundError(cmd, entry.ID, errNoteRekeyedAway)
+	}
 	if err != nil {
 		if dialErr && !isProvenanceRefusal(err) {
 			return nil, output.NetworkError(cmd, err)
@@ -141,6 +150,35 @@ func fetchCashStatus(cmd *cobra.Command, jsonMode bool, entry *ledger.Entry) (*n
 		return nil, classifyCashTokenNWCErr(cmd, err)
 	}
 	return result, nil
+}
+
+// errNoteRekeyedAway is a held cash note whose bill another holder of the same
+// note has since re-keyed: this copy's secret no longer spends it.
+var errNoteRekeyedAway = errors.New("this cash note was re-keyed by another holder: its cash secret no longer matches the bill, so it is not yours")
+
+// cashSecretInUse is the cash secret a call on entry would spend with: the one
+// --as cash: names, else a cash-mode entry's own; "" for any other credential.
+func cashSecretInUse(cmd *cobra.Command, entry *ledger.Entry) string {
+	if as := asCredentialValue(cmd); as != "" {
+		if secret, ok := strings.CutPrefix(as, "cash:"); ok {
+			return secret
+		}
+		return ""
+	}
+	if entry.ThrowawayKey != "" || entry.IdentityRequired == nil || *entry.IdentityRequired {
+		return ""
+	}
+	return entry.CashSecret
+}
+
+// cashNoteRekeyedAway reports a cash-mode roster row whose commitment is not
+// secret's: a cash-mode bill has exactly that one slice.
+func cashNoteRekeyedAway(r *nipcash.CashStatusResult, secret string) bool {
+	if r == nil || r.Tombstone != nil || secret == "" || len(r.Recipients) != 1 || r.Recipients[0].IdentityType != "cash" {
+		return false
+	}
+	want, err := nipcash.CashCommitment(secret)
+	return err == nil && !nipcash.CommitmentsEqual(want, r.Recipients[0].IdentityValue)
 }
 
 // firstCashStatusError returns the first outcome that is not ok, in order:
