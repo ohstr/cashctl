@@ -651,12 +651,14 @@ func TestDecodeCheck_ExpiredCashToken_ReportsAccurateDeadlineMessage(t *testing.
 		t.Fatalf("decode --check on an expired token: ok = true, want false: %v", check)
 	}
 	errText, _ := check["error"].(string)
-	// The Hub's OWN deadline message, which names the timestamp. Asserting on
+	// An accurate expiry: the Hub's own deadline message when it refuses the
+	// read, or, now that cash_status answers an expired bill with its roster
+	// (NIP-CASH), cashctl's reading of that roster's expires_at. Asserting on
 	// "expired" alone is too weak: the omission wording lists expiry as one of
 	// several possibilities it cannot distinguish, so a bare substring match
 	// would pass on the case this test exists to rule out.
-	if !strings.Contains(errText, "deadline") {
-		t.Errorf("decode --check error = %q, want the Hub's own accurate deadline message (lokihub's AppKindCashWallet branch of permissions.HasPermission), not a generic decline", errText)
+	if !strings.Contains(errText, "deadline") && !strings.Contains(errText, "slice is expired") {
+		t.Errorf("decode --check error = %q, want an accurate expiry (the Hub's deadline message, or the expired slice its roster shows), not a generic decline", errText)
 	}
 	if strings.Contains(errText, "does not name you") {
 		t.Errorf("decode --check error = %q — an expired bill the caller DOES hold a slice of must report the expiry, not an information-free omission", errText)
