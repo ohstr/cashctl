@@ -437,7 +437,7 @@ func validateOrder(o *ledger.Order, order *nipCO.Order, now int64) error {
 	case order.PayMillis != order.AmountMillis+order.FeeMillis:
 		return errors.New("pay_millis is not amount plus fee")
 	}
-	return checkOrderInvoice(order, o.Chain)
+	return checkOrderInvoice(order, o)
 }
 
 // applyOrderBills records each bill of order not yet held here: a cash note

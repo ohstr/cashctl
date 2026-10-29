@@ -7,6 +7,8 @@
   database and marks a second copy `duplicate`, a status scripts must accept.
 - Says when a received bill's Hub is not on `mainnet`, as for minting and orders: `receive` reads the bill's
   `get_info` network and prints the test-network line; `--json` adds `network` and `test_network`.
+- Refuses an order's Lightning invoice that the Hub's node identity did not sign, or whose prefix is not the
+  Hub's network (a `tb` or `bcrt` invoice from a `mainnet` bitcoin Hub), before it is shown to pay.
 
 ## [0.7.0-rc.1]
 
