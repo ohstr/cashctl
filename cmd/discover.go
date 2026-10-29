@@ -106,6 +106,10 @@ type discovered struct {
 	Signals  listing.Signals
 	Operator string // the verified operator's pubkey, "" when unverified
 	Names    map[string]string
+	// Contested is a listing whose d several pubkeys list, none of whose signers
+	// has passed the check at tap: never listed, but still found by its exact
+	// address so it can be tapped (NIP-CASH §Wallet Rules, Signals).
+	Contested bool
 }
 
 // discoverWorld is everything the cache holds, read into its parts.
@@ -479,6 +483,10 @@ func discoverRun(cmd *cobra.Command) ([]discovered, *listing.VersionBook, []stri
 		if !ok {
 			continue
 		}
+		// Listings of different pubkeys are never merged: when several list one
+		// d, only the one whose signer passed at tap is shown, or none.
+		shown, one := w.book.CurrentByD(l.D, now)
+		contested := !one || shown.Address() != addr
 		var followers []string
 		op, verified := opOf(addr)
 		if verified {
@@ -489,7 +497,7 @@ func discoverRun(cmd *cobra.Command) ([]discovered, *listing.VersionBook, []stri
 			}
 		}
 		out = append(out, discovered{L: l, Signals: listing.SignalsFor(l, trust, w.recs, w.reps, followers, opOf),
-			Operator: op, Names: w.names})
+			Operator: op, Names: w.names, Contested: contested})
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		return listing.RankLess(out[i].L, out[i].Signals, out[j].L, out[j].Signals, now)
@@ -603,7 +611,12 @@ func newDiscoverListCmd() *cobra.Command {
 			}
 			curators, _ := config.Curators()
 			var views []map[string]any
+			contested := 0
 			for _, d := range all {
+				if d.Contested {
+					contested++
+					continue
+				}
 				if typ != "" && !strings.HasPrefix(string(d.L.Type), map[string]string{"order": "cash_order", "circle": "circle_wallet"}[typ]) {
 					continue
 				}
@@ -620,11 +633,14 @@ func newDiscoverListCmd() *cobra.Command {
 				}
 				output.PrintJSON(map[string]any{"offers": output.NonNil(views), "curators": len(curators),
 					"ranking_from":  map[string]any{"follows": follows, "curators": output.NonNil(curators)},
-					"relays_failed": output.NonNil(failed)})
+					"relays_failed": output.NonNil(failed), "contested": contested})
 				return nil
 			}
 			for _, r := range failed {
 				output.Notef(false, "relay %s didn't answer", output.Sanitize(r))
+			}
+			if contested > 0 {
+				output.Notef(false, "%d offer(s) hidden: several Hubs list the same offer id, and none has been checked; `cash discover show <address>` checks one", contested)
 			}
 			if len(curators) == 0 {
 				output.Println("Ranking from: nobody yet: everything below is unreviewed. Listings are ads; the Hub's terms are checked when you `show` one.")

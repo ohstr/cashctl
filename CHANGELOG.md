@@ -15,6 +15,9 @@
   cache now records the relay that first served each event.
 - Reads an operator's offers list (11191) from the operator's NIP-65 write relays too, so an operator whose
   list is only on their own relays shows as verified.
+- Hides listings of one offer id (`d`) signed by several pubkeys until one passes at `show`, then shows that
+  one only; `list --json` counts the rest in `contested`. A copy re-signed under another key no longer sits
+  beside the real offer.
 
 ## [0.7.0-rc.1]
 
