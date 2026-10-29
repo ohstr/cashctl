@@ -12,13 +12,13 @@ import (
 // The editable discovery relays and the local curator set of `cash discover`
 // (NIP-CASH §Fetching Listings, §Curators). None is shipped.
 
-func listColumn(query string) ([]string, error) {
+func listColumn(query string, args ...any) ([]string, error) {
 	db, err := store.Open()
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = db.Close() }()
-	rows, err := db.Query(query)
+	rows, err := db.Query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("cashctl.db: %w", err)
 	}
@@ -106,11 +106,22 @@ const (
 
 // PutDiscoverEvent caches a public event, checked by the caller; an event
 // already cached keeps its row, except that trusted replaces global.
-func PutDiscoverEvent(id string, kind int, pubkey string, createdAt int64, raw, origin string) error {
-	return execDiscover(`INSERT INTO discover_events (id, kind, pubkey, created_at, raw, origin, fetched_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(id) DO UPDATE SET origin = CASE WHEN excluded.origin = 'trusted' THEN 'trusted' ELSE discover_events.origin END`,
-		id, kind, pubkey, createdAt, raw, origin, time.Now().Unix())
+func PutDiscoverEvent(id string, kind int, pubkey string, createdAt int64, raw, origin, relay string) error {
+	return execDiscover(`INSERT INTO discover_events (id, kind, pubkey, created_at, raw, origin, fetched_at, relay)
+		VALUES (?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''))
+		ON CONFLICT(id) DO UPDATE SET origin = CASE WHEN excluded.origin = 'trusted' THEN 'trusted' ELSE discover_events.origin END,
+			relay = COALESCE(discover_events.relay, excluded.relay)`,
+		id, kind, pubkey, createdAt, raw, origin, time.Now().Unix(), relay)
+}
+
+// DiscoverEventRelay is the relay that first served the cached event id, ""
+// when unknown.
+func DiscoverEventRelay(id string) string {
+	rows, err := listColumn(`SELECT COALESCE(relay, '') FROM discover_events WHERE id = ?`, id)
+	if err != nil || len(rows) == 0 {
+		return ""
+	}
+	return rows[0]
 }
 
 // DiscoverEvents lists the cached events' raw JSON, oldest first.

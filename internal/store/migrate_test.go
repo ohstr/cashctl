@@ -16,6 +16,7 @@ func schemaV3(t *testing.T) string {
 	t.Helper()
 	s := strings.Replace(schema, "token                      TEXT NOT NULL,", "token                      TEXT NOT NULL UNIQUE,", 1)
 	s = strings.Replace(s, liveWalletIndex, "", 1)
+	s = strings.Replace(s, "fetched_at INTEGER NOT NULL,\n\trelay      TEXT\n", "fetched_at INTEGER NOT NULL\n", 1)
 	if s == schema {
 		t.Fatal("setup: the v3 schema is the current one")
 	}
@@ -36,6 +37,9 @@ func v3Database(t *testing.T, rows [][7]string, openCallSources string) {
 		t.Fatal(err)
 	}
 	if _, err := raw.Exec(`INSERT INTO meta (key, value) VALUES ('schema_version', '3')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`INSERT INTO discover_events (id, kind, pubkey, created_at, raw, origin, fetched_at) VALUES ('ev1', 31190, 'p', 1, '{}', 'trusted', 1)`); err != nil {
 		t.Fatal(err)
 	}
 	for _, r := range rows {
@@ -169,6 +173,14 @@ func TestOpen_MigratesAnEmptyV3Database(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = db.Close() }()
+	// A cached event is kept, its relay unknown, and a new one records its relay.
+	var relay sql.NullString
+	if err := db.QueryRow(`SELECT relay FROM discover_events WHERE id = 'ev1'`).Scan(&relay); err != nil || relay.Valid {
+		t.Errorf("cached event after the migration: relay %v (%v), want NULL", relay, err)
+	}
+	if _, err := db.Exec(`INSERT INTO discover_events (id, kind, pubkey, created_at, raw, origin, fetched_at, relay) VALUES ('ev2', 1, 'p', 1, '{}', 'trusted', 1, 'wss://r')`); err != nil {
+		t.Errorf("a new cached event with its relay: %v", err)
+	}
 	var n int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name IN ('idx_entries_live_wallet', 'idx_entries_status_minter')`).Scan(&n); err != nil || n != 2 {
 		t.Errorf("indexes after the migration = %d (%v), want 2", n, err)

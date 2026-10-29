@@ -26,11 +26,14 @@ type signalFixture struct {
 	*listingFixture
 	published []*nip01.Event
 	down      bool
+	// onlyOn names, by event id, the one relay that serves an event; every
+	// other event is served by every relay.
+	onlyOn map[string]string
 }
 
 func newSignalFixture(t *testing.T, withIdentity bool) *signalFixture {
 	t.Helper()
-	f := &signalFixture{listingFixture: newListingFixture(t)}
+	f := &signalFixture{listingFixture: newListingFixture(t), onlyOn: map[string]string{}}
 	if withIdentity {
 		if _, err := identity.GenerateAndSaveLocal(); err != nil {
 			t.Fatal(err)
@@ -43,6 +46,9 @@ func newSignalFixture(t *testing.T, withIdentity bool) *signalFixture {
 		}
 		var out []*nip01.Event
 		for _, ev := range append(slices.Clone(f.events), f.published...) {
+			if r, ok := f.onlyOn[ev.ID]; ok && !slices.Contains(relays, r) {
+				continue
+			}
 			for _, flt := range filters {
 				if (len(flt.IDs) == 0 || slices.Contains(flt.IDs, ev.ID)) &&
 					(len(flt.Kinds) == 0 || slices.Contains(flt.Kinds, ev.Kind)) &&
@@ -168,6 +174,36 @@ func TestDiscover_RecommendQueueAndPublish(t *testing.T) {
 	if r, err := listing.ParseRecommendation(recs[0]); err != nil || !slices.Contains(r.Offers, f.addr) {
 		t.Errorf("recommendation %+v %v", r, err)
 	}
+	// p and a carry the relay the listing was read from.
+	for _, tag := range recs[0].Tags {
+		if (tag[0] == "p" || tag[0] == "a") && (len(tag) < 3 || tag[2] != "wss://discover.example") {
+			t.Errorf("%s tag %v: want the relay hint wss://discover.example", tag[0], tag)
+		}
+	}
+}
+
+// A recommendation's hint is the relay that served the listing, not merely the
+// first one the user reads.
+func TestDiscover_RecommendHintIsTheListingsRelay(t *testing.T) {
+	f := newSignalFixture(t, true)
+	if err := config.AddDiscoverRelay("wss://zeta.example"); err != nil {
+		t.Fatal(err)
+	}
+	f.onlyOn[f.ev.ID] = "wss://zeta.example"
+	f.usedYesterday(t)
+	if _, err := runSignal(t, newDiscoverRecommendCmd(), []string{offerHandle(f.addr)}, map[string]string{"yes": "true"}); err != nil {
+		t.Fatalf("recommend: %v", err)
+	}
+	items, _ := config.Outbox()
+	var draft nip01.Event
+	if len(items) != 1 || json.Unmarshal([]byte(items[0].Draft), &draft) != nil {
+		t.Fatalf("outbox %v", items)
+	}
+	for _, tag := range draft.Tags {
+		if (tag[0] == "p" || tag[0] == "a") && (len(tag) < 3 || tag[2] != "wss://zeta.example") {
+			t.Errorf("%s tag %v: want the hint wss://zeta.example", tag[0], tag)
+		}
+	}
 }
 
 // A report needs a reason, and is queued like a recommendation (no "used" rule).
@@ -276,7 +312,7 @@ func TestOwnWithdrawn(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw, _ := json.Marshal(del)
-	if err := config.PutDiscoverEvent(del.ID, 5, self, int64(del.CreatedAt), string(raw), config.OriginTrusted); err != nil { //nolint:gosec // unix time
+	if err := config.PutDiscoverEvent(del.ID, 5, self, int64(del.CreatedAt), string(raw), config.OriginTrusted, ""); err != nil { //nolint:gosec // unix time
 		t.Fatal(err)
 	}
 	if !ownWithdrawn(self, rec) {

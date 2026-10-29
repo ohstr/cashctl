@@ -210,7 +210,8 @@ CREATE TABLE discover_events (
 	created_at INTEGER NOT NULL,
 	raw        TEXT NOT NULL,
 	origin     TEXT NOT NULL,
-	fetched_at INTEGER NOT NULL
+	fetched_at INTEGER NOT NULL,
+	relay      TEXT
 );
 CREATE TABLE discover_outbox (
 	outbox_id     TEXT PRIMARY KEY,

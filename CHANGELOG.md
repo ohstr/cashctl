@@ -11,6 +11,8 @@
   Hub's network (a `tb` or `bcrt` invoice from a `mainnet` bitcoin Hub), before it is shown to pay.
 - Refuses an `--as connection-key` attestation dated more than 15 minutes ahead of the clock, which a
   verifier ignores (NIP-IC), instead of sending a claim that cannot pass.
+- Gives a recommendation's `p` and `a` tags a relay hint: the relay its listing was read from. The discovery
+  cache now records the relay that first served each event.
 
 ## [0.7.0-rc.1]
 

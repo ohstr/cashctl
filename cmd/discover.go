@@ -223,7 +223,7 @@ func fetchIntoCache(ctx context.Context, relays []string, filters []nip01.Subscr
 				if err != nil {
 					continue
 				}
-				_ = config.PutDiscoverEvent(ev.ID, ev.Kind, ev.PubKey, int64(ev.CreatedAt), string(raw), origin) //nolint:gosec // unix time
+				_ = config.PutDiscoverEvent(ev.ID, ev.Kind, ev.PubKey, int64(ev.CreatedAt), string(raw), origin, r) //nolint:gosec // unix time
 			}
 			// A little before the request started, so an event a relay stored
 			// meanwhile is asked for again.
