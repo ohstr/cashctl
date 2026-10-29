@@ -379,7 +379,7 @@ func receiveZap(cmd *cobra.Command, ev *nip01.Event, raw string) error {
 	if err != nil {
 		return output.RuntimeError(cmd, err)
 	}
-	if held, ok := l.FindByToken(z.Cash); ok && (held.Status == ledger.StatusHeld || held.Status == ledger.StatusZapClaiming) {
+	if held, ok := l.FindByToken(z.Cash); ok && ledger.Live(held.Status) {
 		return output.ConflictError(cmd, "", ledger.ErrAlreadyHeld)
 	}
 	minter := pre.Minter

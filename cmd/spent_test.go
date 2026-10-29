@@ -163,8 +163,8 @@ func TestRunCashStatus_ATombstoneAmongSeveralStaysARow(t *testing.T) {
 		t.Fatal(err)
 	}
 	amt := uint64(1000)
-	spent, _ := l.Add(ledger.Entry{Token: "tok-a", WalletPubkey: "pub", AmountMillis: &amt})
-	if _, err := l.Add(ledger.Entry{Token: "tok-b", WalletPubkey: "pub", AmountMillis: &amt}); err != nil {
+	spent, _ := l.Add(ledger.Entry{Token: "tok-a", WalletPubkey: "pub-a", AmountMillis: &amt})
+	if _, err := l.Add(ledger.Entry{Token: "tok-b", WalletPubkey: "pub-b", AmountMillis: &amt}); err != nil {
 		t.Fatal(err)
 	}
 	if err := l.Save(); err != nil {

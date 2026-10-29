@@ -11,6 +11,7 @@ does it. cashkit documents the same rules in its `docs/design.md`.
 | A3 Presumed-paid redeem | re-opened by a later read that shows the row unclaimed | NIP-CASH §Answer or Omit; NIP-CP §Balance |
 | A4 Lost withdrawal | re-placed automatically on the owning device while its quote counts as valid | NIP-CP §Writing (the lookup rules); NIP-CASH §Lost Replies |
 | A5 NIP-42 AUTH | answered only on the user's own pocket relays, as the user | NIP-CP §Wrapping |
+| A6 One holding per bill | keyed by wallet pubkey (TLV 0), stored in one spelling; a second spelling of a held bill is a `conflict` | NIP-CASH §Wire Format |
 | SG-1 Connection-key status | `NOT_FOUND` is never spent; a redeem or withdrawal is refused first (`status_unreadable`) | NIP-CASH §Scoping the Roster |
 | Result → state | one table for every method: a tombstone maps by its `reason` (`expired`, `reclaimed`, else `spent`); `NOT_FOUND` for the entry's own key or cash secret is `reclaimed`; a connection key's `NOT_FOUND` and no answer write nothing | NIP-CP §Balance; NIP-CASH §Removing a Recipient |
 
@@ -82,6 +83,23 @@ answered.
   link the user's identity to their Hub traffic.
 - cashctl: it keeps no Cash Pocket, so it never answers AUTH. A relay that requires AUTH to read is treated as one
   that does not answer.
+
+## A6. One holding per bill
+
+A decoder accepts a bill's TLV entries in any order and ignores unknown types, and provenance covers only the
+known ones (NIP-CASH §Wire Format). So one bill has many strings that all decode and verify. Both clients key a
+holding by the bill's wallet pubkey (TLV 0), never by its string, and store it in one spelling: lowercase, the
+known entries in ascending type order (TLV 1 in its encoded order), each byte for byte, unknown types dropped.
+For a signed bill with no blank hint that is what a fresh encode gives.
+
+- A second spelling of a bill already held, redeeming or being claimed is refused as `conflict`, before
+  anything is dialled. A bill let go and come back, however spelled, reactivates its old row.
+- An older store that held one bill twice is brought to one holding per bill without losing a secret.
+- cashctl: `internal/billform` gives the spelling; the database allows one live row per wallet pubkey
+  (`idx_entries_live_wallet`). Schema 4's migration from 3 keeps one copy live: the one an open call spends,
+  then the one re-keyed furthest (merge key, then protected cash secret), then the one received last. It marks
+  each other copy `duplicate` (counted nowhere, offered to nothing, its secrets kept) and writes a `migrate`
+  history line for it.
 
 ## SG-1. A connection-key holder's own row
 

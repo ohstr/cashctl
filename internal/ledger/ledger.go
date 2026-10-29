@@ -17,6 +17,7 @@ import (
 
 	"modernc.org/sqlite"
 
+	"github.com/ohstr/cashctl/internal/billform"
 	"github.com/ohstr/cashctl/internal/store"
 )
 
@@ -51,7 +52,17 @@ const (
 	// INTERNAL, omitted or timed out, and the own row still claimed). Counted
 	// in no balance, offered to no operation, re-read until it ends.
 	StatusRedeeming = "redeeming"
+	// StatusDuplicate: a second row for a bill another row holds, set aside
+	// when an older ledger had stored one bill twice under two spellings.
+	// Counted nowhere, offered to nothing; kept so no secret it carries is lost.
+	StatusDuplicate = "duplicate"
 )
+
+// Live reports whether status keeps a bill in this ledger's hands: at most
+// one row per bill may be live.
+func Live(status string) bool {
+	return status == StatusHeld || status == StatusRedeeming || status == StatusZapClaiming
+}
 
 // CashProtection values — see Entry.CashProtection's own doc comment.
 const (
@@ -522,7 +533,10 @@ func (l *Ledger) save() error {
 	// make that second save compare against a version its own first save had
 	// already bumped, and report a conflict with no second process involved.
 	newVersions := make(map[string]int64, len(l.Entries))
-	for _, e := range l.Entries {
+	for i := range l.Entries {
+		// A token set in place (a moved bill) is stored in its one spelling too.
+		normalize(&l.Entries[i])
+		e := l.Entries[i]
 		expectedVersion := l.loadedVersions[e.ID]
 		_, known := l.loaded[e.ID]
 		if prior, ok := l.loaded[e.ID]; ok && entriesEqual(prior, e) {
@@ -600,9 +614,9 @@ func (l *Ledger) save() error {
 			expectedVersion)
 		if err != nil {
 			// entries.id collisions are handled by ON CONFLICT above — the
-			// only other constraint this table has is token's own UNIQUE,
-			// so a constraint failure reaching here specifically means
-			// this exact token was saved by a concurrent `cashctl receive`
+			// only other constraint this table has is one live row per
+			// wallet pubkey, so a constraint failure reaching here means
+			// this bill was saved by a concurrent `cashctl receive`
 			// (same shape Add's own in-memory check already guards for the
 			// non-concurrent case: two processes both Load before either
 			// Save, so neither's in-memory check sees the other's token
@@ -618,8 +632,8 @@ func (l *Ledger) save() error {
 		// Zero rows means the DO UPDATE's WHERE did not match, i.e. the row's
 		// version moved since Load. Checked only for a row this process LOADED:
 		// for a row it is adding, an id conflict is effectively unreachable (ids
-		// are freshly generated; the real duplicate-receive collision is token's
-		// own UNIQUE, handled as ErrAlreadyHeld above), and treating that path as
+		// are freshly generated; the real duplicate-receive collision is the
+		// live-wallet index, handled as ErrAlreadyHeld above), and treating that path as
 		// a conflict could only produce a spurious one.
 		if known {
 			n, raErr := res.RowsAffected()
@@ -747,7 +761,7 @@ func entriesEqual(a, b Entry) bool {
 // confirmed live — a trigger's own RAISE(ABORT, ...), all of which share
 // the exact same primary code 19). entries.save's own insert calls this,
 // where entries.id collisions are already handled by ON CONFLICT — the
-// only constraint that can still fail there is token's own UNIQUE — but
+// only constraint that can still fail there is the live-wallet index — but
 // the check has to actually SAY that specifically, not just "some
 // constraint fired": a caught-but-misclassified failure of a different
 // kind (a future CHECK constraint, an operator-added trigger, or — this
@@ -779,19 +793,44 @@ var ErrAlreadyHeld = errors.New("this token is already in your ledger")
 // caller has to re-Load to make progress, which is why the message says so.
 var ErrConcurrentUpdate = errors.New("this wallet's local record was changed by another cashctl process while this command was running; nothing was overwritten — re-run the command")
 
-// FindByToken looks up an entry by its original token string — used to
-// reject re-receiving the same token twice.
+// normalize stores a bill in its one spelling (billform.Canonical), with the
+// wallet pubkey its token names; a string no decoder reads is only lowercased.
+func normalize(e *Entry) {
+	if c, err := billform.Canonical(e.Token); err == nil {
+		e.Token = c
+		e.WalletPubkey, _ = billform.WalletPubkey(c)
+		return
+	}
+	e.Token = strings.ToLower(e.Token)
+}
+
+// billKey is what one holding is keyed by: the wallet pubkey (TLV 0) of the
+// bill token spells, however it is spelled, else the lowercased string.
+func billKey(token string) string {
+	if w, err := billform.WalletPubkey(token); err == nil {
+		return "w:" + w
+	}
+	return "t:" + strings.ToLower(token)
+}
+
+// FindByToken finds the entry of the bill token spells, however it is spelled
+// (a decoder accepts entries in any order and ignores unknown types, so one
+// bill has many strings): a live entry first, else the latest one let go.
 func (l *Ledger) FindByToken(token string) (*Entry, bool) {
-	// Tokens are stored lowercase (Add, and every token a Hub returns); the
-	// uppercase spelling of a held token, as a QR code carries it, is the same
-	// token.
-	token = strings.ToLower(token)
+	key := billKey(token)
+	var found *Entry
 	for i := range l.Entries {
-		if l.Entries[i].Token == token {
+		if billKey(l.Entries[i].Token) != key {
+			continue
+		}
+		if Live(l.Entries[i].Status) {
 			return &l.Entries[i], true
 		}
+		if found == nil || l.Entries[i].Status != StatusDuplicate {
+			found = &l.Entries[i]
+		}
 	}
-	return nil, false
+	return found, found != nil
 }
 
 // Find looks up an entry by its short local ID (e.g. "tok-8e21").
@@ -818,37 +857,22 @@ func (l *Ledger) Held() []Entry {
 }
 
 // Add records a new entry, generating a short local ID and setting
-// ReceivedAt/Status/Verified. Rejects a token already HELD — a token
-// that's already in the ledger but no longer held (transferred, redeemed,
-// consolidated away) instead REACTIVATES that same row (see below) rather
-// than being rejected outright.
-//
-// e.Token is normalized to lowercase before either check: bech32 (BIP-173)
-// is single-case by construction — a real encoder never mixes case — but
-// case-INsensitive to decode, so the uppercase spelling of an already-held
-// token is the exact same token, not a second one. Comparing/storing raw
-// let it slip through as a distinct entry, silently doubling the token's
-// counted balance.
+// ReceivedAt/Status/Verified. The bill is keyed by its wallet pubkey and
+// stored in its one spelling (normalize), so a bill already live here is
+// ErrAlreadyHeld however it is spelled — uppercase, entries reordered, an
+// unknown TLV added. A bill held before and since let go (transferred,
+// redeemed, consolidated away) instead REACTIVATES that same row: a
+// full-amount transfer reassigns a wallet's identity IN PLACE (NIP-CASH
+// §Transferring and Splitting a Slice), so the same bill can genuinely come
+// back to a previous holder, and keeping its ID keeps the history recorded
+// before attributable.
 func (l *Ledger) Add(e Entry) (*Entry, error) {
-	e.Token = strings.ToLower(e.Token)
+	normalize(&e)
 	if existing, ok := l.FindByToken(e.Token); ok {
-		if existing.Status == StatusHeld || existing.Status == StatusRedeeming {
+		if Live(existing.Status) {
 			return nil, ErrAlreadyHeld
 		}
-		// The exact same token string came back — the one way this
-		// happens legitimately is a full-amount transfer, which
-		// reassigns a wallet's identity IN PLACE (NIP-CASH §Transferring
-		// and Splitting a Slice) rather than minting a new token string,
-		// so the very same string can genuinely be received again later
-		// by whoever it comes back to. entries.token is UNIQUE in the
-		// schema (rightly so — one wallet, one token string, however
-		// many times its identity changes hands), so this reactivates
-		// the SAME row (keeping its ID, so history/status transitions
-		// recorded before this stay attributable) instead of trying to
-		// INSERT a second one for it, which the schema would reject
-		// regardless of what this in-memory check decided.
-		id := existing.ID
-		e.ID = id
+		e.ID = existing.ID
 		e.ReceivedAt = nowRFC3339()
 		e.Status = StatusHeld
 		*existing = e
@@ -923,15 +947,21 @@ func nullIntPtr(v *int64) sql.NullInt64 {
 	return sql.NullInt64{Int64: *v, Valid: true}
 }
 
-// ZapEventFor is the Cash Zap stored with a held token, "" when none.
+// ZapEventFor is the Cash Zap stored with the bill token spells, however it is
+// spelled, "" when none: from its live row, else the latest one let go.
 func ZapEventFor(token string) (string, error) {
 	db, err := store.Open()
 	if err != nil {
 		return "", err
 	}
 	defer func() { _ = db.Close() }()
+	w, err := billform.WalletPubkey(token)
+	if err != nil {
+		return "", nil
+	}
 	var ev sql.NullString
-	err = db.QueryRow(`SELECT zap_event FROM entries WHERE token = ?`, strings.ToLower(token)).Scan(&ev)
+	err = db.QueryRow(`SELECT zap_event FROM entries WHERE wallet_pubkey = ?
+		ORDER BY status IN ('held', 'redeeming', 'zap_claiming') DESC, status = 'duplicate', rowid DESC LIMIT 1`, w).Scan(&ev)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}

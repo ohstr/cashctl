@@ -184,12 +184,12 @@ func runCashReceive(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return output.RuntimeError(cmd, err)
 	}
-	// Only a token still HELD blocks this — one that's since been
-	// transferred/redeemed/consolidated away is allowed back in (ledger.Add
-	// reactivates its existing row): a full-amount transfer reassigns a
-	// wallet in place, so the very same token string legitimately returns
-	// to a previous holder.
-	if held, ok := l.FindByToken(input); ok && held.Status == ledger.StatusHeld {
+	// Only a bill still live here blocks this, however it is spelled — one
+	// that's since been transferred/redeemed/consolidated away is allowed back
+	// in (ledger.Add reactivates its existing row): a full-amount transfer
+	// reassigns a wallet in place, so the same bill legitimately returns to a
+	// previous holder.
+	if held, ok := l.FindByToken(input); ok && ledger.Live(held.Status) {
 		return output.ConflictError(cmd, input, ledger.ErrAlreadyHeld)
 	}
 

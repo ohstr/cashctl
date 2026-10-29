@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.7.0-rc.2]
+
+- Fixes one bill being received and counted twice under two spellings (entries reordered, an unknown TLV
+  added): holdings are keyed by wallet pubkey and stored in one spelling. Schema 4 migrates a 0.7.0-rc.1
+  database and marks a second copy `duplicate`, a status scripts must accept.
+
 ## [0.7.0-rc.1]
 
 - Adds the `reclaimed` and `expired` holding statuses, so a removed slice
