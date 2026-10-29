@@ -9,6 +9,8 @@
   `get_info` network and prints the test-network line; `--json` adds `network` and `test_network`.
 - Refuses an order's Lightning invoice that the Hub's node identity did not sign, or whose prefix is not the
   Hub's network (a `tb` or `bcrt` invoice from a `mainnet` bitcoin Hub), before it is shown to pay.
+- Refuses an `--as connection-key` attestation dated more than 15 minutes ahead of the clock, which a
+  verifier ignores (NIP-IC), instead of sending a claim that cannot pass.
 
 ## [0.7.0-rc.1]
 

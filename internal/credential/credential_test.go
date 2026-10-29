@@ -558,3 +558,65 @@ func mustConnKey(t *testing.T, platform nipIC.WebIdentity, user string) nipIC.Co
 	}
 	return k
 }
+
+// T-34b, NIP-IC §Verification steps 3 and 5: an attestation dated more than 15
+// minutes ahead of the clock is ignored by a verifier, so a claim with it is
+// refused here first; up to 900 s ahead it is used.
+func TestParseCash_ConnectionKey_FutureDatedAttestation(t *testing.T) {
+	iaPriv, userPriv := randomPrivKeyHex(t), randomPrivKeyHex(t)
+	userPub, _ := utils.GetPublicKey(userPriv)
+	ev, err := nipIC.NewAttestation(nipIC.AttestationParams{
+		AuthType: "oauth", PrivateKey: iaPriv, ConnectionKey: mustConnKey(t, "discord", "482910"), UserPubkey: userPub,
+		Platform: "discord", Evidence: nipIC.Evidence{Platform: "discord", UserID: "482910", Username: "someone", VerifiedAt: 1720000000},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ := json.Marshal(ev)
+	file := filepath.Join(t.TempDir(), "attestation.json")
+	if err := os.WriteFile(file, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	prev := nowUnix
+	t.Cleanup(func() { nowUnix = prev })
+	for ahead, ok := range map[int64]bool{-3600: true, 0: true, 899: true, 900: true, 901: false, 86400: false} {
+		nowUnix = func() int64 { return int64(ev.CreatedAt) - ahead } //nolint:gosec // a test timestamp
+		_, err := ParseCash("connection-key:" + userPriv + ",discord,482910," + file)
+		if (err == nil) != ok {
+			t.Errorf("dated %d s ahead: %v, want ok=%v", ahead, err, ok)
+		}
+		if _, aErr := ConnectionKeyAttestation("connection-key:" + userPriv + ",discord,482910," + file); (aErr == nil) != ok {
+			t.Errorf("ConnectionKeyAttestation, dated %d s ahead: %v, want ok=%v", ahead, aErr, ok)
+		}
+	}
+}
+
+// NIP-IC §Canonical Platform User IDs: a sender derives a ConnectionKey from
+// typed input only on x, discord, email and dns, and only from a canonical
+// value; platform names are never lowercased.
+func TestParseTarget_ConnectionTypedInputMustBeCanonical(t *testing.T) {
+	ia := strings.Repeat("ab", 32)
+	for _, in := range []string{
+		"connection:github:alice:" + ia,   // IA-defined platform: key comes from the attestation
+		"connection:telegram:12345:" + ia, // same
+		"connection:x:@alice:" + ia,       // handle, not the numeric id
+		"connection:discord:080351110224678912:" + ia,
+		"connection:dns:faß.de:" + ia,
+		"connection:Discord:80351110224678912:" + ia,
+		"connection:discord:80351110224678912:" + ia + ":extra",
+	} {
+		if _, err := ParseTarget(in); err == nil {
+			t.Errorf("%s: accepted", in)
+		}
+	}
+	for _, in := range []string{
+		"connection:discord:80351110224678912:" + ia,
+		"connection:x:1234567:" + ia,
+		"connection:email:alice@example.com:" + ia,
+		"connection:dns:example.com:" + ia,
+	} {
+		if _, err := ParseTarget(in); err != nil {
+			t.Errorf("%s: refused: %v", in, err)
+		}
+	}
+}
