@@ -96,7 +96,7 @@ For a signed bill with no blank hint that is what a fresh encode gives.
   anything is dialled. A bill let go and come back, however spelled, reactivates its old row.
 - An older store that held one bill twice is brought to one holding per bill without losing a secret.
 - cashctl: `internal/billform` gives the spelling; the database allows one live row per wallet pubkey
-  (`idx_entries_live_wallet`). Schema 4's migration from 3 keeps one copy live: the one an open call spends,
+  (`idx_entries_live_wallet`). Schema 4's migration from 3 (`docs/storage.md`) keeps one copy live: the one an open call spends,
   then the one re-keyed furthest (merge key, then protected cash secret), then the one received last. It marks
   each other copy `duplicate` (counted nowhere, offered to nothing, its secrets kept) and writes a `migrate`
   history line for it.
