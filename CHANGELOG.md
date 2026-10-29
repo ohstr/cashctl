@@ -13,6 +13,8 @@
   verifier ignores (NIP-IC), instead of sending a claim that cannot pass.
 - Gives a recommendation's `p` and `a` tags a relay hint: the relay its listing was read from. The discovery
   cache now records the relay that first served each event.
+- Reads an operator's offers list (11191) from the operator's NIP-65 write relays too, so an operator whose
+  list is only on their own relays shows as verified.
 
 ## [0.7.0-rc.1]
 

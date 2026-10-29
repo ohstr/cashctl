@@ -319,3 +319,71 @@ func TestOwnWithdrawn(t *testing.T) {
 		t.Error("a withdrawn recommendation still counts")
 	}
 }
+
+// NIP-CASH §The Operator's Offers: the operator's 11191 is read from its NIP-65
+// write relays too, so a list kept only there still verifies the operator.
+func TestDiscover_OperatorOffersFromTheOperatorsWriteRelays(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		marker   string // the r tag's marker in the operator's 10002; "-" for no 10002
+		verified bool
+	}{
+		{"a write relay", "write", true},
+		{"an unmarked relay", "", true},
+		{"a read-only relay", "read", false},
+		{"no relay list", "-", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newSignalFixture(t, true)
+			opPriv, opPub := testmint.Key(t)
+			curPriv, curPub := testmint.Key(t)
+			if err := config.AddCurator(curPub); err != nil {
+				t.Fatal(err)
+			}
+			oc, _ := nipCO.DecodeOrderConnection(f.conn)
+			now := time.Now().Unix()
+			l, err := listing.NewListing(listing.ListingFields{Order: &oc, Network: "mainnet", Title: "Buy cash",
+				Status: listing.StatusOpen, Expiration: now + 86400, Operator: &listing.Ref{Pubkey: opPub}}, now-5, now,
+				func(ev *nip01.Event) error { return ev.Sign(f.orders.hubPriv) })
+			if err != nil {
+				t.Fatal(err)
+			}
+			rec := listing.NewRecommendation(f.orders.hubXOnly, "", []listing.Ref{{Pubkey: f.addr}}, "")
+			rec.CreatedAt = uint64(now - 60) //nolint:gosec // unix time
+			if err := rec.Sign(curPriv); err != nil {
+				t.Fatal(err)
+			}
+			offers := listing.NewOperatorOffers([]listing.Ref{{Pubkey: f.addr}}, []listing.Ref{{Pubkey: f.orders.hubXOnly}})
+			offers.CreatedAt = uint64(now - 30) //nolint:gosec // unix time
+			if err := offers.Sign(opPriv); err != nil {
+				t.Fatal(err)
+			}
+			f.events = append(f.events, l, rec, offers)
+			f.onlyOn[offers.ID] = "wss://operator.example"
+			if c.marker != "-" {
+				tag := []string{"r", "wss://operator.example"}
+				if c.marker != "" {
+					tag = append(tag, c.marker)
+				}
+				list := nip01.NewEvent(10002, "", tag)
+				list.CreatedAt = uint64(now - 30) //nolint:gosec // unix time
+				if err := list.Sign(opPriv); err != nil {
+					t.Fatal(err)
+				}
+				f.events = append(f.events, list)
+			}
+			doc, err := runSignal(t, newDiscoverListCmd(), nil, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			offersShown, _ := doc["offers"].([]any)
+			if len(offersShown) != 1 {
+				t.Fatalf("offers %v", doc["offers"])
+			}
+			op, _ := offersShown[0].(map[string]any)["operator"].(map[string]any)
+			if got := op != nil && op["verified"] == true && op["pubkey"] == opPub; got != c.verified {
+				t.Errorf("operator %v, want verified=%v", op, c.verified)
+			}
+		})
+	}
+}

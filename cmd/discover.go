@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/url"
 	"os"
 	"slices"
@@ -237,6 +238,67 @@ func fetchIntoCache(ctx context.Context, relays []string, filters []nip01.Subscr
 	return failed
 }
 
+// fetchOperatorOffers reads each operator's 11191 (and kind 0) from the
+// operator's NIP-65 write relays too, as NIP-CASH §The Operator's Offers asks:
+// a list kept only on the operator's own relays still verifies. Their kind
+// 10002 comes from the discovery relays. A relay of an operator's that fails
+// says nothing about the discovery relays, so it is not reported.
+func fetchOperatorOffers(ctx context.Context, discovery, ops []string) {
+	if len(ops) == 0 {
+		return
+	}
+	fetchIntoCache(ctx, discovery, []nip01.SubscriptionFilter{{Kinds: []int{10002}, Authors: ops}}, config.OriginTrusted)
+	byRelay := map[string][]string{}
+	for op, rs := range writeRelaysOf(ops) {
+		for _, r := range rs {
+			if !slices.Contains(discovery, r) {
+				byRelay[r] = append(byRelay[r], op)
+			}
+		}
+	}
+	relays := slices.Sorted(maps.Keys(byRelay))
+	if len(relays) > maxOperatorRelays {
+		relays = relays[:maxOperatorRelays]
+	}
+	for _, r := range relays {
+		fetchIntoCache(ctx, []string{r}, []nip01.SubscriptionFilter{{Kinds: []int{0, listing.KindOperatorOffers}, Authors: byRelay[r]}}, config.OriginTrusted)
+	}
+}
+
+// maxOperatorRelays bounds the operators' own relays one run asks, and
+// maxWriteRelaysEach how many of one operator's are taken.
+const (
+	maxOperatorRelays  = 20
+	maxWriteRelaysEach = 4
+)
+
+// writeRelaysOf is each author's NIP-65 write relays (an r tag with no marker
+// or "write"), from their newest cached kind 10002: ws or wss URLs only, at
+// most maxWriteRelaysEach each.
+func writeRelaysOf(authors []string) map[string][]string {
+	raws, _ := config.DiscoverEvents()
+	var lists []*nip01.Event
+	for _, raw := range raws {
+		var ev nip01.Event
+		if json.Unmarshal([]byte(raw), &ev) == nil && ev.Kind == 10002 && slices.Contains(authors, ev.PubKey) {
+			e := ev
+			lists = append(lists, &e)
+		}
+	}
+	out := map[string][]string{}
+	for _, ev := range newestPerAuthor(lists) {
+		for _, t := range ev.Tags {
+			if len(t) < 2 || t[0] != "r" || (len(t) > 2 && t[2] != "write") || len(out[ev.PubKey]) >= maxWriteRelaysEach {
+				continue
+			}
+			if u, err := url.Parse(t[1]); err == nil && (u.Scheme == "wss" || u.Scheme == "ws") && u.Host != "" && !slices.Contains(out[ev.PubKey], t[1]) {
+				out[ev.PubKey] = append(out[ev.PubKey], t[1])
+			}
+		}
+	}
+	return out
+}
+
 // discoverCacheMax bounds discover_events.
 const discoverCacheMax = 5000
 
@@ -395,6 +457,7 @@ func discoverRun(cmd *cobra.Command) ([]discovered, *listing.VersionBook, []stri
 			}
 			asked = trusted
 			failed = intersect(failed, fetchIntoCache(ctx, relays, trusted, config.OriginTrusted))
+			fetchOperatorOffers(ctx, relays, ops)
 		}
 		if raws, _ := config.DiscoverEvents(); len(failed) == len(relays) && len(raws) == 0 {
 			return nil, nil, failed, output.NetworkError(cmd, errors.New("no discovery relay answered and nothing is cached"))
