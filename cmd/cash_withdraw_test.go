@@ -37,9 +37,18 @@ type fakeWithdrawHub struct {
 	// payoutMillis overrides the quoted payout (0: 19258).
 	payoutMillis uint64
 	notices      chan struct{}
+	// status answers cash_status (nil: no answer, and no Lightning line).
+	status    *nipcash.CashStatusResult
+	statusErr error
+	// networkFee overrides the quoted network fee (0: 1200).
+	networkFee uint64
 }
 
 func (f *fakeWithdrawHub) Close() {}
+
+func (f *fakeWithdrawHub) CashStatus(context.Context, nipcash.Credential, string) (*nipcash.CashStatusResult, error) {
+	return f.status, f.statusErr
+}
 
 func (f *fakeWithdrawHub) WatchPayout(context.Context, string, []string) (<-chan struct{}, error) {
 	return f.notices, nil
@@ -50,9 +59,13 @@ func (f *fakeWithdrawHub) QuoteWithdraw(_ context.Context, p nipcash.CashWithdra
 	fields := nipcash.QuoteFields{Wallet: f.wallet, IdentityValue: strings.Repeat("ee", 32), Address: p.Address,
 		AmountMillis: 21000, NetworkFeeMillis: 1200, HubFeeMillis: 542, PayoutMillis: 19258,
 		SentBy: time.Now().Unix() + 3600, HoldsUntil: 870413}
+	if f.networkFee != 0 {
+		fields.NetworkFeeMillis = f.networkFee
+		fields.PayoutMillis = 21000 - f.networkFee - fields.HubFeeMillis
+	}
 	if f.payoutMillis != 0 {
 		fields.PayoutMillis = f.payoutMillis
-		fields.HubFeeMillis = 21000 - 1200 - f.payoutMillis
+		fields.HubFeeMillis = 21000 - fields.NetworkFeeMillis - f.payoutMillis
 	}
 	ev, err := nipcash.NewWithdrawQuoteEvent(fields, time.Now().Unix(), func(ev *nip01.Event) error { return ev.Sign(f.hubPriv) })
 	if err != nil {

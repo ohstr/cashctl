@@ -87,7 +87,8 @@ request may have gone out and the Hub's answer never arrived, so it may
 already have been applied. Resending it may pay twice; run `cashctl cash
 status --token <id>` (the error names the id) and act on what it reports.
 A failure to reach the Hub at all is still `network`, since nothing was
-sent. This is the same top-level `{"error", "code", "retryable", ...}`
+sent. A Hub whose announcement can't be used is exit 1, `reason: hub_unusable`:
+nothing was sent and the money has not moved. This is the same top-level `{"error", "code", "retryable", ...}`
 shape `cashctl --help` describes for every command, not something
 special to this skill's own three. `recovery` is the one field exempt from
 secret redaction and never truncated, and it appears only when a Hub-side

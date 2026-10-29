@@ -1,10 +1,10 @@
 // Package store manages cashctl's single local SQLite database, cashctl.db.
 //
-// The schema is version 3, created fresh: there is no migration from any
-// earlier cashctl, and a database without schema_version 3 is refused, never
-// read (nothing earlier was in production). Version 2 was only ever written by
-// pre-release builds, which lacked the join, withdrawal and discover columns
-// and tables this version has.
+// The schema is version 4. A new database gets it whole; a version-3 one
+// (cashctl 0.7.0-rc.1) is migrated in place (migrateV3, which keys bills by
+// wallet pubkey); any other is refused, never read. Version 2 was only ever
+// written by pre-release builds, which lacked the join, withdrawal and
+// discover columns and tables version 3 has.
 package store
 
 import (
@@ -22,7 +22,7 @@ import (
 )
 
 // SchemaVersion is the only schema this cashctl reads or writes.
-const SchemaVersion = "3"
+const SchemaVersion = "4"
 
 // schema is created once, in an empty database, together with
 // meta(schema_version).
@@ -55,7 +55,7 @@ CREATE TABLE connections (
 
 CREATE TABLE entries (
 	id                         TEXT PRIMARY KEY,
-	token                      TEXT NOT NULL UNIQUE,
+	token                      TEXT NOT NULL,
 	wallet_pubkey              TEXT NOT NULL,
 	minter_pubkey              TEXT,
 	secret                     TEXT NOT NULL,
@@ -84,6 +84,7 @@ CREATE TABLE entries (
 	version                    INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX idx_entries_status_minter ON entries(status, minter_pubkey);
+` + liveWalletIndex + `
 
 CREATE TABLE pending_calls (
 	call_id           TEXT PRIMARY KEY,
@@ -209,7 +210,8 @@ CREATE TABLE discover_events (
 	created_at INTEGER NOT NULL,
 	raw        TEXT NOT NULL,
 	origin     TEXT NOT NULL,
-	fetched_at INTEGER NOT NULL
+	fetched_at INTEGER NOT NULL,
+	relay      TEXT
 );
 CREATE TABLE discover_outbox (
 	outbox_id     TEXT PRIMARY KEY,
@@ -270,7 +272,8 @@ CREATE TABLE withdrawals (
 	confirmed_at       INTEGER,
 	checked_at         INTEGER,
 	finished_at        INTEGER,
-	recovered          INTEGER NOT NULL DEFAULT 0
+	recovered          INTEGER NOT NULL DEFAULT 0,
+	receipt_invalid_seen INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE unverified_confirmations (
@@ -282,6 +285,11 @@ CREATE TABLE unverified_confirmations (
 	via          TEXT NOT NULL
 );
 `
+
+// liveWalletIndex allows one live row per bill: a bill is its wallet pubkey
+// (TLV 0), however its string is spelled (NIP-CASH §Wire Format).
+const liveWalletIndex = `CREATE UNIQUE INDEX idx_entries_live_wallet ON entries(wallet_pubkey)
+	WHERE status IN ('held', 'redeeming', 'zap_claiming') AND wallet_pubkey <> '';`
 
 // ErrOldDatabase is a cashctl.db written by an earlier cashctl. It is never
 // read: the caller moves it aside.
@@ -359,7 +367,8 @@ func enableWAL(db *sql.DB) {
 }
 
 // Open opens cashctl's single local database, cashctl.db, under appdir.Dir(),
-// creating the version-3 schema in a new or empty file and refusing any other
+// creating the version-4 schema in a new or empty file, migrating a version-3
+// one and refusing any other
 // (ErrOldDatabase). It also checks this file's device record (EnsureDevice).
 // Callers own the returned *sql.DB and must Close it. 0600: it holds a
 // plaintext identity key and cash-mode spending secrets.
@@ -391,9 +400,10 @@ func Open() (*sql.DB, error) {
 	return db, nil
 }
 
-// initSchema creates the schema in an empty database, refuses one of another
-// version, and checks the device record — under one write lock, so two
-// processes opening a fresh file at once never both create it.
+// initSchema creates the schema in an empty database, migrates a version-3
+// one, refuses one of another version, and checks the device record — under
+// one write lock, so two processes opening a file at once never both create
+// or migrate it.
 func initSchema(db *sql.DB, path string) error {
 	ctx := context.Background()
 	conn, err := db.Conn(ctx)
@@ -425,7 +435,12 @@ func initSchema(db *sql.DB, path string) error {
 	} else {
 		var version string
 		err := conn.QueryRowContext(ctx, `SELECT value FROM meta WHERE key = 'schema_version'`).Scan(&version)
-		if err != nil || version != SchemaVersion {
+		switch {
+		case err == nil && version == "3":
+			if err := migrateV3(ctx, conn); err != nil {
+				return fmt.Errorf("cashctl.db: migrating from version 3: %w", err)
+			}
+		case err != nil || version != SchemaVersion:
 			return &ErrOldDatabase{Path: path}
 		}
 	}

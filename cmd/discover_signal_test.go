@@ -26,11 +26,14 @@ type signalFixture struct {
 	*listingFixture
 	published []*nip01.Event
 	down      bool
+	// onlyOn names, by event id, the one relay that serves an event; every
+	// other event is served by every relay.
+	onlyOn map[string]string
 }
 
 func newSignalFixture(t *testing.T, withIdentity bool) *signalFixture {
 	t.Helper()
-	f := &signalFixture{listingFixture: newListingFixture(t)}
+	f := &signalFixture{listingFixture: newListingFixture(t), onlyOn: map[string]string{}}
 	if withIdentity {
 		if _, err := identity.GenerateAndSaveLocal(); err != nil {
 			t.Fatal(err)
@@ -43,6 +46,9 @@ func newSignalFixture(t *testing.T, withIdentity bool) *signalFixture {
 		}
 		var out []*nip01.Event
 		for _, ev := range append(slices.Clone(f.events), f.published...) {
+			if r, ok := f.onlyOn[ev.ID]; ok && !slices.Contains(relays, r) {
+				continue
+			}
 			for _, flt := range filters {
 				if (len(flt.IDs) == 0 || slices.Contains(flt.IDs, ev.ID)) &&
 					(len(flt.Kinds) == 0 || slices.Contains(flt.Kinds, ev.Kind)) &&
@@ -168,6 +174,36 @@ func TestDiscover_RecommendQueueAndPublish(t *testing.T) {
 	if r, err := listing.ParseRecommendation(recs[0]); err != nil || !slices.Contains(r.Offers, f.addr) {
 		t.Errorf("recommendation %+v %v", r, err)
 	}
+	// p and a carry the relay the listing was read from.
+	for _, tag := range recs[0].Tags {
+		if (tag[0] == "p" || tag[0] == "a") && (len(tag) < 3 || tag[2] != "wss://discover.example") {
+			t.Errorf("%s tag %v: want the relay hint wss://discover.example", tag[0], tag)
+		}
+	}
+}
+
+// A recommendation's hint is the relay that served the listing, not merely the
+// first one the user reads.
+func TestDiscover_RecommendHintIsTheListingsRelay(t *testing.T) {
+	f := newSignalFixture(t, true)
+	if err := config.AddDiscoverRelay("wss://zeta.example"); err != nil {
+		t.Fatal(err)
+	}
+	f.onlyOn[f.ev.ID] = "wss://zeta.example"
+	f.usedYesterday(t)
+	if _, err := runSignal(t, newDiscoverRecommendCmd(), []string{offerHandle(f.addr)}, map[string]string{"yes": "true"}); err != nil {
+		t.Fatalf("recommend: %v", err)
+	}
+	items, _ := config.Outbox()
+	var draft nip01.Event
+	if len(items) != 1 || json.Unmarshal([]byte(items[0].Draft), &draft) != nil {
+		t.Fatalf("outbox %v", items)
+	}
+	for _, tag := range draft.Tags {
+		if (tag[0] == "p" || tag[0] == "a") && (len(tag) < 3 || tag[2] != "wss://zeta.example") {
+			t.Errorf("%s tag %v: want the hint wss://zeta.example", tag[0], tag)
+		}
+	}
 }
 
 // A report needs a reason, and is queued like a recommendation (no "used" rule).
@@ -276,10 +312,78 @@ func TestOwnWithdrawn(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw, _ := json.Marshal(del)
-	if err := config.PutDiscoverEvent(del.ID, 5, self, int64(del.CreatedAt), string(raw), config.OriginTrusted); err != nil { //nolint:gosec // unix time
+	if err := config.PutDiscoverEvent(del.ID, 5, self, int64(del.CreatedAt), string(raw), config.OriginTrusted, ""); err != nil { //nolint:gosec // unix time
 		t.Fatal(err)
 	}
 	if !ownWithdrawn(self, rec) {
 		t.Error("a withdrawn recommendation still counts")
+	}
+}
+
+// NIP-CASH §The Operator's Offers: the operator's 11191 is read from its NIP-65
+// write relays too, so a list kept only there still verifies the operator.
+func TestDiscover_OperatorOffersFromTheOperatorsWriteRelays(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		marker   string // the r tag's marker in the operator's 10002; "-" for no 10002
+		verified bool
+	}{
+		{"a write relay", "write", true},
+		{"an unmarked relay", "", true},
+		{"a read-only relay", "read", false},
+		{"no relay list", "-", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newSignalFixture(t, true)
+			opPriv, opPub := testmint.Key(t)
+			curPriv, curPub := testmint.Key(t)
+			if err := config.AddCurator(curPub); err != nil {
+				t.Fatal(err)
+			}
+			oc, _ := nipCO.DecodeOrderConnection(f.conn)
+			now := time.Now().Unix()
+			l, err := listing.NewListing(listing.ListingFields{Order: &oc, Network: "mainnet", Title: "Buy cash",
+				Status: listing.StatusOpen, Expiration: now + 86400, Operator: &listing.Ref{Pubkey: opPub}}, now-5, now,
+				func(ev *nip01.Event) error { return ev.Sign(f.orders.hubPriv) })
+			if err != nil {
+				t.Fatal(err)
+			}
+			rec := listing.NewRecommendation(f.orders.hubXOnly, "", []listing.Ref{{Pubkey: f.addr}}, "")
+			rec.CreatedAt = uint64(now - 60) //nolint:gosec // unix time
+			if err := rec.Sign(curPriv); err != nil {
+				t.Fatal(err)
+			}
+			offers := listing.NewOperatorOffers([]listing.Ref{{Pubkey: f.addr}}, []listing.Ref{{Pubkey: f.orders.hubXOnly}})
+			offers.CreatedAt = uint64(now - 30) //nolint:gosec // unix time
+			if err := offers.Sign(opPriv); err != nil {
+				t.Fatal(err)
+			}
+			f.events = append(f.events, l, rec, offers)
+			f.onlyOn[offers.ID] = "wss://operator.example"
+			if c.marker != "-" {
+				tag := []string{"r", "wss://operator.example"}
+				if c.marker != "" {
+					tag = append(tag, c.marker)
+				}
+				list := nip01.NewEvent(10002, "", tag)
+				list.CreatedAt = uint64(now - 30) //nolint:gosec // unix time
+				if err := list.Sign(opPriv); err != nil {
+					t.Fatal(err)
+				}
+				f.events = append(f.events, list)
+			}
+			doc, err := runSignal(t, newDiscoverListCmd(), nil, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			offersShown, _ := doc["offers"].([]any)
+			if len(offersShown) != 1 {
+				t.Fatalf("offers %v", doc["offers"])
+			}
+			op, _ := offersShown[0].(map[string]any)["operator"].(map[string]any)
+			if got := op != nil && op["verified"] == true && op["pubkey"] == opPub; got != c.verified {
+				t.Errorf("operator %v, want verified=%v", op, c.verified)
+			}
+		})
 	}
 }

@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -8,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/flokiorg/go-flokicoin/chainutil/bech32"
 	"github.com/ohstr/nmilat/nip57/nip57test"
 	"github.com/ohstr/nmilat/nipCO"
 	"github.com/ohstr/nmilat/nipcash"
@@ -350,27 +352,90 @@ func TestOrderPlace_RowAndCallAreOneTransaction(t *testing.T) {
 // validateOrder decodes the invoice: its amount is pay_millis, it expires by
 // pay_by, and it is on the Hub's chain.
 func TestValidateOrder_ChecksTheInvoice(t *testing.T) {
-	priv, _ := testmint.Key(t)
+	priv, xonly := testmint.Key(t)
+	otherNode, _ := testmint.Key(t)
 	payBy := time.Now().Unix() + 600
-	o := &ledger.Order{Payment: nipCO.PaymentLightning, AmountMillis: 100_000, Chain: "flokicoin"}
+	o := &ledger.Order{Payment: nipCO.PaymentLightning, AmountMillis: 100_000, Chain: "flokicoin", Network: "mainnet", HubIdentity: xonly}
 	order := func(inv string) *nipCO.Order {
 		return &nipCO.Order{Payment: nipCO.PaymentLightning, AmountMillis: 100_000, FeeMillis: 1000, PayMillis: 101_000, PayBy: payBy, Invoice: inv}
 	}
 	if err := validateOrder(o, order(testInvoice(t, priv, "fc", 101_000, payBy)), 0); err != nil {
 		t.Fatalf("a good invoice: %v", err)
 	}
+	if err := validateOrder(o, order(strings.ToUpper(testInvoice(t, priv, "fc", 101_000, payBy))), 0); err != nil {
+		t.Fatalf("an uppercase invoice: %v", err)
+	}
 	for name, inv := range map[string]string{
-		"another amount": testInvoice(t, priv, "fc", 100_000, payBy),
-		"amountless":     testInvoice(t, priv, "fc", 0, payBy),
-		"expires late":   testInvoice(t, priv, "fc", 101_000, payBy+60),
-		"expires early":  testInvoice(t, priv, "fc", 101_000, payBy-400),
-		"unknown prefix": testInvoice(t, priv, "xx", 101_000, payBy),
-		"another chain":  testInvoice(t, priv, "bc", 101_000, payBy),
-		"not an invoice": "lnfc1invoice",
+		"another amount":     testInvoice(t, priv, "fc", 100_000, payBy),
+		"amountless":         testInvoice(t, priv, "fc", 0, payBy),
+		"expires late":       testInvoice(t, priv, "fc", 101_000, payBy+60),
+		"expires early":      testInvoice(t, priv, "fc", 101_000, payBy-1),
+		"unknown prefix":     testInvoice(t, priv, "xx", 101_000, payBy),
+		"another chain":      testInvoice(t, priv, "bc", 101_000, payBy),
+		"another network":    testInvoice(t, priv, "fcrt", 101_000, payBy),
+		"another node":       testInvoice(t, otherNode, "fc", 101_000, payBy),
+		"signature replaced": withSignatureOf(t, testInvoice(t, priv, "fc", 101_000, payBy), testInvoice(t, priv, "fc", 101_000, payBy)),
+		"not an invoice":     "lnfc1invoice",
 	} {
 		if err := validateOrder(o, order(inv), 0); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
+	}
+
+	// Each network takes its own prefixes; a Hub that names no known network is
+	// held to its chain's.
+	for _, c := range []struct {
+		chain, network, currency string
+		ok                       bool
+	}{
+		{"bitcoin", "mainnet", "bc", true}, {"bitcoin", "mainnet", "tb", false}, {"bitcoin", "mainnet", "bcrt", false},
+		{"bitcoin", "testnet", "tb", true}, {"bitcoin", "signet", "tbs", true}, {"bitcoin", "regtest", "bcrt", true},
+		{"bitcoin", "regtest", "bc", false}, {"flokicoin", "regtest", "fcrt", true}, {"flokicoin", "testnet", "tf", true},
+		{"bitcoin", "", "tb", true}, {"bitcoin", "", "fc", false},
+	} {
+		oc := *o
+		oc.Chain, oc.Network = c.chain, c.network
+		err := validateOrder(&oc, order(testInvoice(t, priv, c.currency, 101_000, payBy)), 0)
+		if (err == nil) != c.ok {
+			t.Errorf("%s/%s, a %s invoice: %v, want ok=%v", c.chain, c.network, c.currency, err, c.ok)
+		}
+	}
+}
+
+// withSignatureOf is inv with the signature words of from: still bech32, signed
+// over other data.
+func withSignatureOf(t *testing.T, inv, from string) string {
+	t.Helper()
+	hrp, words, err := bech32.DecodeNoLimit(inv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, fw, err := bech32.DecodeNoLimit(from)
+	if err != nil {
+		t.Fatal(err)
+	}
+	words = append(append([]byte(nil), words[:len(words)-104]...), fw[len(fw)-104:]...)
+	s, err := bech32.Encode(hrp, words)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+func TestInvoiceNodeField(t *testing.T) {
+	key := make([]byte, 33)
+	key[0], key[32] = 2, 7
+	w, _ := bech32.ConvertBits(key, 8, 5, true)
+	field := append([]byte{19, byte(len(w) / 32), byte(len(w) % 32)}, w...)
+	other := []byte{6, 0, 1, 9}
+	if got, ok := invoiceNodeField(append(append([]byte(nil), other...), field...)); !ok || !bytes.Equal(got, key) {
+		t.Errorf("n field = %x %v, want %x", got, ok, key)
+	}
+	if _, ok := invoiceNodeField(other); ok {
+		t.Error("an n field read where there is none")
+	}
+	if _, ok := invoiceNodeField(field[:10]); ok {
+		t.Error("a truncated n field was read")
 	}
 }
 

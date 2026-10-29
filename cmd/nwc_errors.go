@@ -77,6 +77,9 @@ func classifyCashTokenNWCErr(cmd *cobra.Command, err error) error {
 	if isProvenanceRefusal(err) {
 		return output.InvalidInputError(cmd, "", err)
 	}
+	if errors.Is(err, nipcashclient.ErrHubUnusable) {
+		return hubUnusableError(cmd, err)
+	}
 	if explained, ok := explainCashSecretRefusal(err); ok {
 		return output.InvalidInputError(cmd, "", explained)
 	}
@@ -130,6 +133,9 @@ func classifyCashSpendErr(cmd *cobra.Command, err error, verb string, ids ...str
 		// Refused before any relay was contacted: nothing was sent.
 		return output.InvalidInputError(cmd, input, err)
 	}
+	if errors.Is(err, nipcashclient.ErrHubUnusable) {
+		return hubUnusableError(cmd, err)
+	}
 	if errors.Is(err, nipcashclient.ErrNoJournal) || errors.Is(err, nipcashclient.ErrNotSent) {
 		return output.RuntimeError(cmd, fmt.Errorf("not placed — your money has not moved: %w", err))
 	}
@@ -143,6 +149,14 @@ func classifyCashSpendErr(cmd *cobra.Command, err error, verb string, ids ...str
 	return output.IndeterminateError(cmd, input, fmt.Errorf(
 		"the Hub gave no answer to this %s, so whether it was applied is unknown. "+
 			"Do not resend it: check first with %s: %w", verb, cashStatusHint(ids), err))
+}
+
+// hubUnusableError is nmilat refusing to send anything to a Hub whose
+// announcement cannot be used (NIP-CASH §Hub Announcement): nothing was sent.
+func hubUnusableError(cmd *cobra.Command, err error) error {
+	return output.WithReason(output.RuntimeError(cmd, fmt.Errorf(
+		"this Hub's announcement can't be used (it names no request window of at least 60 seconds, or its newest announcement was refused), so cashctl sent it nothing — your money has not moved: %w", err)),
+		nipcashclient.ReasonHubUnusable)
 }
 
 // rejectedBeforeSend are the SDK's own checks on a request it then never

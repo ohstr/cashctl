@@ -1,0 +1,2641 @@
+{
+  "description": "NIP-CZ Cash Zaps (kind 9522, cash-zap:v1 tokens): the recipient's 10522, the strict tag rules (K-CZ-1..6) and rules 1-8 of the client verification (a scheme-1 mint bill carries no zap payload; there is no legacy payload), and counting.",
+  "source": "nipCZ/{event,verify,count,info}.go; nipCZ/event_test.go, verify_test.go, count_test.go, info_test.go (K-CZ-1..6)",
+  "nmilat": "github.com/ohstr/nmilat devel",
+  "keys": {
+    "minter": "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+    "minterSecret": "0000000000000000000000000000000000000000000000000000000000000001",
+    "recipient": "2f8bde4d1a07209355b4a7250a5c5128e88b84bddc619ab7cba8d569b240efe4",
+    "recipientSecret": "0000000000000000000000000000000000000000000000000000000000000005",
+    "sender": "fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556",
+    "senderSecret": "0000000000000000000000000000000000000000000000000000000000000006"
+  },
+  "target": {
+    "id": "24eea2cd3cb21023dd7145faf8c73a85216a72d5f12f53a65eafbf7a3adc8c6b",
+    "pubkey": "2f8bde4d1a07209355b4a7250a5c5128e88b84bddc619ab7cba8d569b240efe4",
+    "created_at": 1720000000,
+    "kind": 1,
+    "tags": [],
+    "content": "a note",
+    "sig": "f9558b55504dedcd8973183c57e30ebfdadf999a1920f1abb80ef8bf985d18a3857da2e2f914be90e954adf8a5f8067bab7d328450a7186576d23439691cda0f"
+  },
+  "info": [
+    {
+      "name": "one chain, one minter",
+      "event": {
+        "id": "b49a0e2310946734c06ca04f0014e4b9a9fc6f2d46c38000d5bc4583a2607dff",
+        "pubkey": "2f8bde4d1a07209355b4a7250a5c5128e88b84bddc619ab7cba8d569b240efe4",
+        "created_at": 1720000000,
+        "kind": 10522,
+        "tags": [
+          [
+            "chain",
+            "bitcoin"
+          ],
+          [
+            "mint",
+            "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+            "bitcoin"
+          ],
+          [
+            "relay",
+            "wss://relay.example.com"
+          ]
+        ],
+        "content": "",
+        "sig": "3df72a760adf24c3f5bfb6beddf6e378e47e4536d6329d6606b3d4aa547bb8b04482faa476d3ec9605ce78f934559cb231cc914cf980d3a7dfcce4264af4e90f"
+      },
+      "accepts": {
+        "bitcoin": true,
+        "flokicoin": false
+      },
+      "listsMinter": {
+        "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798/bitcoin": true,
+        "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798/flokicoin": false
+      },
+      "relays": [
+        "wss://relay.example.com"
+      ]
+    },
+    {
+      "name": "no chain: any chain",
+      "event": {
+        "id": "95cfffb56d744dac5f47c366851d94ae482250c09ba5559ba1a66c8ddac12818",
+        "pubkey": "2f8bde4d1a07209355b4a7250a5c5128e88b84bddc619ab7cba8d569b240efe4",
+        "created_at": 1720000000,
+        "kind": 10522,
+        "tags": [
+          [
+            "mint",
+            "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+            "flokicoin"
+          ]
+        ],
+        "content": "",
+        "sig": "30246d6be323460515d3a00aed8b05ef4eaceb8031b93f01ae850cd540ad636fbdbd3a4bd4077909b6816a45b9d449c1867af7890a586b342bac319ad21daf8e"
+      },
+      "accepts": {
+        "bitcoin": true,
+        "flokicoin": true
+      },
+      "listsMinter": {
+        "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798/bitcoin": false,
+        "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798/flokicoin": true
+      }
+    },
+    {
+      "name": "a mint for an unaccepted chain, without a chain, x-only: ignored",
+      "event": {
+        "id": "573c3229307b9449e2c53a591ff48e543dbdcb9941e2a430f47d1b2684258ee8",
+        "pubkey": "2f8bde4d1a07209355b4a7250a5c5128e88b84bddc619ab7cba8d569b240efe4",
+        "created_at": 1720000000,
+        "kind": 10522,
+        "tags": [
+          [
+            "chain",
+            "bitcoin"
+          ],
+          [
+            "mint",
+            "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+            "flokicoin"
+          ],
+          [
+            "mint",
+            "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+          ],
+          [
+            "mint",
+            "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+            "bitcoin"
+          ]
+        ],
+        "content": "",
+        "sig": "546ed2223a7c330c5f4f622323003eaff799b707dd2f6e8d4960eae353f3c17374806755c113e377970edbe04b80d5468978e614cbfc510fc74680b2c7355719"
+      },
+      "accepts": {
+        "bitcoin": true,
+        "flokicoin": false
+      },
+      "listsMinter": {
+        "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798/bitcoin": false,
+        "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798/flokicoin": false
+      }
+    },
+    {
+      "name": "wrong kind",
+      "event": {
+        "id": "24eea2cd3cb21023dd7145faf8c73a85216a72d5f12f53a65eafbf7a3adc8c6b",
+        "pubkey": "2f8bde4d1a07209355b4a7250a5c5128e88b84bddc619ab7cba8d569b240efe4",
+        "created_at": 1720000000,
+        "kind": 1,
+        "tags": [],
+        "content": "a note",
+        "sig": "f9558b55504dedcd8973183c57e30ebfdadf999a1920f1abb80ef8bf985d18a3857da2e2f914be90e954adf8a5f8067bab7d328450a7186576d23439691cda0f"
+      },
+      "error": "nipCZ: unexpected event kind"
+    }
+  ],
+  "parse": [
+    {
+      "name": "valid",
+      "event": {
+        "id": "e868103d2402d38a0fac2152c62f1efd2918c047657bc8de4813a6c3ec80e010",
+        "pubkey": "fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556",
+        "created_at": 1720000060,
+        "kind": 9522,
+        "tags": [
+          [
+            "e",
+            "24eea2cd3cb21023dd7145faf8c73a85216a72d5f12f53a65eafbf7a3adc8c6b"
+          ],
+          [
+            "k",
+            "1"
+          ],
+          [
+            "p",
+            "2f8bde4d1a07209355b4a7250a5c5128e88b84bddc619ab7cba8d569b240efe4"
+          ],
+          [
+            "amount",
+            "21000"
+          ],
+          [
+            "chain",
+            "bitcoin"
+          ],
+          [
+            "cash",
+            "satscash1qqs2h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2cpzamhxue69uhhyetvv9ujuetcv9khqmr99e3k7mgzyr8vankwem8vankwem8vankwem8vankwem8vankwem8vankwem8vup2pyrwg097a2sp6t07m5jrjcg33al5d02ln6nkh6eqdf2m6rfpjtw7q62laeyut8z86qcy4p9fw73mf8jq6k2a6gcx2hfv0rfkut8wslkc7qcyqqqqqqqqqq5sgpqqsyduwxdg"
+          ],
+          [
+            "w",
+            "abababababababababababababababababababababababababababababababab"
+          ],
+          [
+            "issued_at",
+            "1720000060"
+          ],
+          [
+            "expires_at",
+            "0"
+          ]
+        ],
+        "content": "Great post!",
+        "sig": "c493c91db657bcee0ebd09bf4360613f3d613b76ae9d6dba1e0ac9c5a60335a64b7c7bf019bd3c7ec2ca414ed33e6f79aee8c159e878261c754829cf2d4398cb"
+      },
+      "rule": 0
+    },
+    {
+      "id": "K-CZ-1",
+      "name": "issued_at 0",
+      "event": {
+        "id": "9b933569c6fb64429b2dbda639fca5948f91f1003d0af63c0513a5f565dcd62e",
+        "pubkey": "fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556",
+        "created_at": 1720000060,
+        "kind": 9522,
+        "tags": [
+          [
+            "e",
+            "24eea2cd3cb21023dd7145faf8c73a85216a72d5f12f53a65eafbf7a3adc8c6b"
+          ],
+          [
+            "k",
+            "1"
+          ],
+          [
+            "p",
+            "2f8bde4d1a07209355b4a7250a5c5128e88b84bddc619ab7cba8d569b240efe4"
+          ],
+          [
+            "amount",
+            "21000"
+          ],
+          [
+            "chain",
+            "bitcoin"
+          ],
+          [
+            "cash",
+            "satscash1qqs2h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2cpzamhxue69uhhyetvv9ujuetcv9khqmr99e3k7mgzyr8vankwem8vankwem8vankwem8vankwem8vankwem8vankwem8vup2pyrwg097a2sp6t07m5jrjcg33al5d02ln6nkh6eqdf2m6rfpjtw7q62laeyut8z86qcy4p9fw73mf8jq6k2a6gcx2hfv0rfkut8wslkc7qcyqqqqqqqqqq5sgpqqsyduwxdg"
+          ],
+          [
+            "w",
+            "abababababababababababababababababababababababababababababababab"
+          ],
+          [
+            "issued_at",
+            "0"
+          ],
+          [
+            "expires_at",
+            "0"
+          ]
+        ],
+        "content": "Great post!",
+        "sig": "4bd377d8826e705dd845f733929a86fa1542b54f8aab9519fc940a76de695c475b0c2399ecc8163ef82a017fa1a865105f1471f6380a0efb6ab318ae82ef693b"
+      },
+      "rule": 0
+    },
+    {
+      "id": "K-CZ-2",
+      "name": "amount 021000",
+      "event": {
+        "id": "569387224f8c326c221bc0f2abf78ae8b1e822d094620795c4653ab87bfc5b06",
+        "pubkey": "fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556",
+        "created_at": 1720000060,
+        "kind": 9522,
+        "tags": [
+          [
+            "e",
+            "24eea2cd3cb21023dd7145faf8c73a85216a72d5f12f53a65eafbf7a3adc8c6b"
+          ],
+          [
+            "k",
+            "1"
+          ],
+          [
+            "p",
+            "2f8bde4d1a07209355b4a7250a5c5128e88b84bddc619ab7cba8d569b240efe4"
+          ],
+          [
+            "amount",
+            "021000"
+          ],
+          [
+            "chain",
+            "bitcoin"
+          ],
+          [
+            "cash",
+            "satscash1qqs2h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2cpzamhxue69uhhyetvv9ujuetcv9khqmr99e3k7mgzyr8vankwem8vankwem8vankwem8vankwem8vankwem8vankwem8vup2pyrwg097a2sp6t07m5jrjcg33al5d02ln6nkh6eqdf2m6rfpjtw7q62laeyut8z86qcy4p9fw73mf8jq6k2a6gcx2hfv0rfkut8wslkc7qcyqqqqqqqqqq5sgpqqsyduwxdg"
+          ],
+          [
+            "w",
+            "abababababababababababababababababababababababababababababababab"
+          ],
+          [
+            "issued_at",
+            "1720000060"
+          ],
+          [
+            "expires_at",
+            "0"
+          ]
+        ],
+        "content": "Great post!",
+        "sig": "2d364819a0ca45beedd4ca45b4190eec54b2b42576e163948e52b45df6ae0c4103213fdd35ff483e873e295415526269d3a2b453182f6f43e54ca344f4c956f5"
+      },
+      "rule": 2,
+      "error": "nipCZ: rule 2: amount is not a positive integer without leading zeros"
+    },
+    {
+      "id": "K-CZ-3",
+      "name": "uppercase w",
+      "event": {
+        "id": "2a131ae106dca463fcb69d95b4f16833e6a7c4a282aafe0ab172f74a7fb008f1",
+        "pubkey": "fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556",
+        "created_at": 1720000060,
+        "kind": 9522,
+        "tags": [
+          [
+            "e",
+            "24eea2cd3cb21023dd7145faf8c73a85216a72d5f12f53a65eafbf7a3adc8c6b"
+          ],
+          [
+            "k",
+            "1"
+          ],
+          [
+            "p",
+            "2f8bde4d1a07209355b4a7250a5c5128e88b84bddc619ab7cba8d569b240efe4"
+          ],
+          [
+            "amount",
+            "21000"
+          ],
+          [
+            "chain",
+            "bitcoin"
+          ],
+          [
+            "cash",
+            "satscash1qqs2h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2cpzamhxue69uhhyetvv9ujuetcv9khqmr99e3k7mgzyr8vankwem8vankwem8vankwem8vankwem8vankwem8vankwem8vup2pyrwg097a2sp6t07m5jrjcg33al5d02ln6nkh6eqdf2m6rfpjtw7q62laeyut8z86qcy4p9fw73mf8jq6k2a6gcx2hfv0rfkut8wslkc7qcyqqqqqqqqqq5sgpqqsyduwxdg"
+          ],
+          [
+            "w",
+            "ABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB"
+          ],
+          [
+            "issued_at",
+            "1720000060"
+          ],
+          [
+            "expires_at",
+            "0"
+          ]
+        ],
+        "content": "Great post!",
+        "sig": "0b0db56befb1af16344ff3b7c7079d8eccb3a303a727310e5c6cf7e2fd153b02b0ce270e95940f8ed0763003eba544c5222cc7d4d86aa67471b4c8045f5420a3"
+      },
+      "rule": 2,
+      "error": "nipCZ: rule 2: w is not 64 lowercase hex"
+    },
+    {
+      "id": "K-CZ-4",
+      "name": "amount 0",
+      "event": {
+        "id": "f5254015730edabaa1edb4a8084de618bfe290951c2b7c906158e893a18c2e6c",
+        "pubkey": "fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556",
+        "created_at": 1720000060,
+        "kind": 9522,
+        "tags": [
+          [
+            "e",
+            "24eea2cd3cb21023dd7145faf8c73a85216a72d5f12f53a65eafbf7a3adc8c6b"
+          ],
+          [
+            "k",
+            "1"
+          ],
+          [
+            "p",
+            "2f8bde4d1a07209355b4a7250a5c5128e88b84bddc619ab7cba8d569b240efe4"
+          ],
+          [
+            "amount",
+            "0"
+          ],
+          [
+            "chain",
+            "bitcoin"
+          ],
+          [
+            "cash",
+            "satscash1qqs2h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2cpzamhxue69uhhyetvv9ujuetcv9khqmr99e3k7mgzyr8vankwem8vankwem8vankwem8vankwem8vankwem8vankwem8vup2pyrwg097a2sp6t07m5jrjcg33al5d02ln6nkh6eqdf2m6rfpjtw7q62laeyut8z86qcy4p9fw73mf8jq6k2a6gcx2hfv0rfkut8wslkc7qcyqqqqqqqqqq5sgpqqsyduwxdg"
+          ],
+          [
+            "w",
+            "abababababababababababababababababababababababababababababababab"
+          ],
+          [
+            "issued_at",
+            "1720000060"
+          ],
+          [
+            "expires_at",
+            "0"
+          ]
+        ],
+        "content": "Great post!",
+        "sig": "8c96de46463d2c2572a05b707326bc39ff04ae3f7e5475ff00ddbe9e618c19690a6c0e447bdde7df257238ce5fb8ce7bbf60e70ccfa4e4441246f2cfcddf809b"
+      },
+      "rule": 2,
+      "error": "nipCZ: rule 2: amount is not a positive integer without leading zeros"
+    },
+    {
+      "id": "K-CZ-5",
+      "name": "expires_at 00",
+      "event": {
+        "id": "585e23476d49be972df7a74dcdccea769cfadc68d3db0b2fd3ac2f64ae48e6d9",
+        "pubkey": "fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556",
+        "created_at": 1720000060,
+        "kind": 9522,
+        "tags": [
+          [
+            "e",
+            "24eea2cd3cb21023dd7145faf8c73a85216a72d5f12f53a65eafbf7a3adc8c6b"
+          ],
+          [
+            "k",
+            "1"
+          ],
+          [
+            "p",
+            "2f8bde4d1a07209355b4a7250a5c5128e88b84bddc619ab7cba8d569b240efe4"
+          ],
+          [
+            "amount",
+            "21000"
+          ],
+          [
+            "chain",
+            "bitcoin"
+          ],
+          [
+            "cash",
+            "satscash1qqs2h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2cpzamhxue69uhhyetvv9ujuetcv9khqmr99e3k7mgzyr8vankwem8vankwem8vankwem8vankwem8vankwem8vankwem8vup2pyrwg097a2sp6t07m5jrjcg33al5d02ln6nkh6eqdf2m6rfpjtw7q62laeyut8z86qcy4p9fw73mf8jq6k2a6gcx2hfv0rfkut8wslkc7qcyqqqqqqqqqq5sgpqqsyduwxdg"
+          ],
+          [
+            "w",
+            "abababababababababababababababababababababababababababababababab"
+          ],
+          [
+            "issued_at",
+            "1720000060"
+          ],
+          [
+            "expires_at",
+            "00"
+          ]
+        ],
+        "content": "Great post!",
+        "sig": "c5b64a444816d24b06eb04bd5df039e8535f806a78a27c5f0e9bcab5072e673e7846e699e220c2cab54fae93b223aea3d7bf7a6fab56817d1acf1c6fde9f03e6"
+      },
+      "rule": 2,
+      "error": "nipCZ: rule 2: expires_at is not unsigned decimal without leading zeros"
+    },
+    {
+      "id": "K-CZ-6",
+      "name": "uppercase p",
+      "event": {
+        "id": "89bb72d6cb4cb1231bcb7906f5da901be97cff1e775e812fbc0a5ff294473ffb",
+        "pubkey": "fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556",
+        "created_at": 1720000060,
+        "kind": 9522,
+        "tags": [
+          [
+            "e",
+            "24eea2cd3cb21023dd7145faf8c73a85216a72d5f12f53a65eafbf7a3adc8c6b"
+          ],
+          [
+            "k",
+            "1"
+          ],
+          [
+            "p",
+            "2F8BDE4D1A07209355B4A7250A5C5128E88B84BDDC619AB7CBA8D569B240EFE4"
+          ],
+          [
+            "amount",
+            "21000"
+          ],
+          [
+            "chain",
+            "bitcoin"
+          ],
+          [
+            "cash",
+            "satscash1qqs2h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2cpzamhxue69uhhyetvv9ujuetcv9khqmr99e3k7mgzyr8vankwem8vankwem8vankwem8vankwem8vankwem8vankwem8vup2pyrwg097a2sp6t07m5jrjcg33al5d02ln6nkh6eqdf2m6rfpjtw7q62laeyut8z86qcy4p9fw73mf8jq6k2a6gcx2hfv0rfkut8wslkc7qcyqqqqqqqqqq5sgpqqsyduwxdg"
+          ],
+          [
+            "w",
+            "abababababababababababababababababababababababababababababababab"
+          ],
+          [
+            "issued_at",
+            "1720000060"
+          ],
+          [
+            "expires_at",
+            "0"
+          ]
+        ],
+        "content": "Great post!",
+        "sig": "6f4fdecf2c1fe15dd4e34c6f6adbfc46d3d44ad081bdaca025746f2fe383aae23a036ea4e54ce9245252699a1ad14e3faa686ed692777c1339d4239cf2c74799"
+      },
+      "rule": 2,
+      "error": "nipCZ: rule 2: p is not 64 lowercase hex with a valid platform"
+    },
+    {
+      "name": "no p",
+      "event": {
+        "id": "2576c4a9451a8bebd63be559fb6db1651d065c034f51d4ceb4fdfdec4f8e3a72",
+        "pubkey": "fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556",
+        "created_at": 1720000060,
+        "kind": 9522,
+        "tags": [
+          [
+            "e",
+            "24eea2cd3cb21023dd7145faf8c73a85216a72d5f12f53a65eafbf7a3adc8c6b"
+          ],
+          [
+            "k",
+            "1"
+          ],
+          [
+            "amount",
+            "21000"
+          ],
+          [
+            "chain",
+            "bitcoin"
+          ],
+          [
+            "cash",
+            "satscash1qqs2h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2cpzamhxue69uhhyetvv9ujuetcv9khqmr99e3k7mgzyr8vankwem8vankwem8vankwem8vankwem8vankwem8vankwem8vup2pyrwg097a2sp6t07m5jrjcg33al5d02ln6nkh6eqdf2m6rfpjtw7q62laeyut8z86qcy4p9fw73mf8jq6k2a6gcx2hfv0rfkut8wslkc7qcyqqqqqqqqqq5sgpqqsyduwxdg"
+          ],
+          [
+            "w",
+            "abababababababababababababababababababababababababababababababab"
+          ],
+          [
+            "issued_at",
+            "1720000060"
+          ],
+          [
+            "expires_at",
+            "0"
+          ]
+        ],
+        "content": "Great post!",
+        "sig": "1e0e1b881ceda9e4ff16548ae98e753df7c9627652b06f0d80b8a728489fcf4bb942509ea8f361a3f1d8e385f5b36fe5e6ad77ce5107dd3532d0d94204e3cb5c"
+      },
+      "rule": 2,
+      "error": "nipCZ: rule 2: 0 p tags, want exactly one"
+    },
+    {
+      "name": "two p",
+      "event": {
+        "id": "b96f8f7ae3e99677912f0bf45332906a072db8b9e8fb57f9dd3a418966100d46",
+        "pubkey": "fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556",
+        "created_at": 1720000060,
+        "kind": 9522,
+        "tags": [
+          [
+            "e",
+            "24eea2cd3cb21023dd7145faf8c73a85216a72d5f12f53a65eafbf7a3adc8c6b"
+          ],
+          [
+            "k",
+            "1"
+          ],
+          [
+            "p",
+            "2f8bde4d1a07209355b4a7250a5c5128e88b84bddc619ab7cba8d569b240efe4"
+          ],
+          [
+            "amount",
+            "21000"
+          ],
+          [
+            "chain",
+            "bitcoin"
+          ],
+          [
+            "cash",
+            "satscash1qqs2h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2cpzamhxue69uhhyetvv9ujuetcv9khqmr99e3k7mgzyr8vankwem8vankwem8vankwem8vankwem8vankwem8vankwem8vup2pyrwg097a2sp6t07m5jrjcg33al5d02ln6nkh6eqdf2m6rfpjtw7q62laeyut8z86qcy4p9fw73mf8jq6k2a6gcx2hfv0rfkut8wslkc7qcyqqqqqqqqqq5sgpqqsyduwxdg"
+          ],
+          [
+            "w",
+            "abababababababababababababababababababababababababababababababab"
+          ],
+          [
+            "issued_at",
+            "1720000060"
+          ],
+          [
+            "expires_at",
+            "0"
+          ],
+          [
+            "p",
+            "fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556"
+          ]
+        ],
+        "content": "Great post!",
+        "sig": "91502e4053889f1038745a5b6835689340f5e7257ac88c28b98ee5dd130e0b6e0f4f2dbbe0a1327c441ded0232079d210c21a348198a4a3d4ecc7d75fde5e1ac"
+      },
+      "rule": 2,
+      "error": "nipCZ: rule 2: 2 p tags, want exactly one"
+    },
+    {
+      "name": "no amount",
+      "event": {
+        "id": "c88b370d15565ba77226ec3cf6ea8d59a49889af7d27d8a31a46e549cc080f25",
+        "pubkey": "fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556",
+        "created_at": 1720000060,
+        "kind": 9522,
+        "tags": [
+          [
+            "e",
+            "24eea2cd3cb21023dd7145faf8c73a85216a72d5f12f53a65eafbf7a3adc8c6b"
+          ],
+          [
+            "k",
+            "1"
+          ],
+          [
+            "p",
+            "2f8bde4d1a07209355b4a7250a5c5128e88b84bddc619ab7cba8d569b240efe4"
+          ],
+          [
+            "chain",
+            "bitcoin"
+          ],
+          [
+            "cash",
+            "satscash1qqs2h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2cpzamhxue69uhhyetvv9ujuetcv9khqmr99e3k7mgzyr8vankwem8vankwem8vankwem8vankwem8vankwem8vankwem8vup2pyrwg097a2sp6t07m5jrjcg33al5d02ln6nkh6eqdf2m6rfpjtw7q62laeyut8z86qcy4p9fw73mf8jq6k2a6gcx2hfv0rfkut8wslkc7qcyqqqqqqqqqq5sgpqqsyduwxdg"
+          ],
+          [
+            "w",
+            "abababababababababababababababababababababababababababababababab"
+          ],
+          [
+            "issued_at",
+            "1720000060"
+          ],
+          [
+            "expires_at",
+            "0"
+          ]
+        ],
+        "content": "Great post!",
+        "sig": "d6a0e878f9a0e59225987d5747a12d3b7f1a07174f16add306124c69227b25bd89babd3b8a41f4b5e6ca3250efd184f02e52eac9baed0f4d7a0e4a079a48eedd"
+      },
+      "rule": 2,
+      "error": "nipCZ: rule 2: 0 amount tags, want exactly one"
+    },
+    {
+      "name": "no chain",
+      "event": {
+        "id": "9a45021f3e28981f1dbcf53a9ad8e31f8ad80479adc6eccb420865f1c70ce449",
+        "pubkey": "fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556",
+        "created_at": 1720000060,
+        "kind": 9522,
+        "tags": [
+          [
+            "e",
+            "24eea2cd3cb21023dd7145faf8c73a85216a72d5f12f53a65eafbf7a3adc8c6b"
+          ],
+          [
+            "k",
+            "1"
+          ],
+          [
+            "p",
+            "2f8bde4d1a07209355b4a7250a5c5128e88b84bddc619ab7cba8d569b240efe4"
+          ],
+          [
+            "amount",
+            "21000"
+          ],
+          [
+            "cash",
+            "satscash1qqs2h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2cpzamhxue69uhhyetvv9ujuetcv9khqmr99e3k7mgzyr8vankwem8vankwem8vankwem8vankwem8vankwem8vankwem8vup2pyrwg097a2sp6t07m5jrjcg33al5d02ln6nkh6eqdf2m6rfpjtw7q62laeyut8z86qcy4p9fw73mf8jq6k2a6gcx2hfv0rfkut8wslkc7qcyqqqqqqqqqq5sgpqqsyduwxdg"
+          ],
+          [
+            "w",
+            "abababababababababababababababababababababababababababababababab"
+          ],
+          [
+            "issued_at",
+            "1720000060"
+          ],
+          [
+            "expires_at",
+            "0"
+          ]
+        ],
+        "content": "Great post!",
+        "sig": "590db58aeabc1bb5d2d938b99b39487d1ff4786f8299075823aaf280631b25964aff52b243d9a683a0cc501e611fe43b18f554cf9ec90cca3c7b1666c80d6975"
+      },
+      "rule": 2,
+      "error": "nipCZ: rule 2: 0 chain tags, want exactly one"
+    },
+    {
+      "name": "no cash",
+      "event": {
+        "id": "3029403b9b021be98ed1dc00fff0728b7bd787ae4c17ccf8b58f4bf285a847b2",
+        "pubkey": "fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556",
+        "created_at": 1720000060,
+        "kind": 9522,
+        "tags": [
+          [
+            "e",
+            "24eea2cd3cb21023dd7145faf8c73a85216a72d5f12f53a65eafbf7a3adc8c6b"
+          ],
+          [
+            "k",
+            "1"
+          ],
+          [
+            "p",
+            "2f8bde4d1a07209355b4a7250a5c5128e88b84bddc619ab7cba8d569b240efe4"
+          ],
+          [
+            "amount",
+            "21000"
+          ],
+          [
+            "chain",
+            "bitcoin"
+          ],
+          [
+            "w",
+            "abababababababababababababababababababababababababababababababab"
+          ],
+          [
+            "issued_at",
+            "1720000060"
+          ],
+          [
+            "expires_at",
+            "0"
+          ]
+        ],
+        "content": "Great post!",
+        "sig": "263df1dd15950909b783e89f0e4e60674db4bd2816cd0a8392640e55df3804ae1b67bd02f20bc45bc13743490aa5895c776a0dd557e7a4cd055ae1d4d39a9067"
+      },
+      "rule": 2,
+      "error": "nipCZ: rule 2: 0 cash tags, want exactly one"
+    },
+    {
+      "name": "no w",
+      "event": {
+        "id": "13a01c2bb6bf3af0e9c08729a558fa3388178899481d53a7c02858dba6aae017",
+        "pubkey": "fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556",
+        "created_at": 1720000060,
+        "kind": 9522,
+        "tags": [
+          [
+            "e",
+            "24eea2cd3cb21023dd7145faf8c73a85216a72d5f12f53a65eafbf7a3adc8c6b"
+          ],
+          [
+            "k",
+            "1"
+          ],
+          [
+            "p",
+            "2f8bde4d1a07209355b4a7250a5c5128e88b84bddc619ab7cba8d569b240efe4"
+          ],
+          [
+            "amount",
+            "21000"
+          ],
+          [
+            "chain",
+            "bitcoin"
+          ],
+          [
+            "cash",
+            "satscash1qqs2h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2cpzamhxue69uhhyetvv9ujuetcv9khqmr99e3k7mgzyr8vankwem8vankwem8vankwem8vankwem8vankwem8vankwem8vup2pyrwg097a2sp6t07m5jrjcg33al5d02ln6nkh6eqdf2m6rfpjtw7q62laeyut8z86qcy4p9fw73mf8jq6k2a6gcx2hfv0rfkut8wslkc7qcyqqqqqqqqqq5sgpqqsyduwxdg"
+          ],
+          [
+            "issued_at",
+            "1720000060"
+          ],
+          [
+            "expires_at",
+            "0"
+          ]
+        ],
+        "content": "Great post!",
+        "sig": "df8716b0361f0045a47fb8dba2cd524a349572053bcfd8eb36bbc4b8af59337bd0312196daeab57e0fe85cddb56ce8cbc8530339ab0216efa3f058dcce749ea2"
+      },
+      "rule": 2,
+      "error": "nipCZ: rule 2: 0 w tags, want exactly one"
+    },
+    {
+      "name": "two e",
+      "event": {
+        "id": "0d4df4a958d040c096fbe9efea95b244071c368086fa2cc0db660ed4dc56bb21",
+        "pubkey": "fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556",
+        "created_at": 1720000060,
+        "kind": 9522,
+        "tags": [
+          [
+            "e",
+            "24eea2cd3cb21023dd7145faf8c73a85216a72d5f12f53a65eafbf7a3adc8c6b"
+          ],
+          [
+            "k",
+            "1"
+          ],
+          [
+            "p",
+            "2f8bde4d1a07209355b4a7250a5c5128e88b84bddc619ab7cba8d569b240efe4"
+          ],
+          [
+            "amount",
+            "21000"
+          ],
+          [
+            "chain",
+            "bitcoin"
+          ],
+          [
+            "cash",
+            "satscash1qqs2h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2cpzamhxue69uhhyetvv9ujuetcv9khqmr99e3k7mgzyr8vankwem8vankwem8vankwem8vankwem8vankwem8vankwem8vup2pyrwg097a2sp6t07m5jrjcg33al5d02ln6nkh6eqdf2m6rfpjtw7q62laeyut8z86qcy4p9fw73mf8jq6k2a6gcx2hfv0rfkut8wslkc7qcyqqqqqqqqqq5sgpqqsyduwxdg"
+          ],
+          [
+            "w",
+            "abababababababababababababababababababababababababababababababab"
+          ],
+          [
+            "issued_at",
+            "1720000060"
+          ],
+          [
+            "expires_at",
+            "0"
+          ],
+          [
+            "e",
+            "24eea2cd3cb21023dd7145faf8c73a85216a72d5f12f53a65eafbf7a3adc8c6b"
+          ]
+        ],
+        "content": "Great post!",
+        "sig": "312b3caaab2c97101ac5b7eabdaccf6818ea92529f2e9f4170127b344be317e1d328e7d922c1af80b2e67e45d80edf5c339a50c5b8c1198f56e43c0d888af7e3"
+      },
+      "rule": 2,
+      "error": "nipCZ: rule 2: 2 e tags, want at most one"
+    },
+    {
+      "name": "two k",
+      "event": {
+        "id": "da17238145f5b9990995fc55d8183ec9ff198e26e45bfca1568c0d72323a9825",
+        "pubkey": "fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556",
+        "created_at": 1720000060,
+        "kind": 9522,
+        "tags": [
+          [
+            "e",
+            "24eea2cd3cb21023dd7145faf8c73a85216a72d5f12f53a65eafbf7a3adc8c6b"
+          ],
+          [
+            "k",
+            "1"
+          ],
+          [
+            "p",
+            "2f8bde4d1a07209355b4a7250a5c5128e88b84bddc619ab7cba8d569b240efe4"
+          ],
+          [
+            "amount",
+            "21000"
+          ],
+          [
+            "chain",
+            "bitcoin"
+          ],
+          [
+            "cash",
+            "satscash1qqs2h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2cpzamhxue69uhhyetvv9ujuetcv9khqmr99e3k7mgzyr8vankwem8vankwem8vankwem8vankwem8vankwem8vankwem8vup2pyrwg097a2sp6t07m5jrjcg33al5d02ln6nkh6eqdf2m6rfpjtw7q62laeyut8z86qcy4p9fw73mf8jq6k2a6gcx2hfv0rfkut8wslkc7qcyqqqqqqqqqq5sgpqqsyduwxdg"
+          ],
+          [
+            "w",
+            "abababababababababababababababababababababababababababababababab"
+          ],
+          [
+            "issued_at",
+            "1720000060"
+          ],
+          [
+            "expires_at",
+            "0"
+          ],
+          [
+            "k",
+            "1"
+          ]
+        ],
+        "content": "Great post!",
+        "sig": "ab37ba598a13964825ce838c70f646ad9091c993e6b6b99a45a2fb6b2baf1b9d78e6a305ea6a81211591b867b9dfc9fcafcf9fd3bdc0cb4839060537d8809cf7"
+      },
+      "rule": 2,
+      "error": "nipCZ: rule 2: 2 k tags, want at most one"
+    },
+    {
+      "name": "ia beside a pubkey p",
+      "event": {
+        "id": "d02e7d88a439736d5c0bf0862c5605b811c3a92ef9146c495f861fb4f6b20967",
+        "pubkey": "fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556",
+        "created_at": 1720000060,
+        "kind": 9522,
+        "tags": [
+          [
+            "e",
+            "24eea2cd3cb21023dd7145faf8c73a85216a72d5f12f53a65eafbf7a3adc8c6b"
+          ],
+          [
+            "k",
+            "1"
+          ],
+          [
+            "p",
+            "2f8bde4d1a07209355b4a7250a5c5128e88b84bddc619ab7cba8d569b240efe4"
+          ],
+          [
+            "amount",
+            "21000"
+          ],
+          [
+            "chain",
+            "bitcoin"
+          ],
+          [
+            "cash",
+            "satscash1qqs2h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2cpzamhxue69uhhyetvv9ujuetcv9khqmr99e3k7mgzyr8vankwem8vankwem8vankwem8vankwem8vankwem8vankwem8vup2pyrwg097a2sp6t07m5jrjcg33al5d02ln6nkh6eqdf2m6rfpjtw7q62laeyut8z86qcy4p9fw73mf8jq6k2a6gcx2hfv0rfkut8wslkc7qcyqqqqqqqqqq5sgpqqsyduwxdg"
+          ],
+          [
+            "w",
+            "abababababababababababababababababababababababababababababababab"
+          ],
+          [
+            "issued_at",
+            "1720000060"
+          ],
+          [
+            "expires_at",
+            "0"
+          ],
+          [
+            "ia",
+            "fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556"
+          ]
+        ],
+        "content": "Great post!",
+        "sig": "a4b15c9ebecd675478ed7e8b9f82656e494794f761ae757a840fd704c9403e149a3a757303dcc687c2ce3f551de096bcee0e9ac9563360914b51d6e5464230c6"
+      },
+      "rule": 2,
+      "error": "nipCZ: rule 2: ia is present exactly when p is a ConnectionKey"
+    },
+    {
+      "name": "connection key p without ia",
+      "event": {
+        "id": "5b537400e420483b6fea7d3813f2de898ca8861452abdb658da8c679aa209fa2",
+        "pubkey": "fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556",
+        "created_at": 1720000060,
+        "kind": 9522,
+        "tags": [
+          [
+            "e",
+            "24eea2cd3cb21023dd7145faf8c73a85216a72d5f12f53a65eafbf7a3adc8c6b"
+          ],
+          [
+            "k",
+            "1"
+          ],
+          [
+            "p",
+            "22ced17fc7b3a6f7262d2dbe00b42d302948595468e025f4392b0a5022b8319d",
+            "discord"
+          ],
+          [
+            "amount",
+            "21000"
+          ],
+          [
+            "chain",
+            "bitcoin"
+          ],
+          [
+            "cash",
+            "satscash1qqs2h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2cpzamhxue69uhhyetvv9ujuetcv9khqmr99e3k7mgzyr8vankwem8vankwem8vankwem8vankwem8vankwem8vankwem8vup2pyrwg097a2sp6t07m5jrjcg33al5d02ln6nkh6eqdf2m6rfpjtw7q62laeyut8z86qcy4p9fw73mf8jq6k2a6gcx2hfv0rfkut8wslkc7qcyqqqqqqqqqq5sgpqqsyduwxdg"
+          ],
+          [
+            "w",
+            "abababababababababababababababababababababababababababababababab"
+          ],
+          [
+            "issued_at",
+            "1720000060"
+          ],
+          [
+            "expires_at",
+            "0"
+          ]
+        ],
+        "content": "Great post!",
+        "sig": "7bce941bb0f77ad430767a8fdd31dafa2050f89b82c17bf41de9ea51965cb520c45e3f45851241ae293a130253ac0a4a8cf1844174a731fab2e162184b446ce4"
+      },
+      "rule": 2,
+      "error": "nipCZ: rule 2: ia is present exactly when p is a ConnectionKey"
+    },
+    {
+      "name": "pubkey P",
+      "event": {
+        "id": "7bb3227a82a480fc52533591d5333e7307f03be6f604b1dc22130fa05ea0ab74",
+        "pubkey": "fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556",
+        "created_at": 1720000060,
+        "kind": 9522,
+        "tags": [
+          [
+            "e",
+            "24eea2cd3cb21023dd7145faf8c73a85216a72d5f12f53a65eafbf7a3adc8c6b"
+          ],
+          [
+            "k",
+            "1"
+          ],
+          [
+            "p",
+            "2f8bde4d1a07209355b4a7250a5c5128e88b84bddc619ab7cba8d569b240efe4"
+          ],
+          [
+            "amount",
+            "21000"
+          ],
+          [
+            "chain",
+            "bitcoin"
+          ],
+          [
+            "cash",
+            "satscash1qqs2h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2cpzamhxue69uhhyetvv9ujuetcv9khqmr99e3k7mgzyr8vankwem8vankwem8vankwem8vankwem8vankwem8vankwem8vup2pyrwg097a2sp6t07m5jrjcg33al5d02ln6nkh6eqdf2m6rfpjtw7q62laeyut8z86qcy4p9fw73mf8jq6k2a6gcx2hfv0rfkut8wslkc7qcyqqqqqqqqqq5sgpqqsyduwxdg"
+          ],
+          [
+            "w",
+            "abababababababababababababababababababababababababababababababab"
+          ],
+          [
+            "issued_at",
+            "1720000060"
+          ],
+          [
+            "expires_at",
+            "0"
+          ],
+          [
+            "P",
+            "22ced17fc7b3a6f7262d2dbe00b42d302948595468e025f4392b0a5022b8319d"
+          ]
+        ],
+        "content": "Great post!",
+        "sig": "789a99c79459d7699a63dac206a79974330bd9b30f1440877c553e046543955a96142705bc5c57038149dce4baa2bfa3110149d5026670c7cf40797415f92140"
+      },
+      "rule": 2,
+      "error": "nipCZ: rule 2: P is a ConnectionKey, never a Nostr pubkey"
+    },
+    {
+      "name": "amount +21000",
+      "event": {
+        "id": "9d41324fd3e99d65175384051e26710bf8090ceadc467c64b6251fa47526cff7",
+        "pubkey": "fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556",
+        "created_at": 1720000060,
+        "kind": 9522,
+        "tags": [
+          [
+            "e",
+            "24eea2cd3cb21023dd7145faf8c73a85216a72d5f12f53a65eafbf7a3adc8c6b"
+          ],
+          [
+            "k",
+            "1"
+          ],
+          [
+            "p",
+            "2f8bde4d1a07209355b4a7250a5c5128e88b84bddc619ab7cba8d569b240efe4"
+          ],
+          [
+            "amount",
+            "+21000"
+          ],
+          [
+            "chain",
+            "bitcoin"
+          ],
+          [
+            "cash",
+            "satscash1qqs2h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2cpzamhxue69uhhyetvv9ujuetcv9khqmr99e3k7mgzyr8vankwem8vankwem8vankwem8vankwem8vankwem8vankwem8vup2pyrwg097a2sp6t07m5jrjcg33al5d02ln6nkh6eqdf2m6rfpjtw7q62laeyut8z86qcy4p9fw73mf8jq6k2a6gcx2hfv0rfkut8wslkc7qcyqqqqqqqqqq5sgpqqsyduwxdg"
+          ],
+          [
+            "w",
+            "abababababababababababababababababababababababababababababababab"
+          ],
+          [
+            "issued_at",
+            "1720000060"
+          ],
+          [
+            "expires_at",
+            "0"
+          ]
+        ],
+        "content": "Great post!",
+        "sig": "6b7d5426aa9d8060d25002b6cec52564566f13cb6a9cac468d002b50034922eec9fbad5f9070a56c01ab772f3818d6b27eae0fb761fb78a247f510d42cdb56e8"
+      },
+      "rule": 2,
+      "error": "nipCZ: rule 2: amount is not a positive integer without leading zeros"
+    },
+    {
+      "name": "issued_at 01720000060",
+      "event": {
+        "id": "43dd05ea18dd6ce07cc68d6fd74207697e321cdaf18e21793fb60bb5f56300f8",
+        "pubkey": "fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556",
+        "created_at": 1720000060,
+        "kind": 9522,
+        "tags": [
+          [
+            "e",
+            "24eea2cd3cb21023dd7145faf8c73a85216a72d5f12f53a65eafbf7a3adc8c6b"
+          ],
+          [
+            "k",
+            "1"
+          ],
+          [
+            "p",
+            "2f8bde4d1a07209355b4a7250a5c5128e88b84bddc619ab7cba8d569b240efe4"
+          ],
+          [
+            "amount",
+            "21000"
+          ],
+          [
+            "chain",
+            "bitcoin"
+          ],
+          [
+            "cash",
+            "satscash1qqs2h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2cpzamhxue69uhhyetvv9ujuetcv9khqmr99e3k7mgzyr8vankwem8vankwem8vankwem8vankwem8vankwem8vankwem8vup2pyrwg097a2sp6t07m5jrjcg33al5d02ln6nkh6eqdf2m6rfpjtw7q62laeyut8z86qcy4p9fw73mf8jq6k2a6gcx2hfv0rfkut8wslkc7qcyqqqqqqqqqq5sgpqqsyduwxdg"
+          ],
+          [
+            "w",
+            "abababababababababababababababababababababababababababababababab"
+          ],
+          [
+            "issued_at",
+            "01720000060"
+          ],
+          [
+            "expires_at",
+            "0"
+          ]
+        ],
+        "content": "Great post!",
+        "sig": "23e2a806cd43487e50dfdc6a4679de0c3aed47def6e12a93516561e2df41d3e3981d6b04213b617415926358c283bc4b082b84212f2d35c199190f5b9a3219d2"
+      },
+      "rule": 2,
+      "error": "nipCZ: rule 2: issued_at is not unsigned decimal without leading zeros"
+    },
+    {
+      "name": "a zap bill without issued_at",
+      "event": {
+        "id": "8be0bf51e50f12ff6c3e8bdff225cf9b649d385cfc8a3a10926e63c5f0c67454",
+        "pubkey": "fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556",
+        "created_at": 1720000060,
+        "kind": 9522,
+        "tags": [
+          [
+            "e",
+            "24eea2cd3cb21023dd7145faf8c73a85216a72d5f12f53a65eafbf7a3adc8c6b"
+          ],
+          [
+            "k",
+            "1"
+          ],
+          [
+            "p",
+            "2f8bde4d1a07209355b4a7250a5c5128e88b84bddc619ab7cba8d569b240efe4"
+          ],
+          [
+            "amount",
+            "21000"
+          ],
+          [
+            "chain",
+            "bitcoin"
+          ],
+          [
+            "cash",
+            "satscash1qqs2h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2cpzamhxue69uhhyetvv9ujuetcv9khqmr99e3k7mgzyr8vankwem8vankwem8vankwem8vankwem8vankwem8vankwem8vup2pyrwg097a2sp6t07m5jrjcg33al5d02ln6nkh6eqdf2m6rfpjtw7q62laeyut8z86qcy4p9fw73mf8jq6k2a6gcx2hfv0rfkut8wslkc7qcyqqqqqqqqqq5sgpqqsyduwxdg"
+          ],
+          [
+            "w",
+            "abababababababababababababababababababababababababababababababab"
+          ],
+          [
+            "expires_at",
+            "0"
+          ]
+        ],
+        "content": "Great post!",
+        "sig": "37d7566c1fb72e36b9177e40d8bd108d8d2770d9a3200c069569ee1015d1679ccd0c219cba2fce58d2df4199ca5f607ee23b0eda4aba5f0c395b7163f1dbf478"
+      },
+      "rule": 2,
+      "error": "nipCZ: rule 2: a token with TLV 8 = 2 needs issued_at and expires_at"
+    },
+    {
+      "name": "a zap bill without expires_at",
+      "event": {
+        "id": "5129e5d6b4274d966af0448493b52f2ffd3e0b20f960db004741c4809d3077aa",
+        "pubkey": "fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556",
+        "created_at": 1720000060,
+        "kind": 9522,
+        "tags": [
+          [
+            "e",
+            "24eea2cd3cb21023dd7145faf8c73a85216a72d5f12f53a65eafbf7a3adc8c6b"
+          ],
+          [
+            "k",
+            "1"
+          ],
+          [
+            "p",
+            "2f8bde4d1a07209355b4a7250a5c5128e88b84bddc619ab7cba8d569b240efe4"
+          ],
+          [
+            "amount",
+            "21000"
+          ],
+          [
+            "chain",
+            "bitcoin"
+          ],
+          [
+            "cash",
+            "satscash1qqs2h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2cpzamhxue69uhhyetvv9ujuetcv9khqmr99e3k7mgzyr8vankwem8vankwem8vankwem8vankwem8vankwem8vankwem8vup2pyrwg097a2sp6t07m5jrjcg33al5d02ln6nkh6eqdf2m6rfpjtw7q62laeyut8z86qcy4p9fw73mf8jq6k2a6gcx2hfv0rfkut8wslkc7qcyqqqqqqqqqq5sgpqqsyduwxdg"
+          ],
+          [
+            "w",
+            "abababababababababababababababababababababababababababababababab"
+          ],
+          [
+            "issued_at",
+            "1720000060"
+          ]
+        ],
+        "content": "Great post!",
+        "sig": "8708741317e65a72f90eb65898958b430e48b3e057e4272252773fb9d81687bfeccb886c10028936516a23d0d9e0fd96bc701127a5a5b011aa7a7e4f5f758caa"
+      },
+      "rule": 2,
+      "error": "nipCZ: rule 2: a token with TLV 8 = 2 needs issued_at and expires_at"
+    },
+    {
+      "name": "w not the token's wallet",
+      "event": {
+        "id": "84f83a898c5e4b24c0be56c02e9ece28829cd8f2bebfcf9995ee4339e46e0498",
+        "pubkey": "fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556",
+        "created_at": 1720000060,
+        "kind": 9522,
+        "tags": [
+          [
+            "e",
+            "24eea2cd3cb21023dd7145faf8c73a85216a72d5f12f53a65eafbf7a3adc8c6b"
+          ],
+          [
+            "k",
+            "1"
+          ],
+          [
+            "p",
+            "2f8bde4d1a07209355b4a7250a5c5128e88b84bddc619ab7cba8d569b240efe4"
+          ],
+          [
+            "amount",
+            "21000"
+          ],
+          [
+            "chain",
+            "bitcoin"
+          ],
+          [
+            "cash",
+            "satscash1qqs2h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2cpzamhxue69uhhyetvv9ujuetcv9khqmr99e3k7mgzyr8vankwem8vankwem8vankwem8vankwem8vankwem8vankwem8vup2pyrwg097a2sp6t07m5jrjcg33al5d02ln6nkh6eqdf2m6rfpjtw7q62laeyut8z86qcy4p9fw73mf8jq6k2a6gcx2hfv0rfkut8wslkc7qcyqqqqqqqqqq5sgpqqsyduwxdg"
+          ],
+          [
+            "w",
+            "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+          ],
+          [
+            "issued_at",
+            "1720000060"
+          ],
+          [
+            "expires_at",
+            "0"
+          ]
+        ],
+        "content": "Great post!",
+        "sig": "280bf0a7ce00903bee5e9163856c412f11436cac72a47c47d88b3a088f2a41e6c2e4ba77e80e139436847c571c3f1a84b41bedfafb449afa6a5b3538cf9844c8"
+      },
+      "rule": 2,
+      "error": "nipCZ: rule 2: w is not the token's wallet pubkey (TLV 0)"
+    },
+    {
+      "name": "undecodable cash",
+      "event": {
+        "id": "b2d07203c42d3fc4bcbc947312fcbc67398692044b08d210387315410e9b3251",
+        "pubkey": "fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556",
+        "created_at": 1720000060,
+        "kind": 9522,
+        "tags": [
+          [
+            "e",
+            "24eea2cd3cb21023dd7145faf8c73a85216a72d5f12f53a65eafbf7a3adc8c6b"
+          ],
+          [
+            "k",
+            "1"
+          ],
+          [
+            "p",
+            "2f8bde4d1a07209355b4a7250a5c5128e88b84bddc619ab7cba8d569b240efe4"
+          ],
+          [
+            "amount",
+            "21000"
+          ],
+          [
+            "chain",
+            "bitcoin"
+          ],
+          [
+            "cash",
+            "satscash1qqqq"
+          ],
+          [
+            "w",
+            "abababababababababababababababababababababababababababababababab"
+          ],
+          [
+            "issued_at",
+            "1720000060"
+          ],
+          [
+            "expires_at",
+            "0"
+          ]
+        ],
+        "content": "Great post!",
+        "sig": "2add37bbdd05e0c74d589a3f04284a9368c0205bd1ebab5ab1d24f84d7a0ead269c3bcc0e669b841a455a9d27b80d1de5212ec0bc6eb3113995d37df21676f49"
+      },
+      "rule": 3,
+      "error": "nipCZ: rule 3: cash does not decode: nipcash: invalid bech32: invalid separator index 8"
+    },
+    {
+      "name": "bad signature (rule 1)",
+      "event": {
+        "id": "e868103d2402d38a0fac2152c62f1efd2918c047657bc8de4813a6c3ec80e010",
+        "pubkey": "fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556",
+        "created_at": 1720000060,
+        "kind": 9522,
+        "tags": [
+          [
+            "e",
+            "24eea2cd3cb21023dd7145faf8c73a85216a72d5f12f53a65eafbf7a3adc8c6b"
+          ],
+          [
+            "k",
+            "1"
+          ],
+          [
+            "p",
+            "2f8bde4d1a07209355b4a7250a5c5128e88b84bddc619ab7cba8d569b240efe4"
+          ],
+          [
+            "amount",
+            "21000"
+          ],
+          [
+            "chain",
+            "bitcoin"
+          ],
+          [
+            "cash",
+            "satscash1qqs2h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2cpzamhxue69uhhyetvv9ujuetcv9khqmr99e3k7mgzyr8vankwem8vankwem8vankwem8vankwem8vankwem8vankwem8vup2pyrwg097a2sp6t07m5jrjcg33al5d02ln6nkh6eqdf2m6rfpjtw7q62laeyut8z86qcy4p9fw73mf8jq6k2a6gcx2hfv0rfkut8wslkc7qcyqqqqqqqqqq5sgpqqsyduwxdg"
+          ],
+          [
+            "w",
+            "abababababababababababababababababababababababababababababababab"
+          ],
+          [
+            "issued_at",
+            "1720000060"
+          ],
+          [
+            "expires_at",
+            "0"
+          ]
+        ],
+        "content": "Great post!",
+        "sig": "c493c91db657bcee0ebd09bf4360613f3d613b76ae9d6dba1e0ac9c5a60335a64b7c7bf019bd3c7ec2ca414ed33e6f79aee8c159e878261c754829cf2d4398c0"
+      },
+      "rule": 1,
+      "error": "nipCZ: rule 1: signature: invalid signature"
+    },
+    {
+      "name": "an expiration tag is kept, listed never counted",
+      "event": {
+        "id": "5ea72e5abdaf216ad47e38287689ddd4c7df502f072587e07f112b6b9f6e3d17",
+        "pubkey": "fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556",
+        "created_at": 1720000060,
+        "kind": 9522,
+        "tags": [
+          [
+            "e",
+            "24eea2cd3cb21023dd7145faf8c73a85216a72d5f12f53a65eafbf7a3adc8c6b"
+          ],
+          [
+            "k",
+            "1"
+          ],
+          [
+            "p",
+            "2f8bde4d1a07209355b4a7250a5c5128e88b84bddc619ab7cba8d569b240efe4"
+          ],
+          [
+            "amount",
+            "21000"
+          ],
+          [
+            "chain",
+            "bitcoin"
+          ],
+          [
+            "cash",
+            "satscash1qqs2h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2cpzamhxue69uhhyetvv9ujuetcv9khqmr99e3k7mgzyr8vankwem8vankwem8vankwem8vankwem8vankwem8vankwem8vup2pyrwg097a2sp6t07m5jrjcg33al5d02ln6nkh6eqdf2m6rfpjtw7q62laeyut8z86qcy4p9fw73mf8jq6k2a6gcx2hfv0rfkut8wslkc7qcyqqqqqqqqqq5sgpqqsyduwxdg"
+          ],
+          [
+            "w",
+            "abababababababababababababababababababababababababababababababab"
+          ],
+          [
+            "issued_at",
+            "1720000060"
+          ],
+          [
+            "expires_at",
+            "0"
+          ],
+          [
+            "expiration",
+            "1730000000"
+          ]
+        ],
+        "content": "Great post!",
+        "sig": "4cf9daa96bb7f90eb7719f65941c42b95aabdeb372c024a8c010cc4aa871403785595a923726f2f3cbec52db3e473ef53a727d7a93b206fe25f69e42a6627064"
+      },
+      "rule": 0
+    }
+  ],
+  "verify": [
+    {
+      "name": "listed minter: countable",
+      "event": {
+        "id": "e868103d2402d38a0fac2152c62f1efd2918c047657bc8de4813a6c3ec80e010",
+        "pubkey": "fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556",
+        "created_at": 1720000060,
+        "kind": 9522,
+        "tags": [
+          [
+            "e",
+            "24eea2cd3cb21023dd7145faf8c73a85216a72d5f12f53a65eafbf7a3adc8c6b"
+          ],
+          [
+            "k",
+            "1"
+          ],
+          [
+            "p",
+            "2f8bde4d1a07209355b4a7250a5c5128e88b84bddc619ab7cba8d569b240efe4"
+          ],
+          [
+            "amount",
+            "21000"
+          ],
+          [
+            "chain",
+            "bitcoin"
+          ],
+          [
+            "cash",
+            "satscash1qqs2h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2cpzamhxue69uhhyetvv9ujuetcv9khqmr99e3k7mgzyr8vankwem8vankwem8vankwem8vankwem8vankwem8vankwem8vup2pyrwg097a2sp6t07m5jrjcg33al5d02ln6nkh6eqdf2m6rfpjtw7q62laeyut8z86qcy4p9fw73mf8jq6k2a6gcx2hfv0rfkut8wslkc7qcyqqqqqqqqqq5sgpqqsyduwxdg"
+          ],
+          [
+            "w",
+            "abababababababababababababababababababababababababababababababab"
+          ],
+          [
+            "issued_at",
+            "1720000060"
+          ],
+          [
+            "expires_at",
+            "0"
+          ]
+        ],
+        "content": "Great post!",
+        "sig": "c493c91db657bcee0ebd09bf4360613f3d613b76ae9d6dba1e0ac9c5a60335a64b7c7bf019bd3c7ec2ca414ed33e6f79aee8c159e878261c754829cf2d4398cb"
+      },
+      "withInfo": true,
+      "trustedMinters": [],
+      "rules": [
+        {
+          "n": 1,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 2,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 3,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 4,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 5,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 6,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 7,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 8,
+          "ok": true,
+          "skipped": false
+        }
+      ],
+      "minter": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+      "zapSigned": true,
+      "countable": true,
+      "valid": true
+    },
+    {
+      "name": "trusted minter, no 10522: countable",
+      "event": {
+        "id": "e868103d2402d38a0fac2152c62f1efd2918c047657bc8de4813a6c3ec80e010",
+        "pubkey": "fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556",
+        "created_at": 1720000060,
+        "kind": 9522,
+        "tags": [
+          [
+            "e",
+            "24eea2cd3cb21023dd7145faf8c73a85216a72d5f12f53a65eafbf7a3adc8c6b"
+          ],
+          [
+            "k",
+            "1"
+          ],
+          [
+            "p",
+            "2f8bde4d1a07209355b4a7250a5c5128e88b84bddc619ab7cba8d569b240efe4"
+          ],
+          [
+            "amount",
+            "21000"
+          ],
+          [
+            "chain",
+            "bitcoin"
+          ],
+          [
+            "cash",
+            "satscash1qqs2h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2cpzamhxue69uhhyetvv9ujuetcv9khqmr99e3k7mgzyr8vankwem8vankwem8vankwem8vankwem8vankwem8vankwem8vup2pyrwg097a2sp6t07m5jrjcg33al5d02ln6nkh6eqdf2m6rfpjtw7q62laeyut8z86qcy4p9fw73mf8jq6k2a6gcx2hfv0rfkut8wslkc7qcyqqqqqqqqqq5sgpqqsyduwxdg"
+          ],
+          [
+            "w",
+            "abababababababababababababababababababababababababababababababab"
+          ],
+          [
+            "issued_at",
+            "1720000060"
+          ],
+          [
+            "expires_at",
+            "0"
+          ]
+        ],
+        "content": "Great post!",
+        "sig": "c493c91db657bcee0ebd09bf4360613f3d613b76ae9d6dba1e0ac9c5a60335a64b7c7bf019bd3c7ec2ca414ed33e6f79aee8c159e878261c754829cf2d4398cb"
+      },
+      "withInfo": false,
+      "trustedMinters": [
+        "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+      ],
+      "rules": [
+        {
+          "n": 1,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 2,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 3,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 4,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 5,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 6,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 7,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 8,
+          "ok": true,
+          "skipped": false
+        }
+      ],
+      "minter": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+      "zapSigned": true,
+      "countable": true,
+      "valid": true
+    },
+    {
+      "name": "neither listed nor trusted (rule 8)",
+      "event": {
+        "id": "e868103d2402d38a0fac2152c62f1efd2918c047657bc8de4813a6c3ec80e010",
+        "pubkey": "fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556",
+        "created_at": 1720000060,
+        "kind": 9522,
+        "tags": [
+          [
+            "e",
+            "24eea2cd3cb21023dd7145faf8c73a85216a72d5f12f53a65eafbf7a3adc8c6b"
+          ],
+          [
+            "k",
+            "1"
+          ],
+          [
+            "p",
+            "2f8bde4d1a07209355b4a7250a5c5128e88b84bddc619ab7cba8d569b240efe4"
+          ],
+          [
+            "amount",
+            "21000"
+          ],
+          [
+            "chain",
+            "bitcoin"
+          ],
+          [
+            "cash",
+            "satscash1qqs2h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2cpzamhxue69uhhyetvv9ujuetcv9khqmr99e3k7mgzyr8vankwem8vankwem8vankwem8vankwem8vankwem8vankwem8vup2pyrwg097a2sp6t07m5jrjcg33al5d02ln6nkh6eqdf2m6rfpjtw7q62laeyut8z86qcy4p9fw73mf8jq6k2a6gcx2hfv0rfkut8wslkc7qcyqqqqqqqqqq5sgpqqsyduwxdg"
+          ],
+          [
+            "w",
+            "abababababababababababababababababababababababababababababababab"
+          ],
+          [
+            "issued_at",
+            "1720000060"
+          ],
+          [
+            "expires_at",
+            "0"
+          ]
+        ],
+        "content": "Great post!",
+        "sig": "c493c91db657bcee0ebd09bf4360613f3d613b76ae9d6dba1e0ac9c5a60335a64b7c7bf019bd3c7ec2ca414ed33e6f79aee8c159e878261c754829cf2d4398cb"
+      },
+      "withInfo": false,
+      "trustedMinters": [],
+      "rules": [
+        {
+          "n": 1,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 2,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 3,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 4,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 5,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 6,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 7,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 8,
+          "ok": false,
+          "skipped": false,
+          "reason": "the Minter is neither trusted by the reader nor listed in the recipient's 10522 for bitcoin"
+        }
+      ],
+      "minter": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+      "zapSigned": true,
+      "countable": false,
+      "reason": "rule 8: the Minter is not trusted",
+      "valid": true
+    },
+    {
+      "name": "the zap signature over another issued_at: another key recovered (rule 8)",
+      "event": {
+        "id": "fe58eb3ebea81fdab69665c5c9b2fb28793d6b5b59949dab67033a46fec53947",
+        "pubkey": "fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556",
+        "created_at": 1720000060,
+        "kind": 9522,
+        "tags": [
+          [
+            "e",
+            "24eea2cd3cb21023dd7145faf8c73a85216a72d5f12f53a65eafbf7a3adc8c6b"
+          ],
+          [
+            "k",
+            "1"
+          ],
+          [
+            "p",
+            "2f8bde4d1a07209355b4a7250a5c5128e88b84bddc619ab7cba8d569b240efe4"
+          ],
+          [
+            "amount",
+            "21000"
+          ],
+          [
+            "chain",
+            "bitcoin"
+          ],
+          [
+            "cash",
+            "satscash1qqs2h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2cpzamhxue69uhhyetvv9ujuetcv9khqmr99e3k7mgzyr8vankwem8vankwem8vankwem8vankwem8vankwem8vankwem8vup2pyr7uxtvtkkmjltj2qekl9qh67j2exf0u4vllsfl94pn9c2c5648nx0m4shpr8vc88gl0nr2hru72wrnse2vcwg38e3f5992m6q4k3k0eqcyqqqqqqqqqq5sgpqqsyezqeuh"
+          ],
+          [
+            "w",
+            "abababababababababababababababababababababababababababababababab"
+          ],
+          [
+            "issued_at",
+            "1720000060"
+          ],
+          [
+            "expires_at",
+            "0"
+          ]
+        ],
+        "content": "Great post!",
+        "sig": "ab6eebc80174527debc48438fd3f892526b38619c9918bdc310c0324e6cc2f7706114afff4c8a4717be80824c020289a2ef7f87fecbf650195540ec955254931"
+      },
+      "withInfo": true,
+      "trustedMinters": [],
+      "rules": [
+        {
+          "n": 1,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 2,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 3,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 4,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 5,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 6,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 7,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 8,
+          "ok": false,
+          "skipped": false,
+          "reason": "the Minter is neither trusted by the reader nor listed in the recipient's 10522 for bitcoin"
+        }
+      ],
+      "minter": "02e6a47937473fbda39d512512e4462fbdee84c3f0350cf67b5b1f0732a5363ddd",
+      "zapSigned": true,
+      "countable": false,
+      "reason": "rule 8: the Minter is not trusted",
+      "valid": true
+    },
+    {
+      "name": "retargeted: another e (rule 7)",
+      "event": {
+        "id": "a96a9f7d0fdba33f4b813846962bea571f89d80b0ee01ba73cbdd44049385efe",
+        "pubkey": "fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556",
+        "created_at": 1720000060,
+        "kind": 9522,
+        "tags": [
+          [
+            "e",
+            "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f"
+          ],
+          [
+            "k",
+            "1"
+          ],
+          [
+            "p",
+            "2f8bde4d1a07209355b4a7250a5c5128e88b84bddc619ab7cba8d569b240efe4"
+          ],
+          [
+            "amount",
+            "21000"
+          ],
+          [
+            "chain",
+            "bitcoin"
+          ],
+          [
+            "cash",
+            "satscash1qqs2h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2cpzamhxue69uhhyetvv9ujuetcv9khqmr99e3k7mgzyr8vankwem8vankwem8vankwem8vankwem8vankwem8vankwem8vup2pyrwg097a2sp6t07m5jrjcg33al5d02ln6nkh6eqdf2m6rfpjtw7q62laeyut8z86qcy4p9fw73mf8jq6k2a6gcx2hfv0rfkut8wslkc7qcyqqqqqqqqqq5sgpqqsyduwxdg"
+          ],
+          [
+            "w",
+            "abababababababababababababababababababababababababababababababab"
+          ],
+          [
+            "issued_at",
+            "1720000060"
+          ],
+          [
+            "expires_at",
+            "0"
+          ]
+        ],
+        "content": "Great post!",
+        "sig": "ef2a8cd18c6b7f3ae93cdc3ecf930a98401c3b5aa5efa95a5668cf21345674a982343343eaa63d1a20ff3c278898d17390707dbf973deef22e75bf7b9c2944eb"
+      },
+      "withInfo": true,
+      "trustedMinters": [],
+      "rules": [
+        {
+          "n": 1,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 2,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 3,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 4,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 5,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 6,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 7,
+          "ok": false,
+          "skipped": false,
+          "reason": "the zap does not name the target event"
+        },
+        {
+          "n": 8,
+          "ok": false,
+          "skipped": false,
+          "reason": "the Minter is neither trusted by the reader nor listed in the recipient's 10522 for bitcoin"
+        }
+      ],
+      "minter": "02c6e4021db1e877ee8bdc6f1023e045302e901411a7e84e49703d07a45892f46a",
+      "zapSigned": false,
+      "countable": false,
+      "reason": "rule 7: the zap does not name the target event",
+      "valid": true
+    },
+    {
+      "name": "an expiration tag: listed, never counted",
+      "event": {
+        "id": "5ea72e5abdaf216ad47e38287689ddd4c7df502f072587e07f112b6b9f6e3d17",
+        "pubkey": "fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556",
+        "created_at": 1720000060,
+        "kind": 9522,
+        "tags": [
+          [
+            "e",
+            "24eea2cd3cb21023dd7145faf8c73a85216a72d5f12f53a65eafbf7a3adc8c6b"
+          ],
+          [
+            "k",
+            "1"
+          ],
+          [
+            "p",
+            "2f8bde4d1a07209355b4a7250a5c5128e88b84bddc619ab7cba8d569b240efe4"
+          ],
+          [
+            "amount",
+            "21000"
+          ],
+          [
+            "chain",
+            "bitcoin"
+          ],
+          [
+            "cash",
+            "satscash1qqs2h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2cpzamhxue69uhhyetvv9ujuetcv9khqmr99e3k7mgzyr8vankwem8vankwem8vankwem8vankwem8vankwem8vankwem8vup2pyrwg097a2sp6t07m5jrjcg33al5d02ln6nkh6eqdf2m6rfpjtw7q62laeyut8z86qcy4p9fw73mf8jq6k2a6gcx2hfv0rfkut8wslkc7qcyqqqqqqqqqq5sgpqqsyduwxdg"
+          ],
+          [
+            "w",
+            "abababababababababababababababababababababababababababababababab"
+          ],
+          [
+            "issued_at",
+            "1720000060"
+          ],
+          [
+            "expires_at",
+            "0"
+          ],
+          [
+            "expiration",
+            "1730000000"
+          ]
+        ],
+        "content": "Great post!",
+        "sig": "4cf9daa96bb7f90eb7719f65941c42b95aabdeb372c024a8c010cc4aa871403785595a923726f2f3cbec52db3e473ef53a727d7a93b206fe25f69e42a6627064"
+      },
+      "withInfo": true,
+      "trustedMinters": [],
+      "rules": [
+        {
+          "n": 1,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 2,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 3,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 4,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 5,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 6,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 7,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 8,
+          "ok": true,
+          "skipped": false
+        }
+      ],
+      "minter": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+      "zapSigned": true,
+      "countable": false,
+      "reason": "a Cash Zap carries no NIP-40 expiration tag",
+      "valid": true
+    },
+    {
+      "name": "re-signed by another sender: another key recovered (rule 8)",
+      "event": {
+        "id": "6312403e1cda1845c4bea6daace1ac75acb134a048ee6b78752dfefe0e804f1b",
+        "pubkey": "5cbdf0646e5db4eaa398f365f2ea7a0e3d419b7e0330e39ce92bddedcac4f9bc",
+        "created_at": 1720000060,
+        "kind": 9522,
+        "tags": [
+          [
+            "e",
+            "24eea2cd3cb21023dd7145faf8c73a85216a72d5f12f53a65eafbf7a3adc8c6b"
+          ],
+          [
+            "k",
+            "1"
+          ],
+          [
+            "p",
+            "2f8bde4d1a07209355b4a7250a5c5128e88b84bddc619ab7cba8d569b240efe4"
+          ],
+          [
+            "amount",
+            "21000"
+          ],
+          [
+            "chain",
+            "bitcoin"
+          ],
+          [
+            "cash",
+            "satscash1qqs2h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2cpzamhxue69uhhyetvv9ujuetcv9khqmr99e3k7mgzyr8vankwem8vankwem8vankwem8vankwem8vankwem8vankwem8vup2pyrwg097a2sp6t07m5jrjcg33al5d02ln6nkh6eqdf2m6rfpjtw7q62laeyut8z86qcy4p9fw73mf8jq6k2a6gcx2hfv0rfkut8wslkc7qcyqqqqqqqqqq5sgpqqsyduwxdg"
+          ],
+          [
+            "w",
+            "abababababababababababababababababababababababababababababababab"
+          ],
+          [
+            "issued_at",
+            "1720000060"
+          ],
+          [
+            "expires_at",
+            "0"
+          ]
+        ],
+        "content": "Great post!",
+        "sig": "72ecf848839a56f5dc21e1a88f17966bf42ca3a38a0e6a996bbd72fdd325b5d552591a889192d10198a8e9d95c15a5832a12c717df6c088e7259e6a85d316f67"
+      },
+      "withInfo": true,
+      "trustedMinters": [],
+      "rules": [
+        {
+          "n": 1,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 2,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 3,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 4,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 5,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 6,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 7,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 8,
+          "ok": false,
+          "skipped": false,
+          "reason": "the Minter is neither trusted by the reader nor listed in the recipient's 10522 for bitcoin"
+        }
+      ],
+      "minter": "032350de1a74923ab9ea19b91ee8569f0bbbd730048c98f3ff7bf6f2f8fb7cddaa",
+      "zapSigned": true,
+      "countable": false,
+      "reason": "rule 8: the Minter is not trusted",
+      "valid": true
+    },
+    {
+      "name": "amount tag differs from the token's",
+      "event": {
+        "id": "932fa494ba54bf2e6aa9ef4b429d665541bcef64f95cf9577e703b83e5d42f39",
+        "pubkey": "fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556",
+        "created_at": 1720000060,
+        "kind": 9522,
+        "tags": [
+          [
+            "e",
+            "24eea2cd3cb21023dd7145faf8c73a85216a72d5f12f53a65eafbf7a3adc8c6b"
+          ],
+          [
+            "k",
+            "1"
+          ],
+          [
+            "p",
+            "2f8bde4d1a07209355b4a7250a5c5128e88b84bddc619ab7cba8d569b240efe4"
+          ],
+          [
+            "amount",
+            "20000"
+          ],
+          [
+            "chain",
+            "bitcoin"
+          ],
+          [
+            "cash",
+            "satscash1qqs2h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2cpzamhxue69uhhyetvv9ujuetcv9khqmr99e3k7mgzyr8vankwem8vankwem8vankwem8vankwem8vankwem8vankwem8vup2pyrwg097a2sp6t07m5jrjcg33al5d02ln6nkh6eqdf2m6rfpjtw7q62laeyut8z86qcy4p9fw73mf8jq6k2a6gcx2hfv0rfkut8wslkc7qcyqqqqqqqqqq5sgpqqsyduwxdg"
+          ],
+          [
+            "w",
+            "abababababababababababababababababababababababababababababababab"
+          ],
+          [
+            "issued_at",
+            "1720000060"
+          ],
+          [
+            "expires_at",
+            "0"
+          ]
+        ],
+        "content": "Great post!",
+        "sig": "93f06e3249e65c31bba0e1a30afea0fd51cc41e9bcd7b37c9ec00f1b05d7b6f6332fc9bd0a24feb3d8a949f3c46fadb234b65a0523933d43fd0b29c95a7d2eac"
+      },
+      "withInfo": true,
+      "trustedMinters": [],
+      "rules": [
+        {
+          "n": 1,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 2,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 3,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 4,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 5,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 6,
+          "ok": false,
+          "skipped": false,
+          "reason": "the token's attested amount (TLV 6) is not amount"
+        },
+        {
+          "n": 7,
+          "ok": false,
+          "skipped": true,
+          "reason": "rule 6 failed"
+        },
+        {
+          "n": 8,
+          "ok": false,
+          "skipped": true,
+          "reason": "rule 6 failed"
+        }
+      ],
+      "minter": "",
+      "zapSigned": false,
+      "countable": false,
+      "reason": "invalid",
+      "valid": false
+    },
+    {
+      "name": "chain tag differs from the token's prefix",
+      "event": {
+        "id": "1a2e87ad017239503b13ef08108fb582de330a4221d93cb689bac46ea2ed33c0",
+        "pubkey": "fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556",
+        "created_at": 1720000060,
+        "kind": 9522,
+        "tags": [
+          [
+            "e",
+            "24eea2cd3cb21023dd7145faf8c73a85216a72d5f12f53a65eafbf7a3adc8c6b"
+          ],
+          [
+            "k",
+            "1"
+          ],
+          [
+            "p",
+            "2f8bde4d1a07209355b4a7250a5c5128e88b84bddc619ab7cba8d569b240efe4"
+          ],
+          [
+            "amount",
+            "21000"
+          ],
+          [
+            "chain",
+            "flokicoin"
+          ],
+          [
+            "cash",
+            "satscash1qqs2h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2cpzamhxue69uhhyetvv9ujuetcv9khqmr99e3k7mgzyr8vankwem8vankwem8vankwem8vankwem8vankwem8vankwem8vup2pyrwg097a2sp6t07m5jrjcg33al5d02ln6nkh6eqdf2m6rfpjtw7q62laeyut8z86qcy4p9fw73mf8jq6k2a6gcx2hfv0rfkut8wslkc7qcyqqqqqqqqqq5sgpqqsyduwxdg"
+          ],
+          [
+            "w",
+            "abababababababababababababababababababababababababababababababab"
+          ],
+          [
+            "issued_at",
+            "1720000060"
+          ],
+          [
+            "expires_at",
+            "0"
+          ]
+        ],
+        "content": "Great post!",
+        "sig": "0ba79a0b0f9a204270540778fc0d3c37d38e09bd94fc2886e07de5667db322ea22bcf394d8db0786ccd5a5f0b61925fab9ff7c0ddb76cb875300499b8805a490"
+      },
+      "withInfo": true,
+      "trustedMinters": [],
+      "rules": [
+        {
+          "n": 1,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 2,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 3,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 4,
+          "ok": false,
+          "skipped": false,
+          "reason": "token prefix satscash is chain bitcoin, not flokicoin"
+        },
+        {
+          "n": 5,
+          "ok": false,
+          "skipped": true,
+          "reason": "rule 4 failed"
+        },
+        {
+          "n": 6,
+          "ok": false,
+          "skipped": true,
+          "reason": "rule 4 failed"
+        },
+        {
+          "n": 7,
+          "ok": false,
+          "skipped": true,
+          "reason": "rule 4 failed"
+        },
+        {
+          "n": 8,
+          "ok": false,
+          "skipped": true,
+          "reason": "rule 4 failed"
+        }
+      ],
+      "minter": "",
+      "zapSigned": false,
+      "countable": false,
+      "reason": "invalid",
+      "valid": false
+    },
+    {
+      "name": "a mint bill (scheme 1), no zap payload",
+      "event": {
+        "id": "48a26e58b0e35e63a4c3ffe6752c63ccb7415e876ff0c2685933706c25230304",
+        "pubkey": "fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556",
+        "created_at": 1720000060,
+        "kind": 9522,
+        "tags": [
+          [
+            "e",
+            "24eea2cd3cb21023dd7145faf8c73a85216a72d5f12f53a65eafbf7a3adc8c6b"
+          ],
+          [
+            "k",
+            "1"
+          ],
+          [
+            "p",
+            "2f8bde4d1a07209355b4a7250a5c5128e88b84bddc619ab7cba8d569b240efe4"
+          ],
+          [
+            "amount",
+            "21000"
+          ],
+          [
+            "chain",
+            "bitcoin"
+          ],
+          [
+            "cash",
+            "satscash1qqs2h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2cpzamhxue69uhhyetvv9ujuetcv9khqmr99e3k7mgzyr8vankwem8vankwem8vankwem8vankwem8vankwem8vankwem8vup2prau4khjtlundkpfdf2d58uvsxcqfuf40wznasc97kf3rkzanuhjm7krcg04p3ddqhp0xthn09sj5udfxgjp0qnzcnvylndhjm7akew59qcyqqqqqqqqqq5sgpqqszkd3s2m"
+          ],
+          [
+            "w",
+            "abababababababababababababababababababababababababababababababab"
+          ],
+          [
+            "issued_at",
+            "1720000060"
+          ],
+          [
+            "expires_at",
+            "0"
+          ]
+        ],
+        "content": "Great post!",
+        "sig": "cfeb91b4e83ecb98b73f4004ce93df23ce7ba0a5af1e3ee34f1b3d3f2445491cb1aa3884f318dcc9ba950455fb17e5e0b15d1fb56cfe8952197e83656b22c9ac"
+      },
+      "withInfo": true,
+      "trustedMinters": [],
+      "rules": [
+        {
+          "n": 1,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 2,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 3,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 4,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 5,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 6,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 7,
+          "ok": false,
+          "skipped": false,
+          "reason": "the token carries no zap signature (TLV 8 is not 2)"
+        },
+        {
+          "n": 8,
+          "ok": true,
+          "skipped": false
+        }
+      ],
+      "minter": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+      "zapSigned": false,
+      "countable": false,
+      "reason": "rule 7: the token carries no zap signature (TLV 8 is not 2)",
+      "valid": true
+    },
+    {
+      "name": "an expiring zap bill",
+      "event": {
+        "id": "7b130b73ef42c5387b94de0e0a11469d568ff21657ba1584c1819d5886a45e97",
+        "pubkey": "fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556",
+        "created_at": 1720000060,
+        "kind": 9522,
+        "tags": [
+          [
+            "e",
+            "24eea2cd3cb21023dd7145faf8c73a85216a72d5f12f53a65eafbf7a3adc8c6b"
+          ],
+          [
+            "k",
+            "1"
+          ],
+          [
+            "p",
+            "2f8bde4d1a07209355b4a7250a5c5128e88b84bddc619ab7cba8d569b240efe4"
+          ],
+          [
+            "amount",
+            "21000"
+          ],
+          [
+            "chain",
+            "bitcoin"
+          ],
+          [
+            "cash",
+            "satscash1qqs2et9v4jk2et9v4jk2et9v4jk2et9v4jk2et9v4jk2et9v4jk2etqpzamhxue69uhhyetvv9ujuetcv9khqmr99e3k7mgzyr8vankwem8vankwem8vankwem8vankwem8vankwem8vankwem8vup2prandgszkulnu38xkphqsq9sld63066gcj76t4hxz7ymxfq8lxfncv0qwpn9n68xajp42w8l3wgjwm9xtekgcltff0gae5sjuejq4mer4qcyqqqqqqqqqq5sgpqqsyx06uqa"
+          ],
+          [
+            "w",
+            "acacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacac"
+          ],
+          [
+            "issued_at",
+            "1720000060"
+          ],
+          [
+            "expires_at",
+            "1720003660"
+          ]
+        ],
+        "content": "Great post!",
+        "sig": "e8bd414ffe145e101a4c0fcc563c413e2ebd9c788d6a22deb7126ba2d4bb8aa66d8724fe4f3f6c1447a003a9bb650de9eba363d2de680a9b91353249644796ef"
+      },
+      "withInfo": true,
+      "trustedMinters": [],
+      "rules": [
+        {
+          "n": 1,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 2,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 3,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 4,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 5,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 6,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 7,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 8,
+          "ok": true,
+          "skipped": false
+        }
+      ],
+      "minter": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+      "zapSigned": true,
+      "countable": true,
+      "valid": true
+    }
+  ],
+  "count": [
+    {
+      "name": "one countable zap",
+      "zaps": [
+        "listed minter: countable"
+      ],
+      "deletedBySender": [],
+      "minLifeSeconds": 0,
+      "collapse": false,
+      "total": 21000,
+      "counted": [
+        "e868103d2402d38a0fac2152c62f1efd2918c047657bc8de4813a6c3ec80e010"
+      ]
+    },
+    {
+      "name": "two copies of one token count once",
+      "zaps": [
+        "listed minter: countable",
+        "trusted minter, no 10522: countable"
+      ],
+      "deletedBySender": [],
+      "minLifeSeconds": 0,
+      "collapse": false,
+      "total": 21000,
+      "counted": [
+        "e868103d2402d38a0fac2152c62f1efd2918c047657bc8de4813a6c3ec80e010"
+      ]
+    },
+    {
+      "name": "an uncountable zap adds nothing",
+      "zaps": [
+        "neither listed nor trusted (rule 8)"
+      ],
+      "deletedBySender": [],
+      "minLifeSeconds": 0,
+      "collapse": false,
+      "total": 0,
+      "counted": []
+    },
+    {
+      "name": "deleted by its sender",
+      "zaps": [
+        "listed minter: countable"
+      ],
+      "deletedBySender": [
+        "listed minter: countable"
+      ],
+      "minLifeSeconds": 0,
+      "collapse": false,
+      "total": 0,
+      "counted": []
+    },
+    {
+      "name": "a bill living less than the minimum",
+      "zaps": [
+        "an expiring zap bill"
+      ],
+      "deletedBySender": [],
+      "minLifeSeconds": 7200,
+      "collapse": false,
+      "total": 0,
+      "counted": []
+    },
+    {
+      "name": "a bill living at least the minimum",
+      "zaps": [
+        "an expiring zap bill"
+      ],
+      "deletedBySender": [],
+      "minLifeSeconds": 3600,
+      "collapse": false,
+      "total": 21000,
+      "counted": [
+        "7b130b73ef42c5387b94de0e0a11469d568ff21657ba1584c1819d5886a45e97"
+      ]
+    }
+  ]
+}

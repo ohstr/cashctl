@@ -10,6 +10,7 @@ import (
 	"github.com/ohstr/nmilat/nip01"
 	"github.com/ohstr/nmilat/nip47"
 	"github.com/ohstr/nmilat/nipCO"
+	"github.com/ohstr/nmilat/nipcash"
 	"github.com/ohstr/nmilat/nipcash/listing"
 	"github.com/ohstr/nmilat/utils"
 	"github.com/spf13/cobra"
@@ -237,4 +238,100 @@ func TestDiscover_TextNamesEachSignal(t *testing.T) {
 	if want := "recommended by " + npubOrHex(curPub) + " on " + time.Now().UTC().Format("2006-01-02"); !strings.Contains(stdout, want) {
 		t.Errorf("stdout %q lacks %q", stdout, want)
 	}
+}
+
+// NIP-CASH §Wallet Rules, Signals: listings of different pubkeys are never
+// merged; when several list one d, only a listing whose signer passed the
+// check at tap is shown, or none. Each can still be tapped by its address.
+func TestDiscover_SeveralPubkeysListingOneD(t *testing.T) {
+	copycat := func(t *testing.T, f *listingFixture) *nip01.Event {
+		t.Helper()
+		cpPriv, cpX := testmint.Key(t)
+		oc, err := nipCO.DecodeOrderConnection(f.conn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		oc.HubIdentity, oc.Signature = cpX, nil
+		signer, err := nipcash.LocalChainSigner(cpPriv, "flokicoin")
+		if err != nil {
+			t.Fatal(err)
+		}
+		signed, err := nipCO.SignOrderConnection(oc, signer, cpX)
+		if err != nil {
+			t.Fatal(err)
+		}
+		now := time.Now().Unix()
+		ev, err := listing.NewListing(listing.ListingFields{Order: &signed, Network: "mainnet", Summary: []string{listing.SummaryLightning},
+			Title: "Buy cash", Status: listing.StatusOpen, Expiration: now + 86400}, now-5, now,
+			func(ev *nip01.Event) error { return ev.Sign(cpPriv) })
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ev
+	}
+	list := func(t *testing.T) (offers []string, contested float64) {
+		t.Helper()
+		doc, err := runDiscover(t, discoverCmd(newDiscoverListCmd(), nil), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, o := range doc["offers"].([]any) {
+			offers = append(offers, o.(map[string]any)["address"].(string))
+		}
+		return offers, doc["contested"].(float64)
+	}
+	show := func(t *testing.T, addr string) string {
+		t.Helper()
+		doc, _ := runDiscover(t, discoverCmd(newDiscoverShowCmd(), nil), []string{offerHandle(addr)})
+		s, _ := doc["tap"].(string)
+		return s
+	}
+
+	t.Run("before any tap neither is shown", func(t *testing.T) {
+		f := newListingFixture(t)
+		cp := copycat(t, f)
+		f.events = append(f.events, cp)
+		if offers, contested := list(t); len(offers) != 0 || contested != 2 {
+			t.Errorf("offers %v contested %v, want none shown and 2 contested", offers, contested)
+		}
+	})
+	t.Run("the real one passes at tap and is then the one shown", func(t *testing.T) {
+		f := newListingFixture(t)
+		cp := copycat(t, f)
+		f.events = append(f.events, cp)
+		if got := show(t, f.addr); got != "show" {
+			t.Fatalf("tap of the real listing: %q", got)
+		}
+		if offers, contested := list(t); len(offers) != 1 || offers[0] != f.addr || contested != 1 {
+			t.Errorf("offers %v contested %v, want only the real listing", offers, contested)
+		}
+	})
+	t.Run("the copy fails at tap and is hidden for good", func(t *testing.T) {
+		f := newListingFixture(t)
+		cp := copycat(t, f)
+		f.events = append(f.events, cp)
+		cpAddr := listing.Address(cp.PubKey, f.addr[strings.LastIndex(f.addr, ":")+1:])
+		if got := show(t, cpAddr); got != "hide_for_good" {
+			t.Fatalf("tap of the copy: %q", got)
+		}
+		if offers, contested := list(t); len(offers) != 1 || offers[0] != f.addr || contested != 0 {
+			t.Errorf("offers %v contested %v, want the real listing alone", offers, contested)
+		}
+	})
+	t.Run("listings of other d by other pubkeys are all shown", func(t *testing.T) {
+		f := newListingFixture(t)
+		otherPriv, _ := testmint.Key(t)
+		oc, _ := nipCO.DecodeOrderConnection(testmint.CashOrder(t, otherPriv))
+		now := time.Now().Unix()
+		ev, err := listing.NewListing(listing.ListingFields{Order: &oc, Network: "mainnet", Summary: []string{listing.SummaryLightning},
+			Title: "Other", Status: listing.StatusOpen, Expiration: now + 86400}, now-5, now,
+			func(ev *nip01.Event) error { return ev.Sign(otherPriv) })
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.events = append(f.events, ev)
+		if offers, contested := list(t); len(offers) != 2 || contested != 0 {
+			t.Errorf("offers %v contested %v, want both", offers, contested)
+		}
+	})
 }

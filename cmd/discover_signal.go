@@ -168,7 +168,7 @@ func publishNow(cmd *cobra.Command, relays []string, draft *nip01.Event) (*nip01
 		return &ev, nil, append(failed, accepted...), errors.New("no relay that took it returns it")
 	}
 	raw, _ := json.Marshal(ev)
-	_ = config.PutDiscoverEvent(ev.ID, ev.Kind, ev.PubKey, int64(ev.CreatedAt), string(raw), config.OriginTrusted) //nolint:gosec // unix time
+	_ = config.PutDiscoverEvent(ev.ID, ev.Kind, ev.PubKey, int64(ev.CreatedAt), string(raw), config.OriginTrusted, accepted[0]) //nolint:gosec // unix time
 	return &ev, accepted, failed, nil
 }
 
@@ -444,15 +444,21 @@ func runDiscoverRecommend(cmd *cobra.Command, args []string) error {
 		}
 	}
 	drop, _ := cmd.Flags().GetStringSlice("drop")
+	// Every p and a carries a relay hint (NIP-CASH §Recommendations): where the
+	// listing was read.
+	nodeHint := listingRelayHint(ls[0], relays)
 	var offers []listing.Ref
 	for _, r := range prevOffers {
 		if !slices.Contains(drop, r.Pubkey) && !slices.Contains(drop, offerHandle(r.Pubkey)) {
+			if r.Relay == "" {
+				r.Relay = nodeHint
+			}
 			offers = append(offers, r)
 		}
 	}
 	for _, l := range ls {
 		if !slices.ContainsFunc(offers, func(r listing.Ref) bool { return r.Pubkey == l.Address() }) {
-			offers = append(offers, listing.Ref{Pubkey: l.Address()})
+			offers = append(offers, listing.Ref{Pubkey: l.Address(), Relay: listingRelayHint(l, relays)})
 		}
 	}
 	text, err := signalText(cmd)
@@ -474,8 +480,25 @@ func runDiscoverRecommend(cmd *cobra.Command, args []string) error {
 		}
 		return err
 	}
-	draft := listing.NewRecommendation(node, "", offers, text)
+	draft := listing.NewRecommendation(node, nodeHint, offers, text)
 	return queueSignal(cmd, waiting, draft, node, offerHandle(ls[0].Address()), relays, audience)
+}
+
+// listingRelayHint is a relay l can be read from: the one that first served
+// it, else the first discovery relay, else the first of relays.
+func listingRelayHint(l *listing.Listing, relays []string) string {
+	if l.Event != nil {
+		if r := config.DiscoverEventRelay(l.Event.ID); r != "" {
+			return r
+		}
+	}
+	if stored, _ := config.DiscoverRelays(); len(stored) > 0 {
+		return stored[0]
+	}
+	if len(relays) > 0 {
+		return relays[0]
+	}
+	return ""
 }
 
 // refsOf is a recommendation draft's a tags.

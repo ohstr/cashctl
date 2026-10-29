@@ -437,7 +437,7 @@ func validateOrder(o *ledger.Order, order *nipCO.Order, now int64) error {
 	case order.PayMillis != order.AmountMillis+order.FeeMillis:
 		return errors.New("pay_millis is not amount plus fee")
 	}
-	return checkOrderInvoice(order, o.Chain)
+	return checkOrderInvoice(order, o)
 }
 
 // applyOrderBills records each bill of order not yet held here: a cash note
@@ -466,12 +466,12 @@ func applyOrderBills(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, o *le
 			secret := callSecretOf(c, ledger.RoleNewIdentity)
 			if _, err := l.Add(ledger.Entry{Token: token, WalletPubkey: b.WalletPubkey, Secret: tok.Secret, RelayURLs: tok.RelayURLs,
 				AmountMillis: &amount, Verified: true, MinterPubkey: &minter, IdentityRequired: ptrTo(false),
-				CashSecret: secret, CashProtection: ledger.CashProtected}); err != nil {
+				CashSecret: secret, CashProtection: ledger.CashProtected, CreatedByCall: c.CallID}); err != nil {
 				return err
 			}
 		case "self":
 			if _, err := l.Add(ledger.Entry{Token: token, WalletPubkey: b.WalletPubkey, Secret: tok.Secret, RelayURLs: tok.RelayURLs,
-				AmountMillis: &amount, Verified: true, MinterPubkey: &minter, IdentityRequired: ptrTo(true)}); err != nil {
+				AmountMillis: &amount, Verified: true, MinterPubkey: &minter, IdentityRequired: ptrTo(true), CreatedByCall: c.CallID}); err != nil {
 				return err
 			}
 		default:

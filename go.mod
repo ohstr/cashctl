@@ -3,10 +3,11 @@ module github.com/ohstr/cashctl
 go 1.26.10
 
 require (
+	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.0
 	github.com/flokiorg/go-flokicoin v0.26.1-alpha
 	github.com/gorilla/websocket v1.5.3
 	github.com/ohstr/ncli v0.6.0
-	github.com/ohstr/nmilat v0.5.0-rc.44
+	github.com/ohstr/nmilat v0.5.0-rc.45
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
 	golang.org/x/term v0.45.0
@@ -16,7 +17,6 @@ require (
 
 require (
 	github.com/decred/dcrd/crypto/blake256 v1.1.0 // indirect
-	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect

@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/ohstr/nmilat/nip01"
 	"github.com/ohstr/nmilat/nip19"
@@ -362,5 +363,17 @@ func loadAttestation(file string) (*nipIC.Attestation, error) {
 	if err := json.Unmarshal(data, &ev); err != nil {
 		return nil, fmt.Errorf("not a valid Nostr event JSON: %w", err)
 	}
+	// NIP-IC §Verification step 3: a verifier ignores an attestation dated more
+	// than 15 minutes ahead of its clock, so a claim made with one would fail.
+	if at, now := int64(ev.CreatedAt), nowUnix(); ev.CreatedAt > 1<<62 || at > now+maxAttestationAhead { //nolint:gosec // bounded just before
+		return nil, fmt.Errorf("the attestation is dated %d s ahead of this machine's clock (more than %d s): a verifier ignores it — check the clock, or ask the Identity Authority again", at-now, maxAttestationAhead)
+	}
 	return nipIC.ParseAttestation(&ev)
 }
+
+// maxAttestationAhead is how far in the future an attestation may be dated
+// (NIP-IC: 15 minutes).
+const maxAttestationAhead = 900
+
+// nowUnix is the clock loadAttestation checks against. Swapped in tests.
+var nowUnix = func() int64 { return time.Now().Unix() }

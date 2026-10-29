@@ -959,7 +959,7 @@ func doCashConsolidate(cmd *cobra.Command, l *ledger.Ledger, dialCandidates []st
 			}
 			newLedgerEntry := ledger.Entry{
 				Token: strings.ToLower(result.NewWalletToken), WalletPubkey: result.NewWalletPubkey, AmountMillis: &result.AmountMillis, Verified: verified,
-				MinterPubkey: minter,
+				MinterPubkey: minter, CreatedByCall: ownCallID(call),
 			}
 			// A cash-mode target's secret exists only here and in the call's
 			// written-ahead record: the Hub never returns it (NIP-CASH §Cash-Mode

@@ -367,7 +367,7 @@ func (h *Hub) handleRequest(ev *nip01.Event) {
 		return
 	}
 
-	resp := transport.ResponseEnvelope{Version: transport.EnvelopeVersion, ReqNonce: env.Nonce, Seq: 1, Total: 1}
+	resp := transport.ResponseEnvelope{ReqNonce: env.Nonce, Seq: 1, Total: 1}
 	for i, item := range env.Items {
 		if r := h.answer(item, codes[i], randomMessages); r != nil {
 			resp.Results = append(resp.Results, *r)

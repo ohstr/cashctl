@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/url"
 	"os"
 	"slices"
@@ -105,6 +106,10 @@ type discovered struct {
 	Signals  listing.Signals
 	Operator string // the verified operator's pubkey, "" when unverified
 	Names    map[string]string
+	// Contested is a listing whose d several pubkeys list, none of whose signers
+	// has passed the check at tap: never listed, but still found by its exact
+	// address so it can be tapped (NIP-CASH §Wallet Rules, Signals).
+	Contested bool
 }
 
 // discoverWorld is everything the cache holds, read into its parts.
@@ -223,7 +228,7 @@ func fetchIntoCache(ctx context.Context, relays []string, filters []nip01.Subscr
 				if err != nil {
 					continue
 				}
-				_ = config.PutDiscoverEvent(ev.ID, ev.Kind, ev.PubKey, int64(ev.CreatedAt), string(raw), origin) //nolint:gosec // unix time
+				_ = config.PutDiscoverEvent(ev.ID, ev.Kind, ev.PubKey, int64(ev.CreatedAt), string(raw), origin, r) //nolint:gosec // unix time
 			}
 			// A little before the request started, so an event a relay stored
 			// meanwhile is asked for again.
@@ -235,6 +240,67 @@ func fetchIntoCache(ctx context.Context, relays []string, filters []nip01.Subscr
 	}
 	_ = config.PruneDiscoverEvents(discoverCacheMax)
 	return failed
+}
+
+// fetchOperatorOffers reads each operator's 11191 (and kind 0) from the
+// operator's NIP-65 write relays too, as NIP-CASH §The Operator's Offers asks:
+// a list kept only on the operator's own relays still verifies. Their kind
+// 10002 comes from the discovery relays. A relay of an operator's that fails
+// says nothing about the discovery relays, so it is not reported.
+func fetchOperatorOffers(ctx context.Context, discovery, ops []string) {
+	if len(ops) == 0 {
+		return
+	}
+	fetchIntoCache(ctx, discovery, []nip01.SubscriptionFilter{{Kinds: []int{10002}, Authors: ops}}, config.OriginTrusted)
+	byRelay := map[string][]string{}
+	for op, rs := range writeRelaysOf(ops) {
+		for _, r := range rs {
+			if !slices.Contains(discovery, r) {
+				byRelay[r] = append(byRelay[r], op)
+			}
+		}
+	}
+	relays := slices.Sorted(maps.Keys(byRelay))
+	if len(relays) > maxOperatorRelays {
+		relays = relays[:maxOperatorRelays]
+	}
+	for _, r := range relays {
+		fetchIntoCache(ctx, []string{r}, []nip01.SubscriptionFilter{{Kinds: []int{0, listing.KindOperatorOffers}, Authors: byRelay[r]}}, config.OriginTrusted)
+	}
+}
+
+// maxOperatorRelays bounds the operators' own relays one run asks, and
+// maxWriteRelaysEach how many of one operator's are taken.
+const (
+	maxOperatorRelays  = 20
+	maxWriteRelaysEach = 4
+)
+
+// writeRelaysOf is each author's NIP-65 write relays (an r tag with no marker
+// or "write"), from their newest cached kind 10002: ws or wss URLs only, at
+// most maxWriteRelaysEach each.
+func writeRelaysOf(authors []string) map[string][]string {
+	raws, _ := config.DiscoverEvents()
+	var lists []*nip01.Event
+	for _, raw := range raws {
+		var ev nip01.Event
+		if json.Unmarshal([]byte(raw), &ev) == nil && ev.Kind == 10002 && slices.Contains(authors, ev.PubKey) {
+			e := ev
+			lists = append(lists, &e)
+		}
+	}
+	out := map[string][]string{}
+	for _, ev := range newestPerAuthor(lists) {
+		for _, t := range ev.Tags {
+			if len(t) < 2 || t[0] != "r" || (len(t) > 2 && t[2] != "write") || len(out[ev.PubKey]) >= maxWriteRelaysEach {
+				continue
+			}
+			if u, err := url.Parse(t[1]); err == nil && (u.Scheme == "wss" || u.Scheme == "ws") && u.Host != "" && !slices.Contains(out[ev.PubKey], t[1]) {
+				out[ev.PubKey] = append(out[ev.PubKey], t[1])
+			}
+		}
+	}
+	return out
 }
 
 // discoverCacheMax bounds discover_events.
@@ -395,6 +461,7 @@ func discoverRun(cmd *cobra.Command) ([]discovered, *listing.VersionBook, []stri
 			}
 			asked = trusted
 			failed = intersect(failed, fetchIntoCache(ctx, relays, trusted, config.OriginTrusted))
+			fetchOperatorOffers(ctx, relays, ops)
 		}
 		if raws, _ := config.DiscoverEvents(); len(failed) == len(relays) && len(raws) == 0 {
 			return nil, nil, failed, output.NetworkError(cmd, errors.New("no discovery relay answered and nothing is cached"))
@@ -416,6 +483,10 @@ func discoverRun(cmd *cobra.Command) ([]discovered, *listing.VersionBook, []stri
 		if !ok {
 			continue
 		}
+		// Listings of different pubkeys are never merged: when several list one
+		// d, only the one whose signer passed at tap is shown, or none.
+		shown, one := w.book.CurrentByD(l.D, now)
+		contested := !one || shown.Address() != addr
 		var followers []string
 		op, verified := opOf(addr)
 		if verified {
@@ -426,7 +497,7 @@ func discoverRun(cmd *cobra.Command) ([]discovered, *listing.VersionBook, []stri
 			}
 		}
 		out = append(out, discovered{L: l, Signals: listing.SignalsFor(l, trust, w.recs, w.reps, followers, opOf),
-			Operator: op, Names: w.names})
+			Operator: op, Names: w.names, Contested: contested})
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		return listing.RankLess(out[i].L, out[i].Signals, out[j].L, out[j].Signals, now)
@@ -540,7 +611,12 @@ func newDiscoverListCmd() *cobra.Command {
 			}
 			curators, _ := config.Curators()
 			var views []map[string]any
+			contested := 0
 			for _, d := range all {
+				if d.Contested {
+					contested++
+					continue
+				}
 				if typ != "" && !strings.HasPrefix(string(d.L.Type), map[string]string{"order": "cash_order", "circle": "circle_wallet"}[typ]) {
 					continue
 				}
@@ -557,11 +633,14 @@ func newDiscoverListCmd() *cobra.Command {
 				}
 				output.PrintJSON(map[string]any{"offers": output.NonNil(views), "curators": len(curators),
 					"ranking_from":  map[string]any{"follows": follows, "curators": output.NonNil(curators)},
-					"relays_failed": output.NonNil(failed)})
+					"relays_failed": output.NonNil(failed), "contested": contested})
 				return nil
 			}
 			for _, r := range failed {
 				output.Notef(false, "relay %s didn't answer", output.Sanitize(r))
+			}
+			if contested > 0 {
+				output.Notef(false, "%d offer(s) hidden: several Hubs list the same offer id, and none has been checked; `cash discover show <address>` checks one", contested)
 			}
 			if len(curators) == 0 {
 				output.Println("Ranking from: nobody yet: everything below is unreviewed. Listings are ads; the Hub's terms are checked when you `show` one.")

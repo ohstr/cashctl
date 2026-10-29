@@ -47,6 +47,7 @@ const purposeWithdraw = "withdraw"
 // withdrawBill is a dialled bill's withdrawal methods: nipcash/client.Client,
 // behind an interface so tests can stand in for it.
 type withdrawBill interface {
+	CashStatus(ctx context.Context, cred nipcash.Credential, scope string) (*nipcash.CashStatusResult, error)
 	QuoteWithdraw(ctx context.Context, p nipcash.CashWithdrawQuoteParams) (*nipcash.WithdrawQuote, error)
 	Withdraw(ctx context.Context, p nipcash.CashWithdrawParams, j nipcashclient.Journal, device string) (*nipcash.Payout, error)
 	LookupWithdraw(ctx context.Context, pc nipcash.PendingCall, cred nipcash.Credential) (nipcashclient.LookupOutcome, *nipcash.Payout, error)
@@ -273,19 +274,30 @@ func quoteWithdrawal(cmd *cobra.Command, raw string, print bool) (*ledger.Entry,
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	var q *nipcash.WithdrawQuote
+	var status *nipcash.CashStatusResult
 	err = WithSpinner(jsonMode, "Asking the Hub for a quote...", func() error {
 		c, dErr := dialWithdrawFn(ctx, e.Token)
 		if dErr != nil {
 			return dErr
 		}
 		defer c.Close()
+		// The bill is read once: the quote takes its terms and row from this
+		// answer, and the screen its Lightning comparison.
+		var sErr error
+		if status, sErr = c.CashStatus(ctx, cred, nipcash.ScopeMine); sErr != nil {
+			return sErr
+		}
 		var qErr error
-		q, qErr = c.QuoteWithdraw(ctx, nipcash.CashWithdrawQuoteParams{Address: addr, SendBefore: sendBefore, Credential: cred})
+		q, qErr = c.QuoteWithdraw(ctx, nipcash.CashWithdrawQuoteParams{Address: addr, SendBefore: sendBefore, Credential: cred, Status: status})
 		return qErr
 	})
 	if err != nil {
 		return nil, nil, "", classifyQuoteErr(cmd, err)
 	}
+	if net := lightningNet(status, cred); net > 0 {
+		lightningNets[q.ID] = net
+	}
+	warnings = append(warnings, withdrawWarnings(e, q)...)
 	if e.ExpiresAt != nil && *e.ExpiresAt > 0 && time.Until(time.Unix(*e.ExpiresAt, 0)) <= 120*time.Second {
 		warnings = append(warnings, "this bill expires too soon to send")
 	}
@@ -313,6 +325,15 @@ func quoteWithdrawal(cmd *cobra.Command, raw string, print bool) (*ledger.Entry,
 	return e, q, handle, nil
 }
 
+// ownCallID is CreatedByCall for a bill call c made: its id, or
+// ledger.OwnCallLocal when there is no call row.
+func ownCallID(c *ledger.Call) string {
+	if c == nil {
+		return ledger.OwnCallLocal
+	}
+	return c.CallID
+}
+
 // xOnlyMinter is a bill's minter as an x-only key, "" when unknown.
 func xOnlyMinter(e *ledger.Entry) string {
 	if e.MinterPubkey == nil {
@@ -326,9 +347,63 @@ func xOnlyMinter(e *ledger.Entry) string {
 }
 
 func quoteView(e *ledger.Entry, q *nipcash.WithdrawQuote) map[string]any {
-	return map[string]any{"token": e.ID, "address": q.Address, "amount_millis": q.AmountMillis,
+	v := map[string]any{"token": e.ID, "address": q.Address, "amount_millis": q.AmountMillis,
 		"network_fee_millis": q.NetworkFeeMillis, "hub_fee_millis": q.HubFeeMillis, "fee_millis": q.FeeMillis(),
 		"payout_millis": q.PayoutMillis, "sent_by": q.SentBy, "holds_until": q.HoldsUntil}
+	if net := lightningNets[q.ID]; net > 0 {
+		v["lightning_net_millis"] = net
+	}
+	return v
+}
+
+// lightningNets is the net a Lightning redeem would land, by quote id, read
+// from the cash_status the quote was made from; absent when not quoted.
+var lightningNets = map[string]uint64{}
+
+// lightningNet is what the bill's own row says a Lightning redeem would land,
+// 0 when the row is unread or quotes no redeem fee.
+func lightningNet(status *nipcash.CashStatusResult, cred nipcash.Credential) uint64 {
+	if status == nil {
+		return 0
+	}
+	row, err := nipcash.OwnRow(status.Recipients, cred, nipcash.ScopeMine)
+	if err != nil {
+		return 0
+	}
+	return row.NetRedeemableMillis
+}
+
+// feeOverQuarter reports an on-chain fee above 25 % of the bill (plan Q-19).
+func feeOverQuarter(q *nipcash.WithdrawQuote) bool { return 4*q.FeeMillis() > q.AmountMillis }
+
+// feeShare is the fee as a percentage of the bill, for the screen.
+func feeShare(q *nipcash.WithdrawQuote) string {
+	if q.AmountMillis == 0 {
+		return "100"
+	}
+	return strconv.FormatFloat(float64(q.FeeMillis())*100/float64(q.AmountMillis), 'f', 1, 64)
+}
+
+// withdrawWarnings are the quote's warnings that hang on the bill: a fee above
+// a quarter of it, and a bill whose amount others may know (NIP-CASH §Privacy
+// Considerations: a holder SHOULD withdraw only a bill whose amount others do
+// not know, splitting first).
+func withdrawWarnings(e *ledger.Entry, q *nipcash.WithdrawQuote) []string {
+	f := func(v uint64) string { return output.FormatAmount(int64(v)) } //nolint:gosec // amounts fit
+	var out []string
+	if feeOverQuarter(q) {
+		out = append(out, fmt.Sprintf("on-chain costs %s of %s (%s %%)", f(q.FeeMillis()), f(q.AmountMillis), feeShare(q)))
+	}
+	if amountKnownToOthers(e) {
+		out = append(out, "others may know this bill's amount and can find your payout on-chain; split it first to unlink (`cashctl transfer <amount> cash`)")
+	}
+	return out
+}
+
+// amountKnownToOthers reports a bill this device did not make by its own call
+// (received, or a zap bill, whose amount its zap made public).
+func amountKnownToOthers(e *ledger.Entry) bool {
+	return e.CreatedByCall == "" || e.ZapEvent != ""
 }
 
 // groupsOf4 is an address in groups of four, for comparing by eye.
@@ -369,8 +444,13 @@ func printWithdrawScreenSince(e *ledger.Entry, q, prev *nipcash.WithdrawQuote, w
 		f(q.HubFeeMillis), mark(q.HubFeeMillis != prev.HubFeeMillis))
 	output.Fprintf(os.Stderr, "  Recipient gets   %s (exact)%s\n", f(q.PayoutMillis), mark(q.PayoutMillis != prev.PayoutMillis))
 	output.Fprintf(os.Stderr, "  Sent by          %s%s\n", time.Unix(q.SentBy, 0).UTC().Format(time.RFC3339), mark(q.SentBy != prev.SentBy))
-	if 4*q.FeeMillis() > q.AmountMillis {
-		output.Fprintf(os.Stderr, "  On-chain costs %s of %s here.\n", f(q.FeeMillis()), f(q.AmountMillis))
+	output.Fprintf(os.Stderr, "  Price held until block %d%s\n", q.HoldsUntil, mark(q.HoldsUntil != prev.HoldsUntil))
+	if net := lightningNets[q.ID]; net > 0 {
+		if net > q.PayoutMillis {
+			output.Fprintf(os.Stderr, "  Lightning would land %s (%s more): cashctl redeem\n", f(net), f(net-q.PayoutMillis))
+		} else {
+			output.Fprintf(os.Stderr, "  Lightning would land %s\n", f(net))
+		}
 	}
 	if e.ExpiresAt != nil && *e.ExpiresAt > 0 {
 		output.Fprintf(os.Stderr, "  This bill expires %s\n", time.Unix(*e.ExpiresAt, 0).UTC().Format("2006-01-02"))
@@ -410,6 +490,15 @@ var interactiveWithdraw = func(cmd *cobra.Command) bool {
 // askYesFn is confirmIrreversible, swapped in tests.
 var askYesFn = confirmIrreversible
 
+// askFeeFn asks the fee's second question on the terminal (y/N); swapped in
+// tests.
+var askFeeFn = func(question string) bool {
+	output.Fprintf(os.Stderr, "%s [y/N]: ", question)
+	line, _ := stdin.ReadString('\n')
+	a := strings.ToLower(strings.TrimSpace(line))
+	return a == "y" || a == "yes"
+}
+
 func runCashWithdrawSend(cmd *cobra.Command, args []string) error {
 	if err := rejectConnectionFlag(cmd); err != nil {
 		return err
@@ -444,7 +533,8 @@ func runCashWithdrawSend(cmd *cobra.Command, args []string) error {
 		if q, err = nipcash.ParseWithdrawQuote(stored.QuoteJSON); err != nil {
 			return output.RuntimeError(cmd, err)
 		}
-		printWithdrawScreen(e, q, nil)
+		// --yes confirms this quote: the fee and privacy points are warnings.
+		printWithdrawScreen(e, q, withdrawWarnings(e, q))
 	case len(args) == 0:
 		return output.InvocationError(cmd, errors.New("an address (or --quote <quote> --yes) is required"))
 	case !interactiveWithdraw(cmd):
@@ -490,9 +580,15 @@ func confirmAndSend(cmd *cobra.Command, e *ledger.Entry, q, prev *nipcash.Withdr
 	ask := true
 	for {
 		if ask {
-			printWithdrawScreenSince(e, q, prev, nil)
+			printWithdrawScreenSince(e, q, prev, withdrawWarnings(e, q))
 			asked := nowFn()
 			if !askYesFn() {
+				output.Println("Not sent. Your cash is still yours.")
+				return nil
+			}
+			// A fee above a quarter of the bill is asked about a second time (Q-19).
+			if feeOverQuarter(q) && !askFeeFn(fmt.Sprintf("On-chain costs %s of %s (%s %%); still send?",
+				output.FormatAmount(int64(q.FeeMillis())), output.FormatAmount(int64(q.AmountMillis)), feeShare(q))) { //nolint:gosec // amounts fit
 				output.Println("Not sent. Your cash is still yours.")
 				return nil
 			}
@@ -643,6 +739,10 @@ func sendWithdrawal(cmd *cobra.Command, e *ledger.Entry, q *nipcash.WithdrawQuot
 	if err != nil {
 		if c := j.call(); c != nil && errors.Is(err, nipcash.ErrReceiptInvalid) {
 			pErr := placeErr(cmd, l, &j.ledgerJournal, err, "withdrawal", e.ID)
+			if w, ok, _ := ledger.WithdrawalForCall(c.CallID); ok {
+				w.ReceiptInvalidSeen++
+				_ = ledger.PutWithdrawal(w)
+			}
 			return output.WithReason(pErr, reasonReceiptInvalid)
 		}
 		var ind *nipcashclient.IndeterminateError
@@ -736,7 +836,7 @@ func applyPayout(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, w *ledger
 		l.AppendHistory("withdraw", fmt.Sprintf("withdrew %s on-chain (withdrawal %s)", output.FormatAmount(int64(w.AmountMillis)), w.WithdrawalID)) //nolint:gosec // amounts fit
 	}
 	raw, _ := json.Marshal(p)
-	w.State, w.PayoutJSON, w.CheckedAt = string(p.State), string(raw), now
+	w.State, w.PayoutJSON, w.CheckedAt, w.ReceiptInvalidSeen = string(p.State), string(raw), now, 0
 	switch p.State {
 	case nipcash.PayoutFinal:
 		w.FinishedAt = now
@@ -820,6 +920,7 @@ func importRemint(l *ledger.Ledger, c *ledger.Call, w *ledger.Withdrawal, p *nip
 		mode.AmountMillis, mode.Verified, mode.MinterPubkey = &amount, true, &minter
 		entry = mode
 	}
+	entry.CreatedByCall = c.CallID
 	added, err := l.Add(entry)
 	if err != nil {
 		return "", err
@@ -841,6 +942,9 @@ func withdrawalView(w ledger.Withdrawal) map[string]any {
 	}
 	if w.Recovered {
 		v["recovered"] = true
+	}
+	if w.ReceiptInvalidSeen >= ledger.ReceiptInvalidLimit {
+		v["receipt_invalid"] = true
 	}
 	var p nipcash.Payout
 	if w.PayoutJSON != "" && json.Unmarshal([]byte(w.PayoutJSON), &p) == nil {
@@ -913,6 +1017,9 @@ func withdrawalText(w ledger.Withdrawal) string {
 	f := func(v uint64) string { return output.FormatAmount(int64(v)) } //nolint:gosec // amounts fit
 	switch w.State {
 	case ledger.WithdrawSending:
+		if w.ReceiptInvalidSeen >= ledger.ReceiptInvalidLimit {
+			return receiptInvalidText
+		}
 		return "Sending your withdrawal… your bill is locked; never resend it"
 	case ledger.WithdrawNotApplied:
 		return "Not sent. Your cash is still yours."

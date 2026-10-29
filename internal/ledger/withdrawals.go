@@ -35,7 +35,11 @@ type Withdrawal struct {
 	AcceptedRelays                                                 []string
 	State, PayoutJSON, RemintEntryID                               string
 	QuoteExpiredSeen                                               bool
-	ConfirmedAt, CheckedAt, FinishedAt                             int64
+	// ReceiptInvalidSeen counts the answers in a row (the reply, then lookups
+	// done) whose receipt did not verify; ReceiptInvalidLimit of them make the
+	// call stuck, looked up only hourly.
+	ReceiptInvalidSeen                 int
+	ConfirmedAt, CheckedAt, FinishedAt int64
 	// Recovered is a withdrawal found through a cash_status
 	// withdraw_request_id with no local record: never re-placed, its address
 	// not confirmed on this device.
@@ -44,6 +48,10 @@ type Withdrawal struct {
 	// payout: the address it was received at, printed that once.
 	ReceivedAt string
 }
+
+// ReceiptInvalidLimit is how many answers in a row without a valid receipt
+// leave a withdrawal stuck (plan WP-20 step 6).
+const ReceiptInvalidLimit = 2
 
 // DeviceRecovered is the device of a recovered withdrawal's call: never this
 // device, so it is looked up and never re-placed.
@@ -75,12 +83,12 @@ func putWithdrawal(db execer, w Withdrawal) error {
 	_, err := db.Exec(`INSERT OR REPLACE INTO withdrawals (withdrawal_id, call_id, source_entry_id, wallet_pubkey,
 		hub_identity, address, quote_json, quote_id, amount_millis, network_fee_millis, hub_fee_millis, fee_millis,
 		payout_millis, sent_by, holds_until, send_before, notify, accepted_relays, state, payout_json, remint_entry_id,
-		quote_expired_seen, confirmed_at, checked_at, finished_at, recovered)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		quote_expired_seen, confirmed_at, checked_at, finished_at, recovered, receipt_invalid_seen)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		w.WithdrawalID, w.CallID, w.SourceEntryID, w.WalletPubkey, w.HubIdentity, ns(w.Address), ns(w.QuoteJSON),
 		ns(w.QuoteID), w.AmountMillis, w.NetworkFeeMillis, w.HubFeeMillis, w.FeeMillis, w.PayoutMillis, w.SentBy,
 		nz(w.HoldsUntil), nz(w.SendBefore), w.Notify, string(relays), w.State, ns(w.PayoutJSON), ns(w.RemintEntryID),
-		w.QuoteExpiredSeen, nz(w.ConfirmedAt), nz(w.CheckedAt), nz(w.FinishedAt), w.Recovered)
+		w.QuoteExpiredSeen, nz(w.ConfirmedAt), nz(w.CheckedAt), nz(w.FinishedAt), w.Recovered, w.ReceiptInvalidSeen)
 	if err != nil {
 		return fmt.Errorf("cashctl.db: saving withdrawal %s: %w", w.WithdrawalID, err)
 	}
@@ -90,7 +98,7 @@ func putWithdrawal(db execer, w Withdrawal) error {
 const withdrawalColumns = `withdrawal_id, call_id, source_entry_id, wallet_pubkey, hub_identity, address, quote_json,
 	quote_id, amount_millis, network_fee_millis, hub_fee_millis, fee_millis, payout_millis, sent_by, holds_until,
 	send_before, notify, accepted_relays, state, payout_json, remint_entry_id, quote_expired_seen, confirmed_at,
-	checked_at, finished_at, recovered`
+	checked_at, finished_at, recovered, receipt_invalid_seen`
 
 func scanWithdrawal(row interface{ Scan(...any) error }) (Withdrawal, error) {
 	var w Withdrawal
@@ -98,7 +106,7 @@ func scanWithdrawal(row interface{ Scan(...any) error }) (Withdrawal, error) {
 	var netFee, hubFee, holds, before, confirmed, checked, finished sql.NullInt64
 	err := row.Scan(&w.WithdrawalID, &w.CallID, &w.SourceEntryID, &w.WalletPubkey, &w.HubIdentity, &addr, &quote,
 		&quoteID, &w.AmountMillis, &netFee, &hubFee, &w.FeeMillis, &w.PayoutMillis, &w.SentBy, &holds, &before,
-		&w.Notify, &relays, &w.State, &payout, &remint, &w.QuoteExpiredSeen, &confirmed, &checked, &finished, &w.Recovered)
+		&w.Notify, &relays, &w.State, &payout, &remint, &w.QuoteExpiredSeen, &confirmed, &checked, &finished, &w.Recovered, &w.ReceiptInvalidSeen)
 	w.Address, w.QuoteJSON, w.QuoteID, w.PayoutJSON, w.RemintEntryID = addr.String, quote.String, quoteID.String, payout.String, remint.String
 	w.NetworkFeeMillis, w.HubFeeMillis = uint64(netFee.Int64), uint64(hubFee.Int64) //nolint:gosec // stored from uint64
 	w.HoldsUntil, w.SendBefore, w.ConfirmedAt, w.CheckedAt, w.FinishedAt = holds.Int64, before.Int64, confirmed.Int64, checked.Int64, finished.Int64

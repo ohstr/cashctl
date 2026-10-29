@@ -318,3 +318,29 @@ func newZapFixtureSameDir(t *testing.T, f *zapFixture) *zapFixture {
 	raw, _ := json.Marshal(ev)
 	return &zapFixture{me: f.me, minterPriv: f.minterPriv, minterX: f.minterX, ev: ev, bill: bill, raw: string(raw)}
 }
+
+// NIP-CZ §Receiving: one bill is held once. Receiving the same Cash Zap again
+// is a conflict and adds nothing; another zap is still received.
+func TestReceiveZap_TheSameZapTwiceHoldsOneBill(t *testing.T) {
+	f := newZapFixture(t)
+	installZapHub(t, &fakeZapHub{res: f.mine(21000, false)})
+	trust := map[string]string{"trust-minter": "true"}
+	if _, err := runReceiveZap(t, []string{f.raw}, trust); err != nil {
+		t.Fatalf("first receive: %v", err)
+	}
+	if _, err := runReceiveZap(t, []string{f.raw}, trust); output.ExitCode(err) != 5 {
+		t.Fatalf("second receive: exit %d (%v), want 5 (conflict)", output.ExitCode(err), err)
+	}
+	l, _ := ledger.Load()
+	if held := l.Held(); len(held) != 1 {
+		t.Fatalf("held %d bills from one zap", len(held))
+	}
+	other := newZapFixtureSameDir(t, f)
+	if _, err := runReceiveZap(t, []string{other.raw}, trust); err != nil {
+		t.Fatalf("another zap: %v", err)
+	}
+	l, _ = ledger.Load()
+	if held := l.Held(); len(held) != 2 {
+		t.Errorf("held %d bills after a second, different zap; want 2", len(held))
+	}
+}

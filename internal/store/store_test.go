@@ -113,8 +113,8 @@ func TestOpen_DirectoryNamesWithURISignificantCharacters(t *testing.T) {
 	}
 }
 
-// T-129: a new file gets the version-2 schema.
-func TestOpen_CreatesSchemaVersion2(t *testing.T) {
+// T-129: a new file gets the current schema.
+func TestOpen_CreatesTheCurrentSchema(t *testing.T) {
 	withTempConfigDir(t)
 	db, err := Open()
 	if err != nil {
@@ -128,7 +128,7 @@ func TestOpen_CreatesSchemaVersion2(t *testing.T) {
 	for _, table := range []string{"device", "pending_calls", "call_secrets", "derived_ids", "entries", "connections"} {
 		var n int
 		if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&n); err != nil || n != 1 {
-			t.Errorf("table %s missing from the v3 schema", table)
+			t.Errorf("table %s missing from the schema", table)
 		}
 	}
 }
