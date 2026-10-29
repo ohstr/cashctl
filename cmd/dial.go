@@ -68,17 +68,40 @@ func dialBill(ctx context.Context, token string) (*nipcashclient.Client, error) 
 		if err != nil {
 			return nil, err
 		}
-		return nipcashclient.ConnectZap(ctx, token, zc, sessionOptions()...)
+		c, err := nipcashclient.ConnectZap(ctx, token, zc, sessionOptions()...)
+		return c, asProvenanceRefusal(err)
 	}
 	if err := checkBillProvenance(tok); err != nil {
 		return nil, err
 	}
-	return nipcashclient.Connect(ctx, token, sessionOptions()...)
+	c, err := nipcashclient.Connect(ctx, token, sessionOptions()...)
+	return c, asProvenanceRefusal(err)
 }
 
-// isProvenanceRefusal reports dialBill refusing a bill before any network call.
+// provenanceRefusal is nmilat refusing a bill's provenance, said as cashctl
+// says its own refusal of the same bill; errors.Is matches both.
+type provenanceRefusal struct{ said, cause error }
+
+func (e *provenanceRefusal) Error() string   { return e.said.Error() }
+func (e *provenanceRefusal) Unwrap() []error { return []error{e.said, e.cause} }
+
+// asProvenanceRefusal maps nmilat's provenance refusals (before any relay is
+// dialled) to cashctl's own; any other error is returned as it is.
+func asProvenanceRefusal(err error) error {
+	switch {
+	case errors.Is(err, nipcashclient.ErrBillUnverified):
+		return &provenanceRefusal{errProvenanceFailed, err}
+	case errors.Is(err, nipcashclient.ErrZapContextRequired), errors.Is(err, nipcash.ErrZapContextRequired):
+		return &provenanceRefusal{errNeedsZapEvent, err}
+	}
+	return err
+}
+
+// isProvenanceRefusal reports a bill refused before any network call, by
+// dialBill or by nmilat.
 func isProvenanceRefusal(err error) bool {
-	return errors.Is(err, errProvenanceFailed) || errors.Is(err, errNeedsZapEvent) || errors.Is(err, errNoProvenance)
+	return errors.Is(err, errProvenanceFailed) || errors.Is(err, errNeedsZapEvent) || errors.Is(err, errNoProvenance) ||
+		errors.Is(err, nipcashclient.ErrBillUnverified) || errors.Is(err, nipcashclient.ErrZapContextRequired)
 }
 
 // returnedBillCheck checks a bill a Hub handed back (a split piece, a merge, a
@@ -172,5 +195,9 @@ func heldZapContext(token string) (nipcash.ZapContext, error) {
 // dialZapFn dials a zap bill with the zap context its provenance is checked
 // against (rule 9 of a Cash Zap being received). Swapped in tests.
 var dialZapFn = func(ctx context.Context, token string, zc nipcash.ZapContext) (zapStatusClient, error) {
-	return nipcashclient.ConnectZap(ctx, token, zc, sessionOptions()...)
+	c, err := nipcashclient.ConnectZap(ctx, token, zc, sessionOptions()...)
+	if err != nil {
+		return nil, asProvenanceRefusal(err)
+	}
+	return c, nil
 }

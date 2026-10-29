@@ -118,7 +118,8 @@ plain `Error: ...` line by default, or `{"error", "code", "retryable",
 `reason`, when present, names the cause within `code` (`connection_invalid`,
 `mixed_case`, `connection_mismatch`, `connection_unverified`, `not_accepting`,
 `join_unavailable`, `over_hub_limit`, `rotation_not_served`, `rotation_open`,
-`above_dust`, ...).
+`above_dust`, `hub_unusable` — a Hub whose announcement can't be used, exit 1,
+nothing sent, ...).
 
 `input`, when present, is the single specific value that caused the
 failure (for a `usage` error: the unknown flag or command, or the first

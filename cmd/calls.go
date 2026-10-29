@@ -365,7 +365,8 @@ func closeNotSent(l *ledger.Ledger, c *ledger.Call) {
 // Hub: the dial failed, or nmilat never published.
 func sentNothing(err error) bool {
 	var notSent *notSentError
-	return errors.As(err, &notSent) || errors.Is(err, nipcashclient.ErrNotSent) || errors.Is(err, nipcashclient.ErrPowTooHard)
+	return errors.As(err, &notSent) || errors.Is(err, nipcashclient.ErrNotSent) || errors.Is(err, nipcashclient.ErrPowTooHard) ||
+		errors.Is(err, nipcashclient.ErrHubUnusable)
 }
 
 // placeErr turns a placed call's failure into its outcome on the ledger and the
@@ -393,6 +394,10 @@ func placeErrFor(cmd *cobra.Command, l *ledger.Ledger, j *ledgerJournal, err err
 	var gone *nipcash.BillGone
 	var indeterminate *nipcashclient.IndeterminateError
 	switch {
+	case errors.Is(err, nipcashclient.ErrHubUnusable):
+		// Refused before writing, or before publishing (with ErrNotSent).
+		closeNotSent(l, c)
+		return hubUnusableError(cmd, err)
 	case errors.Is(err, nipcashclient.ErrPowTooHard):
 		closeNotSent(l, c)
 		return output.RuntimeError(cmd, fmt.Errorf(
@@ -403,9 +408,6 @@ func placeErrFor(cmd *cobra.Command, l *ledger.Ledger, j *ledgerJournal, err err
 		// the Hub.
 		closeNotSent(l, c)
 		return output.RuntimeError(cmd, fmt.Errorf("not placed — your money has not moved: %w", err))
-	case errors.Is(err, nipcashclient.ErrHubUnusable):
-		return output.RuntimeError(cmd, fmt.Errorf(
-			"this Hub does not announce a request window, so cashctl will not send it a call that creates a bill — your money has not moved: %w", err))
 	case errors.As(err, &final):
 		closeCall(l, c, ledger.CallNotApplied, final.Code)
 		_ = l.Save()

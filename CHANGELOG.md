@@ -23,7 +23,8 @@
 - Stops looking up a withdrawal at every command when its Hub keeps answering without a valid receipt: two
   such answers leave it `stuck` (`receipt_invalid`), shown as such and looked up hourly. ([#149](https://github.com/ohstr/cashctl/pull/149))
 - Updates nmilat to v0.5.0-rc.45: a call goes on to the bill's next relay when one stays silent, no relay is
-  dialled until a bill method runs, and a Hub whose newest announcement is refused gets no call at all. ([#149](https://github.com/ohstr/cashctl/pull/149))
+  dialled until a bill method runs, and a Hub whose newest announcement is refused gets no call at all, which
+  cashctl reports as exit 1, `reason: hub_unusable`, nothing sent (a spend so refused was exit 8). ([#149](https://github.com/ohstr/cashctl/pull/149))
 
 ## [0.7.0-rc.1]
 
