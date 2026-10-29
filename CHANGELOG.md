@@ -4,24 +4,24 @@
 
 - Fixes one bill being received and counted twice under two spellings (entries reordered, an unknown TLV
   added): holdings are keyed by wallet pubkey and stored in one spelling. Schema 4 migrates a 0.7.0-rc.1
-  database and marks a second copy `duplicate`, a status scripts must accept.
+  database and marks a second copy `duplicate`, a status scripts must accept. ([#149](https://github.com/ohstr/cashctl/pull/149))
 - Says when a received bill's Hub is not on `mainnet`, as for minting and orders: `receive` reads the bill's
-  `get_info` network and prints the test-network line; `--json` adds `network` and `test_network`.
+  `get_info` network and prints the test-network line; `--json` adds `network` and `test_network`. ([#149](https://github.com/ohstr/cashctl/pull/149))
 - Refuses an order's Lightning invoice that the Hub's node identity did not sign, or whose prefix is not the
-  Hub's network (a `tb` or `bcrt` invoice from a `mainnet` bitcoin Hub), before it is shown to pay.
+  Hub's network (a `tb` or `bcrt` invoice from a `mainnet` bitcoin Hub), before it is shown to pay. ([#149](https://github.com/ohstr/cashctl/pull/149))
 - Refuses an `--as connection-key` attestation dated more than 15 minutes ahead of the clock, which a
-  verifier ignores (NIP-IC), instead of sending a claim that cannot pass.
+  verifier ignores (NIP-IC), instead of sending a claim that cannot pass. ([#149](https://github.com/ohstr/cashctl/pull/149))
 - Gives a recommendation's `p` and `a` tags a relay hint: the relay its listing was read from. The discovery
-  cache now records the relay that first served each event.
+  cache now records the relay that first served each event. ([#149](https://github.com/ohstr/cashctl/pull/149))
 - Reads an operator's offers list (11191) from the operator's NIP-65 write relays too, so an operator whose
-  list is only on their own relays shows as verified.
+  list is only on their own relays shows as verified. ([#149](https://github.com/ohstr/cashctl/pull/149))
 - Hides listings of one offer id (`d`) signed by several pubkeys until one passes at `show`, then shows that
   one only; `list --json` counts the rest in `contested`. A copy re-signed under another key no longer sits
-  beside the real offer.
+  beside the real offer. ([#149](https://github.com/ohstr/cashctl/pull/149))
 - Asks a second time before a withdrawal whose fee is above 25 % of the bill, and shows the block the price
-  holds until, what a Lightning redeem would land, and a privacy warning for a received or zap bill.
+  holds until, what a Lightning redeem would land, and a privacy warning for a received or zap bill. ([#149](https://github.com/ohstr/cashctl/pull/149))
 - Stops looking up a withdrawal at every command when its Hub keeps answering without a valid receipt: two
-  such answers leave it `stuck` (`receipt_invalid`), shown as such and looked up hourly.
+  such answers leave it `stuck` (`receipt_invalid`), shown as such and looked up hourly. ([#149](https://github.com/ohstr/cashctl/pull/149))
 
 ## [0.7.0-rc.1]
 
