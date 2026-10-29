@@ -466,12 +466,12 @@ func applyOrderBills(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, o *le
 			secret := callSecretOf(c, ledger.RoleNewIdentity)
 			if _, err := l.Add(ledger.Entry{Token: token, WalletPubkey: b.WalletPubkey, Secret: tok.Secret, RelayURLs: tok.RelayURLs,
 				AmountMillis: &amount, Verified: true, MinterPubkey: &minter, IdentityRequired: ptrTo(false),
-				CashSecret: secret, CashProtection: ledger.CashProtected}); err != nil {
+				CashSecret: secret, CashProtection: ledger.CashProtected, CreatedByCall: c.CallID}); err != nil {
 				return err
 			}
 		case "self":
 			if _, err := l.Add(ledger.Entry{Token: token, WalletPubkey: b.WalletPubkey, Secret: tok.Secret, RelayURLs: tok.RelayURLs,
-				AmountMillis: &amount, Verified: true, MinterPubkey: &minter, IdentityRequired: ptrTo(true)}); err != nil {
+				AmountMillis: &amount, Verified: true, MinterPubkey: &minter, IdentityRequired: ptrTo(true), CreatedByCall: c.CallID}); err != nil {
 				return err
 			}
 		default:

@@ -207,7 +207,17 @@ type Entry struct {
 	// RedeemPresumedAt is when a redeem still claimed 24 h past its invoice's
 	// expiry was presumed paid; a later read showing the row unclaimed re-opens it.
 	RedeemPresumedAt *int64 `json:"-"`
+
+	// CreatedByCall is the call of this device that made the bill (a mint, a
+	// split's remainder, a merge, an order, a cancelled payout's re-mint), ""
+	// for a bill received from someone else, whose amount others know (NIP-CASH
+	// §Privacy Considerations). OwnCallLocal marks one made with no call row.
+	CreatedByCall string `json:"-"`
 }
+
+// OwnCallLocal is CreatedByCall for a bill this device made whose call is
+// not on record.
+const OwnCallLocal = "local"
 
 // HistoryEntry is one line of cashctl's local action log (`cashctl wallet
 // history`).
@@ -351,7 +361,7 @@ func load() (*Ledger, error) {
 		connection_key_platform, connection_key_external_id, attestation_event_id, ia_pubkey,
 		expires_at, cash_protection,
 		throwaway_key, pending_throwaway_key, version, redeem_fee_millis, zap_event,
-		redeem_payment_hash, redeem_invoice_expires_at, redeem_into, redeem_presumed_at
+		redeem_payment_hash, redeem_invoice_expires_at, redeem_into, redeem_presumed_at, created_by_call
 		FROM entries ORDER BY rowid`)
 	if err != nil {
 		return nil, fmt.Errorf("cashctl.db: reading entries: %w", err)
@@ -360,7 +370,7 @@ func load() (*Ledger, error) {
 		var e Entry
 		var relayURLs, cashProtection, throwawayKey, pendingThrowawayKey, zapEvent sql.NullString
 		var identityRequired, amountMillis, expiresAt, redeemFee sql.NullInt64
-		var redeemHash, redeemInto sql.NullString
+		var redeemHash, redeemInto, createdBy sql.NullString
 		var redeemInvoiceExpires, redeemPresumed sql.NullInt64
 		var version int64
 		if err := rows.Scan(&e.ID, &e.Token, &e.WalletPubkey, &e.MinterPubkey, &e.Secret, &relayURLs,
@@ -368,7 +378,7 @@ func load() (*Ledger, error) {
 			&e.ConnectionKeyPlatform, &e.ConnectionKeyExternalID, &e.AttestationEventID, &e.IAPubkey,
 			&expiresAt, &cashProtection,
 			&throwawayKey, &pendingThrowawayKey, &version, &redeemFee, &zapEvent,
-			&redeemHash, &redeemInvoiceExpires, &redeemInto, &redeemPresumed); err != nil {
+			&redeemHash, &redeemInvoiceExpires, &redeemInto, &redeemPresumed, &createdBy); err != nil {
 			_ = rows.Close()
 			return nil, fmt.Errorf("cashctl.db: reading entries: %w", err)
 		}
@@ -378,6 +388,7 @@ func load() (*Ledger, error) {
 		e.PendingThrowawayKey = pendingThrowawayKey.String
 		e.ZapEvent = zapEvent.String
 		e.RedeemPaymentHash, e.RedeemInto = redeemHash.String, redeemInto.String
+		e.CreatedByCall = createdBy.String
 		if redeemInvoiceExpires.Valid {
 			v := redeemInvoiceExpires.Int64
 			e.RedeemInvoiceExpiresAt = &v
@@ -581,8 +592,8 @@ func (l *Ledger) save() error {
 			connection_key_platform, connection_key_external_id, attestation_event_id, ia_pubkey,
 			expires_at, cash_protection,
 			throwaway_key, pending_throwaway_key, redeem_fee_millis, zap_event,
-			redeem_payment_hash, redeem_invoice_expires_at, redeem_into, redeem_presumed_at, version)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+			redeem_payment_hash, redeem_invoice_expires_at, redeem_into, redeem_presumed_at, created_by_call, version)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
 			ON CONFLICT(id) DO UPDATE SET
 				token = excluded.token, wallet_pubkey = excluded.wallet_pubkey,
 				minter_pubkey = excluded.minter_pubkey, secret = excluded.secret,
@@ -603,6 +614,7 @@ func (l *Ledger) save() error {
 				redeem_invoice_expires_at = excluded.redeem_invoice_expires_at,
 				redeem_into = excluded.redeem_into,
 				redeem_presumed_at = excluded.redeem_presumed_at,
+				created_by_call = excluded.created_by_call,
 				version = entries.version + 1
 			WHERE entries.version = ?`,
 			e.ID, e.Token, e.WalletPubkey, e.MinterPubkey, e.Secret, relayURLs,
@@ -611,7 +623,7 @@ func (l *Ledger) save() error {
 			expiresAt, e.CashProtection,
 			e.ThrowawayKey, e.PendingThrowawayKey, redeemFee, nullString(e.ZapEvent),
 			nullString(e.RedeemPaymentHash), nullIntPtr(e.RedeemInvoiceExpiresAt), nullString(e.RedeemInto), nullIntPtr(e.RedeemPresumedAt),
-			expectedVersion)
+			nullString(e.CreatedByCall), expectedVersion)
 		if err != nil {
 			// entries.id collisions are handled by ON CONFLICT above — the
 			// only other constraint this table has is one live row per

@@ -691,6 +691,7 @@ func applyTransferResult(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, r
 		if res.RemainingAmountMillis != nil && *res.RemainingAmountMillis <= maxSaneAmountMillis {
 			remainder.AmountMillis = res.RemainingAmountMillis
 		}
+		remainder.CreatedByCall = c.CallID
 		_, _ = l.Add(remainder)
 	}
 	if t := res.RemainderWalletTombstone; t != nil {
@@ -736,7 +737,7 @@ func applyConsolidateResult(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call
 	}
 	verified, minter := returnedBillCheck(res.NewWalletToken, sharedMinterOfIDs(l, c.SourceEntryIDs))
 	entry := ledger.Entry{Token: strings.ToLower(res.NewWalletToken), WalletPubkey: res.NewWalletPubkey,
-		AmountMillis: &res.AmountMillis, Verified: verified, MinterPubkey: minter, ExpiresAt: expiryPtr(res.ExpiresAt)}
+		AmountMillis: &res.AmountMillis, Verified: verified, MinterPubkey: minter, ExpiresAt: expiryPtr(res.ExpiresAt), CreatedByCall: c.CallID}
 	req, _ := requestOf(c)
 	switch {
 	case req.NewIdentity.IdentityType == "cash":
@@ -802,6 +803,8 @@ func nextStep(c *ledger.Call, device string) string {
 		return "run `cashctl cash settle --as <credential>` with the credential it was placed with"
 	case c.Detail == "confirm_replace":
 		return "the Hub never saw this mint: `cashctl cash settle --replace " + c.CallID + "` mints it again (under its derived id, never twice)"
+	case c.State == ledger.CallStuck && c.Detail == reasonReceiptInvalid:
+		return "the Hub keeps answering without a valid receipt: never send this bill again; cashctl looks it up hourly; contact the Hub"
 	case c.State == ledger.CallStuck:
 		return "run `cashctl cash settle`; if it stays stuck, keep its secrets and contact the Hub"
 	}

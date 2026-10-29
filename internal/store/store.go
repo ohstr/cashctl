@@ -272,7 +272,8 @@ CREATE TABLE withdrawals (
 	confirmed_at       INTEGER,
 	checked_at         INTEGER,
 	finished_at        INTEGER,
-	recovered          INTEGER NOT NULL DEFAULT 0
+	recovered          INTEGER NOT NULL DEFAULT 0,
+	receipt_invalid_seen INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE unverified_confirmations (

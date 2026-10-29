@@ -561,6 +561,7 @@ func printAndSaveTransferResult(cmd *cobra.Command, l *ledger.Ledger, transferRe
 		if !remainder.Verified {
 			output.Notef(jsonMode, unverifiedReturnNote)
 		}
+		remainder.CreatedByCall = ownCallID(call)
 		remainderEntry, _ = l.Add(remainder)
 		// Bounded before it is recorded, like every other Hub-supplied amount that
 		// reaches the ledger (validateQuotedAmounts, cash_receive.go). One figure past

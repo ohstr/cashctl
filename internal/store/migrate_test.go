@@ -17,6 +17,10 @@ func schemaV3(t *testing.T) string {
 	s := strings.Replace(schema, "token                      TEXT NOT NULL,", "token                      TEXT NOT NULL UNIQUE,", 1)
 	s = strings.Replace(s, liveWalletIndex, "", 1)
 	s = strings.Replace(s, "fetched_at INTEGER NOT NULL,\n\trelay      TEXT\n", "fetched_at INTEGER NOT NULL\n", 1)
+	s = strings.Replace(s, "recovered          INTEGER NOT NULL DEFAULT 0,\n\treceipt_invalid_seen INTEGER NOT NULL DEFAULT 0\n", "recovered          INTEGER NOT NULL DEFAULT 0\n", 1)
+	if strings.Contains(s, "receipt_invalid_seen") || strings.Contains(s, "relay      TEXT") {
+		t.Fatal("setup: the v3 schema still has a version-4 column")
+	}
 	if s == schema {
 		t.Fatal("setup: the v3 schema is the current one")
 	}
@@ -180,6 +184,10 @@ func TestOpen_MigratesAnEmptyV3Database(t *testing.T) {
 	}
 	if _, err := db.Exec(`INSERT INTO discover_events (id, kind, pubkey, created_at, raw, origin, fetched_at, relay) VALUES ('ev2', 1, 'p', 1, '{}', 'trusted', 1, 'wss://r')`); err != nil {
 		t.Errorf("a new cached event with its relay: %v", err)
+	}
+	var seen int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('withdrawals') WHERE name = 'receipt_invalid_seen'`).Scan(&seen); err != nil || seen != 1 {
+		t.Errorf("withdrawals.receipt_invalid_seen after the migration: %d (%v)", seen, err)
 	}
 	var n int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name IN ('idx_entries_live_wallet', 'idx_entries_status_minter')`).Scan(&n); err != nil || n != 2 {

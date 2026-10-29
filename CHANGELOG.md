@@ -18,6 +18,10 @@
 - Hides listings of one offer id (`d`) signed by several pubkeys until one passes at `show`, then shows that
   one only; `list --json` counts the rest in `contested`. A copy re-signed under another key no longer sits
   beside the real offer.
+- Asks a second time before a withdrawal whose fee is above 25 % of the bill, and shows the block the price
+  holds until, what a Lightning redeem would land, and a privacy warning for a received or zap bill.
+- Stops looking up a withdrawal at every command when its Hub keeps answering without a valid receipt: two
+  such answers leave it `stuck` (`receipt_invalid`), shown as such and looked up hourly.
 
 ## [0.7.0-rc.1]
 

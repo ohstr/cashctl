@@ -34,7 +34,8 @@ type v3Entry struct {
 // several live rows, one stays live (survivorFirst) and each other becomes
 // "duplicate": counted nowhere, its secrets kept. The token's UNIQUE goes, and
 // idx_entries_live_wallet allows one live row per wallet pubkey from then on.
-// discover_events gains the relay that first served each event.
+// discover_events gains the relay that first served each event, withdrawals
+// a count of answers in a row without a valid receipt.
 func migrateV3(ctx context.Context, conn *sql.Conn) error {
 	entries, err := readV3Entries(ctx, conn)
 	if err != nil {
@@ -102,6 +103,10 @@ func migrateV3(ctx context.Context, conn *sql.Conn) error {
 	}
 	// The relay that first served a cached event, a recommendation's hint.
 	if _, err := conn.ExecContext(ctx, `ALTER TABLE discover_events ADD COLUMN relay TEXT`); err != nil {
+		return err
+	}
+	// How many answers in a row carried no valid receipt (a withdrawal).
+	if _, err := conn.ExecContext(ctx, `ALTER TABLE withdrawals ADD COLUMN receipt_invalid_seen INTEGER NOT NULL DEFAULT 0`); err != nil {
 		return err
 	}
 	_, err = conn.ExecContext(ctx, `UPDATE meta SET value = ? WHERE key = 'schema_version'`, SchemaVersion)

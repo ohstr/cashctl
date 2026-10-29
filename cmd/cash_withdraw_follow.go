@@ -99,6 +99,9 @@ func settleWithdrawInto(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, de
 		_ = l.Save()
 		return "the quote expired: quote again (`cashctl cash withdraw quote`) and send the new quote"
 	}
+	if act.Kind == nipcashclient.ActionWait && act.Reason == "lookup_malformed" && payout == nil {
+		return receiptInvalidAgain(l, c, &w)
+	}
 	if act.Kind == nipcashclient.ActionWait && payout != nil {
 		if w.Recovered && w.PayoutMillis == 0 {
 			adoptRecoveredPayout(&w, payout)
@@ -112,6 +115,33 @@ func settleWithdrawInto(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, de
 	finishRefusedWithdrawal(l, c.CallID)
 	return summary
 }
+
+// receiptInvalidAgain counts one more answer without a valid receipt. At
+// ReceiptInvalidLimit in a row the call is stuck/receipt_invalid: still open
+// and never resent, looked up only hourly, and shown as such (plan WP-20 step
+// 6), instead of being asked again at every command for ever.
+func receiptInvalidAgain(l *ledger.Ledger, c *ledger.Call, w *ledger.Withdrawal) string {
+	w.ReceiptInvalidSeen++
+	_ = ledger.PutWithdrawal(*w)
+	now := time.Now().Unix()
+	c.UpdatedAt = now
+	if w.ReceiptInvalidSeen < ledger.ReceiptInvalidLimit {
+		c.Detail = reasonReceiptInvalid
+		_ = l.Save()
+		return "the Hub's answer had no valid receipt; it is asked again"
+	}
+	retry := now + receiptInvalidRetry
+	c.State, c.Detail, c.RetryAfter = ledger.CallStuck, reasonReceiptInvalid, &retry
+	_ = l.Save()
+	return receiptInvalidText
+}
+
+// receiptInvalidRetry is how often a stuck/receipt_invalid withdrawal is
+// looked up.
+const receiptInvalidRetry = 3600
+
+// receiptInvalidText is what a stuck/receipt_invalid withdrawal says.
+const receiptInvalidText = "The Hub keeps answering this withdrawal without a valid receipt. Never send this bill again; cashctl asks it hourly. Contact the Hub."
 
 // finishRefusedWithdrawal ends the withdrawal row of call id once that call is
 // closed not applied (a refusal, or a re-placement the Hub refused).

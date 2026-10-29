@@ -252,7 +252,7 @@ func applyMintResult(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, res *
 		out.Summary = "a cash note, kept in `cashctl wallet history`"
 	case kind == "pubkey" && localPubIs(cmd, value):
 		e, err := l.Add(ledger.Entry{Token: token, WalletPubkey: res.WalletPubkey, AmountMillis: &amount, Verified: true,
-			MinterPubkey: &minter, IdentityRequired: ptrTo(true), ExpiresAt: expiryPtr(res.ExpiresAt)})
+			MinterPubkey: &minter, IdentityRequired: ptrTo(true), ExpiresAt: expiryPtr(res.ExpiresAt), CreatedByCall: c.CallID})
 		if err != nil && !errors.Is(err, ledger.ErrAlreadyHeld) {
 			return mintOutcome{}, err
 		}
