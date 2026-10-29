@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/ohstr/cashctl/internal/appdir"
+	"github.com/ohstr/cashctl/internal/identity"
 	"github.com/ohstr/cashctl/internal/ledger"
 	"github.com/ohstr/cashctl/internal/output"
 	"github.com/ohstr/cashctl/internal/testmint"
@@ -73,9 +74,14 @@ func TestReceive_ABillHeldUnderAnotherSpellingIsAConflictBeforeAnyDial(t *testin
 		t.Errorf("the bill's relay was contacted %d time(s) for a bill already held", n)
 	}
 
-	// Another bill on the same relay is checked with its Hub as usual.
+	// Another bill on the same relay is checked with its Hub as usual; the
+	// check needs an identity, and the relay is dialled only when it runs.
+	if _, err := identity.GenerateAndSaveLocal(); err != nil {
+		t.Fatal(err)
+	}
 	other := testmint.Bill(t, nipcash.Token{RelayURLs: []string{relay}}, "")
-	if err := receive(other); output.ExitCode(err) == 5 {
+	err = receive(other)
+	if output.ExitCode(err) == 5 {
 		t.Fatalf("a different bill was refused as already held: %v", err)
 	}
 	if dialled.Load() == 0 {

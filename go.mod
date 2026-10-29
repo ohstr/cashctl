@@ -7,7 +7,7 @@ require (
 	github.com/flokiorg/go-flokicoin v0.26.1-alpha
 	github.com/gorilla/websocket v1.5.3
 	github.com/ohstr/ncli v0.6.0
-	github.com/ohstr/nmilat v0.5.0-rc.44
+	github.com/ohstr/nmilat v0.5.0-rc.45
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
 	golang.org/x/term v0.45.0
