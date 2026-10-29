@@ -251,6 +251,7 @@ func runCashReceive(cmd *cobra.Command, args []string) error {
 		return output.RuntimeError(cmd, err)
 	}
 
+	network, testNet := noteBillNetwork(jsonMode, input)
 	if !jsonMode {
 		output.Printf("Received %s.\n", output.FormatAmount(int64(result.Row.AmountMillis)))
 		// NIP-CASH §Removing a Recipient: an unclaimed slice can still be taken
@@ -264,7 +265,7 @@ func runCashReceive(cmd *cobra.Command, args []string) error {
 	if jsonMode {
 		// JSON key stays "secured" — an intentional, unchanged part of the
 		// --json contract (only the human-mode wording/identifiers changed).
-		output.PrintJSON(map[string]any{"entry": finalEntry, "secured": protected.json()})
+		output.PrintJSON(map[string]any{"entry": finalEntry, "secured": protected.json(), "network": network, "test_network": testNet})
 	}
 	return nil
 }

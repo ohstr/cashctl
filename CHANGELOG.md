@@ -5,6 +5,8 @@
 - Fixes one bill being received and counted twice under two spellings (entries reordered, an unknown TLV
   added): holdings are keyed by wallet pubkey and stored in one spelling. Schema 4 migrates a 0.7.0-rc.1
   database and marks a second copy `duplicate`, a status scripts must accept.
+- Says when a received bill's Hub is not on `mainnet`, as for minting and orders: `receive` reads the bill's
+  `get_info` network and prints the test-network line; `--json` adds `network` and `test_network`.
 
 ## [0.7.0-rc.1]
 

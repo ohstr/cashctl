@@ -471,8 +471,10 @@ func receiveZap(cmd *cobra.Command, ev *nip01.Event, raw string) error {
 	if err := l.Save(); err != nil {
 		return output.RuntimeError(cmd, err)
 	}
+	network, testNet := noteBillNetwork(jsonMode, added.Token)
 	if jsonMode {
-		output.PrintJSON(map[string]any{"received": true, "entry": added, "zap": true, "rules": ruleRows(v), "minter_pubkey": minter})
+		output.PrintJSON(map[string]any{"received": true, "entry": added, "zap": true, "rules": ruleRows(v), "minter_pubkey": minter,
+			"network": network, "test_network": testNet})
 		return nil
 	}
 	output.Printf("Received a Cash Zap of %s (entry %s).\n", output.FormatAmount(int64(amount)), added.ID) //nolint:gosec // amounts fit
