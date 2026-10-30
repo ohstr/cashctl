@@ -120,16 +120,17 @@ func migrateV3(ctx context.Context, conn *sql.Conn) error {
 // migrateV4 brings a version-4 database to version 5 inside initSchema's
 // transaction: the entries table gains identity_pubkey, the pubkey a
 // pubkey-mode slice is addressed to (R-CP-RECLAIM). Existing rows backfill to
-// NULL — "unknown, can't tie": cmd/spent.go's proofOf keeps its pre-R-CP-RECLAIM
-// default (an empty addressee is treated as the entry's own key) for them, so a
-// holding received before this column existed is classified exactly as before,
-// while a row received after it records the key the slice was addressed to and
-// gains the rotated-key safety.
+// NULL — "unknown, can't tie": cmd/spent.go's proofOf treats an empty addressee
+// as other_key, so a NOT_FOUND on a legacy holding fails SAFE to unknown (never
+// terminal reclaimed), while a row received after this column records the key the
+// slice was addressed to and gains the full rotated-key safety.
 func migrateV4(ctx context.Context, conn *sql.Conn) error {
 	if _, err := conn.ExecContext(ctx, `ALTER TABLE entries ADD COLUMN identity_pubkey TEXT`); err != nil {
 		return err
 	}
-	_, err := conn.ExecContext(ctx, `UPDATE meta SET value = ? WHERE key = 'schema_version'`, SchemaVersion)
+	// Freeze the literal version migrateV4 produces (5), not SchemaVersion, which
+	// moves on as later migrations are added (matches migrateV3's '4').
+	_, err := conn.ExecContext(ctx, `UPDATE meta SET value = '5' WHERE key = 'schema_version'`)
 	return err
 }
 

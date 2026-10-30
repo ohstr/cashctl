@@ -99,7 +99,7 @@ func TestProofOf_RotatedStoredKeyIsNotReclaim(t *testing.T) {
 	}{
 		{"own key", myPub, proofIdentityKey, ledger.StatusReclaimed},
 		{"rotated key", strings.Repeat("ab", 32), proofOtherKey, ""},
-		{"empty addressee", "", proofIdentityKey, ledger.StatusReclaimed},
+		{"empty addressee (legacy) fails safe to unknown", "", proofOtherKey, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cmd := testCmdWithFlags(false, false)
@@ -123,11 +123,29 @@ func TestProofOf_RotatedStoredKeyIsNotReclaim(t *testing.T) {
 }
 
 // statusLedger saves held entries made by mk (one per call) and returns them.
+//
+// The default entry is a pubkey-mode slice addressed to the local identity: the
+// key a no-`--as`, no-throwaway signer resolves to (signerPubKeyHex ->
+// localPubKeyHex). So its NOT_FOUND is a proof BY the key the slice was
+// addressed to — the entry's own identity key, reclaimed (R-CP-RECLAIM). mk may
+// override IdentityPubkey (or short-circuit the addressee check entirely with a
+// cash secret, connection key or --as) for cases that must not reclaim.
 func statusLedger(t *testing.T, mk ...func(*ledger.Entry)) (*ledger.Ledger, []string) {
 	t.Helper()
 	appdir.SetOverride(t.TempDir())
 	t.Cleanup(func() { appdir.SetOverride("") })
 	t.Setenv(asCredentialEnv, "")
+	if _, err := identity.GenerateAndSaveLocal(); err != nil {
+		t.Fatal(err)
+	}
+	priv, err := identity.Resolve(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	localPub, err := utils.GetPublicKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
 	l, err := ledger.Load()
 	if err != nil {
 		t.Fatal(err)
@@ -135,7 +153,7 @@ func statusLedger(t *testing.T, mk ...func(*ledger.Entry)) (*ledger.Ledger, []st
 	var ids []string
 	for i, f := range mk {
 		amt := uint64(1000 * (i + 1))
-		in := ledger.Entry{Token: "tok" + string(rune('a'+i)), WalletPubkey: "pub" + string(rune('a'+i)), AmountMillis: &amt}
+		in := ledger.Entry{Token: "tok" + string(rune('a'+i)), WalletPubkey: "pub" + string(rune('a'+i)), AmountMillis: &amt, IdentityPubkey: localPub}
 		if f != nil {
 			f(&in)
 		}
@@ -363,11 +381,30 @@ func TestAlreadySpentError_ReclaimedAndExpired(t *testing.T) {
 // G6 redeem: cash_redeem answered NOT_FOUND for the entry's own key is
 // reclaimed; for a connection key it stays held.
 func TestApplyRedeemResults_NotFoundIsReclaimed(t *testing.T) {
+	appdir.SetOverride(t.TempDir())
+	t.Cleanup(func() { appdir.SetOverride("") })
 	t.Setenv(asCredentialEnv, "")
+	// A no-`--as`, no-throwaway signer is the local identity; a pubkey-mode
+	// entry addressed to it is own-key-addressed, so its NOT_FOUND is the
+	// entry's own identity key (reclaimed). The connection-key case short-
+	// circuits before the addressee check and stays held (SG-1).
+	if _, err := identity.GenerateAndSaveLocal(); err != nil {
+		t.Fatal(err)
+	}
+	priv, err := identity.Resolve(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	localPub, err := utils.GetPublicKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, ck := range []bool{false, true} {
 		e := &ledger.Entry{ID: "tok-a", Status: ledger.StatusHeld}
 		if ck {
 			e.ConnectionKeyPlatform = "nostr"
+		} else {
+			e.IdentityPubkey = localPub
 		}
 		l := &ledger.Ledger{Entries: []ledger.Entry{*e}}
 		e = &l.Entries[0]

@@ -170,13 +170,14 @@ func proofOf(cmd *cobra.Command, entry *ledger.Entry) string {
 	// DIFFERENT key proves nothing about the slice (R-CP-RECLAIM), so only a
 	// proof BY the key the slice was addressed to is the entry's own identity
 	// key (reclaimed); anything else is other_key, whose NOT_FOUND writes no
-	// terminal state. A legacy/empty IdentityPubkey — a holding received before
-	// it was recorded, "unknown, can't tie" — keeps the conservative default:
-	// treat it as the entry's own key, so existing holdings classify as before.
-	if entry.IdentityPubkey != "" {
-		if signer, err := signerPubKeyHex(cmd, entry); err != nil || signer != entry.IdentityPubkey {
-			return proofOtherKey
-		}
+	// terminal state. A legacy/empty IdentityPubkey cannot be tied to the signer
+	// either ("unknown, can't tie"), so it must fail SAFE to other_key — never
+	// terminal reclaimed — exactly like a rotated key (NIP-CASH:1589-1590 / :3718).
+	if entry.IdentityPubkey == "" {
+		return proofOtherKey
+	}
+	if signer, err := signerPubKeyHex(cmd, entry); err != nil || signer != entry.IdentityPubkey {
+		return proofOtherKey
 	}
 	return proofIdentityKey
 }
