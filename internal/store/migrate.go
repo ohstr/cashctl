@@ -109,7 +109,27 @@ func migrateV3(ctx context.Context, conn *sql.Conn) error {
 	if _, err := conn.ExecContext(ctx, `ALTER TABLE withdrawals ADD COLUMN receipt_invalid_seen INTEGER NOT NULL DEFAULT 0`); err != nil {
 		return err
 	}
-	_, err = conn.ExecContext(ctx, `UPDATE meta SET value = ? WHERE key = 'schema_version'`, SchemaVersion)
+	// Set the version migrateV3 actually produces (4), not SchemaVersion:
+	// initSchema then chains migrateV4 to carry a v3 database the rest of the
+	// way to the current schema. A literal, since this step's output is frozen
+	// at 4 even as SchemaVersion moves on.
+	_, err = conn.ExecContext(ctx, `UPDATE meta SET value = '4' WHERE key = 'schema_version'`)
+	return err
+}
+
+// migrateV4 brings a version-4 database to version 5 inside initSchema's
+// transaction: the entries table gains identity_pubkey, the pubkey a
+// pubkey-mode slice is addressed to (R-CP-RECLAIM). Existing rows backfill to
+// NULL — "unknown, can't tie": cmd/spent.go's proofOf keeps its pre-R-CP-RECLAIM
+// default (an empty addressee is treated as the entry's own key) for them, so a
+// holding received before this column existed is classified exactly as before,
+// while a row received after it records the key the slice was addressed to and
+// gains the rotated-key safety.
+func migrateV4(ctx context.Context, conn *sql.Conn) error {
+	if _, err := conn.ExecContext(ctx, `ALTER TABLE entries ADD COLUMN identity_pubkey TEXT`); err != nil {
+		return err
+	}
+	_, err := conn.ExecContext(ctx, `UPDATE meta SET value = ? WHERE key = 'schema_version'`, SchemaVersion)
 	return err
 }
 
@@ -213,10 +233,16 @@ func columnsOf(ctx context.Context, conn *sql.Conn, table string) ([]string, err
 	return out, rows.Err()
 }
 
-// entriesTableV4 is the version-4 entries table, cut from schema so the two
-// never differ.
+// entriesTableV4 is the version-4 entries table, cut from the current schema
+// with the columns added after v4 stripped back out (today just
+// identity_pubkey, added by migrateV4), the same way migrate_test.go's schemaV3
+// derives an older schema. migrateV3 must create the table EXACTLY as v4 had
+// it: it copies the v3 rows by the new table's own column list, so a column v3
+// never had would make that SELECT fail — the later migrateV4 adds
+// identity_pubkey back on top.
 func entriesTableV4() string {
 	start := strings.Index(schema, "CREATE TABLE entries (")
 	end := strings.Index(schema[start:], ");") + start + 2
-	return schema[start:end]
+	ddl := schema[start:end]
+	return strings.Replace(ddl, "\tidentity_pubkey            TEXT,\n", "", 1)
 }

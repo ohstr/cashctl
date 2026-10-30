@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,9 +12,11 @@ import (
 	nipcashclient "github.com/ohstr/nmilat/nipcash/client"
 	"github.com/ohstr/nmilat/nipcash/transport"
 	relayclient "github.com/ohstr/nmilat/relay/client"
+	"github.com/ohstr/nmilat/utils"
 	"github.com/spf13/cobra"
 
 	"github.com/ohstr/cashctl/internal/appdir"
+	"github.com/ohstr/cashctl/internal/identity"
 	"github.com/ohstr/cashctl/internal/ledger"
 	"github.com/ohstr/cashctl/internal/output"
 )
@@ -63,6 +66,59 @@ func TestStateForResult_SharedVectors(t *testing.T) {
 		if got := stateForResult(a); got != want {
 			t.Errorf("%s: state = %q, want %q", c.Name, got, want)
 		}
+	}
+}
+
+// TestProofOf_RotatedStoredKeyIsNotReclaim is R-CP-RECLAIM: on the no-`--as`
+// path, a pubkey-mode entry's NOT_FOUND is classified reclaimed ONLY when the
+// slice was addressed to the key now signing. After an identity rotation a
+// NOT_FOUND to the rotated-away key proves nothing (other_key → no terminal
+// state), so a live pubkey holding is never wrongly marked reclaimed. A legacy
+// entry with no recorded addressee keeps the conservative default (own key).
+func TestProofOf_RotatedStoredKeyIsNotReclaim(t *testing.T) {
+	appdir.SetOverride(t.TempDir())
+	t.Cleanup(func() { appdir.SetOverride("") })
+	t.Setenv(asCredentialEnv, "")
+	if _, err := identity.GenerateAndSaveLocal(); err != nil {
+		t.Fatal(err)
+	}
+	priv, err := identity.Resolve(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	myPub, err := utils.GetPublicKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name      string
+		addressed string // entry.IdentityPubkey, the key the slice was addressed to
+		wantProof string
+		wantState string
+	}{
+		{"own key", myPub, proofIdentityKey, ledger.StatusReclaimed},
+		{"rotated key", strings.Repeat("ab", 32), proofOtherKey, ""},
+		{"empty addressee", "", proofIdentityKey, ledger.StatusReclaimed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := testCmdWithFlags(false, false)
+			// IdentityRequired true: an identity-bound (pubkey-mode) slice that
+			// reaches proofOf's addressee check, not a cash note or the
+			// identity-not-required other_key branch.
+			e := &ledger.Entry{
+				ID:               "tok-a",
+				Status:           ledger.StatusHeld,
+				IdentityRequired: ptrTo(true),
+				IdentityPubkey:   tc.addressed,
+			}
+			if got := proofOf(cmd, e); got != tc.wantProof {
+				t.Fatalf("proofOf = %q, want %q", got, tc.wantProof)
+			}
+			if got := stateForResult(billAnswer{NotFound: true, Proof: tc.wantProof}); got != tc.wantState {
+				t.Errorf("stateForResult(not_found, %s) = %q, want %q", tc.wantProof, got, tc.wantState)
+			}
+		})
 	}
 }
 

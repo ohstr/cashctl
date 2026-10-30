@@ -165,6 +165,19 @@ func proofOf(cmd *cobra.Command, entry *ledger.Entry) string {
 	case entry.IdentityRequired != nil && !*entry.IdentityRequired:
 		return proofOtherKey
 	}
+	// A pubkey-mode slice is addressed to one identity key. After an identity
+	// rotation the key now signing may no longer be that key: a NOT_FOUND to a
+	// DIFFERENT key proves nothing about the slice (R-CP-RECLAIM), so only a
+	// proof BY the key the slice was addressed to is the entry's own identity
+	// key (reclaimed); anything else is other_key, whose NOT_FOUND writes no
+	// terminal state. A legacy/empty IdentityPubkey — a holding received before
+	// it was recorded, "unknown, can't tie" — keeps the conservative default:
+	// treat it as the entry's own key, so existing holdings classify as before.
+	if entry.IdentityPubkey != "" {
+		if signer, err := signerPubKeyHex(cmd, entry); err != nil || signer != entry.IdentityPubkey {
+			return proofOtherKey
+		}
+	}
 	return proofIdentityKey
 }
 

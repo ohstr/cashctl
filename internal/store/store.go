@@ -1,8 +1,10 @@
 // Package store manages cashctl's single local SQLite database, cashctl.db.
 //
-// The schema is version 4. A new database gets it whole; a version-3 one
-// (cashctl 0.7.0-rc.1) is migrated in place (migrateV3, which keys bills by
-// wallet pubkey); any other is refused, never read. Version 2 was only ever
+// The schema is version 5. A new database gets it whole; an older one is
+// migrated in place, one version at a time: a version-3 one (cashctl
+// 0.7.0-rc.1) through migrateV3 (which keys bills by wallet pubkey) then
+// migrateV4, a version-4 one through migrateV4 (which adds entries.identity_pubkey,
+// R-CP-RECLAIM); any other is refused, never read. Version 2 was only ever
 // written by pre-release builds, which lacked the join, withdrawal and
 // discover columns and tables version 3 has.
 package store
@@ -22,7 +24,7 @@ import (
 )
 
 // SchemaVersion is the only schema this cashctl reads or writes.
-const SchemaVersion = "4"
+const SchemaVersion = "5"
 
 // schema is created once, in an empty database, together with
 // meta(schema_version).
@@ -81,6 +83,7 @@ CREATE TABLE entries (
 	redeem_into                TEXT,
 	redeem_presumed_at         INTEGER,
 	created_by_call            TEXT,
+	identity_pubkey            TEXT,
 	version                    INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX idx_entries_status_minter ON entries(status, minter_pubkey);
@@ -434,13 +437,26 @@ func initSchema(db *sql.DB, path string) error {
 		}
 	} else {
 		var version string
-		err := conn.QueryRowContext(ctx, `SELECT value FROM meta WHERE key = 'schema_version'`).Scan(&version)
-		switch {
-		case err == nil && version == "3":
+		if err := conn.QueryRowContext(ctx, `SELECT value FROM meta WHERE key = 'schema_version'`).Scan(&version); err != nil {
+			return &ErrOldDatabase{Path: path}
+		}
+		// Migrations run in sequence, each bringing the database up exactly one
+		// version, so a version-3 database is carried all the way to the current
+		// schema (3 → migrateV3 → 4 → migrateV4 → 5). Any version below the
+		// oldest we migrate, or above the one we write, is refused.
+		if version == "3" {
 			if err := migrateV3(ctx, conn); err != nil {
 				return fmt.Errorf("cashctl.db: migrating from version 3: %w", err)
 			}
-		case err != nil || version != SchemaVersion:
+			version = "4"
+		}
+		if version == "4" {
+			if err := migrateV4(ctx, conn); err != nil {
+				return fmt.Errorf("cashctl.db: migrating from version 4: %w", err)
+			}
+			version = "5"
+		}
+		if version != SchemaVersion {
 			return &ErrOldDatabase{Path: path}
 		}
 	}
