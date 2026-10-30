@@ -1,7 +1,8 @@
-// standard_transport_guard.go holds the spec classification and the NWC
-// request decoder the attack-surface test uses to tell a forbidden bill
-// method apart from a method a bill connection legitimately serves on the
-// shared (kind-23194) transport.
+// standard_transport_guard.go holds the spec classification the attack-surface
+// test uses to tell a forbidden bill method apart from a method a bill
+// connection legitimately serves on the shared (kind-23194) transport. The NWC
+// request decoder that reads a captured method lives in the integration-tagged
+// standard_transport_decode.go, since only the live attack test uses it.
 //
 // No build tag: this file and its unit test compile and run without the
 // live stack, so the classification can be pinned to the NIP-CASH table on
@@ -9,10 +10,6 @@
 package integration
 
 import (
-	"encoding/json"
-	"fmt"
-
-	"github.com/ohstr/nmilat/nip44"
 	"github.com/ohstr/nmilat/nipcash"
 )
 
@@ -38,24 +35,4 @@ func isForbiddenOnStandardTransport(method string) bool {
 	default:
 		return false
 	}
-}
-
-// decodeNWCMethod NIP-44-v2-decrypts a captured NWC request's content with the
-// bill's connection secret and wallet pubkey, then returns its "method".
-//
-// A kind-23194 request is encrypted client→wallet, so the conversation key is
-// derived from the bill's Secret (the connection private key) and its
-// WalletPubkey — exactly what nip44.DecryptHex takes.
-func decodeNWCMethod(content, secretHex, walletPubkeyHex string) (string, error) {
-	plaintext, err := nip44.DecryptHex(content, secretHex, walletPubkeyHex)
-	if err != nil {
-		return "", fmt.Errorf("nip-44 v2 decrypt: %w", err)
-	}
-	var req struct {
-		Method string `json:"method"`
-	}
-	if err := json.Unmarshal([]byte(plaintext), &req); err != nil {
-		return "", fmt.Errorf("parse NWC request %q: %w", plaintext, err)
-	}
-	return req.Method, nil
 }
