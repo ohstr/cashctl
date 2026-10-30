@@ -730,6 +730,11 @@ func credentialModeOf(src ledger.Entry) ledger.Entry {
 		ConnectionKeyExternalID: src.ConnectionKeyExternalID,
 		AttestationEventID:      src.AttestationEventID,
 		IAPubkey:                src.IAPubkey,
+		// The remainder stays under the source's SAME identity, so it is addressed
+		// to the same key: carry it so a later NOT_FOUND to that key is told from
+		// one to a rotated-away key (R-CP-RECLAIM). Empty for a cash-mode source,
+		// which has no addressee — the conservative default.
+		IdentityPubkey: src.IdentityPubkey,
 	}
 }
 

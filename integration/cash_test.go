@@ -84,7 +84,12 @@ func setUpCashHubOpts(t *testing.T, admin *adminClient, opts cashHubOpts) adminC
 	// (t.Cleanup is LIFO): every cash_wallet child this hub ever mints
 	// must be reclaimed before the hub itself can be deleted.
 	t.Cleanup(func() {
-		if err := admin.deleteApp(resp.ID); err != nil {
+		// A mint's request record keeps the hub until deadline+H (+ tombstone)
+		// per NIP-CASH §The Record (:1717-1722) — that refusal is the retention
+		// guard working, not a teardown failure. Mirrors lokihub
+		// integration/ephemeral_test.go; the leaked app row clears on wipe.
+		if err := admin.deleteApp(resp.ID); err != nil &&
+			!strings.Contains(err.Error(), "cannot be deleted yet") {
 			t.Logf("cleanup: delete ephemeral cash_hub app_id=%d: %v", resp.ID, err)
 		}
 	})

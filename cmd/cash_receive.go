@@ -226,6 +226,17 @@ func runCashReceive(cmd *cobra.Command, args []string) error {
 		// entry is saved) flips it to CashProtected on a successful
 		// re-key — see ledger.Entry.CashProtection's own doc comment.
 		entry.CashProtection = ledger.CashShared
+	} else {
+		// Pubkey-mode: record the pubkey this slice is addressed to — the key
+		// that will sign for it, which is cashctl's own identity, or the `--as
+		// pubkey:` key when received under one (signerPubKeyHex resolves both).
+		// proofOf uses it to tell a later NOT_FOUND to THIS key (reclaimed) from
+		// one to a key rotated away since (proves nothing, never terminal,
+		// R-CP-RECLAIM). Left empty if the signer can't be resolved — treated as
+		// the entry's own key, the conservative pre-R-CP-RECLAIM default.
+		if signer, sErr := signerPubKeyHex(cmd, nil); sErr == nil {
+			entry.IdentityPubkey = signer
+		}
 	}
 
 	added, err := l.Add(entry)

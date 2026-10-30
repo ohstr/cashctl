@@ -565,15 +565,29 @@ func transferVerb(purpose string) string {
 // signing key's public key, and the secret a cash note or throwaway key
 // authorizes with (kept until the call is final, for its lookup).
 func authorizerOf(cmd *cobra.Command, e *ledger.Entry, cred nipcash.Credential) (kind, pub, secret string) {
+	// An --as (or CASHCTL_AS) override is the credential resolveCredential
+	// actually signs the call with, so it — not the entry's own kind — is the
+	// authorizer recorded here, read exactly the way proofOf reads it. A cash:
+	// secret that IS this entry's own cash secret authorizes as that secret; any
+	// other override key is one cashctl cannot tie to the entry (as_credential),
+	// whose later NOT_FOUND proves nothing about the held slice and must never
+	// mark it reclaimed (R-CP-RECLAIM). This is checked BEFORE the entry-type
+	// branches so authorizerOf stays consistent with resolveCredential, which
+	// reads --as first: otherwise a throwaway/cash/pubkey slice spent under
+	// CASHCTL_AS would be signed by the override yet recorded as the entry's own
+	// key, and proofOfCall would reclaim a live slice on the override's NOT_FOUND.
+	if as := asCredentialValue(cmd); as != "" {
+		if s, ok := strings.CutPrefix(as, "cash:"); ok && e != nil && isCashNote(e) && s == e.CashSecret {
+			return ledger.AuthCashSecret, "", e.CashSecret
+		}
+		return ledger.AuthAsCredential, "", ""
+	}
 	switch {
 	case e != nil && e.ThrowawayKey != "":
 		pub, _ = utils.GetPublicKey(e.ThrowawayKey)
 		return ledger.AuthThrowawayKey, pub, e.ThrowawayKey
 	case e != nil && isCashNote(e):
 		return ledger.AuthCashSecret, "", e.CashSecret
-	}
-	if as, _ := cmd.Flags().GetString("as"); as != "" {
-		return ledger.AuthAsCredential, "", ""
 	}
 	pub, _ = localPubKeyHex(cmd)
 	return ledger.AuthLocalIdentity, pub, ""

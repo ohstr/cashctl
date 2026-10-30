@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ohstr/nmilat/nip01"
 	"github.com/ohstr/nmilat/nipcash"
 	"github.com/ohstr/nmilat/nipcw"
 	"github.com/ohstr/nmilat/utils"
@@ -79,12 +80,20 @@ func TestNoBillTrafficOnTheSharedTransport(t *testing.T) {
 		mintCashGift(t, hub, 30_000),
 	}
 	unsigned := decodeToken(t, mintPubkeyTokenFromHub(t, hub, pub, 30_000))
-	var stops []func() int64
+	// Capture (not just count) every kind-23194 request addressed to each
+	// bill's wallet pubkey, keeping the decoded bill so its Secret can decrypt
+	// what we captured. A bare count would fail on the get_info the spec
+	// REQUIRES on each bill connection (NIP-CASH §Network and Chain :3163-3165);
+	// only the enumerated bill methods are forbidden here (:2011-2024).
+	var bills []nipcash.Token
+	var caps []func() []*nip01.Event
 	for _, tok := range tokens {
 		d := decodeToken(t, tok)
-		stops = append(stops, countEvents(t, d.RelayURLs[0], kindNWCRequest, d.WalletPubkey))
+		bills = append(bills, d)
+		caps = append(caps, captureEvents(t, d.RelayURLs[0], kindNWCRequest, d.WalletPubkey))
 	}
-	stops = append(stops, countEvents(t, unsigned.RelayURLs[0], kindNWCRequest, unsigned.WalletPubkey))
+	bills = append(bills, unsigned)
+	caps = append(caps, captureEvents(t, unsigned.RelayURLs[0], kindNWCRequest, unsigned.WalletPubkey))
 
 	var ids []string
 	for _, tok := range tokens {
@@ -111,16 +120,30 @@ func TestNoBillTrafficOnTheSharedTransport(t *testing.T) {
 		}
 	}
 
-	for i, stop := range stops {
-		if n := stop(); n != 0 {
-			t.Errorf("bill %d: %d NIP-47 request(s) addressed to it on the shared transport, want none", i, n)
+	// A bill method on the shared transport is the attack; a plain get_info is
+	// not. Decrypt each captured request and fail only on a forbidden bill
+	// method — the real bill methods already rode the private transport
+	// (kind 23190 → inbox), proven by TestPrivateTransport_*.
+	for i := range caps {
+		d := bills[i]
+		for _, ev := range caps[i]() {
+			method, err := decodeNWCMethod(ev.Content, d.Secret, d.WalletPubkey)
+			if err != nil {
+				t.Errorf("bill %d: a kind-23194 request addressed to it would not decrypt: %v", i, err)
+				continue
+			}
+			if isForbiddenOnStandardTransport(method) {
+				t.Errorf("bill %d: forbidden bill method %q sent as a kind-23194 request on the shared transport; it must ride the private transport (kind 23190)", i, method)
+			}
 		}
 	}
 }
 
-// TestDeletedSlice_IsNotFound: the Hub owner removes this holder's slice of
-// a bill. The holder is told it is gone, not that it was spent.
-func TestDeletedSlice_IsNotFound(t *testing.T) {
+// TestDeletedSlice_IsReclaimed: the Hub owner removes this holder's slice of a
+// bill. Per NIP-CASH §Removing a Recipient (:3648-3654) a removed own slice
+// becomes terminal `reclaimed`; the holder is told spent/reason=reclaimed (not
+// not_found), while still holding the live two-recipient bill.
+func TestDeletedSlice_IsReclaimed(t *testing.T) {
 	admin, hub := plainClientHub(t)
 	f, pub := newMember(t)
 	_, other := newIdentity(t)
@@ -145,8 +168,12 @@ func TestDeletedSlice_IsNotFound(t *testing.T) {
 		t.Fatalf("no live slice for %s on wallet %s", pub, walletPub)
 	}
 
-	requireFailure(t, "cash status of a deleted slice", f.run("cash", "status", "--token", id), 4, "not_found", "")
-	requireFailure(t, "redeem of a deleted slice", f.run("redeem", "--token", id, "--invoice", makeHubInvoice(t, hub, 3_000), "--yes"), 4, "not_found", "")
+	if e := requireFailure(t, "cash status of a deleted slice", f.run("cash", "status", "--token", id), 10, "spent", ""); e.Reason != "reclaimed" {
+		t.Errorf("cash status reason = %q, want reclaimed", e.Reason)
+	}
+	if e := requireFailure(t, "redeem of a deleted slice", f.run("redeem", "--token", id, "--invoice", makeHubInvoice(t, hub, 3_000), "--yes"), 10, "spent", ""); e.Reason != "reclaimed" {
+		t.Errorf("redeem reason = %q, want reclaimed", e.Reason)
+	}
 }
 
 // TestZeroRetention_SilenceIsNotSpent: with no tombstone kept, a destroyed

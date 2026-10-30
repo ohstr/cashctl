@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.7.0-rc.3]
+
+- Fixes a reclaim misclassification on the call-recovery path: a transfer signed with an
+  `--as`/`CASHCTL_AS` override key could mark the entry's own live slice `reclaimed` when the Hub
+  answered `NOT_FOUND` about the override, hiding real funds from balance and selection. An override
+  is now recorded as a foreign credential and never reclaims the entry's own slice.
+  ([#150](https://github.com/ohstr/cashctl/pull/150))
+- Records the identity key on self-held bills made by `mint`, `order` and a split's remainder, so a
+  genuine reclaim of your own slice is recognized instead of being left as unknown.
+  ([#150](https://github.com/ohstr/cashctl/pull/150))
+
 ## [0.7.0-rc.2]
 
 - Fixes one bill being received and counted twice under two spellings (entries reordered, an unknown TLV

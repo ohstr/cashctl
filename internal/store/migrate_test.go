@@ -18,8 +18,9 @@ func schemaV3(t *testing.T) string {
 	s = strings.Replace(s, liveWalletIndex, "", 1)
 	s = strings.Replace(s, "fetched_at INTEGER NOT NULL,\n\trelay      TEXT\n", "fetched_at INTEGER NOT NULL\n", 1)
 	s = strings.Replace(s, "recovered          INTEGER NOT NULL DEFAULT 0,\n\treceipt_invalid_seen INTEGER NOT NULL DEFAULT 0\n", "recovered          INTEGER NOT NULL DEFAULT 0\n", 1)
-	if strings.Contains(s, "receipt_invalid_seen") || strings.Contains(s, "relay      TEXT") {
-		t.Fatal("setup: the v3 schema still has a version-4 column")
+	s = strings.Replace(s, "\tidentity_pubkey            TEXT,\n", "", 1)
+	if strings.Contains(s, "receipt_invalid_seen") || strings.Contains(s, "relay      TEXT") || strings.Contains(s, "identity_pubkey") {
+		t.Fatal("setup: the v3 schema still has a column added after version 3")
 	}
 	if s == schema {
 		t.Fatal("setup: the v3 schema is the current one")

@@ -132,6 +132,20 @@ type Entry struct {
 	AttestationEventID      string `json:"attestation_event_id,omitempty"`
 	IAPubkey                string `json:"ia_pubkey,omitempty"`
 
+	// IdentityPubkey is the pubkey a pubkey-mode slice is addressed to — the
+	// key that signs for it: cashctl's own identity pubkey at receive, or the
+	// `--as pubkey:` value when the bill was received under one. NOT derivable
+	// from the token itself (which only says whether a proof is required, not
+	// which key), so like the connection-key fields above it is stored here.
+	// Empty for a cash-mode entry (no identity key at all) and for any entry
+	// received before this field existed — "unknown, can't tie": cmd/spent.go's
+	// proofOf treats an empty value as the entry's own key, its pre-R-CP-RECLAIM
+	// default, so a legacy holding is classified exactly as before. When set, it
+	// lets proofOf distinguish a NOT_FOUND to the key the slice was addressed to
+	// (reclaimed, terminal) from one to a key rotated away since (proves nothing
+	// about the slice — never written terminal).
+	IdentityPubkey string `json:"identity_pubkey,omitempty"`
+
 	// MinterPubkey is set only when the token carries a mint_signature that
 	// VerifyProvenance confirms as valid (nil otherwise — an unsigned or
 	// invalidly-signed token has no recoverable minter identity at all).
@@ -361,7 +375,8 @@ func load() (*Ledger, error) {
 		connection_key_platform, connection_key_external_id, attestation_event_id, ia_pubkey,
 		expires_at, cash_protection,
 		throwaway_key, pending_throwaway_key, version, redeem_fee_millis, zap_event,
-		redeem_payment_hash, redeem_invoice_expires_at, redeem_into, redeem_presumed_at, created_by_call
+		redeem_payment_hash, redeem_invoice_expires_at, redeem_into, redeem_presumed_at, created_by_call,
+		identity_pubkey
 		FROM entries ORDER BY rowid`)
 	if err != nil {
 		return nil, fmt.Errorf("cashctl.db: reading entries: %w", err)
@@ -370,7 +385,7 @@ func load() (*Ledger, error) {
 		var e Entry
 		var relayURLs, cashProtection, throwawayKey, pendingThrowawayKey, zapEvent sql.NullString
 		var identityRequired, amountMillis, expiresAt, redeemFee sql.NullInt64
-		var redeemHash, redeemInto, createdBy sql.NullString
+		var redeemHash, redeemInto, createdBy, identityPubkey sql.NullString
 		var redeemInvoiceExpires, redeemPresumed sql.NullInt64
 		var version int64
 		if err := rows.Scan(&e.ID, &e.Token, &e.WalletPubkey, &e.MinterPubkey, &e.Secret, &relayURLs,
@@ -378,7 +393,8 @@ func load() (*Ledger, error) {
 			&e.ConnectionKeyPlatform, &e.ConnectionKeyExternalID, &e.AttestationEventID, &e.IAPubkey,
 			&expiresAt, &cashProtection,
 			&throwawayKey, &pendingThrowawayKey, &version, &redeemFee, &zapEvent,
-			&redeemHash, &redeemInvoiceExpires, &redeemInto, &redeemPresumed, &createdBy); err != nil {
+			&redeemHash, &redeemInvoiceExpires, &redeemInto, &redeemPresumed, &createdBy,
+			&identityPubkey); err != nil {
 			_ = rows.Close()
 			return nil, fmt.Errorf("cashctl.db: reading entries: %w", err)
 		}
@@ -389,6 +405,7 @@ func load() (*Ledger, error) {
 		e.ZapEvent = zapEvent.String
 		e.RedeemPaymentHash, e.RedeemInto = redeemHash.String, redeemInto.String
 		e.CreatedByCall = createdBy.String
+		e.IdentityPubkey = identityPubkey.String
 		if redeemInvoiceExpires.Valid {
 			v := redeemInvoiceExpires.Int64
 			e.RedeemInvoiceExpiresAt = &v
@@ -592,8 +609,9 @@ func (l *Ledger) save() error {
 			connection_key_platform, connection_key_external_id, attestation_event_id, ia_pubkey,
 			expires_at, cash_protection,
 			throwaway_key, pending_throwaway_key, redeem_fee_millis, zap_event,
-			redeem_payment_hash, redeem_invoice_expires_at, redeem_into, redeem_presumed_at, created_by_call, version)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+			redeem_payment_hash, redeem_invoice_expires_at, redeem_into, redeem_presumed_at, created_by_call,
+			identity_pubkey, version)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
 			ON CONFLICT(id) DO UPDATE SET
 				token = excluded.token, wallet_pubkey = excluded.wallet_pubkey,
 				minter_pubkey = excluded.minter_pubkey, secret = excluded.secret,
@@ -615,6 +633,7 @@ func (l *Ledger) save() error {
 				redeem_into = excluded.redeem_into,
 				redeem_presumed_at = excluded.redeem_presumed_at,
 				created_by_call = excluded.created_by_call,
+				identity_pubkey = excluded.identity_pubkey,
 				version = entries.version + 1
 			WHERE entries.version = ?`,
 			e.ID, e.Token, e.WalletPubkey, e.MinterPubkey, e.Secret, relayURLs,
@@ -623,7 +642,7 @@ func (l *Ledger) save() error {
 			expiresAt, e.CashProtection,
 			e.ThrowawayKey, e.PendingThrowawayKey, redeemFee, nullString(e.ZapEvent),
 			nullString(e.RedeemPaymentHash), nullIntPtr(e.RedeemInvoiceExpiresAt), nullString(e.RedeemInto), nullIntPtr(e.RedeemPresumedAt),
-			nullString(e.CreatedByCall), expectedVersion)
+			nullString(e.CreatedByCall), nullString(e.IdentityPubkey), expectedVersion)
 		if err != nil {
 			// entries.id collisions are handled by ON CONFLICT above — the
 			// only other constraint this table has is one live row per

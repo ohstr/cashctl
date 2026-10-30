@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,9 +12,11 @@ import (
 	nipcashclient "github.com/ohstr/nmilat/nipcash/client"
 	"github.com/ohstr/nmilat/nipcash/transport"
 	relayclient "github.com/ohstr/nmilat/relay/client"
+	"github.com/ohstr/nmilat/utils"
 	"github.com/spf13/cobra"
 
 	"github.com/ohstr/cashctl/internal/appdir"
+	"github.com/ohstr/cashctl/internal/identity"
 	"github.com/ohstr/cashctl/internal/ledger"
 	"github.com/ohstr/cashctl/internal/output"
 )
@@ -66,12 +69,166 @@ func TestStateForResult_SharedVectors(t *testing.T) {
 	}
 }
 
+// TestProofOf_RotatedStoredKeyIsNotReclaim is R-CP-RECLAIM: on the no-`--as`
+// path, a pubkey-mode entry's NOT_FOUND is classified reclaimed ONLY when the
+// slice was addressed to the key now signing. After an identity rotation a
+// NOT_FOUND to the rotated-away key proves nothing (other_key → no terminal
+// state), so a live pubkey holding is never wrongly marked reclaimed. A legacy
+// entry with no recorded addressee keeps the conservative default (own key).
+func TestProofOf_RotatedStoredKeyIsNotReclaim(t *testing.T) {
+	appdir.SetOverride(t.TempDir())
+	t.Cleanup(func() { appdir.SetOverride("") })
+	t.Setenv(asCredentialEnv, "")
+	if _, err := identity.GenerateAndSaveLocal(); err != nil {
+		t.Fatal(err)
+	}
+	priv, err := identity.Resolve(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	myPub, err := utils.GetPublicKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name      string
+		addressed string // entry.IdentityPubkey, the key the slice was addressed to
+		wantProof string
+		wantState string
+	}{
+		{"own key", myPub, proofIdentityKey, ledger.StatusReclaimed},
+		{"rotated key", strings.Repeat("ab", 32), proofOtherKey, ""},
+		{"empty addressee (legacy) fails safe to unknown", "", proofOtherKey, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := testCmdWithFlags(false, false)
+			// IdentityRequired true: an identity-bound (pubkey-mode) slice that
+			// reaches proofOf's addressee check, not a cash note or the
+			// identity-not-required other_key branch.
+			e := &ledger.Entry{
+				ID:               "tok-a",
+				Status:           ledger.StatusHeld,
+				IdentityRequired: ptrTo(true),
+				IdentityPubkey:   tc.addressed,
+			}
+			if got := proofOf(cmd, e); got != tc.wantProof {
+				t.Fatalf("proofOf = %q, want %q", got, tc.wantProof)
+			}
+			if got := stateForResult(billAnswer{NotFound: true, Proof: tc.wantProof}); got != tc.wantState {
+				t.Errorf("stateForResult(not_found, %s) = %q, want %q", tc.wantProof, got, tc.wantState)
+			}
+		})
+	}
+}
+
+// TestAuthorizerOf_OverrideIsNotTheEntrysOwnKey is the call-path sibling of
+// TestProofOf_RotatedStoredKeyIsNotReclaim (R-CP-RECLAIM). A call SIGNED under
+// an --as/CASHCTL_AS override is signed by that credential (resolveCredential
+// reads it first), so authorizerOf must record it as as_credential — NOT the
+// entry's own kind — or proofOfCall would later treat the override's NOT_FOUND
+// as the slice's own proof and reclaim a live slice. A cash: secret that IS the
+// entry's own is the one exception: it genuinely is the entry's own credential.
+func TestAuthorizerOf_OverrideIsNotTheEntrysOwnKey(t *testing.T) {
+	appdir.SetOverride(t.TempDir())
+	t.Cleanup(func() { appdir.SetOverride("") })
+	t.Setenv(asCredentialEnv, "")
+	if _, err := identity.GenerateAndSaveLocal(); err != nil {
+		t.Fatal(err)
+	}
+	const ownSecret = "a1b2c3"
+	pubkeySlice := func(e *ledger.Entry) { e.IdentityRequired = ptrTo(true) }
+	throwaway := func(e *ledger.Entry) { e.ThrowawayKey = strings.Repeat("cd", 32) }
+	cashNote := func(e *ledger.Entry) { e.IdentityRequired, e.CashSecret = ptrTo(false), ownSecret }
+
+	for _, tc := range []struct {
+		name     string
+		mk       func(*ledger.Entry)
+		as       string
+		wantKind string
+	}{
+		{"pubkey slice, no override, is its own local key", pubkeySlice, "", ledger.AuthLocalIdentity},
+		{"pubkey slice under CASHCTL_AS is as_credential", pubkeySlice, "pubkey:11", ledger.AuthAsCredential},
+		{"throwaway slice, no override, is its throwaway key", throwaway, "", ledger.AuthThrowawayKey},
+		{"throwaway slice under CASHCTL_AS is as_credential", throwaway, "pubkey:11", ledger.AuthAsCredential},
+		{"cash note under its OWN cash secret stays cash_secret", cashNote, "cash:" + ownSecret, ledger.AuthCashSecret},
+		{"cash note under a DIFFERENT cash secret is as_credential", cashNote, "cash:beef", ledger.AuthAsCredential},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(asCredentialEnv, tc.as)
+			e := &ledger.Entry{ID: "tok", Status: ledger.StatusHeld}
+			tc.mk(e)
+			if kind, _, _ := authorizerOf(testCmdWithFlags(false, false), e, nil); kind != tc.wantKind {
+				t.Fatalf("authorizerOf kind = %q, want %q", kind, tc.wantKind)
+			}
+		})
+	}
+}
+
+// TestMarkRefusedNotFound_OverrideDoesNotReclaimLiveSlice is the end-to-end
+// R-CP-RECLAIM call-path guard: a live pubkey/throwaway slice whose cash_transfer
+// was placed under CASHCTL_AS=pubkey:<another key> is refused NOT_FOUND (the
+// override owns no slice), and markRefusedNotFound must leave the slice HELD —
+// the NOT_FOUND is about the override, not the slice's own key. The no-override
+// controls prove a genuine own-key reclaim still records.
+func TestMarkRefusedNotFound_OverrideDoesNotReclaimLiveSlice(t *testing.T) {
+	throwaway := func(e *ledger.Entry) { e.ThrowawayKey = strings.Repeat("cd", 32) }
+	for _, tc := range []struct {
+		name string
+		mk   func(*ledger.Entry)
+		as   string
+		want string // the state markRefusedNotFound writes ("" == nothing, stays held)
+	}{
+		{"pubkey own-key reclaims (control)", nil, "", ledger.StatusReclaimed},
+		{"pubkey under CASHCTL_AS stays held", nil, "pubkey:11", ""},
+		{"throwaway own-key reclaims (control)", throwaway, "", ledger.StatusReclaimed},
+		{"throwaway under CASHCTL_AS stays held", throwaway, "pubkey:11", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			l, ids := statusLedger(t, tc.mk)
+			t.Setenv(asCredentialEnv, tc.as)
+			e, _ := l.Find(ids[0])
+			kind, pub, secret := authorizerOf(testCmdWithFlags(false, false), e, nil)
+			c := &ledger.Call{Method: nipcash.MethodCashTransfer, SourceEntryIDs: ids[:1],
+				AuthorizerKind: kind, AuthorizerPubkey: pub, AuthorizerSecret: secret}
+			if got := markRefusedNotFound(l, c, "NOT_FOUND"); got != tc.want {
+				t.Fatalf("markRefusedNotFound = %q, want %q", got, tc.want)
+			}
+			wantStatus := ledger.StatusHeld
+			if tc.want != "" {
+				wantStatus = tc.want
+			}
+			if got, _ := l.Find(ids[0]); got.Status != wantStatus {
+				t.Fatalf("slice status = %q, want %q", got.Status, wantStatus)
+			}
+		})
+	}
+}
+
 // statusLedger saves held entries made by mk (one per call) and returns them.
+//
+// The default entry is a pubkey-mode slice addressed to the local identity: the
+// key a no-`--as`, no-throwaway signer resolves to (signerPubKeyHex ->
+// localPubKeyHex). So its NOT_FOUND is a proof BY the key the slice was
+// addressed to — the entry's own identity key, reclaimed (R-CP-RECLAIM). mk may
+// override IdentityPubkey (or short-circuit the addressee check entirely with a
+// cash secret, connection key or --as) for cases that must not reclaim.
 func statusLedger(t *testing.T, mk ...func(*ledger.Entry)) (*ledger.Ledger, []string) {
 	t.Helper()
 	appdir.SetOverride(t.TempDir())
 	t.Cleanup(func() { appdir.SetOverride("") })
 	t.Setenv(asCredentialEnv, "")
+	if _, err := identity.GenerateAndSaveLocal(); err != nil {
+		t.Fatal(err)
+	}
+	priv, err := identity.Resolve(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	localPub, err := utils.GetPublicKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
 	l, err := ledger.Load()
 	if err != nil {
 		t.Fatal(err)
@@ -79,7 +236,7 @@ func statusLedger(t *testing.T, mk ...func(*ledger.Entry)) (*ledger.Ledger, []st
 	var ids []string
 	for i, f := range mk {
 		amt := uint64(1000 * (i + 1))
-		in := ledger.Entry{Token: "tok" + string(rune('a'+i)), WalletPubkey: "pub" + string(rune('a'+i)), AmountMillis: &amt}
+		in := ledger.Entry{Token: "tok" + string(rune('a'+i)), WalletPubkey: "pub" + string(rune('a'+i)), AmountMillis: &amt, IdentityPubkey: localPub}
 		if f != nil {
 			f(&in)
 		}
@@ -307,11 +464,30 @@ func TestAlreadySpentError_ReclaimedAndExpired(t *testing.T) {
 // G6 redeem: cash_redeem answered NOT_FOUND for the entry's own key is
 // reclaimed; for a connection key it stays held.
 func TestApplyRedeemResults_NotFoundIsReclaimed(t *testing.T) {
+	appdir.SetOverride(t.TempDir())
+	t.Cleanup(func() { appdir.SetOverride("") })
 	t.Setenv(asCredentialEnv, "")
+	// A no-`--as`, no-throwaway signer is the local identity; a pubkey-mode
+	// entry addressed to it is own-key-addressed, so its NOT_FOUND is the
+	// entry's own identity key (reclaimed). The connection-key case short-
+	// circuits before the addressee check and stays held (SG-1).
+	if _, err := identity.GenerateAndSaveLocal(); err != nil {
+		t.Fatal(err)
+	}
+	priv, err := identity.Resolve(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	localPub, err := utils.GetPublicKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, ck := range []bool{false, true} {
 		e := &ledger.Entry{ID: "tok-a", Status: ledger.StatusHeld}
 		if ck {
 			e.ConnectionKeyPlatform = "nostr"
+		} else {
+			e.IdentityPubkey = localPub
 		}
 		l := &ledger.Ledger{Entries: []ledger.Entry{*e}}
 		e = &l.Entries[0]
