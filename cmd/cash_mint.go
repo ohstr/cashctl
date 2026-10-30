@@ -251,8 +251,13 @@ func applyMintResult(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, res *
 		l.AddHandoff(ledger.Handoff{Kind: ledger.HandoffCashNote, Handoff: out.Handoff, AmountMillis: amount, Target: "cash", WalletPubkey: res.WalletPubkey, ExpiresAt: expiryPtr(res.ExpiresAt)})
 		out.Summary = "a cash note, kept in `cashctl wallet history`"
 	case kind == "pubkey" && localPubIs(cmd, value):
+		// value is the identity pubkey this slice is addressed to (localPubIs
+		// confirmed it is the local key). Record it, like cash_receive does, so a
+		// later NOT_FOUND to THIS key is told from one to a rotated-away key
+		// (R-CP-RECLAIM); without it the slice fails safe to unknown and a genuine
+		// reclaim never records.
 		e, err := l.Add(ledger.Entry{Token: token, WalletPubkey: res.WalletPubkey, AmountMillis: &amount, Verified: true,
-			MinterPubkey: &minter, IdentityRequired: ptrTo(true), ExpiresAt: expiryPtr(res.ExpiresAt), CreatedByCall: c.CallID})
+			MinterPubkey: &minter, IdentityRequired: ptrTo(true), IdentityPubkey: value, ExpiresAt: expiryPtr(res.ExpiresAt), CreatedByCall: c.CallID})
 		if err != nil && !errors.Is(err, ledger.ErrAlreadyHeld) {
 			return mintOutcome{}, err
 		}

@@ -101,10 +101,21 @@ func TestMint_RefusedWhenGetInfoNamesAnotherIdentity(t *testing.T) {
 		t.Errorf("error doesn't read as an identity mismatch: %s", res.Stderr)
 	}
 
-	// Nothing may be written ahead: the online check fails inside client.Info,
-	// before ledger.Load and the journal ever run (nmilat's own test asserts
-	// the same server-free invariant with len(j.all()) == 0).
-	if calls, _ := f.mustJSON("wallet", "show")["open_calls"].([]any); len(calls) != 0 {
+	// Nothing may be written ahead AND no value may be minted: the online check
+	// fails inside client.Info — which cash_mint.go calls BEFORE MintCash — so
+	// mint_cash is never sent and the journal never runs (nmilat's own unit test
+	// asserts the same server-free invariant with len(j.all()) == 0). Assert all
+	// three client-observable traces of a mint are absent, not just open calls:
+	// a regression that sent mint_cash and only THEN reported the mismatch would
+	// still leave no open call, so open_calls alone does not prove nothing minted.
+	show := f.mustJSON("wallet", "show")
+	if calls, _ := show["open_calls"].([]any); len(calls) != 0 {
 		t.Errorf("a refused mint wrote calls ahead: %v", calls)
+	}
+	if held, _ := show["held_tokens"].([]any); len(held) != 0 {
+		t.Errorf("a refused mint kept %d held token(s); nothing may be minted on a mismatch: %v", len(held), held)
+	}
+	if bal, _ := show["balance"].(float64); bal != 0 {
+		t.Errorf("balance = %v after a refused mint, want 0 — no value may be minted on a mismatch", bal)
 	}
 }

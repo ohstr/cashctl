@@ -470,8 +470,17 @@ func applyOrderBills(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, o *le
 				return err
 			}
 		case "self":
-			if _, err := l.Add(ledger.Entry{Token: token, WalletPubkey: b.WalletPubkey, Secret: tok.Secret, RelayURLs: tok.RelayURLs,
-				AmountMillis: &amount, Verified: true, MinterPubkey: &minter, IdentityRequired: ptrTo(true), CreatedByCall: c.CallID}); err != nil {
+			self := ledger.Entry{Token: token, WalletPubkey: b.WalletPubkey, Secret: tok.Secret, RelayURLs: tok.RelayURLs,
+				AmountMillis: &amount, Verified: true, MinterPubkey: &minter, IdentityRequired: ptrTo(true), CreatedByCall: c.CallID}
+			// A self bill is addressed to the local identity (orderTarget resolves
+			// "self" to localPubKeyHex), the key that will sign to spend it. Record
+			// it like cash_receive/mint so a later NOT_FOUND to THAT key is told
+			// from one to a rotated-away key (R-CP-RECLAIM); left empty, the
+			// conservative default, if it can't be resolved.
+			if self.IdentityPubkey, err = localPubKeyHex(cmd); err != nil {
+				self.IdentityPubkey = ""
+			}
+			if _, err := l.Add(self); err != nil {
 				return err
 			}
 		default:

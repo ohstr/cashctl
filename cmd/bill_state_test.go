@@ -122,6 +122,89 @@ func TestProofOf_RotatedStoredKeyIsNotReclaim(t *testing.T) {
 	}
 }
 
+// TestAuthorizerOf_OverrideIsNotTheEntrysOwnKey is the call-path sibling of
+// TestProofOf_RotatedStoredKeyIsNotReclaim (R-CP-RECLAIM). A call SIGNED under
+// an --as/CASHCTL_AS override is signed by that credential (resolveCredential
+// reads it first), so authorizerOf must record it as as_credential — NOT the
+// entry's own kind — or proofOfCall would later treat the override's NOT_FOUND
+// as the slice's own proof and reclaim a live slice. A cash: secret that IS the
+// entry's own is the one exception: it genuinely is the entry's own credential.
+func TestAuthorizerOf_OverrideIsNotTheEntrysOwnKey(t *testing.T) {
+	appdir.SetOverride(t.TempDir())
+	t.Cleanup(func() { appdir.SetOverride("") })
+	t.Setenv(asCredentialEnv, "")
+	if _, err := identity.GenerateAndSaveLocal(); err != nil {
+		t.Fatal(err)
+	}
+	const ownSecret = "a1b2c3"
+	pubkeySlice := func(e *ledger.Entry) { e.IdentityRequired = ptrTo(true) }
+	throwaway := func(e *ledger.Entry) { e.ThrowawayKey = strings.Repeat("cd", 32) }
+	cashNote := func(e *ledger.Entry) { e.IdentityRequired, e.CashSecret = ptrTo(false), ownSecret }
+
+	for _, tc := range []struct {
+		name     string
+		mk       func(*ledger.Entry)
+		as       string
+		wantKind string
+	}{
+		{"pubkey slice, no override, is its own local key", pubkeySlice, "", ledger.AuthLocalIdentity},
+		{"pubkey slice under CASHCTL_AS is as_credential", pubkeySlice, "pubkey:11", ledger.AuthAsCredential},
+		{"throwaway slice, no override, is its throwaway key", throwaway, "", ledger.AuthThrowawayKey},
+		{"throwaway slice under CASHCTL_AS is as_credential", throwaway, "pubkey:11", ledger.AuthAsCredential},
+		{"cash note under its OWN cash secret stays cash_secret", cashNote, "cash:" + ownSecret, ledger.AuthCashSecret},
+		{"cash note under a DIFFERENT cash secret is as_credential", cashNote, "cash:beef", ledger.AuthAsCredential},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(asCredentialEnv, tc.as)
+			e := &ledger.Entry{ID: "tok", Status: ledger.StatusHeld}
+			tc.mk(e)
+			if kind, _, _ := authorizerOf(testCmdWithFlags(false, false), e, nil); kind != tc.wantKind {
+				t.Fatalf("authorizerOf kind = %q, want %q", kind, tc.wantKind)
+			}
+		})
+	}
+}
+
+// TestMarkRefusedNotFound_OverrideDoesNotReclaimLiveSlice is the end-to-end
+// R-CP-RECLAIM call-path guard: a live pubkey/throwaway slice whose cash_transfer
+// was placed under CASHCTL_AS=pubkey:<another key> is refused NOT_FOUND (the
+// override owns no slice), and markRefusedNotFound must leave the slice HELD —
+// the NOT_FOUND is about the override, not the slice's own key. The no-override
+// controls prove a genuine own-key reclaim still records.
+func TestMarkRefusedNotFound_OverrideDoesNotReclaimLiveSlice(t *testing.T) {
+	throwaway := func(e *ledger.Entry) { e.ThrowawayKey = strings.Repeat("cd", 32) }
+	for _, tc := range []struct {
+		name string
+		mk   func(*ledger.Entry)
+		as   string
+		want string // the state markRefusedNotFound writes ("" == nothing, stays held)
+	}{
+		{"pubkey own-key reclaims (control)", nil, "", ledger.StatusReclaimed},
+		{"pubkey under CASHCTL_AS stays held", nil, "pubkey:11", ""},
+		{"throwaway own-key reclaims (control)", throwaway, "", ledger.StatusReclaimed},
+		{"throwaway under CASHCTL_AS stays held", throwaway, "pubkey:11", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			l, ids := statusLedger(t, tc.mk)
+			t.Setenv(asCredentialEnv, tc.as)
+			e, _ := l.Find(ids[0])
+			kind, pub, secret := authorizerOf(testCmdWithFlags(false, false), e, nil)
+			c := &ledger.Call{Method: nipcash.MethodCashTransfer, SourceEntryIDs: ids[:1],
+				AuthorizerKind: kind, AuthorizerPubkey: pub, AuthorizerSecret: secret}
+			if got := markRefusedNotFound(l, c, "NOT_FOUND"); got != tc.want {
+				t.Fatalf("markRefusedNotFound = %q, want %q", got, tc.want)
+			}
+			wantStatus := ledger.StatusHeld
+			if tc.want != "" {
+				wantStatus = tc.want
+			}
+			if got, _ := l.Find(ids[0]); got.Status != wantStatus {
+				t.Fatalf("slice status = %q, want %q", got.Status, wantStatus)
+			}
+		})
+	}
+}
+
 // statusLedger saves held entries made by mk (one per call) and returns them.
 //
 // The default entry is a pubkey-mode slice addressed to the local identity: the
