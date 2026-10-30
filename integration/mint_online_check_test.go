@@ -115,7 +115,9 @@ func TestMint_RefusedWhenGetInfoNamesAnotherIdentity(t *testing.T) {
 	if held, _ := show["held_tokens"].([]any); len(held) != 0 {
 		t.Errorf("a refused mint kept %d held token(s); nothing may be minted on a mismatch: %v", len(held), held)
 	}
-	if bal, _ := show["balance"].(float64); bal != 0 {
-		t.Errorf("balance = %v after a refused mint, want 0 — no value may be minted on a mismatch", bal)
+	// Balance comes from `wallet balance` (`wallet show` carries no total): it must
+	// be zero, since a mint that reached the Hub and minted value would show here.
+	if total := walletTotalMloki(t, f); total != 0 {
+		t.Errorf("wallet balance = %d mloki after a refused mint, want 0 — no value may be minted on a mismatch", total)
 	}
 }
