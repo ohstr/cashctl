@@ -334,14 +334,60 @@ func TestCashConsolidate_RefusesExpiredSourceMixedWithHealthySibling(t *testing.
 	// merge — name both sources explicitly. --yes (and f.run's own
 	// --json) confirms the refusal fires even with no prompt to decline.
 	res := f.run("consolidate", "--sources", doomedID+","+healthyID, "--yes")
-	if res.ExitCode != 3 {
-		t.Fatalf("consolidate (expired mixed with healthy): exit = %d, want 3 (invalid_input)\nstdout: %s\nstderr: %s", res.ExitCode, res.Stdout, res.Stderr)
+	requireExpiredMemberRefused(t, f, res, "consolidate (expired mixed with healthy)", doomedID, healthyID)
+}
+
+// requireExpiredMemberRefused checks that a merge naming a source that has
+// already expired was refused with nothing moved, in whichever phase it ran
+// (res is the command's result, healthyIDs every other source). Before the
+// Hub's expiry sweep, cash_status still serves the roster (NIP-CASH §Expiry)
+// and cashctl refuses up front: invalid_input, exit 3, every source still held.
+// After the sweep the bill is gone and its tombstone is definitive (NIP-CASH
+// §Answering About a Destroyed Bill): spent with reason expired, exit 10, the
+// expired source no longer held (NIP-CP §Balance: state expired) and every
+// healthy one still held.
+func requireExpiredMemberRefused(t *testing.T, f *fixture, res result, what, doomedID string, healthyIDs ...string) {
+	t.Helper()
+	switch res.ExitCode {
+	case 3:
+		if got := errorCode(t, res); got != "invalid_input" {
+			t.Errorf("%s: code = %q, want invalid_input", what, got)
+		}
+		requireHeldIDs(t, f, what, append([]string{doomedID}, healthyIDs...)...)
+	case 10:
+		var body struct {
+			Code   string `json:"code"`
+			Reason string `json:"reason"`
+		}
+		if err := json.Unmarshal([]byte(res.Stderr), &body); err != nil {
+			t.Fatalf("%s: stderr is not a JSON error report: %v\nstderr: %s", what, err, res.Stderr)
+		}
+		if body.Code != "spent" || body.Reason != "expired" {
+			t.Errorf("%s: code/reason = %q/%q, want spent/expired\nstderr: %s", what, body.Code, body.Reason, res.Stderr)
+		}
+		requireHeldIDs(t, f, what, healthyIDs...)
+	default:
+		t.Fatalf("%s: exit = %d, want 3 (invalid_input, before the Hub's expiry sweep) or 10 (spent/expired, after it)\nstdout: %s\nstderr: %s", what, res.ExitCode, res.Stdout, res.Stderr)
 	}
-	if got := errorCode(t, res); got != "invalid_input" {
-		t.Errorf("code = %q, want invalid_input", got)
+}
+
+// requireHeldIDs checks that f holds exactly the tokens want.
+func requireHeldIDs(t *testing.T, f *fixture, what string, want ...string) {
+	t.Helper()
+	held, _ := f.mustJSON("wallet", "show")["held_tokens"].([]any)
+	got := make(map[string]bool, len(held))
+	for _, h := range held {
+		e, _ := h.(map[string]any)
+		id, _ := e["id"].(string)
+		got[id] = true
 	}
-	if n := heldCount(t, f); n != 2 {
-		t.Fatalf("refused consolidate, but %d tokens are held afterward, want both untouched (nothing merged)", n)
+	if len(held) != len(want) {
+		t.Errorf("%s: %d tokens held afterward, want %d (%v): %v", what, len(held), len(want), want, held)
+	}
+	for _, id := range want {
+		if !got[id] {
+			t.Errorf("%s: token %s is no longer held, want it untouched", what, id)
+		}
 	}
 }
 
@@ -369,15 +415,7 @@ func TestCashConsolidate_RefusesWhenAMemberHasAlreadyExpired(t *testing.T) {
 	// No "n\n" to decline with: the refusal happens before any prompt is
 	// ever shown, interactive or not.
 	res := f.run("consolidate", doomedID, healthyID)
-	if res.ExitCode != 3 {
-		t.Fatalf("consolidate (expired mixed with healthy): exit = %d, want 3 (invalid_input)\nstdout: %s\nstderr: %s", res.ExitCode, res.Stdout, res.Stderr)
-	}
-	if got := errorCode(t, res); got != "invalid_input" {
-		t.Errorf("code = %q, want invalid_input", got)
-	}
-	if n := heldCount(t, f); n != 2 {
-		t.Errorf("refused consolidate, but %d tokens are held afterward, want both untouched", n)
-	}
+	requireExpiredMemberRefused(t, f, res, "consolidate (expired mixed with healthy)", doomedID, healthyID)
 }
 
 // TestCashTransfer_AutoConsolidate_RefusesWhenASourceHasAlreadyExpired is
@@ -423,11 +461,10 @@ func TestCashTransfer_AutoConsolidate_RefusesWhenASourceHasAlreadyExpired(t *tes
 	if minter1 != minter2 {
 		t.Skipf("skipping: the two tokens' recovered minter pubkeys differ (%s vs %s) — can't exercise same-minter grouping", minter1, minter2)
 	}
-	if res := f.run("receive", doomed); res.ExitCode != 0 {
-		t.Fatalf("receive (doomed): exit %d\nstderr: %s", res.ExitCode, res.Stderr)
-	}
-	if res := f.run("receive", healthy); res.ExitCode != 0 {
-		t.Fatalf("receive (healthy): exit %d\nstderr: %s", res.ExitCode, res.Stderr)
+	doomedID, _ := f.mustJSON("receive", doomed)["entry"].(map[string]any)["id"].(string)
+	healthyID, _ := f.mustJSON("receive", healthy)["entry"].(map[string]any)["id"].(string)
+	if doomedID == "" || healthyID == "" {
+		t.Fatalf("receive: missing entry id(s): %q / %q", doomedID, healthyID)
 	}
 
 	waitPastCashExpiry()
@@ -435,29 +472,10 @@ func TestCashTransfer_AutoConsolidate_RefusesWhenASourceHasAlreadyExpired(t *tes
 	// Neither single token covers 6000 (3000 and 5000 each fall short) but
 	// their sum (8000) does — forces ledger.SelectForAmount's
 	// ConsolidateFirst path, exercising transferWithAutoConsolidate's own
-	// mixed-expiry refusal rather than doCashConsolidate's.
+	// mixed-expiry refusal rather than doCashConsolidate's. Either way nothing
+	// is merged and the healthy source stays held, separate.
 	res := f.run("transfer", fakeHex32(t), lokiArg(6_000), "--yes")
-	if res.ExitCode != 3 {
-		t.Fatalf("transfer (auto-consolidate, one source already expired): exit = %d, want 3 (invalid_input) — nothing should be dialed at all\nstdout: %s\nstderr: %s", res.ExitCode, res.Stdout, res.Stderr)
-	}
-	if got := errorCode(t, res); got != "invalid_input" {
-		t.Errorf("code = %q, want invalid_input", got)
-	}
-	// Nothing was attempted — both original sources remain held, separate.
-	showResp := f.mustJSON("wallet", "show")
-	held, _ := showResp["held_tokens"].([]any)
-	if len(held) != 2 {
-		t.Fatalf("refused transfer, but wallet show: held_tokens = %v, want exactly 2 (both originals untouched, nothing merged)", held)
-	}
-	var total uint64
-	for _, h := range held {
-		entry, _ := h.(map[string]any)
-		amt, _ := entry["amount_millis"].(float64)
-		total += uint64(amt)
-	}
-	if total != 8_000 {
-		t.Errorf("held total = %d, want 8000 (3000+5000, nothing lost, nothing merged)", total)
-	}
+	requireExpiredMemberRefused(t, f, res, "transfer (auto-consolidate, one source already expired)", doomedID, healthyID)
 }
 
 // TestCashTransfer_PreviewShowsExpiryWarning is cash_confirmation_test.go's
