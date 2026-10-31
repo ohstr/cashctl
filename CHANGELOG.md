@@ -4,7 +4,7 @@
 
 - Stops `consolidate` and `transfer`'s auto-consolidate at a source its Hub has already swept as expired,
   before anything is sent: the source is marked `expired` and the command exits `spent` (`reason: expired`),
-  with the other tokens still held.
+  with the other tokens still held. ([#152](https://github.com/ohstr/cashctl/pull/152))
 
 ## [0.7.0-rc.3]
 
