@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -16,6 +17,7 @@ import (
 	"github.com/ohstr/cashctl/internal/credential"
 	"github.com/ohstr/cashctl/internal/identity"
 	"github.com/ohstr/cashctl/internal/ledger"
+	"github.com/ohstr/cashctl/internal/output"
 
 	"github.com/ohstr/cashctl/internal/testmint"
 )
@@ -785,7 +787,7 @@ func TestCredentialModeOf_CopiesOnlyCredentialFields(t *testing.T) {
 
 func TestExpiresAtFromCheck_ExpiredDeclineReportsAPassedDeadline(t *testing.T) {
 	err := &relayclient.WalletError{Method: "list_recipients", Code: "EXPIRED", Message: "app expired"}
-	got := expiresAtFromCheck(nil, err)
+	got, _ := expiresAtFromCheck(nil, err)
 	if got == nil {
 		t.Fatal("expiresAtFromCheck(EXPIRED) = nil, want a deadline that has already passed")
 	}
@@ -805,7 +807,7 @@ func TestExpiresAtFromCheck_OtherFailuresStillMeanUnknown(t *testing.T) {
 		&relayclient.WalletError{Method: "list_recipients", Code: "RESTRICTED", Message: "no"},
 		errors.New("dial tcp: connection refused"),
 	} {
-		if got := expiresAtFromCheck(nil, err); got != nil {
+		if got, gone := expiresAtFromCheck(nil, err); got != nil || gone != nil {
 			t.Errorf("expiresAtFromCheck(%v) = %v, want nil", err, time.Unix(*got, 0))
 		}
 	}
@@ -813,11 +815,64 @@ func TestExpiresAtFromCheck_OtherFailuresStillMeanUnknown(t *testing.T) {
 
 func TestExpiresAtFromCheck_SuccessPassesTheRealDeadlineThrough(t *testing.T) {
 	when := time.Now().Add(3 * time.Hour).Unix()
-	if got := expiresAtFromCheck(&nipcash.CheckClaimResult{Claimable: true, Row: nipcash.RecipientStatus{ExpiresAt: nipcash.Expiry{At: when, Present: true}}}, nil); got == nil || *got != when {
+	if got, _ := expiresAtFromCheck(&nipcash.CheckClaimResult{Claimable: true, Row: nipcash.RecipientStatus{ExpiresAt: nipcash.Expiry{At: when, Present: true}}}, nil); got == nil || *got != when {
 		t.Errorf("expiresAtFromCheck() = %v, want %d", got, when)
 	}
-	if got := expiresAtFromCheck(&nipcash.CheckClaimResult{Claimable: true}, nil); got != nil {
+	if got, _ := expiresAtFromCheck(&nipcash.CheckClaimResult{Claimable: true}, nil); got != nil {
 		t.Errorf("no deadline on the result: got %v, want nil", *got)
+	}
+}
+
+// Once the Hub's expiry sweep has run, the probe gets the bill's tombstone, not
+// a roster. It used to read as "deadline unknown", so a merge with a healthy
+// sibling went ahead and only the Hub's tombstone stopped it.
+func TestExpiresAtFromCheck_TombstoneSurfacesTheGoneBill(t *testing.T) {
+	gone := &nipcash.BillGone{Method: nipcash.MethodCashStatus, Tombstone: nipcash.Tombstone{Status: "spent", Reason: nipcash.ReasonExpired}}
+	got, tomb := expiresAtFromCheck(nil, fmt.Errorf("check claim: %w", gone))
+	if tomb == nil || tomb.Reason != nipcash.ReasonExpired {
+		t.Fatalf("expiresAtFromCheck(BillGone) tombstone = %+v, want the expired tombstone", tomb)
+	}
+	if got != nil {
+		t.Errorf("expiresAtFromCheck(BillGone) deadline = %v, want nil", time.Unix(*got, 0))
+	}
+}
+
+// A source the probe found swept is recorded expired and refuses the merge with
+// the Hub's own spent/expired error (exit 10); the other source stays held.
+func TestGoneSourceError_MarksTheSweptSourceAndKeepsTheRest(t *testing.T) {
+	appdir.SetOverride(t.TempDir())
+	t.Cleanup(func() { appdir.SetOverride("") })
+	l, err := ledger.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, b := uint64(4000), uint64(6000)
+	doomed, err := l.Add(ledger.Entry{Token: "tok-doomed", WalletPubkey: "pub-doomed", AmountMillis: &a})
+	if err != nil {
+		t.Fatal(err)
+	}
+	healthy, err := l.Add(ledger.Entry{Token: "tok-healthy", WalletPubkey: "pub-healthy", AmountMillis: &b})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	gotErr := goneSourceError(&cobra.Command{}, l, doomed, &nipcash.Tombstone{Status: "spent", Reason: nipcash.ReasonExpired}, "consolidated")
+	ce := output.AsCLIError(gotErr)
+	if ce == nil || ce.Code != output.CodeSpent || ce.Reason != ledger.StatusExpired || ce.Input != doomed.ID {
+		t.Fatalf("error = %+v, want spent/expired for %s", ce, doomed.ID)
+	}
+	if code := output.ExitCode(gotErr); code != 10 {
+		t.Errorf("exit = %d, want 10", code)
+	}
+	if !strings.Contains(gotErr.Error(), "nothing was consolidated") {
+		t.Errorf("message %q does not say nothing was consolidated", gotErr)
+	}
+	fresh, _ := ledger.Load()
+	if e, _ := fresh.Find(doomed.ID); e.Status != ledger.StatusExpired {
+		t.Errorf("swept source status = %q, want expired", e.Status)
+	}
+	if e, _ := fresh.Find(healthy.ID); e.Status != ledger.StatusHeld {
+		t.Errorf("healthy source status = %q, want held", e.Status)
 	}
 }
 

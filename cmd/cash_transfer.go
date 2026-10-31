@@ -209,7 +209,8 @@ func fetchExpiresAt(cmd *cobra.Command, token string) *int64 {
 		return nil
 	}
 	myPub, _ := signerPubKeyHex(cmd, nil)
-	return fetchExpiresAtWithCredential(cmd, token, cred, myPub)
+	expiresAt, _ := fetchExpiresAtWithCredential(cmd, token, cred, myPub)
+	return expiresAt
 }
 
 // fetchExpiresAtWithCredential is fetchExpiresAt with cred supplied by the
@@ -224,16 +225,19 @@ func fetchExpiresAt(cmd *cobra.Command, token string) *int64 {
 //
 // matchPubHex is the pubkey cred signs as, which the Hub's reply is matched
 // against; a mismatch reads as "no slice" and the expiry as unknown.
-func fetchExpiresAtWithCredential(cmd *cobra.Command, token string, cred nipcash.Credential, matchPubHex string) *int64 {
+//
+// A non-nil tombstone means the Hub says the bill is already gone (see
+// expiresAtFromCheck).
+func fetchExpiresAtWithCredential(cmd *cobra.Command, token string, cred nipcash.Credential, matchPubHex string) (*int64, *nipcash.Tombstone) {
 	tok, err := nipcash.Decode(token)
 	if err != nil {
-		return nil
+		return nil, nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	client, err := dialBill(ctx, token)
 	if err != nil {
-		return nil
+		return nil, nil
 	}
 	defer client.Close()
 	result, err := client.CheckClaim(ctx, cred, tok)
@@ -252,19 +256,42 @@ func fetchExpiresAtWithCredential(cmd *cobra.Command, token string, cred nipcash
 // healthy part inside the merged, now-dead token. The real deadline is
 // unknowable from a rejection, so this reports one that has certainly
 // passed.
-func expiresAtFromCheck(result *nipcash.CheckClaimResult, err error) *int64 {
+//
+// A tombstone (*nipcash.BillGone) is returned as the second value: once the
+// Hub's expiry sweep has run, the bill is gone and that answer is definitive
+// (NIP-CASH §Answering About a Destroyed Bill), so a merge naming it stops
+// here instead of reaching the Hub only to get the same tombstone back.
+func expiresAtFromCheck(result *nipcash.CheckClaimResult, err error) (*int64, *nipcash.Tombstone) {
 	if err != nil {
+		var gone *nipcash.BillGone
+		if errors.As(err, &gone) {
+			return nil, &gone.Tombstone
+		}
 		if isExpiredWalletErr(err) {
 			passed := time.Now().Unix() - 1
-			return &passed
+			return &passed, nil
 		}
-		return nil
+		return nil, nil
 	}
 	if !result.Claimable && result.Reason == "expired" {
 		passed := time.Now().Unix() - 1
-		return &passed
+		return &passed, nil
 	}
-	return expiryPtr(result.Row.ExpiresAt)
+	return expiryPtr(result.Row.ExpiresAt), nil
+}
+
+// goneSourceError records a merge source whose Hub answered the expiry probe
+// with a tombstone and refuses the whole merge before anything is sent. It is
+// the same spent error (with reason expired or reclaimed) the Hub's tombstone
+// gives once the call reaches it. entry is nil for a source cashctl does not
+// hold; refused is the action not taken, past tense ("consolidated").
+func goneSourceError(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entry, t *nipcash.Tombstone, refused string) error {
+	state := stateForTombstone(t)
+	if entry == nil {
+		return goneErrorf(cmd, "", state, fmt.Errorf("%w (a token given that cashctl does not hold); nothing was %s, and your tokens are still yours", goneCause(state), refused))
+	}
+	markFinal(l, entry, state)
+	return goneErrorf(cmd, entry.ID, state, fmt.Errorf("%w (token %s); nothing was %s, and your other tokens are still yours", goneCause(state), entry.ID, refused))
 }
 
 // earliestExpiry returns whichever of a/b expires soonest — nil (never
@@ -382,14 +409,20 @@ func transferWithAutoConsolidate(cmd *cobra.Command, l *ledger.Ledger, group []l
 	var earliest *int64
 	var expiredCount, healthyCount int
 	var expiredIDs []string
-	_ = WithSpinner(jsonMode, "Checking expiry...", func() error {
+	if err := WithSpinner(jsonMode, "Checking expiry...", func() error {
 		for i := range group {
 			// Asked with each source's own credential: a cash note answers only
 			// to its secret.
 			var ea *int64
 			if cred, cErr := resolveCredential(cmd, &group[i]); cErr == nil {
 				myPub, _ := signerPubKeyHex(cmd, &group[i])
-				ea = fetchExpiresAtWithCredential(cmd, group[i].Token, cred, myPub)
+				var gone *nipcash.Tombstone
+				ea, gone = fetchExpiresAtWithCredential(cmd, group[i].Token, cred, myPub)
+				if gone != nil {
+					// Already swept: nothing is sent, the rest stay held.
+					e, _ := l.Find(group[i].ID)
+					return goneSourceError(cmd, l, e, gone, "transferred")
+				}
 			}
 			earliest = earliestExpiry(earliest, ea)
 			if ea == nil {
@@ -403,7 +436,9 @@ func transferWithAutoConsolidate(cmd *cobra.Command, l *ledger.Ledger, group []l
 			}
 		}
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
 	if expiredCount > 0 && healthyCount > 0 {
 		// Hard refusal, not just a warning: the interim cash_consolidate
 		// merges these into one wallet whose own expiry is the earliest of

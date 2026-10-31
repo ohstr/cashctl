@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.7.0-rc.4]
+
+- Stops `consolidate` and `transfer`'s auto-consolidate at a source its Hub has already swept as expired,
+  before anything is sent: the source is marked `expired` and the command exits `spent` (`reason: expired`),
+  with the other tokens still held.
+
 ## [0.7.0-rc.3]
 
 - Fixes a reclaim misclassification on the call-recovery path: a transfer signed with an

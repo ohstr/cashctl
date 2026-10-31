@@ -490,7 +490,12 @@ func consolidateItems(cmd *cobra.Command, l *ledger.Ledger, items []string, toFl
 				// resolved above, so this probes with the real credential
 				// rather than fetchExpiresAt's own local-identity guess.
 				srcPub, _ := signerPubKeyHex(cmd, e)
-				if ea := fetchExpiresAtWithCredential(cmd, e.Token, src.Credential, srcPub); ea != nil {
+				ea, gone := fetchExpiresAtWithCredential(cmd, e.Token, src.Credential, srcPub)
+				if gone != nil {
+					// Already swept: nothing is sent, the rest stay held.
+					return goneSourceError(cmd, l, e, gone, "consolidated")
+				}
+				if ea != nil {
 					earliestExpiresAt = earliestExpiry(earliestExpiresAt, ea)
 					if time.Until(time.Unix(*ea, 0)) <= 0 {
 						expiredSources++
@@ -526,7 +531,11 @@ func consolidateItems(cmd *cobra.Command, l *ledger.Ledger, items []string, toFl
 			// this verbose form had no expiry awareness at all before this,
 			// an obvious way to route around the refusal below otherwise.
 			credPub, _ := credentialPubKeyHex(cmd, parts[2])
-			if ea := fetchExpiresAtWithCredential(cmd, parts[0], cred, credPub); ea != nil {
+			ea, gone := fetchExpiresAtWithCredential(cmd, parts[0], cred, credPub)
+			if gone != nil {
+				return goneSourceError(cmd, l, nil, gone, "consolidated")
+			}
+			if ea != nil {
 				earliestExpiresAt = earliestExpiry(earliestExpiresAt, ea)
 				if time.Until(time.Unix(*ea, 0)) <= 0 {
 					expiredSources++
