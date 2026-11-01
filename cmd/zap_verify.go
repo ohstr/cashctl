@@ -384,6 +384,15 @@ func receiveZap(cmd *cobra.Command, ev *nip01.Event, raw string) error {
 	}
 	minter := pre.Minter
 	amount := z.Amount
+	// Hold the zap's amount to the same ceiling and signed-provenance cross-check
+	// receive applies (validateClaimedAmount) before it reaches the ledger or
+	// FormatAmount: a 9522 `amount` tag is a wire uint64 parseDecimal accepts up to
+	// 2^64-1, and a colluding minter+Hub can make rule 9 pass on it. One figure past
+	// math.MaxInt64 goes negative at summarizeHeldTokens' int64 cast and reports the
+	// WHOLE wallet negative, so an out-of-range amount is refused, not stored Verified.
+	if err := validateClaimedAmount(cmd, z.Token, amount, &minter); err != nil {
+		return err
+	}
 	entry := ledger.Entry{Token: strings.ToLower(z.Cash), WalletPubkey: z.W, Secret: z.Token.Secret, RelayURLs: z.Token.RelayURLs,
 		IdentityRequired: ptrTo(true), AmountMillis: &amount, Verified: true, MinterPubkey: &minter, ZapEvent: raw}
 	if z.Recipient.IsConnectionKey() {
@@ -519,11 +528,26 @@ func (e *zapClaimNotValidError) Error() string { return "not a valid zap: " + e.
 // only for an exact in-place move of zapAmount.
 func applyZapClaimResult(l *ledger.Ledger, e *ledger.Entry, zapAmount uint64, res *nipcash.CashTransferResult) (summary, notZap string) {
 	amount := res.AmountMillis
+	// Bound both Hub-reported figures before either reaches the ledger or
+	// FormatAmount: the claim's cash_transfer has already happened, so a figure past
+	// maxSaneAmountMillis is dropped (like cash_transfer.go's remainder) rather than
+	// refused. One past math.MaxInt64 goes negative at summarizeHeldTokens' int64 cast
+	// and reports the WHOLE wallet negative, not only this bill. (zapAmount is already
+	// bounded upstream — receive refuses it before a claim call is ever placed.)
+	remaining := res.RemainingAmountMillis
+	if remaining != nil && *remaining > maxSaneAmountMillis {
+		remaining = nil
+	}
 	switch {
 	case res.NewWalletToken == "" && res.NewWalletTombstone == nil && res.NewWalletPubkey == "":
 		claimedByLocalKey(e)
 		if amount == zapAmount {
 			return "zap claimed", ""
+		}
+		if amount > maxSaneAmountMillis {
+			// Dropped, not stored: the entry keeps the bounded zap amount it holds.
+			notZap = "the Hub reports an in-place amount too large to be real, not the zap it claims"
+			break
 		}
 		e.AmountMillis = &amount
 		notZap = fmt.Sprintf("the Hub moved %s in place, not the zap's %s", output.FormatAmount(int64(amount)), output.FormatAmount(int64(zapAmount))) //nolint:gosec // amounts fit
@@ -537,7 +561,12 @@ func applyZapClaimResult(l *ledger.Ledger, e *ledger.Entry, zapAmount uint64, re
 	default:
 		verified, minter := returnedBillCheck(res.NewWalletToken, e.MinterPubkey)
 		kept := ledger.Entry{Token: strings.ToLower(res.NewWalletToken), WalletPubkey: res.NewWalletPubkey,
-			IdentityRequired: ptrTo(true), AmountMillis: &amount, Verified: verified, MinterPubkey: minter}
+			IdentityRequired: ptrTo(true), Verified: verified, MinterPubkey: minter}
+		// The new bill keeps the moved amount only if it is in range; past the ceiling
+		// it degrades to no figure, which summarizeHeldTokens skips.
+		if amount <= maxSaneAmountMillis {
+			kept.AmountMillis = &amount
+		}
 		if res.ExpiresAt != nil && *res.ExpiresAt > 0 {
 			at := int64(*res.ExpiresAt) //nolint:gosec // unix time
 			kept.ExpiresAt = &at
@@ -547,17 +576,22 @@ func applyZapClaimResult(l *ledger.Ledger, e *ledger.Entry, zapAmount uint64, re
 			rest := credentialModeOf(*e)
 			rest.Token, rest.WalletPubkey = strings.ToLower(res.RemainderWalletToken), res.RemainderWalletPubkey
 			rest.Verified, rest.MinterPubkey = returnedBillCheck(rest.Token, e.MinterPubkey)
-			rest.AmountMillis = res.RemainingAmountMillis
+			rest.AmountMillis = remaining
 			_, _ = l.Add(rest)
 			_ = l.SetStatus(e.ID, ledger.StatusTransferred)
 		} else if res.RemainingAmountMillis != nil && *res.RemainingAmountMillis > 0 {
-			// The rest stays in place, still bound to the connection key.
-			e.AmountMillis = res.RemainingAmountMillis
+			// The rest stays in place, still bound to the connection key — with no
+			// figure if the Hub's remainder was past the ceiling (remaining is nil).
+			e.AmountMillis = remaining
 			e.Status = ledger.StatusHeld
 		} else {
 			_ = l.SetStatus(e.ID, ledger.StatusTransferred)
 		}
-		notZap = fmt.Sprintf("the Hub split the bill, moving %s to a new bill", output.FormatAmount(int64(amount))) //nolint:gosec // amounts fit
+		if amount <= maxSaneAmountMillis {
+			notZap = fmt.Sprintf("the Hub split the bill, moving %s to a new bill", output.FormatAmount(int64(amount))) //nolint:gosec // amounts fit
+		} else {
+			notZap = "the Hub split the bill, moving an amount too large to be real to a new bill"
+		}
 	}
 	l.AppendHistory("receive", fmt.Sprintf("claimed a Cash Zap to a connection key, kept as an ordinary bill: %s", notZap))
 	return "kept as an ordinary bill, not a valid zap: " + notZap, notZap

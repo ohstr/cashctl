@@ -461,6 +461,18 @@ func applyOrderBills(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, o *le
 			return fmt.Errorf("bill %s is not signed by the Hub", b.WalletPubkey)
 		}
 		amount := b.AmountMillis
+		// Hold this Hub-minted bill to the maxSaneAmountMillis ceiling before it
+		// reaches the ledger or FormatAmount, as every other Hub-amount ingest site
+		// does: one figure past math.MaxInt64 goes negative at summarizeHeldTokens'
+		// int64 cast and reports the WHOLE wallet negative, not only this bill, so an
+		// out-of-range amount is refused rather than stored Verified:true. (Only the
+		// ceiling, not receive's attested-provenance cross-check: an order bill's
+		// AmountMillis is the order's own figure for a freshly minted wallet, not a
+		// holder's slice of a pre-attested bill.)
+		if amount > maxSaneAmountMillis {
+			return output.InvalidInputError(cmd, "", fmt.Errorf(
+				"order %s minted a bill of %d mloki, too large to be real — refusing to trust it", o.OrderID, amount))
+		}
 		switch o.RecipientKind {
 		case "cash":
 			secret := callSecretOf(c, ledger.RoleNewIdentity)
