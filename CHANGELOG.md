@@ -5,6 +5,9 @@
 - Bounds the amount an order's minted bill and a `consolidate` result report before it is stored, like every
   other Hub-amount path. A figure too large to be a real quantity is refused (order) or dropped (consolidate)
   instead of being read back as a negative balance for the whole wallet.
+- Bounds the amount a received or claimed Cash Zap reports before it is stored, closing the last money-ingest
+  path that skipped the check. A zap amount too large to be a real quantity is refused (receive) or dropped
+  (claim) instead of being read back as a negative balance for the whole wallet.
 
 ## [0.7.0-rc.4]
 
