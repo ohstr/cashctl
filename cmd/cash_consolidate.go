@@ -967,13 +967,24 @@ func doCashConsolidate(cmd *cobra.Command, l *ledger.Ledger, dialCandidates []st
 				output.Notef(jsonMode, unverifiedReturnNote)
 			}
 			newLedgerEntry := ledger.Entry{
-				Token: strings.ToLower(result.NewWalletToken), WalletPubkey: result.NewWalletPubkey, AmountMillis: &result.AmountMillis, Verified: verified,
+				Token: strings.ToLower(result.NewWalletToken), WalletPubkey: result.NewWalletPubkey, Verified: verified,
 				MinterPubkey: minter, CreatedByCall: ownCallID(call),
 			}
 			// A cash-mode target's secret exists only here and in the call's
 			// written-ahead record: the Hub never returns it (NIP-CASH §Cash-Mode
 			// Slices). It moves onto the new entry in the same Save that closes
 			// the call.
+			// Bound the merged amount before it reaches the ledger or FormatAmount,
+			// like cash_transfer.go's remainder: the consolidate already happened, so
+			// a figure past maxSaneAmountMillis is dropped (the entry degrades to
+			// naming the token with no figure, which summarizeHeldTokens skips and
+			// `wallet show` renders amountless) rather than stored — one past
+			// math.MaxInt64 goes negative at the int64 cast and reports the WHOLE
+			// wallet negative, not only this note.
+			if result.AmountMillis <= maxSaneAmountMillis {
+				amt := result.AmountMillis
+				newLedgerEntry.AmountMillis = &amt
+			}
 			if bt, ok := target.(*nipcash.CashTarget); ok {
 				newLedgerEntry.CashSecret = bt.Secret()
 				newLedgerEntry.IdentityRequired = ptrTo(false)
@@ -991,7 +1002,11 @@ func doCashConsolidate(cmd *cobra.Command, l *ledger.Ledger, dialCandidates []st
 				newEntry = &newLedgerEntry
 			}
 			closeCall(l, call, ledger.CallDone, "")
-			l.AppendHistory("consolidate", fmt.Sprintf("consolidated %d tokens into one %s note", len(localIDs), output.FormatAmount(int64(result.AmountMillis))))
+			if newLedgerEntry.AmountMillis != nil {
+				l.AppendHistory("consolidate", fmt.Sprintf("consolidated %d tokens into one %s note", len(localIDs), output.FormatAmount(int64(*newLedgerEntry.AmountMillis))))
+			} else {
+				l.AppendHistory("consolidate", fmt.Sprintf("consolidated %d tokens into one note", len(localIDs)))
+			}
 			return newEntry, expiryPtr(result.ExpiresAt), nil
 		}
 		lastErr = callErr
