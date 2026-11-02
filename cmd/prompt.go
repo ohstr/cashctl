@@ -2,11 +2,11 @@ package cmd
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -129,8 +129,36 @@ func ResolveVaultPassword(jsonMode bool) (string, error) {
 	if jsonMode {
 		return "", fmt.Errorf("vault password required: set NCLI_VAULT_PASSWORD (no interactive prompt under --json)")
 	}
-	output.Fprint(os.Stderr, "Vault password: ")
-	pw, err := term.ReadPassword(int(syscall.Stdin))
+	return readSecretFromTTY("Vault password: ")
+}
+
+// readSecretFromTTY reads a secret with echo disabled, prompting on stderr.
+// It reads the controlling terminal (/dev/tty on Unix, CONIN$ on Windows —
+// see openControllingTTY) rather than fd 0, so a value piped into stdin —
+// e.g. the <token>#<secret> bill of `echo … | cashctl receive -` — does
+// not collide with the password read and turn its termios ioctl into
+// "inappropriate ioctl for device". This is what ssh-keygen and sudo do.
+//
+// If the controlling terminal can't be opened, it falls back to fd 0 only
+// when fd 0 is itself a terminal; otherwise it returns a clear, actionable
+// error instead of the cryptic ioctl failure reading a pipe would produce.
+func readSecretFromTTY(prompt string) (string, error) {
+	if tty, err := openControllingTTY(); err == nil {
+		defer func() { _ = tty.Close() }()
+		return readNoEcho(tty, prompt)
+	}
+	if term.IsTerminal(int(os.Stdin.Fd())) {
+		return readNoEcho(os.Stdin, prompt)
+	}
+	return "", errors.New("vault password required but no terminal available: set NCLI_VAULT_PASSWORD")
+}
+
+// readNoEcho prints prompt to stderr, then reads one line from f with echo
+// disabled, printing the trailing newline the suppressed Enter keystroke
+// couldn't.
+func readNoEcho(f *os.File, prompt string) (string, error) {
+	output.Fprint(os.Stderr, prompt)
+	pw, err := term.ReadPassword(int(f.Fd()))
 	output.Fprintln(os.Stderr)
 	if err != nil {
 		return "", err
