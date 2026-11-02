@@ -11,7 +11,7 @@
 - Fixes the interactive vault password prompt crashing with `inappropriate ioctl for device` when stdin is a
   pipe, such as `echo '<token>#<secret>' | cashctl receive -` for a vault-backed identity. The prompt now
   reads the controlling terminal like ssh and sudo, and when none is available errors asking for
-  `NCLI_VAULT_PASSWORD` instead.
+  `NCLI_VAULT_PASSWORD` instead. ([#157](https://github.com/ohstr/cashctl/pull/157))
 
 ## [0.7.0-rc.4]
 
