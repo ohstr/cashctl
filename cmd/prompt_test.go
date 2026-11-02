@@ -181,3 +181,79 @@ func TestPromptLine_PromptGoesToStderrNotStdout(t *testing.T) {
 		t.Errorf("stdout=%q stderr=%q, want the prompt on stderr only", out, errOut)
 	}
 }
+
+// TestReadSecretFromTTY_HeadlessReturnsActionableError pins the fix for the
+// vault-password-prompt-in-pipe crash: with no controlling terminal and a
+// non-terminal fd 0 (the piped `cashctl receive -` case), the read must
+// return a clear, actionable error naming NCLI_VAULT_PASSWORD rather than
+// reaching term.ReadPassword on a pipe and leaking "inappropriate ioctl for
+// device".
+func TestReadSecretFromTTY_HeadlessReturnsActionableError(t *testing.T) {
+	realOpen := openControllingTTY
+	defer func() { openControllingTTY = realOpen }()
+	openControllingTTY = func() (*os.File, error) { return nil, errors.New("no controlling terminal") }
+
+	// A pipe is never a terminal, so the IsTerminal(fd 0) fallback is not
+	// taken either — exactly the headless/piped situation.
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = r.Close(); _ = w.Close() }()
+	realStdin := os.Stdin
+	os.Stdin = r
+	defer func() { os.Stdin = realStdin }()
+
+	_, gotErr := readSecretFromTTY("Vault password: ")
+	if gotErr == nil {
+		t.Fatal("readSecretFromTTY returned nil error on a headless, piped stdin; want an actionable error")
+	}
+	if strings.Contains(gotErr.Error(), "ioctl") {
+		t.Fatalf("readSecretFromTTY leaked a termios ioctl error %q; it must never reach term.ReadPassword on a pipe", gotErr)
+	}
+	if !strings.Contains(gotErr.Error(), "NCLI_VAULT_PASSWORD") {
+		t.Errorf("error %q does not name NCLI_VAULT_PASSWORD, the documented non-interactive escape hatch", gotErr)
+	}
+}
+
+// TestResolveVaultPassword_EnvVarWinsWithoutPrompting checks the
+// non-interactive precedence: NCLI_VAULT_PASSWORD short-circuits before any
+// terminal is touched, in any mode.
+func TestResolveVaultPassword_EnvVarWinsWithoutPrompting(t *testing.T) {
+	realOpen := openControllingTTY
+	defer func() { openControllingTTY = realOpen }()
+	openControllingTTY = func() (*os.File, error) {
+		t.Fatal("ResolveVaultPassword opened a terminal despite NCLI_VAULT_PASSWORD being set")
+		return nil, nil
+	}
+	t.Setenv("NCLI_VAULT_PASSWORD", "hunter2")
+
+	got, err := ResolveVaultPassword(false)
+	if err != nil {
+		t.Fatalf("ResolveVaultPassword returned %v, want nil", err)
+	}
+	if got != "hunter2" {
+		t.Errorf("ResolveVaultPassword() = %q, want the env-var value", got)
+	}
+}
+
+// TestResolveVaultPassword_JSONModeErrorsWithoutPrompting checks that --json
+// with no env var errors immediately rather than blocking on or opening a
+// prompt no JSON consumer can answer.
+func TestResolveVaultPassword_JSONModeErrorsWithoutPrompting(t *testing.T) {
+	realOpen := openControllingTTY
+	defer func() { openControllingTTY = realOpen }()
+	openControllingTTY = func() (*os.File, error) {
+		t.Fatal("ResolveVaultPassword opened a terminal under --json")
+		return nil, nil
+	}
+	t.Setenv("NCLI_VAULT_PASSWORD", "")
+
+	_, err := ResolveVaultPassword(true)
+	if err == nil {
+		t.Fatal("ResolveVaultPassword(jsonMode=true) returned nil error, want a set-NCLI_VAULT_PASSWORD error")
+	}
+	if !strings.Contains(err.Error(), "NCLI_VAULT_PASSWORD") {
+		t.Errorf("error %q does not name NCLI_VAULT_PASSWORD", err)
+	}
+}

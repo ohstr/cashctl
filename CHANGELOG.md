@@ -8,6 +8,10 @@
 - Bounds the amount a received or claimed Cash Zap reports before it is stored, closing the last money-ingest
   path that skipped the check. A zap amount too large to be a real quantity is refused (receive) or dropped
   (claim) instead of being read back as a negative balance for the whole wallet. ([#155](https://github.com/ohstr/cashctl/pull/155))
+- Fixes the interactive vault password prompt crashing with `inappropriate ioctl for device` when stdin is a
+  pipe, such as `echo '<token>#<secret>' | cashctl receive -` for a vault-backed identity. The prompt now
+  reads the controlling terminal like ssh and sudo, and when none is available errors asking for
+  `NCLI_VAULT_PASSWORD` instead.
 
 ## [0.7.0-rc.4]
 
