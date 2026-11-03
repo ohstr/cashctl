@@ -1,0 +1,14 @@
+{
+  "passphrase": "backup pw",
+  "walletId": "4e6e04e48e581a38",
+  "identityPubkey": "bfe1cb9066447a51b0ac4fc88a0dae19a988ce8e72d4abb1952899aa832fdd4a",
+  "cash": {
+    "amount": "3000",
+    "cashSecret": "75ea6087b50ff619d71e45ec0d613df0777a330357bc2658330bea41ca5041f3",
+    "walletPubkey": "b0e7f693639547b0aec76b675358461c34d2359d8a6d5f8dd9704a1e20f48c43"
+  },
+  "pubkey": {
+    "amount": "5000",
+    "walletPubkey": "9a68cb68be616c2d1c31782aa5f1ee30762619225b81336f2845880bc4f14ca4"
+  }
+}
