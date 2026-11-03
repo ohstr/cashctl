@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.7.0-rc.7]
+
+- Adds `cashctl wallet import-cashkit <backup-file>`: restore the cash held by a cashkit wallet into a fresh
+  cashctl wallet from a cashkit v3 backup. The whole backup is authenticated before anything in it is trusted
+  (a wrong passphrase, a foreign file, or one changed after it was written is refused); then every live
+  cash-mode token is imported with its spending secret recovered. Identity-bound tokens are reported but not
+  imported (they need the cashkit identity key, not carried yet), and a wallet that already holds cash is
+  refused — it is a restore, not a merge. ([#160](https://github.com/ohstr/cashctl/pull/160))
+
 ## [0.7.0-rc.6]
 
 - Fixes the interactive vault password prompt crashing with `inappropriate ioctl for device` when stdin is a

@@ -11,11 +11,11 @@
 // The cross-client contract (keep in lockstep with cashkit docs/design.md §10):
 //   - key   = scrypt(NFKC(passphrase), salt, N=2^logN, r, p, dkLen=32), params from kdf.
 //   - seal  = base64( 24-byte XChaCha20-Poly1305 nonce ‖ ciphertext ), AAD "cashkit/backup/v1".
-//           A sealed secret decrypts to the field's PLAINTEXT bytes.
+//     A sealed secret decrypts to the field's PLAINTEXT bytes.
 //   - check = sealed "cashkit backup key check": a right passphrase opens it.
 //   - mac   = sealed SHA-256 of the collections' canonical bytes (the row codec's
-//           compact JSON, keys in written order, bigint as {"$bigint":"<decimal>"}).
-//           Any change to a plaintext field — not only a damaged secret — is caught.
+//     compact JSON, keys in written order, bigint as {"$bigint":"<decimal>"}).
+//     Any change to a plaintext field — not only a damaged secret — is caught.
 package cashkitbackup
 
 import (
@@ -234,21 +234,21 @@ type ConnectionKeyBinding struct {
 
 // Holding is one bill in the backup (cashkit's Holding; secrets still sealed).
 type Holding struct {
-	ID           string                `json:"id"`
-	Token        string                `json:"token"`
-	WalletPubkey string                `json:"walletPubkey"`
-	MinterPubkey string                `json:"minterPubkey"`
-	MinterXonly  string                `json:"minterXonly"`
-	HubGroup     string                `json:"hubGroup"`
-	RelayUrls    []string              `json:"relayUrls"`
-	Amount       bigint                `json:"amount"`
-	ExpiresAt    *int64                `json:"expiresAt"`
-	Verified     bool                  `json:"verified"`
-	Status       string                `json:"status"`
-	Mode         string                `json:"mode"`
-	Protection   string                `json:"protection"`
-	CashSecret   *Sealed               `json:"cashSecret"`
-	ThrowawayKey *Sealed               `json:"throwawayKey"`
+	ID            string                `json:"id"`
+	Token         string                `json:"token"`
+	WalletPubkey  string                `json:"walletPubkey"`
+	MinterPubkey  string                `json:"minterPubkey"`
+	MinterXonly   string                `json:"minterXonly"`
+	HubGroup      string                `json:"hubGroup"`
+	RelayUrls     []string              `json:"relayUrls"`
+	Amount        bigint                `json:"amount"`
+	ExpiresAt     *int64                `json:"expiresAt"`
+	Verified      bool                  `json:"verified"`
+	Status        string                `json:"status"`
+	Mode          string                `json:"mode"`
+	Protection    string                `json:"protection"`
+	CashSecret    *Sealed               `json:"cashSecret"`
+	ThrowawayKey  *Sealed               `json:"throwawayKey"`
 	ConnectionKey *ConnectionKeyBinding `json:"connectionKey"`
 }
 
