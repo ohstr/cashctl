@@ -33,6 +33,7 @@ func newWalletCmd() *cobra.Command {
 		newWalletGetInfoCmd(), newWalletBalanceCmd(), newWalletBudgetCmd(),
 		newWalletInvoiceCmd(), newWalletPayCmd(), newWalletListTxCmd(), newWalletSignMessageCmd(),
 		newWalletProtectCmd(), newWalletDeleteCmd(),
+		newWalletImportCashkitCmd(),
 	)
 	return cmd
 }
