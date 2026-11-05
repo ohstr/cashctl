@@ -11,7 +11,7 @@ import (
 	"github.com/ohstr/cashctl/internal/ledger"
 	"github.com/ohstr/cashctl/internal/output"
 
-	"github.com/ohstr/cashctl/internal/testmint"
+	"github.com/ohstr/cashctl/testsupport/testmint"
 )
 
 func tokenOnHub(t *testing.T, wallet, hubGroup string) string {

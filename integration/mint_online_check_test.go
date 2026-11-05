@@ -9,7 +9,7 @@ import (
 	"github.com/ohstr/nmilat/nipcash"
 	"github.com/ohstr/nmilat/utils"
 
-	"github.com/ohstr/cashctl/internal/testmint"
+	"github.com/ohstr/cashctl/testsupport/testmint"
 )
 
 // forgeCashHubIdentity re-signs the real Cash Hub connection `real` so its

@@ -7,7 +7,7 @@ import (
 
 	"github.com/ohstr/nmilat/nipcash"
 
-	"github.com/ohstr/cashctl/internal/testmint"
+	"github.com/ohstr/cashctl/testsupport/testmint"
 )
 
 func TestAdd_ABillRespelledIsNotASecondHolding(t *testing.T) {

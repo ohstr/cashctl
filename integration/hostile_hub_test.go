@@ -15,7 +15,7 @@ import (
 	"github.com/ohstr/nmilat/nipcash/transport"
 	"github.com/ohstr/nmilat/utils"
 
-	"github.com/ohstr/cashctl/integration/fakehub"
+	"github.com/ohstr/cashctl/testsupport/fakehub"
 )
 
 // TestHostileHub_ReceiveRefusesMoreThanTheSignedBill: the Hub reports a

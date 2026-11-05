@@ -18,7 +18,7 @@ import (
 	"github.com/ohstr/cashctl/internal/config"
 	"github.com/ohstr/cashctl/internal/ledger"
 	"github.com/ohstr/cashctl/internal/output"
-	"github.com/ohstr/cashctl/internal/testmint"
+	"github.com/ohstr/cashctl/testsupport/testmint"
 )
 
 // listingFixture is an order link listed by its Hub, the relays' events, and

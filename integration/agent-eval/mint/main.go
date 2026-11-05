@@ -44,7 +44,7 @@ import (
 	"github.com/ohstr/nmilat/nip47"
 	"github.com/ohstr/nmilat/nipcash"
 
-	"github.com/ohstr/cashctl/internal/testmint"
+	"github.com/ohstr/cashctl/testsupport/testmint"
 	relayclient "github.com/ohstr/nmilat/relay/client"
 	"gopkg.in/yaml.v3"
 )

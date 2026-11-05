@@ -9,7 +9,7 @@ import (
 
 	"github.com/ohstr/nmilat/nipcash/transport"
 
-	"github.com/ohstr/cashctl/integration/fakehub"
+	"github.com/ohstr/cashctl/testsupport/fakehub"
 )
 
 // TestFakeHub_HonestReceive is the harness's own check: an honest answer

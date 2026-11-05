@@ -18,7 +18,7 @@ import (
 	"github.com/ohstr/cashctl/internal/appdir"
 	"github.com/ohstr/cashctl/internal/ledger"
 	"github.com/ohstr/cashctl/internal/output"
-	"github.com/ohstr/cashctl/internal/testmint"
+	"github.com/ohstr/cashctl/testsupport/testmint"
 )
 
 const testAddress = "fc1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080"

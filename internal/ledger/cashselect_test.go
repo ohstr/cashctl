@@ -8,7 +8,7 @@ import (
 	"github.com/ohstr/nmilat/nipcash"
 	"testing"
 
-	"github.com/ohstr/cashctl/internal/testmint"
+	"github.com/ohstr/cashctl/testsupport/testmint"
 )
 
 func amountPtr(v uint64) *uint64 { return &v }

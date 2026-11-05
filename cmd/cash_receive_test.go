@@ -10,7 +10,7 @@ import (
 	"github.com/ohstr/nmilat/nipcash"
 	"github.com/spf13/cobra"
 
-	"github.com/ohstr/cashctl/internal/testmint"
+	"github.com/ohstr/cashctl/testsupport/testmint"
 )
 
 // The former TestValidateCashSecret lived here — validateCashSecret

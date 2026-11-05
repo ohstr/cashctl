@@ -16,7 +16,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/ohstr/cashctl/internal/output"
-	"github.com/ohstr/cashctl/internal/testmint"
+	"github.com/ohstr/cashctl/testsupport/testmint"
 )
 
 // What cashctl shows and does about a bill's mint provenance (NIP-CASH §Mint

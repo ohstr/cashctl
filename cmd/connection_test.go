@@ -12,7 +12,7 @@ import (
 	"github.com/ohstr/cashctl/internal/config"
 	"github.com/ohstr/cashctl/internal/output"
 
-	"github.com/ohstr/cashctl/internal/testmint"
+	"github.com/ohstr/cashctl/testsupport/testmint"
 )
 
 func TestValidateConnectionValue(t *testing.T) {

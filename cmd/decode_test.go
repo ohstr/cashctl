@@ -14,7 +14,7 @@ import (
 
 	"github.com/ohstr/cashctl/internal/appdir"
 	"github.com/ohstr/cashctl/internal/identity"
-	"github.com/ohstr/cashctl/internal/testmint"
+	"github.com/ohstr/cashctl/testsupport/testmint"
 )
 
 // newTestDecodeCmd builds a *cobra.Command carrying the same "json"/"yes"/

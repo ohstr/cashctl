@@ -10,7 +10,7 @@ import (
 	nipcwclient "github.com/ohstr/nmilat/nipcw/client"
 
 	"github.com/ohstr/cashctl/internal/config"
-	"github.com/ohstr/cashctl/internal/testmint"
+	"github.com/ohstr/cashctl/testsupport/testmint"
 )
 
 // writeOpenJoin writes an open join of the circle with TLV 0 hub, joined with

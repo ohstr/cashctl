@@ -11,7 +11,7 @@ package integration
 
 import (
 	"errors"
-	"github.com/ohstr/cashctl/internal/testmint"
+	"github.com/ohstr/cashctl/testsupport/testmint"
 	"os"
 	"strings"
 	"testing"
