@@ -1,12 +1,18 @@
 package cmd
 
 import (
+	"encoding/json"
 	"reflect"
+	"slices"
 	"testing"
+	"time"
 
+	"github.com/ohstr/nmilat/nip01"
 	"github.com/ohstr/nmilat/nipCZ"
+	"github.com/spf13/cobra"
 
 	"github.com/ohstr/cashctl/internal/config"
+	"github.com/ohstr/cashctl/internal/output"
 )
 
 // Minter x-only keys (64 lowercase hex); the builder emits them as "02"+xonly.
@@ -101,4 +107,94 @@ func TestBuildCashZapInfo_Deterministic(t *testing.T) {
 	if !reflect.DeepEqual(a.Tags, b.Tags) {
 		t.Errorf("not deterministic:\n%v\n%v", a.Tags, b.Tags)
 	}
+}
+
+// Publishing is gated: under --json (non-interactive) it refuses unless --yes
+// is passed, and with --yes it proceeds.
+func TestCashZapInfo_ConsentRefusesJSONWithoutYes(t *testing.T) {
+	c := discoverCmd(&cobra.Command{Use: "publish"}, nil) // --json defaults true here
+	if ok, err := confirmPublic(c, "publish?"); ok || output.ExitCode(err) != 2 {
+		t.Fatalf("--json without --yes must refuse: ok=%v err=%v", ok, err)
+	}
+	c = discoverCmd(&cobra.Command{Use: "publish"}, map[string]string{"yes": "true"})
+	if ok, err := confirmPublic(c, "publish?"); !ok || err != nil {
+		t.Fatalf("--json with --yes must proceed: ok=%v err=%v", ok, err)
+	}
+}
+
+// seedNIP65 caches a kind-10002 for self with read, write and bare relays.
+func seedNIP65(t *testing.T, self string) {
+	t.Helper()
+	list := nip01.NewEvent(10002, "",
+		[]string{"r", "wss://read.example", "read"},
+		[]string{"r", "wss://write.example", "write"},
+		[]string{"r", "wss://both.example"})
+	list.PubKey = self
+	list.CreatedAt = uint64(time.Now().Unix()) //nolint:gosec // unix time
+	raw, _ := json.Marshal(list)
+	if err := config.PutDiscoverEvent("nip65-zapinfo", 10002, self, int64(list.CreatedAt), string(raw), config.OriginTrusted, ""); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// show previews the event (no network, no consent); publish signs and sends it
+// to the user's write relays, with its tags drawn from the trust store and the
+// user's NIP-65 read relays.
+func TestCashZapInfo_ShowAndPublish(t *testing.T) {
+	f := newSignalFixture(t, true)
+	self := localIdentityHex()
+	seedNIP65(t, self)
+	if err := config.TrustMinter(config.TrustedMinter{MinterXOnly: xA, Chain: "bitcoin"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// show: a dry run that lists the chains, mints and read relays.
+	doc, err := runSignal(t, newCashZapInfoShowCmd(), nil, nil)
+	if err != nil {
+		t.Fatalf("show: %v", err)
+	}
+	if got := jsonStrings(doc["chains"]); !reflect.DeepEqual(got, []string{"bitcoin"}) {
+		t.Errorf("chains %v", got)
+	}
+	if got := jsonStrings(doc["mints"]); !reflect.DeepEqual(got, []string{"02" + xA}) {
+		t.Errorf("mints %v", got)
+	}
+	if got := jsonStrings(doc["relays"]); !reflect.DeepEqual(got, []string{"wss://both.example", "wss://read.example"}) {
+		t.Errorf("relays %v", got)
+	}
+	if len(f.publishedOf(nipCZ.KindCashZapInfo)) != 0 {
+		t.Fatal("show must publish nothing")
+	}
+
+	// publish: signs and sends, and the result parses back as a valid 10522.
+	if _, err := runSignal(t, newCashZapInfoPublishCmd(), nil, map[string]string{"yes": "true"}); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	sent := f.publishedOf(nipCZ.KindCashZapInfo)
+	if len(sent) != 1 {
+		t.Fatalf("published %d Cash Zap Infos, want 1", len(sent))
+	}
+	if sent[0].PubKey != self || sent[0].Content != "" {
+		t.Errorf("published by %s content %q", sent[0].PubKey, sent[0].Content)
+	}
+	info, err := nipCZ.ParseCashZapInfo(sent[0])
+	if err != nil {
+		t.Fatalf("parse back: %v", err)
+	}
+	if !slices.Contains(info.Chains, "bitcoin") || !info.ListsMinter("02"+xA, "bitcoin") {
+		t.Errorf("info %+v", info)
+	}
+	if !slices.Contains(info.Relays, "wss://read.example") || !slices.Contains(info.Relays, "wss://both.example") {
+		t.Errorf("relays %v", info.Relays)
+	}
+}
+
+func jsonStrings(v any) []string {
+	xs, _ := v.([]any)
+	out := make([]string, 0, len(xs))
+	for _, x := range xs {
+		s, _ := x.(string)
+		out = append(out, s)
+	}
+	return out
 }

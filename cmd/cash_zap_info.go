@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"slices"
 	"strings"
 
@@ -127,4 +129,125 @@ func cashZapInfoDraft(cmd *cobra.Command, self string) (*nip01.Event, []config.T
 	extraChains, _ := cmd.Flags().GetStringSlice("chain")
 	draft := buildCashZapInfo(minters, extraChains, userReadRelays(cmd, self))
 	return draft, minters, nil
+}
+
+// newCashZapInfoCmd publishes or previews the user's Cash Zap Info (kind 10522).
+func newCashZapInfoCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "zap-info",
+		Short: "Publish the chains, minters and relays you accept for Cash Zaps (kind 10522)",
+		RunE:  groupRunE,
+	}
+	cmd.AddCommand(newCashZapInfoShowCmd(), newCashZapInfoPublishCmd())
+	return cmd
+}
+
+func newCashZapInfoShowCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "show",
+		Short: "Print the Cash Zap Info that `publish` would sign (a dry run; nothing is sent)",
+		Long: "Print, without publishing, the kind-10522 Cash Zap Info built from the minters you trust\n" +
+			"(`cashctl cash minters`), the distinct chains they cover, and the relays you read Cash Zaps\n" +
+			"on (your NIP-65 read relays, plus --relay). A chain with no trusted minter is not included\n" +
+			"unless you add it with --chain.",
+		Args: output.NoArgs,
+		RunE: runCashZapInfoShow,
+	}
+	zapInfoFlags(cmd)
+	return cmd
+}
+
+func newCashZapInfoPublishCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "publish",
+		Short: "Sign and publish your Cash Zap Info so senders know what you accept (public; asks first)",
+		Long: "Build, sign and publish your replaceable kind-10522 Cash Zap Info so senders' wallets know\n" +
+			"which chains, minters and relays you accept. This is public: it names the minters you trust\n" +
+			"and the relays you read on. The event goes to your NIP-65 write relays (plus --relay); its\n" +
+			"`relay` tags are the relays you read Cash Zaps on (your NIP-65 read relays, plus --relay).",
+		Args: output.NoArgs,
+		RunE: runCashZapInfoPublish,
+	}
+	zapInfoFlags(cmd)
+	return cmd
+}
+
+// zapInfoFlags are shared by show and publish.
+func zapInfoFlags(cmd *cobra.Command) {
+	cmd.Flags().StringSlice("chain", nil, "also accept this chain, even with no trusted minter (repeatable)")
+	cmd.Flags().StringSlice("relay", nil, "add this relay to the ones you read Cash Zaps on, and publish there")
+}
+
+func runCashZapInfoShow(cmd *cobra.Command, _ []string) error {
+	jsonMode, _ := cmd.Flags().GetBool("json")
+	self, err := requireIdentity(cmd, "showing your Cash Zap Info")
+	if err != nil {
+		return err
+	}
+	draft, minters, err := cashZapInfoDraft(cmd, self)
+	if err != nil {
+		return err
+	}
+	draft.PubKey = self // the event would be signed by the local identity
+	if jsonMode {
+		output.PrintJSON(map[string]any{"event": draft, "trusted_minters": len(minters),
+			"chains": zapInfoTagValues(draft, "chain"), "mints": zapInfoTagValues(draft, "mint"), "relays": zapInfoTagValues(draft, "relay")})
+		return nil
+	}
+	output.Printf("kind %d (Cash Zap Info), by %s — not published\n", draft.Kind, npubOrHex(self))
+	for _, t := range draft.Tags {
+		output.Println(strings.Join(t, " "))
+	}
+	if len(draft.Tags) == 0 {
+		output.Println("(nothing to list yet: trust a minter with `cashctl cash minters add`, or add --chain/--relay)")
+	}
+	return nil
+}
+
+func runCashZapInfoPublish(cmd *cobra.Command, _ []string) error {
+	jsonMode, _ := cmd.Flags().GetBool("json")
+	self, err := requireIdentity(cmd, "publishing your Cash Zap Info")
+	if err != nil {
+		return err
+	}
+	draft, minters, err := cashZapInfoDraft(cmd, self)
+	if err != nil {
+		return err
+	}
+	targets := userRelays(cmd, self)
+	if len(targets) == 0 {
+		return output.UsageError(cmd, errors.New(
+			"no relay to publish to: set your NIP-65 relays, or pass --relay wss://…"))
+	}
+	output.Notef(jsonMode, "This is public: it tells anyone the chains you accept, the %d minter(s) you trust and the relays you read Cash Zaps on. It goes to %s.",
+		len(minters), strings.Join(targets, ", "))
+	if ok, err := confirmPublic(cmd, "Publish your Cash Zap Info now?"); err != nil || !ok {
+		if err == nil {
+			output.Println("Cancelled.")
+		}
+		return err
+	}
+	ev, accepted, failed, err := publishNow(cmd, targets, draft)
+	if err != nil {
+		return output.NetworkError(cmd, fmt.Errorf("not published: %w", err))
+	}
+	if jsonMode {
+		output.PrintJSON(map[string]any{"event_id": ev.ID, "published_to": accepted,
+			"relays_failed": output.NonNil(failed), "trusted_minters": len(minters)})
+		return nil
+	}
+	output.Printf("Published your Cash Zap Info (%s) to %s.\n", ev.ID, strings.Join(accepted, ", "))
+	return nil
+}
+
+// zapInfoTagValues are the first values of every tag named name, for the
+// --json summary (every chain, mint or relay, in event order).
+func zapInfoTagValues(ev *nip01.Event, name string) []string {
+	out := []string{}
+	for _, t := range ev.Tags {
+		if len(t) >= 2 && t[0] == name {
+			out = append(out, t[1])
+		}
+	}
+	return out
 }
