@@ -7,6 +7,7 @@
 - Adds `cashctl cash zap-info publish`: build, sign and publish your replaceable kind-10522 Cash Zap
   Info so senders' wallets know which chains, minters and relays you accept, drawn from the minters you
   trust and your NIP-65 relays. `cash zap-info show` previews the event without publishing.
+  ([#163](https://github.com/ohstr/cashctl/pull/163))
 
 ## [0.7.0-rc.7]
 
