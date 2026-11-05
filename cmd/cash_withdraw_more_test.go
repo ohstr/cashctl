@@ -17,7 +17,7 @@ import (
 	"github.com/ohstr/cashctl/internal/ledger"
 	"github.com/ohstr/cashctl/internal/output"
 	"github.com/ohstr/cashctl/internal/store"
-	"github.com/ohstr/cashctl/internal/testmint"
+	"github.com/ohstr/cashctl/testsupport/testmint"
 )
 
 // sendQueued quotes and sends the fixture's bill, leaving a queued payout.

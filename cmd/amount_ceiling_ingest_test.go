@@ -26,7 +26,7 @@ import (
 
 	"github.com/ohstr/cashctl/internal/appdir"
 	"github.com/ohstr/cashctl/internal/ledger"
-	"github.com/ohstr/cashctl/internal/testmint"
+	"github.com/ohstr/cashctl/testsupport/testmint"
 )
 
 // amountPastMaxInt64 is 2^63: one past math.MaxInt64, so int64(...) of it is

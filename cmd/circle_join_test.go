@@ -20,7 +20,7 @@ import (
 	"github.com/ohstr/cashctl/internal/appdir"
 	"github.com/ohstr/cashctl/internal/config"
 	"github.com/ohstr/cashctl/internal/output"
-	"github.com/ohstr/cashctl/internal/testmint"
+	"github.com/ohstr/cashctl/testsupport/testmint"
 )
 
 // fakeCircleHub stands in for nipcw/client: it runs Join's checks in the same

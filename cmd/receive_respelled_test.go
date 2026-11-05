@@ -13,7 +13,7 @@ import (
 	"github.com/ohstr/cashctl/internal/identity"
 	"github.com/ohstr/cashctl/internal/ledger"
 	"github.com/ohstr/cashctl/internal/output"
-	"github.com/ohstr/cashctl/internal/testmint"
+	"github.com/ohstr/cashctl/testsupport/testmint"
 )
 
 // countingRelay is a relay address that counts connections and closes them.

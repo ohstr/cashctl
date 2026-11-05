@@ -9,7 +9,7 @@ import (
 
 	"github.com/ohstr/nmilat/nipcash"
 
-	"github.com/ohstr/cashctl/internal/testmint"
+	"github.com/ohstr/cashctl/testsupport/testmint"
 )
 
 func installBillNetwork(t *testing.T, network string, err error) {

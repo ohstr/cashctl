@@ -8,7 +8,7 @@ import (
 
 	"github.com/flokiorg/go-flokicoin/chainutil/bech32"
 
-	"github.com/ohstr/cashctl/internal/testmint"
+	"github.com/ohstr/cashctl/testsupport/testmint"
 )
 
 // F-61: the decoder rules cashctl relies on (through nmilat) for strings it is

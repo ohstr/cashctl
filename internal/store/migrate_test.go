@@ -7,7 +7,7 @@ import (
 
 	"github.com/ohstr/nmilat/nipcash"
 
-	"github.com/ohstr/cashctl/internal/testmint"
+	"github.com/ohstr/cashctl/testsupport/testmint"
 )
 
 // schemaV3 is the version-3 schema cashctl 0.7.0-rc.1 created: entries keyed

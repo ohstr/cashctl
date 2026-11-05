@@ -15,7 +15,7 @@ func TestIsolation_CashPackagesDoNotReachExtwallet(t *testing.T) {
 		"github.com/ohstr/cashctl/internal/store",
 		"github.com/ohstr/cashctl/internal/dial",
 		"github.com/ohstr/cashctl/internal/credential",
-		"github.com/ohstr/cashctl/integration/fakehub",
+		"github.com/ohstr/cashctl/testsupport/fakehub",
 	} {
 		out, err := exec.Command("go", "list", "-deps", pkg).CombinedOutput()
 		if err != nil {

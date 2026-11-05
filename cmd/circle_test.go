@@ -9,7 +9,7 @@ import (
 	"github.com/ohstr/nmilat/nipcw"
 
 	"github.com/ohstr/cashctl/internal/output"
-	"github.com/ohstr/cashctl/internal/testmint"
+	"github.com/ohstr/cashctl/testsupport/testmint"
 )
 
 // validCircleHub returns a real, checksum-valid circlehub1... string (the
