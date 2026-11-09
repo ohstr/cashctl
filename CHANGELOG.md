@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.7.0-rc.12]
+
+### Fixed
+
+- Fixes a `connection_key` (web-identity) recipient being unaddressable without a platform: a lost
+  mint/transfer reply to one is now recoverable, and a platform-less `nconnection` target sendable —
+  the platform is optional (only the key and its Identity Authority address it). Via nmilat
+  v0.5.0-rc.53.
+
 ## [0.7.0-rc.11]
 
 ### Fixed

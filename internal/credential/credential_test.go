@@ -432,6 +432,24 @@ func TestResolveConnectionTarget(t *testing.T) {
 		}
 	})
 
+	t.Run("empty platform (bare nconnection)", func(t *testing.T) {
+		// A connection_key target is addressed by its key + ia alone; a bare
+		// nconnection carries no platform. It must resolve, not be refused
+		// (CASHCTL-0012) — so a lost mint/transfer reply to it stays recoverable
+		// and a platform-less target is sendable. The label falls back to
+		// "unspecified-platform".
+		rt, err := ResolveConnectionTarget("nconnection1...", key, "", iaHex)
+		if err != nil {
+			t.Fatalf("ResolveConnectionTarget(empty platform) error = %v, want success", err)
+		}
+		if rt.Target == nil {
+			t.Fatal("ResolveConnectionTarget(empty platform) returned nil target")
+		}
+		if !strings.Contains(rt.Resolved, "unspecified-platform") || !strings.Contains(rt.Resolved, iaHex) {
+			t.Errorf("Resolved = %q, want the unspecified-platform label and IA pubkey", rt.Resolved)
+		}
+	})
+
 	t.Run("NIP-05 IA", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			_ = json.NewEncoder(w).Encode(map[string]any{"names": map[string]string{"ia": iaHex}})
