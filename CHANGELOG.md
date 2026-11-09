@@ -7,6 +7,7 @@
 - Fixes `cashctl receive` of a Cash Zap holding a non-loki zap (e.g. satscash) in the loki-only
   ledger, where its amount was summed and shown as loki; a non-loki Cash Zap is now refused before any
   minter contact, the zap-path twin of the rc.10 receive fix.
+  ([#167](https://github.com/ohstr/cashctl/pull/167))
 
 ## [0.7.0-rc.10]
 
