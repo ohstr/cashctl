@@ -260,6 +260,12 @@ func CashOrder(t testing.TB, hubPriv string) string {
 // kind-1 note), carrying a zap bill (scheme 2) of amount on lokicash signed by
 // minterPriv for that context. It returns the event and the bill.
 func CashZap(t testing.TB, minterPriv, senderPriv string, target *nip01.Event, amount uint64) (*nip01.Event, string) {
+	return CashZapOn(t, minterPriv, senderPriv, target, amount, "lokicash", "flokicoin")
+}
+
+// CashZapOn is CashZap for an arbitrary token HRP and `chain` tag, so a test can
+// build a non-loki (e.g. satscash/bitcoin) Cash Zap.
+func CashZapOn(t testing.TB, minterPriv, senderPriv string, target *nip01.Event, amount uint64, hrp, chain string) (*nip01.Event, string) {
 	t.Helper()
 	recipient, targetID := target.PubKey, target.ID
 	sender, err := utils.GetPublicKey(senderPriv)
@@ -273,7 +279,7 @@ func CashZap(t testing.TB, minterPriv, senderPriv string, target *nip01.Event, a
 	issued := uint64(time.Now().Unix()) //nolint:gosec // unix time
 	zc := nipcash.ZapContext{Recipient: recipient, Sender: sender, ZapTarget: targetID, IssuedAt: issued}
 	amt := amount
-	tok := nipcash.Token{HRP: "lokicash", WalletPubkey: randomHex(), Secret: randomHex(),
+	tok := nipcash.Token{HRP: hrp, WalletPubkey: randomHex(), Secret: randomHex(),
 		RelayURLs: []string{"wss://hub.example"}, IdentityRequired: ptrBool(true), AttestedAmountMillis: &amt}
 	signer, err := nipcash.LocalMintSigner(minterPriv, tok.HRP)
 	if err != nil {
@@ -289,7 +295,7 @@ func CashZap(t testing.TB, minterPriv, senderPriv string, target *nip01.Event, a
 	}
 	ev, err := nip01.NewSignedEvent(9522, "zap", senderPriv,
 		[]string{"e", targetID}, []string{"k", "1"}, []string{"p", recipient},
-		[]string{"amount", strconv.FormatUint(amount, 10)}, []string{"chain", "flokicoin"},
+		[]string{"amount", strconv.FormatUint(amount, 10)}, []string{"chain", chain},
 		[]string{"cash", s}, []string{"w", tok.WalletPubkey},
 		[]string{"issued_at", strconv.FormatUint(issued, 10)}, []string{"expires_at", "0"})
 	if err != nil {
