@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.7.0-rc.9]
+
+### Fixed
+
+- Fixes `cashctl wallet import-cashkit` folding non-loki holdings (e.g. satscash) into the
+  loki-labelled ledger, where they were summed with real loki and spendable interchangeably; a
+  non-loki bill is now skipped and reported, since this wallet holds loki only.
+  ([#165](https://github.com/ohstr/cashctl/pull/165))
+
 ## [0.7.0-rc.8]
 
 ### Added
@@ -8,13 +17,6 @@
   Info so senders' wallets know which chains, minters and relays you accept, drawn from the minters you
   trust and your NIP-65 relays. `cash zap-info show` previews the event without publishing.
   ([#163](https://github.com/ohstr/cashctl/pull/163))
-
-### Fixed
-
-- Fixes `cashctl wallet import-cashkit` folding non-loki holdings (e.g. satscash) into the
-  loki-labelled ledger, where they were summed with real loki and spendable interchangeably; a
-  non-loki bill is now skipped and reported, since this wallet holds loki only.
-  ([#165](https://github.com/ohstr/cashctl/pull/165))
 
 ## [0.7.0-rc.7]
 
