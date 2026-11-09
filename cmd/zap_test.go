@@ -186,6 +186,29 @@ func TestReceiveZap_ApprovalThenRule9(t *testing.T) {
 	}
 }
 
+// A non-loki Cash Zap (e.g. satscash/bitcoin) is refused right after it parses —
+// before any minter contact or ledger write: cashctl's balance is loki-only, so
+// a satscash zap would be summed and shown as loki (CASHCTL-0011, the zap-receive
+// twin of the cash_receive loki gate).
+func TestReceiveZap_NonLokiRefused(t *testing.T) {
+	newZapFixture(t) // sets up the local identity + appdir
+	minterPriv, _ := testmint.Key(t)
+	senderPriv, _ := testmint.Key(t)
+	note, err := nip01.NewSignedEvent(1, "a note", senderPriv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev, _ := testmint.CashZapOn(t, minterPriv, senderPriv, note, 21000, "satscash", "bitcoin")
+	raw, _ := json.Marshal(ev)
+	_, err = runReceiveZap(t, []string{string(raw)}, map[string]string{"trust-minter": "true"})
+	if err == nil {
+		t.Fatal("receiveZap(satscash Cash Zap) = nil, want a loki-only refusal")
+	}
+	if !strings.Contains(err.Error(), "loki") {
+		t.Fatalf("receiveZap(satscash) error = %q, want it to mention loki-only", err.Error())
+	}
+}
+
 // Rule 9 failures: claimed, wrong amount, gone, no answer.
 func TestReceiveZap_Rule9Failures(t *testing.T) {
 	for name, tc := range map[string]struct {

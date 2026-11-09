@@ -332,6 +332,13 @@ func receiveZap(cmd *cobra.Command, ev *nip01.Event, raw string) error {
 		pre := nipCZ.VerifyWallet(context.Background(), ev, nil, trust, approved, nil)
 		return output.InvalidInputError(cmd, "", fmt.Errorf("this Cash Zap fails %s", firstFailed(pre)))
 	}
+	// Loki-only gate (NIP-CP §Balance is per chain; this ledger holds one): the
+	// zap-receive twin of cash_receive's gate. A non-loki Cash Zap (e.g. satscash)
+	// would be summed and shown as loki in the one balance, so refuse it before
+	// any minter contact or ledger write.
+	if z.Token.HRP != ledger.LokiHRP {
+		return output.InvalidInputError(cmd, "", fmt.Errorf("cashctl holds loki cash only, not %q Cash Zaps", z.Token.HRP))
+	}
 	mine, idErr := localPubKeyHex(cmd)
 	var cred nipcash.Credential
 	var info *nipCZ.CashZapInfo
