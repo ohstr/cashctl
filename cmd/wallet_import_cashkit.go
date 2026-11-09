@@ -124,6 +124,9 @@ func runWalletImportCashkit(cmd *cobra.Command, args []string) error {
 	if n := plan.Skipped[cashkitimport.SkipUndecodable]; n > 0 {
 		output.Printf("Skipped %d token(s) that did not decode.\n", n)
 	}
+	if n := plan.Skipped[cashkitimport.SkipNonLoki]; n > 0 {
+		output.Printf("Skipped %d non-loki token(s) (e.g. satscash): this wallet holds loki only.\n", n)
+	}
 	if n := plan.Skipped["duplicate"]; n > 0 {
 		output.Printf("Skipped %d duplicate token(s).\n", n)
 	}
