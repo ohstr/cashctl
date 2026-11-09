@@ -7,6 +7,7 @@
 - Fixes `cashctl receive` holding a non-loki cash token (e.g. satscash) in the loki-only ledger, where
   its amount was summed and shown as loki in the wallet balance; a non-loki bill is now refused at
   receive, the general-path twin of the rc.9 import fix.
+  ([#166](https://github.com/ohstr/cashctl/pull/166))
 
 ## [0.7.0-rc.9]
 
