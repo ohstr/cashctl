@@ -65,6 +65,37 @@ func TestRunCashReceive_NoEmbeddedSecret_JSONMode(t *testing.T) {
 	}
 }
 
+// TestRunCashReceive_NonLokiRefused covers the loki-only gate (CASHCTL-0010): a
+// cash token of any non-loki HRP (satscash here, which dial.Sniff recognises as
+// a cash token and falls through to nipcash.Decode) is refused right after
+// decode — before any provenance check, relay dial or ledger write — so a
+// currency this loki-only ledger cannot total is never held. The gate sits
+// before every network step, so like the no-secret case this branch is local
+// and belongs in the unit suite.
+func TestRunCashReceive_NonLokiRefused(t *testing.T) {
+	encoded, err := testmint.Encode(t, nipcash.Token{
+		HRP:              "satscash",
+		WalletPubkey:     strings.Repeat("aa", 32),
+		Secret:           strings.Repeat("bb", 32),
+		IdentityRequired: ptrTo(false),
+		RelayURLs:        []string{"wss://relay.example"},
+	})
+	if err != nil {
+		t.Fatalf("nipcash.Encode: %v", err)
+	}
+
+	cmd := &cobra.Command{}
+	cmd.Flags().Bool("json", true, "")
+
+	runErr := runCashReceive(cmd, []string{encoded})
+	if runErr == nil {
+		t.Fatal("runCashReceive(satscash) = nil, want a loki-only refusal")
+	}
+	if !strings.Contains(runErr.Error(), "loki") {
+		t.Fatalf("runCashReceive(satscash) error = %q, want it to mention loki-only", runErr.Error())
+	}
+}
+
 func TestMinterPubkeyFromToken(t *testing.T) {
 	walletPubkey := "aaaa111122223333444455556666777788889999aaaabbbbccccddddeeee00"
 	amount := uint64(5000)

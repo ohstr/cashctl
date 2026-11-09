@@ -27,12 +27,10 @@ const (
 	SkipNonLoki     = "non_loki_currency" // a non-loki bill (e.g. satscash): cashctl's ledger is loki-only
 )
 
-// lokiHRP is the token HRP of a loki cash bill (lokicash1…). cashctl's ledger
-// carries no currency unit and reports every amount as loki, so only loki bills
-// may be imported; a holding of any other currency (satscash, …) is skipped
-// rather than folded into the loki total where it would be summed and spent as
-// loki (the mix cashkit's own MixedUnitsError exists to prevent).
-const lokiHRP = "lokicash"
+// lokiHRP is the token HRP a loki cash bill carries; a holding of any other
+// currency is skipped rather than folded into cashctl's loki-only ledger. See
+// ledger.LokiHRP for the shared invariant.
+const lokiHRP = ledger.LokiHRP
 
 // Plan is the result of mapping a backup: the cash entries ready to Add, their
 // total, and a census of what was skipped and why.

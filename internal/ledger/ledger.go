@@ -58,6 +58,14 @@ const (
 	StatusDuplicate = "duplicate"
 )
 
+// LokiHRP is the token HRP of a loki cash bill (lokicash1…). This ledger carries
+// no currency unit and reports every amount as loki (NIP-CP §Balance is per
+// chain), so only loki bills belong in it; a bill of any other currency
+// (satscash, …) is summed and mis-denominated into the loki total if admitted,
+// the mix cashkit's own MixedUnitsError exists to prevent. Ingest sites gate on
+// it (cmd receive, cashkitimport).
+const LokiHRP = "lokicash"
+
 // Live reports whether status keeps a bill in this ledger's hands: at most
 // one row per bill may be live.
 func Live(status string) bool {

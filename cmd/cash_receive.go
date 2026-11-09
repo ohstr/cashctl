@@ -105,6 +105,14 @@ func runCashReceive(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return output.InvalidInputError(cmd, input, err)
 	}
+	// Loki-only gate (NIP-CP §Balance is per chain; this ledger holds one). A
+	// non-loki bill (e.g. satscash) would be summed and shown as loki in the one
+	// undifferentiated balance, so refuse it here rather than hold a currency
+	// this wallet cannot total — the general-receive-path twin of the
+	// import-cashkit loki gate.
+	if tok.HRP != ledger.LokiHRP {
+		return output.InvalidInputError(cmd, input, fmt.Errorf("cashctl holds loki cash only, not %q bills", tok.HRP))
+	}
 	// The provenance gate first: a copy whose signature does not cover its own
 	// relays is refused before any of them is named or dialled.
 	if err := checkBillProvenance(tok); err != nil {
