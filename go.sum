@@ -39,8 +39,8 @@ github.com/ncruces/go-strftime v1.0.0 h1:HMFp8mLCTPp341M/ZnA4qaf7ZlsbTc+miZjCLOF
 github.com/ncruces/go-strftime v1.0.0/go.mod h1:Fwc5htZGVVkseilnfgOVb9mKy6w1naJmn9CehxcKcls=
 github.com/ohstr/ncli v0.6.0 h1:VsIv9CygNeFUE5+WuOLSuJpHYeGd8xpx+GBaDWECX30=
 github.com/ohstr/ncli v0.6.0/go.mod h1:5TLk/2cDTPKPfa8IRq+9Z9madxriommQixRsEQ6qzJ4=
-github.com/ohstr/nmilat v0.5.0-rc.53 h1:trsJ7Hp9d5l3F0rhrL67HGNNsk/tjVfbkgpNVrRIcfE=
-github.com/ohstr/nmilat v0.5.0-rc.53/go.mod h1:6zZpAGg0SOT8ra6EcWL25MirNTokqDCQc0OKipl9Oaw=
+github.com/ohstr/nmilat v0.5.0-rc.54 h1:wu/QuDrS29loDX4ApgHh2AXdgZZhn2NOGE49mdebknA=
+github.com/ohstr/nmilat v0.5.0-rc.54/go.mod h1:6zZpAGg0SOT8ra6EcWL25MirNTokqDCQc0OKipl9Oaw=
 github.com/pkg/errors v0.9.1/go.mod h1:bwawxfHBFNV+L2hUp1rHADufV3IMtnDRdf1r5NINEl0=
 github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec h1:W09IVJc94icq4NjY3clb7Lk8O1qJ8BdBEF8z0ibU0rE=
 github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec/go.mod h1:qqbHyh8v60DhA7CoWK5oRCqLrMHRGoxYCSS9EjAz6Eo=

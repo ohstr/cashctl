@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.7.0-rc.13]
+
+### Changed
+
+- Bumps `github.com/ohstr/nmilat` to `v0.5.0-rc.54`: a private-transport item whose `params` is present but not an object (a literal `null`, string, number or array) is now refused at serve and build time (nmilat NMILAT-0010).
+
 ## [0.7.0-rc.12]
 
 ### Fixed
