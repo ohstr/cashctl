@@ -141,12 +141,12 @@ func parseSendBefore(cmd *cobra.Command) (*int64, error) {
 // checkWithdrawAddress is the local part of the address check (nmilat checks
 // the network and script type against the terms when quoting): normalized,
 // never one of this wallet's own order deposit addresses.
-func checkWithdrawAddress(cmd *cobra.Command, raw string) (string, []string, error) {
+func checkWithdrawAddress(cmd *cobra.Command, l ledger.Store, raw string) (string, []string, error) {
 	addr, err := nipcash.NormalizeAddress(raw)
 	if err != nil {
 		return "", nil, output.WithReason(output.InvalidInputError(cmd, raw, fmt.Errorf("not a valid address: %w", err)), reasonAddressInvalid)
 	}
-	orders, _ := ledger.Orders()
+	orders, _ := l.Orders()
 	for _, o := range orders {
 		var ord nipCO.Order
 		if o.OrderJSON != "" && json.Unmarshal([]byte(o.OrderJSON), &ord) == nil && strings.EqualFold(ord.Address, addr) {
@@ -155,7 +155,7 @@ func checkWithdrawAddress(cmd *cobra.Command, raw string) (string, []string, err
 		}
 	}
 	var warnings []string
-	ws, _ := ledger.Withdrawals()
+	ws, _ := l.Withdrawals()
 	for _, w := range ws {
 		switch {
 		case w.Address == addr:
@@ -259,7 +259,7 @@ func quoteWithdrawal(cmd *cobra.Command, raw string, print bool) (*ledger.Entry,
 		return nil, nil, "", output.WithReason(output.UsageError(cmd, errors.New(
 			"run `cashctl wallet protect` first: whoever gave you this bill can still spend it")), reasonProtectFirst)
 	}
-	addr, warnings, err := checkWithdrawAddress(cmd, raw)
+	addr, warnings, err := checkWithdrawAddress(cmd, l, raw)
 	if err != nil {
 		return nil, nil, "", err
 	}
@@ -527,7 +527,7 @@ func runCashWithdrawSend(cmd *cobra.Command, args []string) error {
 		if !ok || e.Status != ledger.StatusHeld {
 			return output.NotFoundError(cmd, stored.EntryID, errors.New("the quoted bill is no longer held"))
 		}
-		if _, _, err := checkWithdrawAddress(cmd, stored.Address); err != nil {
+		if _, _, err := checkWithdrawAddress(cmd, l, stored.Address); err != nil {
 			return err
 		}
 		if q, err = nipcash.ParseWithdrawQuote(stored.QuoteJSON); err != nil {
@@ -643,7 +643,7 @@ func (j *withdrawJournal) WriteAhead(ctx context.Context, calls []nipcash.Pendin
 	}
 	pc := calls[len(calls)-1]
 	w := j.w
-	if existing, ok, _ := ledger.WithdrawalForCall(c.CallID); ok {
+	if existing, ok, _ := j.l.WithdrawalForCall(c.CallID); ok {
 		w = existing
 	} else if w.WithdrawalID == "" {
 		w.WithdrawalID = c.CallID
@@ -655,15 +655,15 @@ func (j *withdrawJournal) WriteAhead(ctx context.Context, calls []nipcash.Pendin
 	if w.State == "" {
 		w.State = ledger.WithdrawSending
 	}
-	if err := ledger.PutWithdrawal(w); err != nil {
+	if err := j.l.PutWithdrawal(w); err != nil {
 		j.l.RemoveCall(c.CallID)
 		_ = j.l.Save()
 		return err
 	}
-	if got, ok, err := ledger.FindWithdrawal(w.WithdrawalID); err != nil || !ok || got.Notify != w.Notify || got.QuoteID != w.QuoteID {
+	if got, ok, err := j.l.FindWithdrawal(w.WithdrawalID); err != nil || !ok || got.Notify != w.Notify || got.QuoteID != w.QuoteID {
 		j.l.RemoveCall(c.CallID)
 		_ = j.l.Save()
-		return errors.New("cashctl.db: the withdrawal's write-ahead did not read back as written")
+		return errors.New("the withdrawal's write-ahead did not read back as written")
 	}
 	j.w = w
 	return nil
@@ -671,12 +671,12 @@ func (j *withdrawJournal) WriteAhead(ctx context.Context, calls []nipcash.Pendin
 
 // RecordAccepted keeps the relays that accepted the withdrawal, for its notices.
 func (j *withdrawJournal) RecordAccepted(_ context.Context, _ string, relays []string) error {
-	w, ok, err := ledger.FindWithdrawal(j.w.WithdrawalID)
+	w, ok, err := j.l.FindWithdrawal(j.w.WithdrawalID)
 	if err != nil || !ok {
 		return err
 	}
 	w.AcceptedRelays = relays
-	return ledger.PutWithdrawal(w)
+	return j.l.PutWithdrawal(w)
 }
 
 var _ nipcashclient.AcceptedRecorder = (*withdrawJournal)(nil)
@@ -739,9 +739,9 @@ func sendWithdrawal(cmd *cobra.Command, e *ledger.Entry, q *nipcash.WithdrawQuot
 	if err != nil {
 		if c := j.call(); c != nil && errors.Is(err, nipcash.ErrReceiptInvalid) {
 			pErr := placeErr(cmd, l, &j.ledgerJournal, err, "withdrawal", e.ID)
-			if w, ok, _ := ledger.WithdrawalForCall(c.CallID); ok {
+			if w, ok, _ := l.WithdrawalForCall(c.CallID); ok {
 				w.ReceiptInvalidSeen++
-				_ = ledger.PutWithdrawal(w)
+				_ = l.PutWithdrawal(w)
 			}
 			return output.WithReason(pErr, reasonReceiptInvalid)
 		}
@@ -755,7 +755,7 @@ func sendWithdrawal(cmd *cobra.Command, e *ledger.Entry, q *nipcash.WithdrawQuot
 			if quoteRefused(ind.Detail) {
 				w := j.w
 				w.QuoteExpiredSeen = true
-				_ = ledger.PutWithdrawal(w)
+				_ = l.PutWithdrawal(w)
 			}
 			// Confirm with the Hub that nothing moved before reporting it.
 			waitFn(time.Until(time.Unix(c.Deadline+1, 0)))
@@ -782,7 +782,7 @@ func sendWithdrawal(cmd *cobra.Command, e *ledger.Entry, q *nipcash.WithdrawQuot
 		if c := j.call(); c != nil && c.State == ledger.CallNotApplied {
 			w := j.w
 			w.State, w.FinishedAt = refusedWithdrawState(c), time.Now().Unix()
-			_ = ledger.PutWithdrawal(w)
+			_ = l.PutWithdrawal(w)
 		}
 		followOtherCopysWithdrawal(cmd, l, e.ID, err)
 		return pErr
@@ -864,7 +864,7 @@ func applyPayout(cmd *cobra.Command, l ledger.Store, c *ledger.Call, w *ledger.W
 	if err := l.Save(); err != nil {
 		return output.RuntimeError(cmd, err)
 	}
-	return ledger.PutWithdrawal(*w)
+	return l.PutWithdrawal(*w)
 }
 
 // finalRewrite is the record of a final payout once nothing will look it up

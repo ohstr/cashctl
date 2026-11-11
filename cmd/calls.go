@@ -343,7 +343,7 @@ func stageNotPlacedOrder(l ledger.Store, c *ledger.Call) {
 	if l == nil || c.Method != nipcash.MethodCashOrder {
 		return
 	}
-	o, ok, err := ledger.OrderForCall(c.CallID)
+	o, ok, err := l.OrderForCall(c.CallID)
 	if err != nil || !ok || o.FinishedAt != 0 || o.State != ledger.OrderPlacing {
 		return
 	}
@@ -451,13 +451,13 @@ func placeErrFor(cmd *cobra.Command, l ledger.Store, j *ledgerJournal, err error
 		}
 		c.SawReused = c.SawReused || indeterminate.Call.SawReused
 		_ = l.Save()
-		return callIndeterminateError(cmd, input, c, verb, err)
+		return callIndeterminateError(cmd, l, input, c, verb, err)
 	case c != nil:
 		// Written ahead and the outcome is not one of the above: never assume
 		// it failed. It stays open and is looked up.
 		c.State, c.Detail, c.UpdatedAt = ledger.CallLookup, "no answer", time.Now().Unix()
 		_ = l.Save()
-		return callIndeterminateError(cmd, input, c, verb, err)
+		return callIndeterminateError(cmd, l, input, c, verb, err)
 	}
 	// No call was written: nothing can have reached the Hub.
 	var notSent *notSentError
@@ -469,14 +469,14 @@ func placeErrFor(cmd *cobra.Command, l ledger.Store, j *ledgerJournal, err error
 
 // callIndeterminateError is exit 8 for a call whose outcome is unknown: it
 // stays open, and the bill it spends is not used again until it is settled.
-func callIndeterminateError(cmd *cobra.Command, input string, c *ledger.Call, verb string, cause error) error {
+func callIndeterminateError(cmd *cobra.Command, l ledger.Store, input string, c *ledger.Call, verb string, cause error) error {
 	answered := "gave no answer"
 	if c.FirstError != "" {
 		answered = "answered " + c.FirstError + ", which does not say whether it was applied"
 	}
 	device, _ := deviceIDFn()
 	call := map[string]any{"call": c.CallID, "method": c.Method, "state": c.State, "detail": c.Detail,
-		"deadline": c.Deadline, "settle_after": c.Deadline + 1, "next_step": nextStep(c, device)}
+		"deadline": c.Deadline, "settle_after": c.Deadline + 1, "next_step": nextStep(l, c, device)}
 	return output.WithCall(output.IndeterminateError(cmd, input, fmt.Errorf(
 		"the Hub %s to this %s (call %s), so whether it moved is unknown. "+
 			"Nothing is resent: `cashctl cash settle` asks the Hub what happened, and every money command does before this bill is used again: %w",

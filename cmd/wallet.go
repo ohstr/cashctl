@@ -126,10 +126,13 @@ pending_joins and pending_merge.`,
 			}
 			device, _ := deviceIDFn()
 			var recovered []string
-			if ws, err := ledger.Withdrawals(); err == nil {
-				for _, w := range ws {
-					if w.Recovered && w.FinishedAt == 0 {
-						recovered = append(recovered, w.WithdrawalID)
+			if l, err := loadStore(cmd); err == nil {
+				defer l.Close()
+				if ws, err := l.Withdrawals(); err == nil {
+					for _, w := range ws {
+						if w.Recovered && w.FinishedAt == 0 {
+							recovered = append(recovered, w.WithdrawalID)
+						}
 					}
 				}
 			}

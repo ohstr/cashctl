@@ -294,8 +294,12 @@ func newOutboxID() string {
 // least once, or a join done, over its connection at its node, from a verified
 // string), and when it last ordered from or joined that node.
 func usedOffer(cmd *cobra.Command, l *listing.Listing) (used bool, last int64) {
-	orders, _ := ledger.Orders()
-	ld, _ := loadStore(cmd)
+	ld, err := loadStore(cmd)
+	if err != nil {
+		return
+	}
+	defer ld.Close()
+	orders, _ := ld.Orders()
 	for _, o := range orders {
 		if o.HubIdentity != l.NodeIdentity {
 			continue

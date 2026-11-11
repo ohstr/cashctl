@@ -207,7 +207,7 @@ func TestWithdraw_InvalidReceiptIsBoundedThenSurfaced(t *testing.T) {
 	if v := withdrawalView(w); v["receipt_invalid"] != true || withdrawalText(w) != receiptInvalidText {
 		t.Errorf("shown as %v / %q", v["receipt_invalid"], withdrawalText(w))
 	}
-	if next := nextStep(c, c.DeviceID); !strings.Contains(next, "never send this bill again") {
+	if next := nextStep(l, c, c.DeviceID); !strings.Contains(next, "never send this bill again") {
 		t.Errorf("next step %q", next)
 	}
 	// Not asked again before its hour.

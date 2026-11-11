@@ -32,7 +32,7 @@ func settleWithdrawCall(cmd *cobra.Command, l ledger.Store, c *ledger.Call, devi
 // settleWithdrawOne is settleWithdrawCall, also returning the withdrawal as
 // recorded (its ReceivedAt set by the save that made it final).
 func settleWithdrawOne(cmd *cobra.Command, l ledger.Store, c *ledger.Call, device string) (string, *ledger.Withdrawal) {
-	w, ok, err := ledger.WithdrawalForCall(c.CallID)
+	w, ok, err := l.WithdrawalForCall(c.CallID)
 	if err != nil {
 		return "no withdrawal record", nil
 	}
@@ -41,7 +41,7 @@ func settleWithdrawOne(cmd *cobra.Command, l ledger.Store, c *ledger.Call, devic
 		// A store written before its call and row shared one save may lack the
 		// row; it is rebuilt and the payout followed (R2-C5).
 		w = recoveredRow(l, c)
-		if err := ledger.PutWithdrawal(w); err != nil {
+		if err := l.PutWithdrawal(w); err != nil {
 			return "no withdrawal record", nil
 		}
 		ok = true
@@ -90,7 +90,7 @@ func settleWithdrawInto(cmd *cobra.Command, l ledger.Store, c *ledger.Call, devi
 	}
 	if quoteRefused(c.FirstDetail) && !w.QuoteExpiredSeen {
 		w.QuoteExpiredSeen = true
-		_ = ledger.PutWithdrawal(w)
+		_ = l.PutWithdrawal(w)
 	}
 	if act.Kind == nipcashclient.ActionReplace && w.QuoteExpiredSeen {
 		// A call of this withdrawal was refused quote_expired: its quote can't be
@@ -122,7 +122,7 @@ func settleWithdrawInto(cmd *cobra.Command, l ledger.Store, c *ledger.Call, devi
 // 6), instead of being asked again at every command for ever.
 func receiptInvalidAgain(l ledger.Store, c *ledger.Call, w *ledger.Withdrawal) string {
 	w.ReceiptInvalidSeen++
-	_ = ledger.PutWithdrawal(*w)
+	_ = l.PutWithdrawal(*w)
 	now := time.Now().Unix()
 	c.UpdatedAt = now
 	if w.ReceiptInvalidSeen < ledger.ReceiptInvalidLimit {
@@ -150,9 +150,9 @@ func finishRefusedWithdrawal(l ledger.Store, id string) {
 	if !ok || c.Method != nipcash.MethodCashWithdraw || c.State != ledger.CallNotApplied {
 		return
 	}
-	if w, ok, _ := ledger.WithdrawalForCall(id); ok && w.FinishedAt == 0 {
+	if w, ok, _ := l.WithdrawalForCall(id); ok && w.FinishedAt == 0 {
 		w.State, w.FinishedAt = refusedWithdrawState(c), time.Now().Unix()
-		_ = ledger.PutWithdrawal(w)
+		_ = l.PutWithdrawal(w)
 	}
 }
 
@@ -194,7 +194,12 @@ func txCheckText(check string) string {
 
 func showWithdrawals(cmd *cobra.Command, ids []string, local bool) error {
 	jsonMode, _ := cmd.Flags().GetBool("json")
-	all, err := ledger.Withdrawals()
+	l, err := loadStore(cmd)
+	if err != nil {
+		return output.RuntimeError(cmd, err)
+	}
+	defer l.Close()
+	all, err := l.Withdrawals()
 	if err != nil {
 		return output.RuntimeError(cmd, err)
 	}
@@ -206,7 +211,7 @@ func showWithdrawals(cmd *cobra.Command, ids []string, local bool) error {
 		}
 	}
 	for _, id := range ids {
-		w, ok, err := ledger.FindWithdrawal(id)
+		w, ok, err := l.FindWithdrawal(id)
 		if err != nil {
 			return output.RuntimeError(cmd, err)
 		}
@@ -216,10 +221,6 @@ func showWithdrawals(cmd *cobra.Command, ids []string, local bool) error {
 		pick = append(pick, w)
 	}
 	if !local {
-		l, err := loadStore(cmd)
-		if err != nil {
-			return output.RuntimeError(cmd, err)
-		}
 		device, _ := deviceIDFn()
 		for i, w := range pick {
 			if c, ok := l.FindCall(w.CallID); ok && c.Open() {
@@ -233,7 +234,7 @@ func showWithdrawals(cmd *cobra.Command, ids []string, local bool) error {
 	showReceipt, _ := cmd.Flags().GetBool("receipt")
 	views := []map[string]any{}
 	for _, w := range pick {
-		fresh, _, _ := ledger.FindWithdrawal(w.WithdrawalID)
+		fresh, _, _ := l.FindWithdrawal(w.WithdrawalID)
 		fresh.ReceivedAt = w.ReceivedAt
 		v := withdrawalView(fresh)
 		var p nipcash.Payout
@@ -284,7 +285,12 @@ func runCashWithdrawCancel(cmd *cobra.Command, args []string) error {
 	if err := rejectConnectionFlag(cmd); err != nil {
 		return err
 	}
-	w, ok, err := ledger.FindWithdrawal(args[0])
+	l, err := loadStore(cmd)
+	if err != nil {
+		return output.RuntimeError(cmd, err)
+	}
+	defer l.Close()
+	w, ok, err := l.FindWithdrawal(args[0])
 	if err != nil || !ok {
 		return output.NotFoundError(cmd, args[0], fmt.Errorf("no withdrawal %q", args[0]))
 	}
@@ -302,10 +308,6 @@ func runCashWithdrawCancel(cmd *cobra.Command, args []string) error {
 	if !Confirm(cmd, false, "Ask the Hub to cancel? If a version confirms first, you are paid instead") {
 		output.Println("Cancelled.")
 		return nil
-	}
-	l, err := loadStore(cmd)
-	if err != nil {
-		return output.RuntimeError(cmd, err)
 	}
 	c, ok := l.FindCall(w.CallID)
 	if !ok {
@@ -363,7 +365,7 @@ func newCashWithdrawSettleCmd() *cobra.Command {
 			if id, _ := cmd.Flags().GetString("replace"); id != "" {
 				return replaceWithdrawalByUser(cmd, l, id, device)
 			}
-			ws, _ := ledger.Withdrawals()
+			ws, _ := l.Withdrawals()
 			stillOpen := false
 			for _, w := range ws {
 				if len(args) == 1 && w.WithdrawalID != args[0] {
@@ -393,7 +395,7 @@ func newCashWithdrawSettleCmd() *cobra.Command {
 // replaceWithdrawalByUser sends again, under the derived id and with the same
 // quote, a withdrawal stuck in confirm_replace, after the user agreed.
 func replaceWithdrawalByUser(cmd *cobra.Command, l ledger.Store, id, device string) error {
-	w, ok, err := ledger.FindWithdrawal(id)
+	w, ok, err := l.FindWithdrawal(id)
 	if err != nil || !ok {
 		return output.NotFoundError(cmd, id, fmt.Errorf("no withdrawal %q", id))
 	}
@@ -413,7 +415,7 @@ func replaceWithdrawalByUser(cmd *cobra.Command, l ledger.Store, id, device stri
 	}
 	summary := replaceCallConfirmed(cmd, l, c, true)
 	_ = l.Save()
-	fresh, _, _ := ledger.FindWithdrawal(id)
+	fresh, _, _ := l.FindWithdrawal(id)
 	if !jsonMode && summary != "" {
 		output.Println(summary)
 	}

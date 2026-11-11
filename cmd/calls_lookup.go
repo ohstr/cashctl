@@ -282,7 +282,7 @@ func settleCalls(cmd *cobra.Command, l ledger.Store, opts settleOptions) []settl
 		if !opts.all && !due(c, time.Now().Unix()) {
 			continue
 		}
-		if closedOrderNotDue(c, time.Now().Unix()) {
+		if closedOrderNotDue(l, c, time.Now().Unix()) {
 			continue
 		}
 		var summary string
@@ -295,7 +295,7 @@ func settleCalls(cmd *cobra.Command, l ledger.Store, opts settleOptions) []settl
 			summary = settleOne(cmd, l, c, device)
 		}
 		if c, ok = l.FindCall(id); ok {
-			out = append(out, settledCall{Call: *c, Summary: summary, NextStep: nextStep(c, device)})
+			out = append(out, settledCall{Call: *c, Summary: summary, NextStep: nextStep(l, c, device)})
 		}
 	}
 	return out
@@ -423,7 +423,7 @@ func replaceCallConfirmed(cmd *cobra.Command, l ledger.Store, c *ledger.Call, co
 	pc := pendingOf(c)
 	if c.Method == nipcash.MethodCashWithdraw {
 		// nmilat re-places a withdrawal only with its quote, address and notify.
-		if w, ok, _ := ledger.WithdrawalForCall(c.CallID); ok {
+		if w, ok, _ := l.WithdrawalForCall(c.CallID); ok {
 			pc = withdrawPending(c, w)
 		}
 	}
@@ -439,7 +439,7 @@ func replaceCallConfirmed(cmd *cobra.Command, l ledger.Store, c *ledger.Call, co
 	}, func(ctx context.Context, next nipcash.PendingCall) error {
 		parent, _ := l.FindCall(parentID)
 		if parent.Method == nipcash.MethodCashWithdraw {
-			w, _, _ := ledger.WithdrawalForCall(parentID)
+			w, _, _ := l.WithdrawalForCall(parentID)
 			bill, err := dialWithdrawFn(ctx, parent.TargetCredential)
 			if err != nil {
 				sendErr = &notSentError{err}
@@ -521,9 +521,9 @@ func replaceCallConfirmed(cmd *cobra.Command, l ledger.Store, c *ledger.Call, co
 		// parent stays as it was.
 		if derivedID != "" {
 			// A withdrawal's row follows its call: it goes back to the parent.
-			if w, ok, _ := ledger.WithdrawalForCall(derivedID); ok {
+			if w, ok, _ := l.WithdrawalForCall(derivedID); ok {
 				w.CallID = parentID
-				_ = ledger.PutWithdrawal(w)
+				_ = l.PutWithdrawal(w)
 			}
 			l.RemoveCall(derivedID)
 		}
@@ -550,7 +550,7 @@ func replaceCallConfirmed(cmd *cobra.Command, l ledger.Store, c *ledger.Call, co
 	child, _ := l.FindCall(derivedID)
 	switch {
 	case sendErr == nil && wres != nil:
-		w, _, _ := ledger.WithdrawalForCall(derivedID)
+		w, _, _ := l.WithdrawalForCall(derivedID)
 		child, _ = l.FindCall(derivedID)
 		if err := applyPayout(cmd, l, child, &w, wres); err != nil {
 			return "placed again as call " + derivedID
@@ -781,7 +781,7 @@ func localPubIs(cmd *cobra.Command, pub string) bool {
 }
 
 // nextStep is what the user does about a call now.
-func nextStep(c *ledger.Call, device string) string {
+func nextStep(l ledger.Store, c *ledger.Call, device string) string {
 	switch {
 	case !c.Open():
 		return "nothing"
@@ -789,7 +789,7 @@ func nextStep(c *ledger.Call, device string) string {
 		return "the payout is followed: `cashctl cash withdraw show`"
 	case c.Method == nipcash.MethodCashWithdraw && c.Detail == "confirm_replace":
 		return "the Hub says this withdrawal never arrived: `cashctl cash withdraw settle --replace <withdrawal> --yes` sends it again"
-	case c.State == ledger.CallOpenOrder && closedOrderWatched(c):
+	case c.State == ledger.CallOpenOrder && closedOrderWatched(l, c):
 		return "the order is closed; a later payment to its address is still collected: `cashctl cash order show`"
 	case c.State == ledger.CallOpenOrder:
 		return "pay the order, then `cashctl cash order show` collects its bills"

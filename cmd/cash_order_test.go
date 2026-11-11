@@ -575,8 +575,9 @@ func TestOrder_ClosedOnchainCollectsLaterBills(t *testing.T) {
 	if l, _ := ledger.Load(); len(l.Held()) != 1 {
 		t.Fatalf("held %d: a closed order checked just now was read again", len(l.Held()))
 	}
-	if c := onlyOrderCall(t); nextStep(c, "") == nextStep(&ledger.Call{State: ledger.CallOpenOrder, Method: nipcash.MethodCashOrder}, "") {
-		t.Errorf("next step %q: want the closed-order step, not \"pay the order\"", nextStep(c, ""))
+	lns := testLoad(t)
+	if c := onlyOrderCall(t); nextStep(lns, c, "") == nextStep(lns, &ledger.Call{State: ledger.CallOpenOrder, Method: nipcash.MethodCashOrder}, "") {
+		t.Errorf("next step %q: want the closed-order step, not \"pay the order\"", nextStep(lns, c, ""))
 	}
 	staleOrderChecks(t)
 	if _, _, err := showAllOrders(t); err != nil {

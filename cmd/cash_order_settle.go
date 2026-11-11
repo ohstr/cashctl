@@ -30,7 +30,7 @@ func orderPending(c *ledger.Call, o ledger.Order) nipcash.PendingCall {
 // stands is checked and applied (bills kept or handed out), finished or ended
 // unpaid closes it; a lost placement the Hub never saw waits for --replace.
 func settleOrderCall(cmd *cobra.Command, l ledger.Store, c *ledger.Call, device string) string {
-	o, ok, err := ledger.OrderForCall(c.CallID)
+	o, ok, err := l.OrderForCall(c.CallID)
 	if err != nil || !ok {
 		return "no order record"
 	}
@@ -88,7 +88,7 @@ func settleOrderCall(cmd *cobra.Command, l ledger.Store, c *ledger.Call, device 
 			}
 			return "no longer answered by the Hub"
 		}
-		_ = ledger.PutOrder(o)
+		_ = l.PutOrder(o)
 		return "no longer answered by the Hub"
 	case act.Kind == nipcashclient.ActionShow && act.Reason == "lookup_unknown" && o.FinishedAt != 0:
 		// A closed on-chain order the Hub no longer knows gains nothing more.
@@ -124,7 +124,12 @@ func newCashOrderShowCmd() *cobra.Command {
 // closed on-chain one) and prints them.
 func showOrders(cmd *cobra.Command, ids []string, local bool) error {
 	jsonMode, _ := cmd.Flags().GetBool("json")
-	all, err := ledger.Orders()
+	l, err := loadStore(cmd)
+	if err != nil {
+		return output.RuntimeError(cmd, err)
+	}
+	defer l.Close()
+	all, err := l.Orders()
 	if err != nil {
 		return output.RuntimeError(cmd, err)
 	}
@@ -137,7 +142,7 @@ func showOrders(cmd *cobra.Command, ids []string, local bool) error {
 		}
 	} else {
 		for _, id := range ids {
-			o, ok, err := ledger.FindOrder(id)
+			o, ok, err := l.FindOrder(id)
 			if err != nil {
 				return output.RuntimeError(cmd, err)
 			}
@@ -148,13 +153,9 @@ func showOrders(cmd *cobra.Command, ids []string, local bool) error {
 		}
 	}
 	if !local {
-		l, err := loadStore(cmd)
-		if err != nil {
-			return output.RuntimeError(cmd, err)
-		}
 		device, _ := deviceIDFn()
 		for _, o := range pick {
-			if c, ok := l.FindCall(o.CallID); ok && c.Open() && (len(ids) > 0 || !closedOrderNotDue(c, time.Now().Unix())) {
+			if c, ok := l.FindCall(o.CallID); ok && c.Open() && (len(ids) > 0 || !closedOrderNotDue(l, c, time.Now().Unix())) {
 				settleOrderCall(cmd, l, c, device)
 			}
 		}
@@ -162,7 +163,7 @@ func showOrders(cmd *cobra.Command, ids []string, local bool) error {
 	}
 	var views []map[string]any
 	for _, o := range pick {
-		fresh, _, _ := ledger.FindOrder(o.OrderID)
+		fresh, _, _ := l.FindOrder(o.OrderID)
 		v := orderView(fresh, nil)
 		v["next_step"] = orderNextStep(fresh)
 		v["warnings"] = output.NonNil(orderWarnings(fresh, storedOrder(fresh)))
@@ -244,7 +245,12 @@ var watchNoticesFn = func(ctx context.Context, cashorder, notify string, accepte
 // when the order is finished or ended unpaid, or at the timeout. Each answer
 // is saved before the next; a notice never changes anything by itself.
 func watchOrder(cmd *cobra.Command, id string, timeout time.Duration) error {
-	o, ok, err := ledger.FindOrder(id)
+	l, err := loadStore(cmd)
+	if err != nil {
+		return output.RuntimeError(cmd, err)
+	}
+	defer l.Close()
+	o, ok, err := l.FindOrder(id)
 	if err != nil {
 		return output.RuntimeError(cmd, err)
 	}
@@ -261,14 +267,10 @@ func watchOrder(cmd *cobra.Command, id string, timeout time.Duration) error {
 	defer cancel()
 	device, _ := deviceIDFn()
 	read := func() {
-		l, err := loadStore(cmd)
-		if err != nil {
-			return
-		}
 		if c, ok := l.FindCall(o.CallID); ok && c.Open() {
 			settleOrderCall(cmd, l, c, device)
 		}
-		o, _, _ = ledger.FindOrder(id)
+		o, _, _ = l.FindOrder(id)
 	}
 	read()
 	var notices <-chan struct{}
@@ -407,7 +409,7 @@ func runCashOrderSettle(cmd *cobra.Command, args []string) error {
 	if id, _ := cmd.Flags().GetString("replace"); id != "" {
 		return replaceOrderByUser(cmd, l, id, device)
 	}
-	orders, err := ledger.Orders()
+	orders, err := l.Orders()
 	if err != nil {
 		return output.RuntimeError(cmd, err)
 	}
@@ -418,7 +420,7 @@ func runCashOrderSettle(cmd *cobra.Command, args []string) error {
 			continue
 		}
 		c, ok := l.FindCall(o.CallID)
-		if !ok || !c.Open() || (len(args) == 0 && closedOrderNotDue(c, time.Now().Unix())) {
+		if !ok || !c.Open() || (len(args) == 0 && closedOrderNotDue(l, c, time.Now().Unix())) {
 			continue
 		}
 		settleOrderCall(cmd, l, c, device)
@@ -441,16 +443,16 @@ const closedOrderRecheck = int64(3600)
 
 // closedOrderWatched reports an answered order (open_order) whose row is
 // finished: a closed on-chain order kept only for late payments.
-func closedOrderWatched(c *ledger.Call) bool {
-	_, ok := closedOrderRow(c)
+func closedOrderWatched(l ledger.Store, c *ledger.Call) bool {
+	_, ok := closedOrderRow(l, c)
 	return ok
 }
 
-func closedOrderRow(c *ledger.Call) (ledger.Order, bool) {
+func closedOrderRow(l ledger.Store, c *ledger.Call) (ledger.Order, bool) {
 	if c.Method != nipcash.MethodCashOrder || c.State != ledger.CallOpenOrder {
 		return ledger.Order{}, false
 	}
-	o, ok, err := ledger.OrderForCall(c.CallID)
+	o, ok, err := l.OrderForCall(c.CallID)
 	if err != nil || !ok || o.FinishedAt == 0 {
 		return ledger.Order{}, false
 	}
@@ -460,8 +462,8 @@ func closedOrderRow(c *ledger.Call) (ledger.Order, bool) {
 // closedOrderNotDue reports a closed on-chain order looked up less than
 // closedOrderRecheck ago: `cash settle` and `cash order show` skip it until
 // then; naming the order still reads it at once.
-func closedOrderNotDue(c *ledger.Call, now int64) bool {
-	o, ok := closedOrderRow(c)
+func closedOrderNotDue(l ledger.Store, c *ledger.Call, now int64) bool {
+	o, ok := closedOrderRow(l, c)
 	return ok && o.CheckedAt != 0 && now-o.CheckedAt < closedOrderRecheck
 }
 
@@ -488,7 +490,7 @@ func endOrphanedPlacing(l ledger.Store, orders []ledger.Order) {
 // derived id, after the user agreed: same recipient, amount, payment and keys,
 // a fresh notify.
 func replaceOrderByUser(cmd *cobra.Command, l ledger.Store, id, device string) error {
-	o, ok, err := ledger.FindOrder(id)
+	o, ok, err := l.FindOrder(id)
 	if err != nil || !ok {
 		return output.NotFoundError(cmd, id, fmt.Errorf("no order %q", id))
 	}
@@ -565,7 +567,7 @@ func replaceOrderByUser(cmd *cobra.Command, l ledger.Store, id, device string) e
 		closeCall(l, parent, ledger.CallNotApplied, "not placed again")
 		o.State, o.FinishedAt, o.CheckedAt = ledger.OrderNotPlaced, time.Now().Unix(), time.Now().Unix()
 		_ = l.Save()
-		_ = ledger.PutOrder(o)
+		_ = l.PutOrder(o)
 		return output.RuntimeError(cmd, fmt.Errorf("not placed again (%v); nothing was sent and nothing is owed — place a new order with `cashctl cash order place`", err))
 	}
 	parent.State, parent.Detail = ledger.CallReplaced, "replaced by call "+child.CallID
@@ -573,7 +575,7 @@ func replaceOrderByUser(cmd *cobra.Command, l ledger.Store, id, device string) e
 	if err != nil {
 		return placeErr(cmd, l, &j.ledgerJournal, err, "order")
 	}
-	fresh, _, _ := ledger.FindOrder(o.OrderID)
+	fresh, _, _ := l.FindOrder(o.OrderID)
 	if _, err := recordOrder(cmd, l, child, &fresh, order, time.Now().Unix()); err != nil {
 		return err
 	}

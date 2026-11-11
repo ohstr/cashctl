@@ -256,7 +256,7 @@ func runCashOrderPlace(cmd *cobra.Command, args []string) error {
 	}
 	crashpoint.Hit("calls.before_apply")
 	call := j.call()
-	o, _, _ := ledger.OrderForCall(call.CallID)
+	o, _, _ := l.OrderForCall(call.CallID)
 	if _, err := recordOrder(cmd, l, call, &o, order, time.Now().Unix()); err != nil {
 		return err
 	}
@@ -281,7 +281,7 @@ func (j *orderJournal) WriteAhead(ctx context.Context, calls []nipcash.PendingCa
 	}
 	callID := ledger.CallIDFor(calls[len(calls)-1].RequestID)
 	o := j.order
-	if existing, ok, _ := ledger.OrderForCall(callID); ok {
+	if existing, ok, _ := j.l.OrderForCall(callID); ok {
 		o = existing
 	} else if o.OrderID == "" {
 		o.OrderID = callID
@@ -294,11 +294,11 @@ func (j *orderJournal) WriteAhead(ctx context.Context, calls []nipcash.PendingCa
 	if err := j.ledgerJournal.WriteAhead(ctx, calls); err != nil {
 		return err
 	}
-	if got, ok, err := ledger.FindOrder(o.OrderID); err != nil || !ok || got.Notify != o.Notify || got.CallID != callID {
+	if got, ok, err := j.l.FindOrder(o.OrderID); err != nil || !ok || got.Notify != o.Notify || got.CallID != callID {
 		j.l.RemoveCall(callID)
 		_ = j.l.Save()
-		_ = ledger.DeleteOrder(o.OrderID)
-		return errors.New("cashctl.db: the order's write-ahead did not read back as written")
+		_ = j.l.DeleteOrder(o.OrderID)
+		return errors.New("the order's write-ahead did not read back as written")
 	}
 	j.order = o
 	return nil
@@ -306,12 +306,12 @@ func (j *orderJournal) WriteAhead(ctx context.Context, calls []nipcash.PendingCa
 
 // RecordAccepted keeps the relays that accepted the order, for its notices.
 func (j *orderJournal) RecordAccepted(_ context.Context, _ string, relays []string) error {
-	o, ok, err := ledger.FindOrder(j.order.OrderID)
+	o, ok, err := j.l.FindOrder(j.order.OrderID)
 	if err != nil || !ok {
 		return err
 	}
 	o.AcceptedRelays = relays
-	return ledger.PutOrder(o)
+	return j.l.PutOrder(o)
 }
 
 var _ nipcashclient.AcceptedRecorder = (*orderJournal)(nil)
