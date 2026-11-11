@@ -98,7 +98,32 @@ func Open(ctx context.Context, dir, userPriv, chain string) (*Pocket, error) {
 	return p, nil
 }
 
-// Close releases the event store (bbolt file lock) and the cache.
+// OpenLedgerOnly opens ONLY the decoded cache (pocket-cache.db, sqlite) for the
+// A′ ledger path — NOT the bbolt pocket.db event store. The ledger path
+// (LedgerStore: embed + sealed faithful tables in the cache) never touches the
+// event store, so opening pocket.db here would take its single-writer bbolt lock
+// for nothing and deadlock the nested ledger.Load() calls several command flows
+// make (withdraw/order). sqlite tolerates multiple connections per process, so a
+// cache-only open lets each (fresh) load succeed — matching the old file-based
+// ledger's per-call read. The pocket.db event store is opened separately, only by
+// the NIP-CP projection/sync/serve (later phases), never on the ledger path.
+func OpenLedgerOnly(dir, userPriv string) (*Pocket, error) {
+	userPub, err := utils.GetPublicKey(userPriv)
+	if err != nil {
+		return nil, fmt.Errorf("pocket: user key: %w", err)
+	}
+	cache, err := OpenCache(filepath.Join(dir, "pocket-cache.db"))
+	if err != nil {
+		return nil, err
+	}
+	// Store/Journal are nil: the ledger path uses only the cache. Close() and the
+	// LedgerStore tolerate a nil Store (the rebuild-from-store path, which needs
+	// pocket.db, is not reachable on the ledger path).
+	return &Pocket{Cache: cache, userPriv: userPriv, userPub: userPub}, nil
+}
+
+// Close releases the event store (bbolt file lock) and the cache. Store is nil on
+// the ledger-only path (OpenLedgerOnly); the nil check makes Close safe there.
 func (p *Pocket) Close() {
 	if p.Store != nil {
 		p.Store.Close()

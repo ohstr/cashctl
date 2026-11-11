@@ -239,7 +239,7 @@ func quoteWithdrawal(cmd *cobra.Command, raw string, print bool) (*ledger.Entry,
 	if err != nil {
 		return nil, nil, "", err
 	}
-	l, err := ledger.Load()
+	l, err := loadStore(cmd)
 	if err != nil {
 		return nil, nil, "", output.RuntimeError(cmd, err)
 	}
@@ -519,7 +519,7 @@ func runCashWithdrawSend(cmd *cobra.Command, args []string) error {
 		if !ok || stored.Used || time.Now().Unix()-stored.CreatedAt > ledger.QuoteMaxAge {
 			return output.NotFoundError(cmd, quoteHandle, errors.New("no usable quote by that name (used, superseded or older than a day): quote again"))
 		}
-		l, err := ledger.Load()
+		l, err := loadStore(cmd)
 		if err != nil {
 			return output.RuntimeError(cmd, err)
 		}
@@ -683,7 +683,7 @@ var _ nipcashclient.AcceptedRecorder = (*withdrawJournal)(nil)
 
 // sendWithdrawal places cash_withdraw for the confirmed quote q of bill e.
 func sendWithdrawal(cmd *cobra.Command, e *ledger.Entry, q *nipcash.WithdrawQuote, handle string) error {
-	l, err := ledger.Load()
+	l, err := loadStore(cmd)
 	if err != nil {
 		return output.RuntimeError(cmd, err)
 	}
@@ -759,7 +759,7 @@ func sendWithdrawal(cmd *cobra.Command, e *ledger.Entry, q *nipcash.WithdrawQuot
 			}
 			// Confirm with the Hub that nothing moved before reporting it.
 			waitFn(time.Until(time.Unix(c.Deadline+1, 0)))
-			l2, lErr := ledger.Load()
+			l2, lErr := loadStore(cmd)
 			if lErr != nil {
 				return pErr
 			}

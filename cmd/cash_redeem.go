@@ -104,7 +104,7 @@ func runCashRedeem(cmd *cobra.Command, args []string) error {
 		intoValue = conn
 	}
 
-	l, err := ledger.Load()
+	l, err := loadStore(cmd)
 	if err != nil {
 		return output.RuntimeError(cmd, err)
 	}
@@ -1635,7 +1635,7 @@ func quoteHeldCandidate(cmd *cobra.Command, entry *ledger.Entry) (redeemQuote, e
 		return redeemQuote{}, err
 	}
 	defer client.Close()
-	l, err := ledger.Load()
+	l, err := loadStore(cmd)
 	if err != nil {
 		return redeemQuote{}, err
 	}

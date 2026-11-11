@@ -222,7 +222,7 @@ func runCashConsolidate(cmd *cobra.Command, args []string) error {
 	toFlag, _ := cmd.Flags().GetString("to")
 	yesFlag, _ := cmd.Flags().GetBool("yes")
 
-	l, err := ledger.Load()
+	l, err := loadStore(cmd)
 	if err != nil {
 		return output.RuntimeError(cmd, err)
 	}

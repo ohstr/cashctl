@@ -116,7 +116,7 @@ pending_joins and pending_merge.`,
 			if err != nil {
 				return output.RuntimeError(cmd, err)
 			}
-			l, err := ledger.Load()
+			l, err := loadStore(cmd)
 			if err != nil {
 				return output.RuntimeError(cmd, err)
 			}
@@ -248,7 +248,7 @@ unless --show-secrets.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			jsonMode, _ := cmd.Flags().GetBool("json")
 			showSecrets, _ := cmd.Flags().GetBool("show-secrets")
-			l, err := ledger.Load()
+			l, err := loadStore(cmd)
 			if err != nil {
 				return output.RuntimeError(cmd, err)
 			}

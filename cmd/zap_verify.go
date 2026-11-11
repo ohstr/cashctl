@@ -382,7 +382,7 @@ func receiveZap(cmd *cobra.Command, ev *nip01.Event, raw string) error {
 		}
 		approved = true
 	}
-	l, err := ledger.Load()
+	l, err := loadStore(cmd)
 	if err != nil {
 		return output.RuntimeError(cmd, err)
 	}

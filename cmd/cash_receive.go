@@ -198,7 +198,7 @@ func runCashReceive(cmd *cobra.Command, args []string) error {
 		return receiveConnectionKeyToken(cmd, input, tok)
 	}
 
-	l, err := ledger.Load()
+	l, err := loadStore(cmd)
 	if err != nil {
 		return output.RuntimeError(cmd, err)
 	}
@@ -334,7 +334,7 @@ func receiveConnectionKeyToken(cmd *cobra.Command, input string, tok nipcash.Tok
 		return err
 	}
 
-	l, err := ledger.Load()
+	l, err := loadStore(cmd)
 	if err != nil {
 		return output.RuntimeError(cmd, err)
 	}

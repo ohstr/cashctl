@@ -26,6 +26,64 @@ func openStore(t *testing.T) *LedgerStore {
 	return s
 }
 
+// TestLedgerStoreNestedOpenNoDeadlock proves the decouple: the ledger path opens
+// ONLY pocket-cache.db (sqlite), never the single-writer bbolt pocket.db, so the
+// nested/overlapping OpenLedgerStore calls several command flows make
+// (withdraw: runCashWithdrawSend holds a load across quote/send; order:
+// watchOrder across mustCall) no longer deadlock. A store opened while another is
+// still open completes, sees the other's Saved state (a fresh per-call read,
+// matching the old file-based ledger — NOT a shared buffer), and both close
+// cleanly so a later open is not wedged by a leaked handle.
+func TestLedgerStoreNestedOpenNoDeadlock(t *testing.T) {
+	priv, _ := testKey(t)
+	dir := t.TempDir()
+	ctx := context.Background()
+
+	outer, err := OpenLedgerStore(ctx, dir, priv, "flokicoin")
+	if err != nil {
+		t.Fatalf("open outer: %v", err)
+	}
+	amt := uint64(4200)
+	tok := testmint.Bill(t, nipcash.Token{HRP: "lokicash", AttestedAmountMillis: &amt}, "")
+	w, err := billform.WalletPubkey(tok)
+	if err != nil {
+		t.Fatalf("wallet pubkey: %v", err)
+	}
+	if _, err := outer.Add(ledger.Entry{Token: tok, WalletPubkey: w, IdentityPubkey: w, AmountMillis: &amt, Status: ledger.StatusHeld}); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	if err := outer.Save(); err != nil {
+		t.Fatalf("save outer: %v", err)
+	}
+
+	// Inner open WHILE outer is still open — the pattern that would deadlock on
+	// bbolt's single-writer lock. Must complete and see outer's Saved bill.
+	inner, err := OpenLedgerStore(ctx, dir, priv, "flokicoin")
+	if err != nil {
+		t.Fatalf("nested open deadlocked/failed (decouple regression?): %v", err)
+	}
+	if len(inner.Held()) != 1 {
+		t.Fatalf("inner sees %d held, want 1 (outer's Saved bill)", len(inner.Held()))
+	}
+	if err := inner.Close(); err != nil {
+		t.Fatalf("close inner: %v", err)
+	}
+	if err := outer.Close(); err != nil {
+		t.Fatalf("close outer: %v", err)
+	}
+
+	// Reopen after both closed — proves Close released the handle (no wedge) and
+	// the bill persisted.
+	reopen, err := OpenLedgerStore(ctx, dir, priv, "flokicoin")
+	if err != nil {
+		t.Fatalf("reopen after close (leaked handle?): %v", err)
+	}
+	t.Cleanup(func() { _ = reopen.Close() })
+	if len(reopen.Held()) != 1 {
+		t.Fatalf("reopen sees %d held, want 1", len(reopen.Held()))
+	}
+}
+
 // TestLedgerStoreReloadByteIdentical is the A' core: the embedded in-memory
 // ledger.Ledger is mutated through its real methods (Add/AddCall/AddHandoff),
 // Save persists it to the NIP-44-sealed faithful tables, and a reopen

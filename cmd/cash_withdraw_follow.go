@@ -216,7 +216,7 @@ func showWithdrawals(cmd *cobra.Command, ids []string, local bool) error {
 		pick = append(pick, w)
 	}
 	if !local {
-		l, err := ledger.Load()
+		l, err := loadStore(cmd)
 		if err != nil {
 			return output.RuntimeError(cmd, err)
 		}
@@ -303,7 +303,7 @@ func runCashWithdrawCancel(cmd *cobra.Command, args []string) error {
 		output.Println("Cancelled.")
 		return nil
 	}
-	l, err := ledger.Load()
+	l, err := loadStore(cmd)
 	if err != nil {
 		return output.RuntimeError(cmd, err)
 	}
@@ -355,7 +355,7 @@ func newCashWithdrawSettleCmd() *cobra.Command {
 			if err := rejectConnectionFlag(cmd); err != nil {
 				return err
 			}
-			l, err := ledger.Load()
+			l, err := loadStore(cmd)
 			if err != nil {
 				return output.RuntimeError(cmd, err)
 			}

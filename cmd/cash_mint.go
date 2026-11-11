@@ -145,7 +145,7 @@ func runCashMint(cmd *cobra.Command, args []string) error {
 		return output.RuntimeError(cmd, errors.New("this Hub does not offer cash_lookup, so a lost reply could never be recovered; cashctl won't mint on it. Nothing was sent"))
 	}
 
-	l, err := ledger.Load()
+	l, err := loadStore(cmd)
 	if err != nil {
 		return output.RuntimeError(cmd, err)
 	}

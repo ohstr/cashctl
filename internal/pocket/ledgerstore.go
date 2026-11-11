@@ -48,7 +48,11 @@ var _ ledger.Store = (*LedgerStore)(nil)
 // the wallet key (the pocket is encrypted to it); chain is the default chain
 // stamped on a call that carries none.
 func OpenLedgerStore(ctx context.Context, dir, userPriv, chain string) (*LedgerStore, error) {
-	p, err := Open(ctx, dir, userPriv, chain)
+	// Cache-only (sqlite): the A′ ledger path never touches the bbolt pocket.db
+	// event store, so opening it would take its single-writer lock for nothing and
+	// deadlock the nested loads withdraw/order make. ctx/chain are accepted for
+	// signature stability but unused here (no event store, no journal).
+	p, err := OpenLedgerOnly(dir, userPriv)
 	if err != nil {
 		return nil, err
 	}

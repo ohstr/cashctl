@@ -884,7 +884,7 @@ func runCashTransfer(cmd *cobra.Command, args []string) error {
 		output.Notef(jsonMode, "  resolves to: %s", target.Resolved)
 	}
 
-	l, err := ledger.Load()
+	l, err := loadStore(cmd)
 	if err != nil {
 		return output.RuntimeError(cmd, err)
 	}

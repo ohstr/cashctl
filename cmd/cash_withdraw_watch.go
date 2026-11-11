@@ -59,7 +59,7 @@ func watchWithdrawal(cmd *cobra.Command, id string, timeout time.Duration) error
 	device, _ := deviceIDFn()
 	received := ""
 	read := func() bool {
-		l, err := ledger.Load()
+		l, err := loadStore(cmd)
 		if err != nil {
 			return false
 		}
@@ -76,7 +76,7 @@ func watchWithdrawal(cmd *cobra.Command, id string, timeout time.Duration) error
 	done := read()
 	var notices <-chan struct{}
 	if !done && w.Notify != "" {
-		if l, err := ledger.Load(); err == nil {
+		if l, err := loadStore(cmd); err == nil {
 			if c, ok := l.FindCall(w.CallID); ok {
 				if bill, err := dialWithdrawFn(ctx, c.TargetCredential); err == nil {
 					defer bill.Close()
@@ -111,7 +111,7 @@ func watchWithdrawal(cmd *cobra.Command, id string, timeout time.Duration) error
 		done = read()
 	}
 	w.ReceivedAt = received
-	if l, err := ledger.Load(); err == nil {
+	if l, err := loadStore(cmd); err == nil {
 		if c, ok := l.FindCall(w.CallID); ok && c.Open() && c.State != ledger.CallOpenWithdraw {
 			return output.IndeterminateError(cmd, id, errors.New("the withdrawal's placement still has no answer; nothing was resent — run `cashctl cash withdraw settle`"))
 		}

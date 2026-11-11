@@ -44,7 +44,7 @@ func runWalletProtect(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	jsonMode, _ := cmd.Flags().GetBool("json")
-	l, err := ledger.Load()
+	l, err := loadStore(cmd)
 	if err != nil {
 		return output.RuntimeError(cmd, err)
 	}

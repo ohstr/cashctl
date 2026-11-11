@@ -148,7 +148,7 @@ func showOrders(cmd *cobra.Command, ids []string, local bool) error {
 		}
 	}
 	if !local {
-		l, err := ledger.Load()
+		l, err := loadStore(cmd)
 		if err != nil {
 			return output.RuntimeError(cmd, err)
 		}
@@ -261,7 +261,7 @@ func watchOrder(cmd *cobra.Command, id string, timeout time.Duration) error {
 	defer cancel()
 	device, _ := deviceIDFn()
 	read := func() {
-		l, err := ledger.Load()
+		l, err := loadStore(cmd)
 		if err != nil {
 			return
 		}
@@ -277,7 +277,7 @@ func watchOrder(cmd *cobra.Command, id string, timeout time.Duration) error {
 		every = orderOnchainPollEvery
 	}
 	if o.FinishedAt == 0 {
-		if c, ok := mustCall(o.CallID); ok {
+		if c, ok := mustCall(cmd, o.CallID); ok {
 			ch, closeFn, err := watchNoticesFn(ctx, c.TargetCredential, o.Notify, o.AcceptedRelays)
 			if err == nil {
 				notices = ch
@@ -318,17 +318,18 @@ func watchOrder(cmd *cobra.Command, id string, timeout time.Duration) error {
 		read()
 	}
 done:
-	if c, ok := mustCall(o.CallID); ok && c.Open() && c.State != ledger.CallOpenOrder {
+	if c, ok := mustCall(cmd, o.CallID); ok && c.Open() && c.State != ledger.CallOpenOrder {
 		return output.IndeterminateError(cmd, id, errors.New("the order's placement has no answer yet; nothing was resent — run `cashctl cash order settle`"))
 	}
 	return printOrderState(cmd, o)
 }
 
-func mustCall(id string) (*ledger.Call, bool) {
-	l, err := ledger.Load()
+func mustCall(cmd *cobra.Command, id string) (*ledger.Call, bool) {
+	l, err := loadStore(cmd)
 	if err != nil {
 		return nil, false
 	}
+	defer l.Close()
 	return l.FindCall(id)
 }
 
@@ -398,7 +399,7 @@ func runCashOrderSettle(cmd *cobra.Command, args []string) error {
 	if err := rejectConnectionFlag(cmd); err != nil {
 		return err
 	}
-	l, err := ledger.Load()
+	l, err := loadStore(cmd)
 	if err != nil {
 		return output.RuntimeError(cmd, err)
 	}

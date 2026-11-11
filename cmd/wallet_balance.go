@@ -58,7 +58,7 @@ func runWalletBalance(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return output.RuntimeError(cmd, err)
 	}
-	l, err := ledger.Load()
+	l, err := loadStore(cmd)
 	if err != nil {
 		return output.RuntimeError(cmd, err)
 	}
@@ -208,7 +208,7 @@ func runWalletBalanceFrom(cmd *cobra.Command, from string, jsonMode bool) error 
 		output.Printf("%s\n", output.FormatAmount(amount))
 		return nil
 	}
-	l, err := ledger.Load()
+	l, err := loadStore(cmd)
 	if err != nil {
 		return output.RuntimeError(cmd, err)
 	}

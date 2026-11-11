@@ -64,7 +64,7 @@ func runWalletImportCashkit(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	l, err := ledger.Load()
+	l, err := loadStore(cmd)
 	if err != nil {
 		return output.RuntimeError(cmd, err)
 	}

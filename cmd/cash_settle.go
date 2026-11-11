@@ -57,7 +57,7 @@ func runCashSettle(cmd *cobra.Command, _ []string) error {
 	wait, _ := cmd.Flags().GetBool("wait")
 	closeID, _ := cmd.Flags().GetString("close")
 	replaceID, _ := cmd.Flags().GetString("replace")
-	l, err := ledger.Load()
+	l, err := loadStore(cmd)
 	if err != nil {
 		return output.RuntimeError(cmd, err)
 	}
