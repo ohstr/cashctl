@@ -51,7 +51,7 @@ func isCashNote(e *ledger.Entry) bool {
 // moveCash places one whole-amount cash_transfer of entry to target, spent with
 // cred, as a call written ahead for purpose. On success the caller applies the
 // result and closes the returned call before its Save.
-func moveCash(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entry, cred nipcash.Credential, target nipcash.Target, purpose string) (*nipcash.CashTransferResult, *ledger.Call, error) {
+func moveCash(cmd *cobra.Command, l ledger.Store, entry *ledger.Entry, cred nipcash.Credential, target nipcash.Target, purpose string) (*nipcash.CashTransferResult, *ledger.Call, error) {
 	if entry.AmountMillis == nil {
 		return nil, nil, output.RuntimeError(cmd, fmt.Errorf("%s has no known amount", entry.ID))
 	}
@@ -73,7 +73,7 @@ func moveCash(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entry, cred ni
 // the already-moved ones back to fresh cash notes and returns the refusal; no
 // answer leaves that note's move open (its key kept on the entry, looked up
 // later) and returns the indeterminate error.
-func moveCashNotesToKey(cmd *cobra.Command, l *ledger.Ledger, ids []string, priv, pub string) ([]string, error) {
+func moveCashNotesToKey(cmd *cobra.Command, l ledger.Store, ids []string, priv, pub string) ([]string, error) {
 	// Refused before any note is touched: a note whose earlier move is still
 	// open keeps that move's key, which may be all that spends it now.
 	if err := refuseLocked(cmd, l, ids); err != nil {
@@ -159,7 +159,7 @@ func isDefiniteRefusal(err error) bool {
 
 // undoMoves moves the notes of a refused merge back to fresh cash notes. Its
 // error, when not nil, carries the recovery of a note moved but not saved.
-func undoMoves(cmd *cobra.Command, l *ledger.Ledger, ids []string) error {
+func undoMoves(cmd *cobra.Command, l ledger.Store, ids []string) error {
 	converted, unsaved := toCashNotes(cmd, l, ids)
 	if len(unsaved) > 0 {
 		return unsavedNotesError(cmd, unsaved)
@@ -204,7 +204,7 @@ func unsavedNotesError(cmd *cobra.Command, unsaved []string) error {
 // Returns the ids it converted, and the <token>#<secret> of each note the Hub
 // moved but whose save then failed: disk still names the bill's old state, so
 // that string is the only way back to it once the process exits.
-func toCashNotes(cmd *cobra.Command, l *ledger.Ledger, ids []string) (converted, unsaved []string) {
+func toCashNotes(cmd *cobra.Command, l ledger.Store, ids []string) (converted, unsaved []string) {
 	for _, id := range ids {
 		e, ok := l.Find(id)
 		if !ok || e.ThrowawayKey == "" || e.Status != ledger.StatusHeld || e.PendingThrowawayKey != "" {
@@ -236,9 +236,9 @@ func toCashNotes(cmd *cobra.Command, l *ledger.Ledger, ids []string) (converted,
 
 // leftoverKeyBills is every held bill still on a throwaway key with no move
 // open: something a merge left behind, to be turned back into a cash note.
-func leftoverKeyBills(l *ledger.Ledger) []string {
+func leftoverKeyBills(l ledger.Store) []string {
 	var ids []string
-	for _, e := range l.Entries {
+	for _, e := range l.AllEntries() {
 		if e.Status != ledger.StatusHeld || e.ThrowawayKey == "" || e.PendingThrowawayKey != "" {
 			continue
 		}
@@ -293,7 +293,7 @@ func probeAmount(e *ledger.Entry, cred nipcash.Credential) (uint64, bool, error)
 // that are due are looked up and finished (settleCalls), then merge moves are
 // settled. Its error, when not nil, carries the recovery of a note moved but
 // not saved.
-func settleBeforeSpend(cmd *cobra.Command, l *ledger.Ledger) error {
+func settleBeforeSpend(cmd *cobra.Command, l ledger.Store) error {
 	settleCalls(cmd, l, settleOptions{})
 	return settlePendingMoves(cmd, l)
 }
@@ -304,10 +304,10 @@ func settleBeforeSpend(cmd *cobra.Command, l *ledger.Ledger) error {
 // resends anything. Then turns whatever a merge left on a throwaway key back into
 // cash notes: no merge is in progress when a command starts. Its error, when not
 // nil, carries the recovery of a note moved but not saved.
-func settlePendingMoves(cmd *cobra.Command, l *ledger.Ledger) error {
+func settlePendingMoves(cmd *cobra.Command, l ledger.Store) error {
 	changed := false
-	for i := range l.Entries {
-		e := &l.Entries[i]
+	for i := range l.AllEntries() {
+		e := &l.AllEntries()[i]
 		if e.Status != ledger.StatusHeld {
 			continue
 		}
@@ -356,7 +356,7 @@ func settlePendingKey(e *ledger.Entry, open bool) bool {
 
 // pendingMerge summarizes held notes moved for a merge that has not finished:
 // how many, and the earliest deadline among them (nil when none is known).
-func pendingMerge(l *ledger.Ledger) (count int, earliest *int64) {
+func pendingMerge(l ledger.Store) (count int, earliest *int64) {
 	for _, e := range l.Held() {
 		if e.ThrowawayKey == "" && e.PendingThrowawayKey == "" {
 			continue
@@ -368,7 +368,7 @@ func pendingMerge(l *ledger.Ledger) (count int, earliest *int64) {
 }
 
 // pendingMergeJSON is pendingMerge for --json: null when nothing is mid-merge.
-func pendingMergeJSON(l *ledger.Ledger) any {
+func pendingMergeJSON(l ledger.Store) any {
 	n, earliest := pendingMerge(l)
 	if n == 0 {
 		return nil
@@ -378,7 +378,7 @@ func pendingMergeJSON(l *ledger.Ledger) any {
 
 // printPendingMerge tells the holder about notes left on a throwaway key by a
 // merge that has not finished, and how to finish it.
-func printPendingMerge(l *ledger.Ledger) {
+func printPendingMerge(l ledger.Store) {
 	n, earliest := pendingMerge(l)
 	if n == 0 {
 		return
@@ -392,7 +392,7 @@ func printPendingMerge(l *ledger.Ledger) {
 
 // sendFromEntry places one cash_transfer from a held bill as a call written
 // ahead for purpose.
-func sendFromEntry(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entry, params nipcash.CashTransferParams, purpose string) (*nipcash.CashTransferResult, *ledger.Call, error) {
+func sendFromEntry(cmd *cobra.Command, l ledger.Store, entry *ledger.Entry, params nipcash.CashTransferParams, purpose string) (*nipcash.CashTransferResult, *ledger.Call, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	caller, err := dialCallerFn(ctx, entry.Token)
@@ -414,7 +414,7 @@ func sendFromEntry(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entry, pa
 // the two leaves a recoverable bill: on a refused send a key bill turns back into
 // a cash note and an identity bill simply stays held; an unanswered one stays
 // held for `cash status` (a key bill is settled by the next command).
-func mergeThenSend(cmd *cobra.Command, l *ledger.Ledger, tokens []string, sources []nipcash.Source, sourceIDs []string,
+func mergeThenSend(cmd *cobra.Command, l ledger.Store, tokens []string, sources []nipcash.Source, sourceIDs []string,
 	sum, sendAmount uint64, priv, pub, toValue string, target credential.ResolvedTarget) error {
 	jsonMode, _ := cmd.Flags().GetBool("json")
 	limit := max(hubConsolidateCapFn(tokens[0]), 2)

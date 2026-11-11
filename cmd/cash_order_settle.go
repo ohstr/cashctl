@@ -29,7 +29,7 @@ func orderPending(c *ledger.Call, o ledger.Order) nipcash.PendingCall {
 // settleOrderCall reads one order and records what the Hub says: an order as it
 // stands is checked and applied (bills kept or handed out), finished or ended
 // unpaid closes it; a lost placement the Hub never saw waits for --replace.
-func settleOrderCall(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, device string) string {
+func settleOrderCall(cmd *cobra.Command, l ledger.Store, c *ledger.Call, device string) string {
 	o, ok, err := ledger.OrderForCall(c.CallID)
 	if err != nil || !ok {
 		return "no order record"
@@ -467,7 +467,7 @@ func closedOrderNotDue(c *ledger.Call, now int64) bool {
 // endOrphanedPlacing ends every `placing` row whose call already closed not
 // applied: a crash between the call's close and the row's write, or a store
 // written before both went into one save (R2-C2).
-func endOrphanedPlacing(l *ledger.Ledger, orders []ledger.Order) {
+func endOrphanedPlacing(l ledger.Store, orders []ledger.Order) {
 	staged := false
 	for _, o := range orders {
 		if o.FinishedAt != 0 || o.State != ledger.OrderPlacing {
@@ -486,7 +486,7 @@ func endOrphanedPlacing(l *ledger.Ledger, orders []ledger.Order) {
 // replaceOrderByUser places again an order the Hub says it never saw, under the
 // derived id, after the user agreed: same recipient, amount, payment and keys,
 // a fresh notify.
-func replaceOrderByUser(cmd *cobra.Command, l *ledger.Ledger, id, device string) error {
+func replaceOrderByUser(cmd *cobra.Command, l ledger.Store, id, device string) error {
 	o, ok, err := ledger.FindOrder(id)
 	if err != nil || !ok {
 		return output.NotFoundError(cmd, id, fmt.Errorf("no order %q", id))

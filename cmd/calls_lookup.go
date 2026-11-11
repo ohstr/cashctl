@@ -147,7 +147,7 @@ func callTarget(c *ledger.Call, req requestShape) (nipcash.Target, error) {
 }
 
 // transferParams rebuilds a cash_transfer call's params.
-func transferParams(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call) (nipcash.CashTransferParams, error) {
+func transferParams(cmd *cobra.Command, l ledger.Store, c *ledger.Call) (nipcash.CashTransferParams, error) {
 	req, err := requestOf(c)
 	if err != nil {
 		return nipcash.CashTransferParams{}, err
@@ -181,7 +181,7 @@ func transferParams(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call) (nipca
 }
 
 // consolidateParams rebuilds a cash_consolidate call's params, in the order sent.
-func consolidateParams(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call) (nipcash.CashConsolidateParams, error) {
+func consolidateParams(cmd *cobra.Command, l ledger.Store, c *ledger.Call) (nipcash.CashConsolidateParams, error) {
 	req, err := requestOf(c)
 	if err != nil {
 		return nipcash.CashConsolidateParams{}, err
@@ -213,7 +213,7 @@ func consolidateParams(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call) (ni
 }
 
 // lookupCallFn looks c up. Swapped in tests.
-var lookupCallFn = func(ctx context.Context, cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call) (nipcashclient.LookupOutcome, error) {
+var lookupCallFn = func(ctx context.Context, cmd *cobra.Command, l ledger.Store, c *ledger.Call) (nipcashclient.LookupOutcome, error) {
 	if c.Method == nipcash.MethodMintCash {
 		// Looked up over the Hub connection it was placed on, signed with its key.
 		hub, err := dialCashHubFn(ctx, c.TargetCredential)
@@ -267,11 +267,11 @@ func due(c *ledger.Call, now int64) bool {
 // settleCalls looks up the open calls that are due and acts on each answer,
 // saving after each. Never resends a call under its own id; a re-placement goes
 // under the derived id.
-func settleCalls(cmd *cobra.Command, l *ledger.Ledger, opts settleOptions) []settledCall {
+func settleCalls(cmd *cobra.Command, l ledger.Store, opts settleOptions) []settledCall {
 	device, _ := deviceIDFn()
 	var out []settledCall
 	var ids []string
-	for _, c := range l.Calls {
+	for _, c := range l.AllCalls() {
 		ids = append(ids, c.CallID)
 	}
 	for _, id := range ids {
@@ -302,7 +302,7 @@ func settleCalls(cmd *cobra.Command, l *ledger.Ledger, opts settleOptions) []set
 }
 
 // settleOne asks about one call and records what the answer means.
-func settleOne(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, device string) string {
+func settleOne(cmd *cobra.Command, l ledger.Store, c *ledger.Call, device string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	id := c.CallID
@@ -329,7 +329,7 @@ func settleOne(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, device stri
 }
 
 // applyAction records a Recover action on c.
-func applyAction(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, action nipcashclient.Action, device string) string {
+func applyAction(cmd *cobra.Command, l ledger.Store, c *ledger.Call, action nipcashclient.Action, device string) string {
 	now := time.Now().Unix()
 	c.UpdatedAt = now
 	summary := ""
@@ -389,7 +389,7 @@ func applyAction(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, action ni
 // releaseZapClaim frees the zap bill of a claim settle closed with nothing
 // moved (or whose record the Hub no longer keeps): the entry leaves
 // zap_claiming, so receiving the zap again reads its Hub afresh (Z-2).
-func releaseZapClaim(l *ledger.Ledger, c *ledger.Call) {
+func releaseZapClaim(l ledger.Store, c *ledger.Call) {
 	if c.Purpose != purposeZapClaim {
 		return
 	}
@@ -403,13 +403,13 @@ func releaseZapClaim(l *ledger.Ledger, c *ledger.Call) {
 // replaceCall re-places c under its derived id after the Hub said it never saw
 // it, with the same target, amounts and secrets, fresh proofs and a new
 // deadline; then c is replaced and the derived call carries on.
-func replaceCall(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call) string {
+func replaceCall(cmd *cobra.Command, l ledger.Store, c *ledger.Call) string {
 	return replaceCallConfirmed(cmd, l, c, false)
 }
 
 // replaceCallConfirmed is replaceCall; confirmed is the user's explicit
 // `cash settle --replace`, which a mint needs.
-func replaceCallConfirmed(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, confirmed bool) string {
+func replaceCallConfirmed(cmd *cobra.Command, l ledger.Store, c *ledger.Call, confirmed bool) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	j := &ledgerJournal{l: l, spec: specOf(c)}
@@ -591,7 +591,7 @@ func replaceCallConfirmed(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, 
 // call's target bill (a consolidate's wire sources[0], NIP-CASH §Answer or
 // Omit), looked up among its sources by wallet, or "" when that bill is not a
 // ledger entry. Other methods name their one source first.
-func tombstoneEntryID(l *ledger.Ledger, c *ledger.Call) string {
+func tombstoneEntryID(l ledger.Store, c *ledger.Call) string {
 	if c == nil || len(c.SourceEntryIDs) == 0 {
 		return ""
 	}
@@ -605,7 +605,7 @@ func tombstoneEntryID(l *ledger.Ledger, c *ledger.Call) string {
 }
 
 // applyCallResult applies the result a lookup returned for c.
-func applyCallResult(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, raw json.RawMessage) (string, error) {
+func applyCallResult(cmd *cobra.Command, l ledger.Store, c *ledger.Call, raw json.RawMessage) (string, error) {
 	if c.Method == nipcash.MethodMintCash {
 		return applyMintLookup(cmd, l, c, raw)
 	}
@@ -632,7 +632,7 @@ func applyCallResult(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, raw j
 }
 
 // applyTransferResult records a cash_transfer that is known to have happened.
-func applyTransferResult(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, res *nipcash.CashTransferResult) (string, error) {
+func applyTransferResult(cmd *cobra.Command, l ledger.Store, c *ledger.Call, res *nipcash.CashTransferResult) (string, error) {
 	if len(c.SourceEntryIDs) == 0 {
 		return "", fmt.Errorf("call %s names no source", c.CallID)
 	}
@@ -721,7 +721,7 @@ func applyTransferResult(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, r
 
 // applyConsolidateResult records a cash_consolidate that is known to have
 // happened.
-func applyConsolidateResult(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, res *nipcash.CashConsolidateResult) (string, error) {
+func applyConsolidateResult(cmd *cobra.Command, l ledger.Store, c *ledger.Call, res *nipcash.CashConsolidateResult) (string, error) {
 	if res.NewWalletToken == "" && res.NewWalletTombstone == nil {
 		return "", fmt.Errorf("call %s: the merged bill carries no token", c.CallID)
 	}

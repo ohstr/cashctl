@@ -46,7 +46,7 @@ func withLookup(t *testing.T, fn func(c *ledger.Call) (nipcashclient.LookupOutco
 	n := 0
 	orig := lookupCallFn
 	t.Cleanup(func() { lookupCallFn = orig })
-	lookupCallFn = func(_ context.Context, _ *cobra.Command, _ *ledger.Ledger, c *ledger.Call) (nipcashclient.LookupOutcome, error) {
+	lookupCallFn = func(_ context.Context, _ *cobra.Command, _ ledger.Store, c *ledger.Call) (nipcashclient.LookupOutcome, error) {
 		n++
 		return fn(c)
 	}

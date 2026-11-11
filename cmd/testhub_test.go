@@ -433,9 +433,9 @@ func fakeAsReplacement(j nipcashclient.Journal, pc nipcash.PendingCall) nipcash.
 	var l *ledger.Ledger
 	switch jj := j.(type) {
 	case *ledgerJournal:
-		l = jj.l
+		l = jj.l.(*ledger.Ledger)
 	case *withdrawJournal:
-		l = jj.l
+		l = jj.l.(*ledger.Ledger)
 	}
 	if l == nil || pc.DerivedFrom != "" {
 		return pc

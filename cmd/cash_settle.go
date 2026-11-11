@@ -91,9 +91,9 @@ func runCashSettle(cmd *cobra.Command, _ []string) error {
 }
 
 // nextDue is when the earliest open call becomes worth asking about again.
-func nextDue(l *ledger.Ledger) (time.Time, bool) {
+func nextDue(l ledger.Store) (time.Time, bool) {
 	var next int64
-	for _, c := range l.Calls {
+	for _, c := range l.AllCalls() {
 		if !c.Open() || c.State == ledger.CallExpired || c.State == ledger.CallStuck || c.State == ledger.CallOpenOrder {
 			continue
 		}
@@ -152,7 +152,7 @@ func callRecovery(c *ledger.Call) string {
 
 // reportSettle prints every call looked at and every call still open, and exits
 // 8 while anything placed from this file is still open.
-func reportSettle(cmd *cobra.Command, l *ledger.Ledger, settled []settledCall, joins []joinSettleRow, joinsOpen bool, redeems []redeemingSettle, redeemsOpen bool, device string, jsonMode bool) error {
+func reportSettle(cmd *cobra.Command, l ledger.Store, settled []settledCall, joins []joinSettleRow, joinsOpen bool, redeems []redeemingSettle, redeemsOpen bool, device string, jsonMode bool) error {
 	rows := map[string]settleRow{}
 	var order []string
 	for _, s := range settled {
@@ -162,7 +162,7 @@ func reportSettle(cmd *cobra.Command, l *ledger.Ledger, settled []settledCall, j
 		rows[s.Call.CallID] = rowOf(s.Call, device, s.Summary)
 	}
 	stillOpen := false
-	for _, c := range l.Calls {
+	for _, c := range l.AllCalls() {
 		if c.Open() {
 			if _, seen := rows[c.CallID]; !seen {
 				order = append(order, c.CallID)
@@ -242,7 +242,7 @@ func refuseUserClose(cmd *cobra.Command, c *ledger.Call) error {
 	return nil
 }
 
-func closeCallByUser(cmd *cobra.Command, l *ledger.Ledger, id, device string, jsonMode bool) error {
+func closeCallByUser(cmd *cobra.Command, l ledger.Store, id, device string, jsonMode bool) error {
 	c, ok := l.FindCall(id)
 	if !ok {
 		return output.NotFoundError(cmd, id, fmt.Errorf("no call %q", id))
@@ -282,7 +282,7 @@ func closeCallByUser(cmd *cobra.Command, l *ledger.Ledger, id, device string, js
 // replaceMintByUser re-places a mint the Hub said it never saw, under its
 // derived id, after the user asked for it (`cash settle --replace`): a mint is
 // never placed again on cashctl's own initiative.
-func replaceMintByUser(cmd *cobra.Command, l *ledger.Ledger, id, device string, jsonMode bool) error {
+func replaceMintByUser(cmd *cobra.Command, l ledger.Store, id, device string, jsonMode bool) error {
 	c, ok := l.FindCall(id)
 	if !ok {
 		return output.NotFoundError(cmd, id, fmt.Errorf("no call %q", id))

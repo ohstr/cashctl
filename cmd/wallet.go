@@ -257,23 +257,23 @@ unless --show-secrets.`,
 				return nil
 			})
 			if jsonMode {
-				handoffs := make([]map[string]any, 0, len(l.Handoffs))
-				for _, h := range l.Handoffs {
+				handoffs := make([]map[string]any, 0, len(l.AllHandoffs()))
+				for _, h := range l.AllHandoffs() {
 					handoffs = append(handoffs, handoffJSON(h, showSecrets))
 				}
-				output.PrintJSON(map[string]any{"history": output.NonNil(l.History), "handoffs": handoffs})
+				output.PrintJSON(map[string]any{"history": output.NonNil(l.AllHistory()), "handoffs": handoffs})
 				return nil
 			}
-			if len(l.History) == 0 && len(l.Handoffs) == 0 {
+			if len(l.AllHistory()) == 0 && len(l.AllHandoffs()) == 0 {
 				output.Println("No local action history yet.")
 				return nil
 			}
-			for _, h := range l.History {
+			for _, h := range l.AllHistory() {
 				output.Printf("%s  %-12s %s\n", h.At, h.Action, h.Detail)
 			}
-			if len(l.Handoffs) > 0 {
+			if len(l.AllHandoffs()) > 0 {
 				output.Println("\nHanded out:")
-				for _, h := range l.Handoffs {
+				for _, h := range l.AllHandoffs() {
 					shown, _ := maskedHandoff(h, showSecrets)
 					output.Printf("  %s  %s to %s  [%s]\n    %s\n", h.At, output.FormatAmount(int64(h.AmountMillis)), output.Sanitize(h.Target), h.Status, shown)
 				}

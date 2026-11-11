@@ -118,7 +118,7 @@ func errRedeemInFlight(cmd *cobra.Command, id string) error {
 
 // markRedeeming records e as redeeming into invoice (into is the --into
 // connection, "" for --invoice).
-func markRedeeming(l *ledger.Ledger, e *ledger.Entry, invoice, into string) {
+func markRedeeming(l ledger.Store, e *ledger.Entry, invoice, into string) {
 	e.Status = ledger.StatusRedeeming
 	e.RedeemPaymentHash, _ = bolt11PaymentHash(invoice)
 	if exp, err := bolt11ExpiresAt(invoice); err == nil {
@@ -138,7 +138,7 @@ func clearRedeem(e *ledger.Entry) {
 
 // endRedeemGone records e's bill destroyed: redeemed when the tombstone says
 // so, else the tombstone's state (stateForResult).
-func endRedeemGone(l *ledger.Ledger, e *ledger.Entry, t *nipcash.Tombstone) {
+func endRedeemGone(l ledger.Store, e *ledger.Entry, t *nipcash.Tombstone) {
 	clearRedeem(e)
 	if t != nil && t.Reason == nipcash.ReasonRedeemed {
 		e.Status = ledger.StatusRedeemed
@@ -152,7 +152,7 @@ func endRedeemGone(l *ledger.Ledger, e *ledger.Entry, t *nipcash.Tombstone) {
 // resolveUndecidedRedeem decides a redeem the Hub's answer left open: coded is
 // the error the answer gave (INTERNAL), nil for an omission or no answer. It
 // returns the bill's outcome error.
-func resolveUndecidedRedeem(ctx context.Context, cmd *cobra.Command, l *ledger.Ledger, e *ledger.Entry, invoice, into string, coded error) error {
+func resolveUndecidedRedeem(ctx context.Context, cmd *cobra.Command, l ledger.Store, e *ledger.Entry, invoice, into string, coded error) error {
 	prog, tomb, err := redeemProgressFn(ctx, cmd, e)
 	switch {
 	case err != nil:
@@ -188,11 +188,11 @@ type redeemingSettle struct {
 // settleRedeeming reads every redeeming bill (and every one presumed paid)
 // again and ends what it can. Returns what changed and how many remain
 // redeeming.
-func settleRedeeming(cmd *cobra.Command, l *ledger.Ledger) (out []redeemingSettle, still int) {
+func settleRedeeming(cmd *cobra.Command, l ledger.Store) (out []redeemingSettle, still int) {
 	now := time.Now().Unix()
 	changed := false
-	for i := range l.Entries {
-		e := &l.Entries[i]
+	for i := range l.AllEntries() {
+		e := &l.AllEntries()[i]
 		presumed := e.Status == ledger.StatusRedeemed && e.RedeemPresumedAt != nil
 		if e.Status != ledger.StatusRedeeming && !presumed {
 			continue
@@ -270,8 +270,8 @@ func invoiceSettled(ctx context.Context, cmd *cobra.Command, e *ledger.Entry) bo
 }
 
 // redeemingTotal is how much is being redeemed, and in how many bills.
-func redeemingTotal(l *ledger.Ledger) (millis uint64, n int) {
-	for _, e := range l.Entries {
+func redeemingTotal(l ledger.Store) (millis uint64, n int) {
+	for _, e := range l.AllEntries() {
 		if e.Status != ledger.StatusRedeeming {
 			continue
 		}

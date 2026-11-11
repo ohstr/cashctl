@@ -99,7 +99,7 @@ func runWalletBalance(cmd *cobra.Command, args []string) error {
 	total += heldTotal
 	expiredHeld += heldExpired
 
-	notes, notesAmount := outstandingCashNotes(l.Handoffs)
+	notes, notesAmount := outstandingCashNotes(l.AllHandoffs())
 	redeemingMillis, redeemingN := redeemingTotal(l)
 
 	if jsonMode {

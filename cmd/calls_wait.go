@@ -34,7 +34,7 @@ var placementSleep = time.Sleep
 // awaitPlacement waits for c's deadline and looks it up once. raw is the
 // result of a call looked up done; closedErr the error of one closed not
 // applied. Both empty: the call stays open.
-func awaitPlacement(_ context.Context, cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call) (raw json.RawMessage, closedErr error) {
+func awaitPlacement(_ context.Context, cmd *cobra.Command, l ledger.Store, c *ledger.Call) (raw json.RawMessage, closedErr error) {
 	if !placementWaitEnabled || c == nil || c.State != ledger.CallLookup {
 		return nil, nil
 	}

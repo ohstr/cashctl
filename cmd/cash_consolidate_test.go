@@ -553,7 +553,7 @@ func TestSharedMinterOfIDs(t *testing.T) {
 // Hub, group 3 never attempted, and nothing printed but group 2's error. The
 // newly minted token from group 1 was never named anywhere.
 
-func withFakeConsolidateItems(t *testing.T, fn func(cmd *cobra.Command, l *ledger.Ledger, items []string, toFlag string, jsonMode, yesFlag bool) (*consolidateResult, error)) {
+func withFakeConsolidateItems(t *testing.T, fn func(cmd *cobra.Command, l ledger.Store, items []string, toFlag string, jsonMode, yesFlag bool) (*consolidateResult, error)) {
 	t.Helper()
 	orig := consolidateItemsFn
 	consolidateItemsFn = fn
@@ -578,7 +578,7 @@ func twoGroups() [][]ledger.Entry {
 
 func TestConsolidateGroups_FailureInOneGroupDoesNotStopTheNext(t *testing.T) {
 	var attempted []string
-	withFakeConsolidateItems(t, func(_ *cobra.Command, _ *ledger.Ledger, items []string, _ string, _, _ bool) (*consolidateResult, error) {
+	withFakeConsolidateItems(t, func(_ *cobra.Command, _ ledger.Store, items []string, _ string, _, _ bool) (*consolidateResult, error) {
 		attempted = append(attempted, items[0])
 		if items[0] == "tok-a1" {
 			return nil, errors.New("hub said no")
@@ -617,7 +617,7 @@ func TestConsolidateGroups_FailureInOneGroupDoesNotStopTheNext(t *testing.T) {
 // money-losing case stated directly: group 1 merges, group 2 fails, and group 1's
 // new token must still reach the output. Before the fix it was silently dropped.
 func TestConsolidateGroups_SucceededGroupIsStillReportedAfterALaterFailure(t *testing.T) {
-	withFakeConsolidateItems(t, func(_ *cobra.Command, _ *ledger.Ledger, items []string, _ string, _, _ bool) (*consolidateResult, error) {
+	withFakeConsolidateItems(t, func(_ *cobra.Command, _ ledger.Store, items []string, _ string, _, _ bool) (*consolidateResult, error) {
 		if items[0] == "tok-b1" {
 			return nil, errors.New("relay went away")
 		}
@@ -643,7 +643,7 @@ func TestConsolidateGroups_SucceededGroupIsStillReportedAfterALaterFailure(t *te
 // reported as failed (which would imply something went wrong and invite a retry)
 // and must not be reported as ok (which would imply a merge happened).
 func TestConsolidateGroups_DeclineIsNeitherSuccessNorFailure(t *testing.T) {
-	withFakeConsolidateItems(t, func(_ *cobra.Command, _ *ledger.Ledger, items []string, _ string, _, _ bool) (*consolidateResult, error) {
+	withFakeConsolidateItems(t, func(_ *cobra.Command, _ ledger.Store, items []string, _ string, _, _ bool) (*consolidateResult, error) {
 		if items[0] == "tok-a1" {
 			return nil, nil // declined
 		}
@@ -751,7 +751,7 @@ func TestConsolidateGroups_ExplainsACrossHubRefusal(t *testing.T) {
 	orig := consolidateItemsFn
 	defer func() { consolidateItemsFn = orig }()
 
-	consolidateItemsFn = func(cmd *cobra.Command, l *ledger.Ledger, ids []string, toFlag string, jsonMode, yesFlag bool) (*consolidateResult, error) {
+	consolidateItemsFn = func(cmd *cobra.Command, l ledger.Store, ids []string, toFlag string, jsonMode, yesFlag bool) (*consolidateResult, error) {
 		return nil, output.NWCErrorForCashToken(cmd, &relayclient.WalletError{
 			Method:  "cash_consolidate",
 			Code:    "BAD_REQUEST",
@@ -785,7 +785,7 @@ func TestConsolidateGroups_LeavesOtherFailuresAlone(t *testing.T) {
 	orig := consolidateItemsFn
 	defer func() { consolidateItemsFn = orig }()
 
-	consolidateItemsFn = func(cmd *cobra.Command, l *ledger.Ledger, ids []string, toFlag string, jsonMode, yesFlag bool) (*consolidateResult, error) {
+	consolidateItemsFn = func(cmd *cobra.Command, l ledger.Store, ids []string, toFlag string, jsonMode, yesFlag bool) (*consolidateResult, error) {
 		return nil, output.NWCErrorForCashToken(cmd, &relayclient.WalletError{
 			Method:  "cash_consolidate",
 			Code:    "NOT_FOUND",

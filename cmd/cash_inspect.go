@@ -354,7 +354,7 @@ func printCashStatusResult(result *nipcash.CashStatusResult) {
 // explicit-id branch duplicates resolveHeldToken's own spent-bill check
 // rather than sharing it, the same way pickHeldToken/pickHeldTokens already
 // accept some duplication for clarity over entanglement.
-func resolveHeldTokensOrAll(cmd *cobra.Command, l *ledger.Ledger) ([]*ledger.Entry, error) {
+func resolveHeldTokensOrAll(cmd *cobra.Command, l ledger.Store) ([]*ledger.Entry, error) {
 	if id, _ := cmd.Flags().GetString("token"); id != "" {
 		e, ok := l.Find(id)
 		if !ok {

@@ -204,7 +204,7 @@ func printProtectOutcomes(jsonMode bool, outcomes []protectOutcome) {
 // them under --json/--yes, or the caller's own explicit pick interactively)
 // — protecting keeps the value yours either way, so unlike redeem's own
 // resolver there is no ambiguity here worth refusing over.
-func resolveUnprotectedCashHoldings(cmd *cobra.Command, l *ledger.Ledger, args []string) (entries, unresolved []*ledger.Entry, err error) {
+func resolveUnprotectedCashHoldings(cmd *cobra.Command, l ledger.Store, args []string) (entries, unresolved []*ledger.Entry, err error) {
 	id := protectNamedID(cmd, args)
 	if id != "" {
 		e, ok := l.Find(id)

@@ -15,7 +15,7 @@ import (
 // recordHandoff keeps a handoff in the ledger (I-27): cashNote when the
 // recipient is whoever holds "<token>#<secret>", otherwise token as a gift to
 // an identity. A no-op when there is nothing to hand over.
-func recordHandoff(l *ledger.Ledger, cashNote, token string, amountMillis uint64, target string) {
+func recordHandoff(l ledger.Store, cashNote, token string, amountMillis uint64, target string) {
 	h := ledger.Handoff{AmountMillis: amountMillis, Target: target}
 	switch {
 	case cashNote != "":
@@ -50,10 +50,10 @@ func handoffTarget(toValue string, target credential.ResolvedTarget) string {
 // nothing — silence says nothing about a bill (NIP-CASH §Cash Status). A gift
 // to an identity stays "sent": its sender cannot see whether it was claimed.
 // Saves best-effort when anything changed.
-func refreshHandoffs(l *ledger.Ledger) {
+func refreshHandoffs(l ledger.Store) {
 	changed := false
-	for i := range l.Handoffs {
-		h := &l.Handoffs[i]
+	for i := range l.AllHandoffs() {
+		h := &l.AllHandoffs()[i]
 		if h.Kind != ledger.HandoffCashNote || h.Status != ledger.HandoffUnclaimed {
 			continue
 		}
@@ -130,9 +130,9 @@ func handoffJSON(h ledger.Handoff, showSecrets bool) map[string]any {
 
 // unclaimedHandoffs is every handoff not known to be claimed or expired, as of
 // its last check, secrets hidden.
-func unclaimedHandoffs(l *ledger.Ledger) []map[string]any {
+func unclaimedHandoffs(l ledger.Store) []map[string]any {
 	out := []map[string]any{}
-	for _, h := range l.Handoffs {
+	for _, h := range l.AllHandoffs() {
 		if h.Status == ledger.HandoffUnclaimed || h.Status == ledger.HandoffSent {
 			out = append(out, handoffJSON(h, false))
 		}

@@ -345,7 +345,7 @@ type redeemOutcome struct {
 func prepareRedeems(
 	ctx context.Context,
 	cmd *cobra.Command,
-	l *ledger.Ledger,
+	l ledger.Store,
 	entries []*ledger.Entry,
 	explicitInvoice string,
 	invoiceOverrideAmount *uint64,
@@ -569,7 +569,7 @@ func makeRedeemInvoices(
 func executeRedeems(
 	ctx context.Context,
 	cmd *cobra.Command,
-	l *ledger.Ledger,
+	l ledger.Store,
 	plans []redeemPlan,
 	outcomes []redeemOutcome,
 	destName, into string,
@@ -741,9 +741,9 @@ func printRedeemOutcomes(jsonMode bool, outcomes []redeemOutcome, destName, expl
 // reportedSpentIDs names every entry its Hub reported spent: bills taken back
 // or spent elsewhere, which --all leaves out and so must say so — a bill that
 // silently vanished from "everything" reads as one cashctl lost.
-func reportedSpentIDs(l *ledger.Ledger) []string {
+func reportedSpentIDs(l ledger.Store) []string {
 	var ids []string
-	for _, e := range l.Entries {
+	for _, e := range l.AllEntries() {
 		if e.Status == ledger.StatusSpent || e.Status == ledger.StatusExpired || e.Status == ledger.StatusReclaimed {
 			ids = append(ids, e.ID)
 		}
@@ -831,7 +831,7 @@ func redeemRecoveryHint(outcomes []redeemOutcome) string {
 // Each returned pointer is re-resolved through l.Find, for the reason
 // resolveHeldToken's own doc comment sets out at length: l.Held() returns
 // copies, so a pointer into it looks live and silently does not write through.
-func resolveHeldTokensForRedeem(cmd *cobra.Command, l *ledger.Ledger) ([]*ledger.Entry, error) {
+func resolveHeldTokensForRedeem(cmd *cobra.Command, l ledger.Store) ([]*ledger.Entry, error) {
 	ids, _ := cmd.Flags().GetStringSlice("token")
 	all, _ := cmd.Flags().GetBool("all")
 	amountFlag, _ := cmd.Flags().GetString("amount")
@@ -920,7 +920,7 @@ func resolveHeldTokensForRedeem(cmd *cobra.Command, l *ledger.Ledger) ([]*ledger
 // sense that the value stays yours, whereas redeeming pays out irreversibly, so
 // a script that did not say which bills it meant must not have that decided for
 // it. --all is how a script says it means all of them.
-func pickHeldTokens(cmd *cobra.Command, l *ledger.Ledger, held []ledger.Entry) ([]*ledger.Entry, error) {
+func pickHeldTokens(cmd *cobra.Command, l ledger.Store, held []ledger.Entry) ([]*ledger.Entry, error) {
 	jsonMode, _ := cmd.Flags().GetBool("json")
 	yesFlag, _ := cmd.Flags().GetBool("yes")
 	tooManyErr := func() error {
@@ -992,7 +992,7 @@ func pickHeldTokens(cmd *cobra.Command, l *ledger.Ledger, held []ledger.Entry) (
 // spent bill waits out the whole timeout and reports a network failure. Our own
 // ledger recorded the spend and is the better source — the Hub is deliberately
 // refusing to confirm it.
-func heldTokenByID(cmd *cobra.Command, l *ledger.Ledger, id string) (*ledger.Entry, error) {
+func heldTokenByID(cmd *cobra.Command, l ledger.Store, id string) (*ledger.Entry, error) {
 	e, ok := l.Find(id)
 	if !ok {
 		return nil, output.NotFoundError(cmd, id, fmt.Errorf("no held token %q", id))
@@ -1010,7 +1010,7 @@ func heldTokenByID(cmd *cobra.Command, l *ledger.Ledger, id string) (*ledger.Ent
 // pointer into l.Held()/pickHeldToken's own slice — both of those return
 // *copies* (Ledger.Held's own doc comment), so a pointer into them looks
 // like a live *ledger.Entry but silently doesn't write through to
-// l.Entries at all. resolveAmount relies on this: it discovers an
+// l.AllEntries() at all. resolveAmount relies on this: it discovers an
 // uncached amount live and writes it straight onto the *ledger.Entry it
 // was given (entry.AmountMillis = &result.AmountMillis) rather than going
 // through a setter — before this fix, that write landed on a throwaway
@@ -1020,7 +1020,7 @@ func heldTokenByID(cmd *cobra.Command, l *ledger.Ledger, id string) (*ledger.Ent
 // regardless. Found auditing internal/ledger's own copy-vs-pointer
 // contract; see docs/private/audit-round2-race-adversarial.md's "Found but
 // out of scope" section and docs/private/audit-round3-redeem-fee-boundaries.md.
-func resolveHeldToken(cmd *cobra.Command, l *ledger.Ledger) (*ledger.Entry, error) {
+func resolveHeldToken(cmd *cobra.Command, l ledger.Store) (*ledger.Entry, error) {
 	if id, _ := cmd.Flags().GetString("token"); id != "" {
 		e, ok := l.Find(id)
 		if !ok {
@@ -1230,7 +1230,7 @@ func truncateInvoiceForDisplay(invoice string) string {
 // remainder, which isn't always known up front (see cash_transfer.go's own
 // Add call). Every entry `cashctl receive` itself saves already has its
 // amount cached, since receive's own mandatory Cash Hub check fills it in.
-func resolveAmount(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entry, sourceClient *nipcashclient.Client) (uint64, error) {
+func resolveAmount(cmd *cobra.Command, l ledger.Store, entry *ledger.Entry, sourceClient *nipcashclient.Client) (uint64, error) {
 	if entry.AmountMillis != nil {
 		return *entry.AmountMillis, nil
 	}
@@ -1313,7 +1313,7 @@ type redeemQuote struct {
 // unanswered is decided by one read of that row; a connection-key holder
 // whose Hub answers it NOT_FOUND could never decide it and the bill would stay
 // redeeming for ever, so the redeem is refused (status_unreadable) first.
-func requireOwnRow(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entry, client *nipcashclient.Client) (*redeemQuote, error) {
+func requireOwnRow(cmd *cobra.Command, l ledger.Store, entry *ledger.Entry, client *nipcashclient.Client) (*redeemQuote, error) {
 	if !isConnectionKeySpend(cmd, entry) {
 		return nil, nil
 	}
@@ -1338,7 +1338,7 @@ var ownRowQuoteFn = resolveRedeemQuote
 // amount can shrink (a co-holder spending part of a shared bill) and the
 // Hub's figures have to be checked against what was recorded
 // (checkQuoteDrift).
-func resolveRedeemQuote(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entry, sourceClient *nipcashclient.Client) (redeemQuote, error) {
+func resolveRedeemQuote(cmd *cobra.Command, l ledger.Store, entry *ledger.Entry, sourceClient *nipcashclient.Client) (redeemQuote, error) {
 	tok, err := nipcash.Decode(entry.Token)
 	if err != nil {
 		return redeemQuote{}, output.RuntimeError(cmd, err)
@@ -1535,7 +1535,7 @@ func entryPointers(entries []ledger.Entry) []*ledger.Entry {
 // is therefore against NetRedeemableMillis, each candidate's OWN live
 // quote — not AmountMillis, the cached face value, which a nonzero fee
 // would make wrong.
-func selectHeldTokensForRedeemAmount(cmd *cobra.Command, l *ledger.Ledger, target uint64) ([]*ledger.Entry, error) {
+func selectHeldTokensForRedeemAmount(cmd *cobra.Command, l ledger.Store, target uint64) ([]*ledger.Entry, error) {
 	held, err := pickableHeld(cmd, l)
 	if err != nil {
 		return nil, err
@@ -1726,7 +1726,7 @@ func invoiceAmountOverride(cmd *cobra.Command, invoice string) (*uint64, error) 
 // credential (nipcash.OwnRow): a tombstone or NOT_FOUND gives the entry its
 // state (stateForResult); a row that can no longer be spent (claimed,
 // withdrawn, expired) is not_found.
-func ownClaim(ctx context.Context, cmd *cobra.Command, l *ledger.Ledger, c *nipcashclient.Client, entry *ledger.Entry, cred nipcash.Credential, tok nipcash.Token) (*nipcash.CheckClaimResult, error) {
+func ownClaim(ctx context.Context, cmd *cobra.Command, l ledger.Store, c *nipcashclient.Client, entry *ledger.Entry, cred nipcash.Credential, tok nipcash.Token) (*nipcash.CheckClaimResult, error) {
 	claim, err := c.CheckClaim(ctx, cred, tok)
 	var gone *nipcash.BillGone
 	switch {

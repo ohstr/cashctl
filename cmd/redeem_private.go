@@ -136,7 +136,7 @@ func entryRelays(entries []*ledger.Entry) []string {
 func quoteHubGroup(
 	ctx context.Context,
 	cmd *cobra.Command,
-	l *ledger.Ledger,
+	l ledger.Store,
 	g entryHubGroup,
 	creds map[string]nipcash.Credential,
 	jsonMode bool,
@@ -297,7 +297,7 @@ func replyErr(incomplete error) error {
 func redeemHubGroup(
 	ctx context.Context,
 	cmd *cobra.Command,
-	l *ledger.Ledger,
+	l ledger.Store,
 	g hubGroup,
 	outcomes []redeemOutcome,
 	destName string,
@@ -460,7 +460,7 @@ func checkQuoteDrift(cmd *cobra.Command, entry *ledger.Entry, amountMillis, feeM
 // entry.AmountMillis, deliberately: the line below overwrites the entry's amount with
 // the Hub's, so on a second attempt the entry no longer holds an independent figure to
 // check against, while the token's is signed and immutable.
-func recordQuote(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entry, recipient nipcash.RecipientStatus) (redeemQuote, error) {
+func recordQuote(cmd *cobra.Command, l ledger.Store, entry *ledger.Entry, recipient nipcash.RecipientStatus) (redeemQuote, error) {
 	q := redeemQuote{
 		AmountMillis:        recipient.AmountMillis,
 		RedeemFeeMillis:     recipient.RedeemFeeMillis,
@@ -489,7 +489,7 @@ func recordQuote(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entry, reci
 }
 
 // recordRedeemed is the local bookkeeping for one bill that really paid out.
-func recordRedeemed(l *ledger.Ledger, entry *ledger.Entry, destName string) {
+func recordRedeemed(l ledger.Store, entry *ledger.Entry, destName string) {
 	if entry == nil {
 		return
 	}
@@ -518,7 +518,7 @@ func plansEntry(plans []redeemPlan, id string) *ledger.Entry {
 // compiler catches.
 func applyRedeemResults(
 	cmd *cobra.Command,
-	l *ledger.Ledger,
+	l ledger.Store,
 	plans []redeemPlan,
 	results []nipcashclient.RedeemOutcome,
 	outcomes []redeemOutcome,

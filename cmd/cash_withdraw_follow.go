@@ -24,14 +24,14 @@ func withdrawPending(c *ledger.Call, w ledger.Withdrawal) nipcash.PendingCall {
 }
 
 // settleWithdrawCall reads one withdrawal and records what the Hub says.
-func settleWithdrawCall(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, device string) string {
+func settleWithdrawCall(cmd *cobra.Command, l ledger.Store, c *ledger.Call, device string) string {
 	summary, _ := settleWithdrawOne(cmd, l, c, device)
 	return summary
 }
 
 // settleWithdrawOne is settleWithdrawCall, also returning the withdrawal as
 // recorded (its ReceivedAt set by the save that made it final).
-func settleWithdrawOne(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, device string) (string, *ledger.Withdrawal) {
+func settleWithdrawOne(cmd *cobra.Command, l ledger.Store, c *ledger.Call, device string) (string, *ledger.Withdrawal) {
 	w, ok, err := ledger.WithdrawalForCall(c.CallID)
 	if err != nil {
 		return "no withdrawal record", nil
@@ -57,7 +57,7 @@ func settleWithdrawOne(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, dev
 	return summary, &w
 }
 
-func settleWithdrawInto(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, device string, wp *ledger.Withdrawal) string {
+func settleWithdrawInto(cmd *cobra.Command, l ledger.Store, c *ledger.Call, device string, wp *ledger.Withdrawal) string {
 	w := *wp
 	defer func() { *wp = w }()
 	var err error
@@ -120,7 +120,7 @@ func settleWithdrawInto(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, de
 // ReceiptInvalidLimit in a row the call is stuck/receipt_invalid: still open
 // and never resent, looked up only hourly, and shown as such (plan WP-20 step
 // 6), instead of being asked again at every command for ever.
-func receiptInvalidAgain(l *ledger.Ledger, c *ledger.Call, w *ledger.Withdrawal) string {
+func receiptInvalidAgain(l ledger.Store, c *ledger.Call, w *ledger.Withdrawal) string {
 	w.ReceiptInvalidSeen++
 	_ = ledger.PutWithdrawal(*w)
 	now := time.Now().Unix()
@@ -145,7 +145,7 @@ const receiptInvalidText = "The Hub keeps answering this withdrawal without a va
 
 // finishRefusedWithdrawal ends the withdrawal row of call id once that call is
 // closed not applied (a refusal, or a re-placement the Hub refused).
-func finishRefusedWithdrawal(l *ledger.Ledger, id string) {
+func finishRefusedWithdrawal(l ledger.Store, id string) {
 	c, ok := l.FindCall(id)
 	if !ok || c.Method != nipcash.MethodCashWithdraw || c.State != ledger.CallNotApplied {
 		return
@@ -392,7 +392,7 @@ func newCashWithdrawSettleCmd() *cobra.Command {
 
 // replaceWithdrawalByUser sends again, under the derived id and with the same
 // quote, a withdrawal stuck in confirm_replace, after the user agreed.
-func replaceWithdrawalByUser(cmd *cobra.Command, l *ledger.Ledger, id, device string) error {
+func replaceWithdrawalByUser(cmd *cobra.Command, l ledger.Store, id, device string) error {
 	w, ok, err := ledger.FindWithdrawal(id)
 	if err != nil || !ok {
 		return output.NotFoundError(cmd, id, fmt.Errorf("no withdrawal %q", id))
@@ -453,7 +453,7 @@ func withdrawRequestIDOf(res *nipcash.CashStatusResult) string {
 // and its quote id is taken from the receipt.
 // recoveredRow is the row of a recovered withdrawal's call, as
 // recoverWithdrawal writes it.
-func recoveredRow(l *ledger.Ledger, c *ledger.Call) ledger.Withdrawal {
+func recoveredRow(l ledger.Store, c *ledger.Call) ledger.Withdrawal {
 	w := ledger.Withdrawal{WithdrawalID: c.CallID, CallID: c.CallID, HubIdentity: c.HubIdentity, WalletPubkey: c.Target,
 		AmountMillis: c.AmountMillis, State: ledger.WithdrawSending, Recovered: true}
 	if len(c.SourceEntryIDs) > 0 {
@@ -462,7 +462,7 @@ func recoveredRow(l *ledger.Ledger, c *ledger.Call) ledger.Withdrawal {
 	return w
 }
 
-func recoverWithdrawal(cmd *cobra.Command, l *ledger.Ledger, e *ledger.Entry, rid string) (ledger.Withdrawal, error) {
+func recoverWithdrawal(cmd *cobra.Command, l ledger.Store, e *ledger.Entry, rid string) (ledger.Withdrawal, error) {
 	kind, pub, secret := authorizerOf(cmd, e, nil)
 	var amount uint64
 	if e.AmountMillis != nil {

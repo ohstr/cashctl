@@ -232,7 +232,7 @@ func TestRequireOwnRow_ConnectionKeyInvoiceNeedsItsRow(t *testing.T) {
 	orig := ownRowQuoteFn
 	t.Cleanup(func() { ownRowQuoteFn = orig })
 	read := 0
-	ownRowQuoteFn = func(cmd *cobra.Command, _ *ledger.Ledger, e *ledger.Entry, _ *nipcashclient.Client) (redeemQuote, error) {
+	ownRowQuoteFn = func(cmd *cobra.Command, _ ledger.Store, e *ledger.Entry, _ *nipcashclient.Client) (redeemQuote, error) {
 		read++
 		return redeemQuote{}, statusUnreadableError(cmd, e.ID)
 	}

@@ -415,7 +415,7 @@ func receiveConnectionKeyToken(cmd *cobra.Command, input string, tok nipcash.Tok
 // connection key, placed through the call engine and recorded with the same
 // in-place logic the Cash-Zap claim uses (applyZapClaimResult — an in-place move
 // holds the bill under the local key).
-func claimConnectionKeyToken(ctx context.Context, cmd *cobra.Command, l *ledger.Ledger, e *ledger.Entry, amount uint64, cred nipcash.Credential, mine string) error {
+func claimConnectionKeyToken(ctx context.Context, cmd *cobra.Command, l ledger.Store, e *ledger.Entry, amount uint64, cred nipcash.Credential, mine string) error {
 	caller, err := dialCallerFn(ctx, e.Token)
 	if err != nil {
 		return err

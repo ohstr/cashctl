@@ -68,8 +68,8 @@ func runWalletImportCashkit(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return output.RuntimeError(cmd, err)
 	}
-	for i := range l.Entries {
-		if ledger.Live(l.Entries[i].Status) {
+	for i := range l.AllEntries() {
+		if ledger.Live(l.AllEntries()[i].Status) {
 			return output.FinalConflictError(cmd, "", errors.New(
 				"this cashctl wallet already holds cash; import a cashkit backup into a fresh wallet (its tokens are a restore, not a merge)"))
 		}

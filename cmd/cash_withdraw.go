@@ -800,7 +800,7 @@ func sendWithdrawal(cmd *cobra.Command, e *ledger.Entry, q *nipcash.WithdrawQuot
 // answer names when this device has no record of it: another copy of this
 // wallet withdrew the bill (XQ-29(2)). It applies to a first send and to a
 // re-placement alike (R2-C6).
-func followOtherCopysWithdrawal(cmd *cobra.Command, l *ledger.Ledger, entryID string, err error) {
+func followOtherCopysWithdrawal(cmd *cobra.Command, l ledger.Store, entryID string, err error) {
 	var gone *nipcash.BillGone
 	if !errors.As(err, &gone) || gone.Tombstone.WithdrawRequestID == "" {
 		return
@@ -821,7 +821,7 @@ func followOtherCopysWithdrawal(cmd *cobra.Command, l *ledger.Ledger, entryID st
 // applyPayout records a payout as the Hub stated it: the source is spent from
 // the first accepted answer; a final payout closes the call; a cancelled one
 // brings the amount back as a new bill.
-func applyPayout(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, w *ledger.Withdrawal, p *nipcash.Payout) error {
+func applyPayout(cmd *cobra.Command, l ledger.Store, c *ledger.Call, w *ledger.Withdrawal, p *nipcash.Payout) error {
 	now := time.Now().Unix()
 	if p == nil {
 		return output.RuntimeError(cmd, errors.New("no payout"))
@@ -871,7 +871,7 @@ func applyPayout(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, w *ledger
 // again (S-CP-R9): the address, quote, receipt and transaction are dropped,
 // and the source's cash secret is wiped (closeCall wiped the call's). The
 // address is kept on w for the one line that says where it was received.
-func finalRewrite(l *ledger.Ledger, w *ledger.Withdrawal, p *nipcash.Payout) {
+func finalRewrite(l ledger.Store, w *ledger.Withdrawal, p *nipcash.Payout) {
 	w.ReceivedAt = w.Address
 	if w.ReceivedAt == "" {
 		w.ReceivedAt = p.Address
@@ -887,7 +887,7 @@ func finalRewrite(l *ledger.Ledger, w *ledger.Withdrawal, p *nipcash.Payout) {
 
 // importRemint keeps the bill a cancelled payout re-minted: bound as the
 // source was (a cash note with the call's re-mint secret).
-func importRemint(l *ledger.Ledger, c *ledger.Call, w *ledger.Withdrawal, p *nipcash.Payout) (string, error) {
+func importRemint(l ledger.Store, c *ledger.Call, w *ledger.Withdrawal, p *nipcash.Payout) (string, error) {
 	if p.NewWalletToken.Tombstone != nil {
 		return "", nil
 	}
