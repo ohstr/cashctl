@@ -21,6 +21,7 @@ import (
 	relayclient "github.com/ohstr/nmilat/relay/client"
 
 	"github.com/ohstr/cashctl/internal/ledger"
+	"github.com/ohstr/cashctl/internal/pocket"
 	"github.com/ohstr/cashctl/internal/store"
 )
 
@@ -486,6 +487,15 @@ func failOrderWrites(t *testing.T, ops ...string) (restore func()) {
 			t.Fatalf("failOrderWrites: store.Path: %v", err)
 		}
 		cachePath := filepath.Join(filepath.Dir(dbPath), "pocket-cache.db")
+		// The pocket cache's tables (orders_full) are created by OpenCache; a test
+		// may inject the trigger before any command has opened the cache, so ensure
+		// the schema exists first (single DDL source) rather than opening a raw,
+		// empty db where orders_full would not exist.
+		if c, err := pocket.OpenCache(cachePath); err != nil {
+			t.Fatalf("failOrderWrites: ensure cache schema: %v", err)
+		} else {
+			_ = c.Close()
+		}
 		openDB = func() (*sql.DB, error) { return sql.Open("sqlite", cachePath) }
 		table = "orders_full"
 	}

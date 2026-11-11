@@ -331,7 +331,6 @@ func TestOrder_EndedUnpaid(t *testing.T) {
 // can't be written, neither is the call, and nothing is sent.
 func TestOrderPlace_RowAndCallAreOneTransaction(t *testing.T) {
 	f, conn := setUpOrderHub(t)
-	skipOnPocket(t, "place does not fail atomically when an orders_full write is blocked: the order persists but a trigger on orders_full does not fail the place write-ahead - needs a production fix to the place order flush, not a test change")
 	failOrderWrites(t, "INSERT")
 	if _, err := placeOrder(t, conn, "100"); err == nil {
 		t.Fatal("placed with an order row that can't be written")
