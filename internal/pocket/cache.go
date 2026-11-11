@@ -63,6 +63,40 @@ CREATE TABLE IF NOT EXISTS meta (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+
+-- pending_calls holds cashctl's in-flight bill-creating calls (ledger.Call),
+-- each serialized and NIP-44-sealed (encrypt-to-self) so no secret is ever
+-- cleartext at rest (the plan's risk 17). Keyed by request_id. These are
+-- cashctl-private local state (not rebuildable from pocket.db) — the precious
+-- rows of risk 19. The migration's A' approach loads these into an in-memory
+-- ledger.Ledger buffer and writes them back here on Save.
+CREATE TABLE IF NOT EXISTS pending_calls (
+  request_id TEXT PRIMARY KEY,
+  sealed     TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+-- handoffs holds recipient hand-offs (ledger.Handoff), NIP-44-sealed — a
+-- recipient token must never be lost, so it is persisted durably + encrypted.
+CREATE TABLE IF NOT EXISTS handoffs (
+  id         INTEGER PRIMARY KEY,
+  sealed     TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+-- entries_full holds the FAITHFUL ledger.Entry (NIP-44-sealed), keyed by the
+-- cashctl-assigned entry id. The pure-NIP-CP held-token 9525 in pocket.db is the
+-- interop/sync copy; this is cmd's source of truth so the in-memory ledger
+-- buffer reloads byte-identical — the cashctl-only fields the 9525 can't carry
+-- (random id, throwaway/redeem/created-by-call) and the id↔SourceEntryIDs
+-- linkage are preserved. The A' Save double-writes (9525 for interop + this
+-- blob for fidelity); this table is local-only precious state (risk 19).
+CREATE TABLE IF NOT EXISTS entries_full (
+  id         TEXT PRIMARY KEY,
+  w          TEXT NOT NULL,
+  sealed     TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
 `
 
 // OpenCache opens (creating if absent) the decoded cache at path.
@@ -362,6 +396,128 @@ func (c *Cache) OpenCalls() ([]string, error) {
 			return nil, err
 		}
 		out = append(out, w)
+	}
+	return out, rows.Err()
+}
+
+// currentRev returns the resolved rev of w (and whether w is known) — what the
+// A' Save reads to write a changed bill at the next rev (so the fold supersedes
+// the prior one by rev rather than flagging a same-rev conflict).
+func (c *Cache) currentRev(w string) (rev uint64, known bool, err error) {
+	err = c.db.QueryRow(`SELECT rev FROM entries WHERE w = ?`, w).Scan(&rev)
+	switch err {
+	case sql.ErrNoRows:
+		return 0, false, nil
+	case nil:
+		return rev, true, nil
+	default:
+		return 0, false, fmt.Errorf("pocket: rev %s: %w", w, err)
+	}
+}
+
+// ---- sealed pending_calls (cashctl's in-flight calls, encrypt-to-self) ----
+
+// PutSealedCall upserts the NIP-44-sealed blob of one ledger.Call by request id.
+func (c *Cache) PutSealedCall(requestID, sealed string, updatedAt int64) error {
+	_, err := c.db.Exec(`
+INSERT INTO pending_calls(request_id, sealed, updated_at) VALUES(?,?,?)
+ON CONFLICT(request_id) DO UPDATE SET sealed=excluded.sealed, updated_at=excluded.updated_at`,
+		requestID, sealed, updatedAt)
+	return err
+}
+
+// DeleteSealedCall removes a call's sealed blob (a call never sent, dropped).
+func (c *Cache) DeleteSealedCall(requestID string) error {
+	_, err := c.db.Exec(`DELETE FROM pending_calls WHERE request_id = ?`, requestID)
+	return err
+}
+
+// SealedCalls returns every stored (request_id, sealed) pending-call blob.
+func (c *Cache) SealedCalls() (map[string]string, error) {
+	rows, err := c.db.Query(`SELECT request_id, sealed FROM pending_calls`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var id, sealed string
+		if err := rows.Scan(&id, &sealed); err != nil {
+			return nil, err
+		}
+		out[id] = sealed
+	}
+	return out, rows.Err()
+}
+
+// ---- sealed handoffs (recipient tokens, encrypt-to-self) ----
+
+// PutSealedHandoff inserts (id==0) or updates a handoff's sealed blob, returning
+// the row id. A recipient token must never be lost, so it is persisted durably.
+func (c *Cache) PutSealedHandoff(id int64, sealed string, updatedAt int64) (int64, error) {
+	if id == 0 {
+		res, err := c.db.Exec(`INSERT INTO handoffs(sealed, updated_at) VALUES(?,?)`, sealed, updatedAt)
+		if err != nil {
+			return 0, err
+		}
+		return res.LastInsertId()
+	}
+	_, err := c.db.Exec(`
+INSERT INTO handoffs(id, sealed, updated_at) VALUES(?,?,?)
+ON CONFLICT(id) DO UPDATE SET sealed=excluded.sealed, updated_at=excluded.updated_at`, id, sealed, updatedAt)
+	return id, err
+}
+
+// SealedHandoffs returns every stored (id, sealed) handoff blob.
+func (c *Cache) SealedHandoffs() (map[int64]string, error) {
+	rows, err := c.db.Query(`SELECT id, sealed FROM handoffs`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[int64]string{}
+	for rows.Next() {
+		var id int64
+		var sealed string
+		if err := rows.Scan(&id, &sealed); err != nil {
+			return nil, err
+		}
+		out[id] = sealed
+	}
+	return out, rows.Err()
+}
+
+// ---- faithful sealed ledger.Entry (cmd's source of truth, encrypt-to-self) ----
+
+// PutSealedEntry upserts the NIP-44-sealed faithful ledger.Entry by its id.
+func (c *Cache) PutSealedEntry(id, w, sealed string, updatedAt int64) error {
+	_, err := c.db.Exec(`
+INSERT INTO entries_full(id, w, sealed, updated_at) VALUES(?,?,?,?)
+ON CONFLICT(id) DO UPDATE SET w=excluded.w, sealed=excluded.sealed, updated_at=excluded.updated_at`,
+		id, w, sealed, updatedAt)
+	return err
+}
+
+// DeleteSealedEntry removes a faithful entry blob by id.
+func (c *Cache) DeleteSealedEntry(id string) error {
+	_, err := c.db.Exec(`DELETE FROM entries_full WHERE id = ?`, id)
+	return err
+}
+
+// SealedEntries returns every stored (id, sealed) faithful-entry blob.
+func (c *Cache) SealedEntries() (map[string]string, error) {
+	rows, err := c.db.Query(`SELECT id, sealed FROM entries_full`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var id, sealed string
+		if err := rows.Scan(&id, &sealed); err != nil {
+			return nil, err
+		}
+		out[id] = sealed
 	}
 	return out, rows.Err()
 }
