@@ -3,13 +3,18 @@ package cmd
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	_ "modernc.org/sqlite" // sqlite driver for the pocket-cache.db fail-injection
 
 	"github.com/ohstr/nmilat/nipcash"
 	nipcashclient "github.com/ohstr/nmilat/nipcash/client"
@@ -199,8 +204,26 @@ func (h *fakeBillHub) probe(e *ledger.Entry, cred nipcash.Credential) (uint64, b
 // test running as root ignores.
 func failSaves(t *testing.T) (restore func()) {
 	t.Helper()
+	// Store-aware: a write-ahead failure must be injected into the store the
+	// command under test actually uses. Toggle-off = the cashctl.db ledger
+	// (entries/pending_calls). Toggle-on = the pocket's faithful sealed cache
+	// (pocket-cache.db: entries_full/pending_calls/handoffs — the tables
+	// LedgerStore.Save's PersistLedger writes). Without this the trigger lands on
+	// cashctl.db while the pocket Save succeeds, so "a failed write-ahead sends
+	// nothing" would falsely fail — a harness gap, not a durability bug.
+	openDB := store.Open
+	tables := []string{"entries", "pending_calls"}
+	if os.Getenv(pocketToggleEnv) != "" {
+		dbPath, err := store.Path()
+		if err != nil {
+			t.Fatalf("failSaves: store.Path: %v", err)
+		}
+		cachePath := filepath.Join(filepath.Dir(dbPath), "pocket-cache.db")
+		openDB = func() (*sql.DB, error) { return sql.Open("sqlite", cachePath) }
+		tables = []string{"entries_full", "pending_calls", "handoffs"}
+	}
 	exec := func(stmts ...string) {
-		db, err := store.Open()
+		db, err := openDB()
 		if err != nil {
 			t.Fatalf("failSaves: %v", err)
 		}
@@ -212,7 +235,7 @@ func failSaves(t *testing.T) (restore func()) {
 		}
 	}
 	var create, drop []string
-	for _, table := range []string{"entries", "pending_calls"} {
+	for _, table := range tables {
 		for _, op := range []string{"UPDATE", "INSERT"} {
 			name := "fail_" + strings.ToLower(op) + "_" + table
 			create = append(create, `CREATE TRIGGER `+name+` BEFORE `+op+` ON `+table+` BEGIN SELECT RAISE(ABORT, 'injected save failure'); END`)
