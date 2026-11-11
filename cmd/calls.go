@@ -38,8 +38,12 @@ const (
 	purposeUnmergeMove = "unmerge_move"
 	purposeMergeRound  = "merge_round"
 	purposeConsolidate = "consolidate"
-	// purposeZapClaim claims a Cash Zap to a connection key: a full in-place
-	// transfer to the local pubkey (NIP-CZ rule 9).
+	// purposeZapClaim claims a connection-key-addressed slice to the local pubkey:
+	// a full in-place transfer, signed with the connection key (NIP-CZ rule 9 for a
+	// Cash Zap, and the same mechanism for a plain token received with
+	// --as connection-key:... — see receiveConnectionKeyToken). The persisted
+	// string stays "zap_claim" so the settle/lookup machinery keyed on it covers
+	// both.
 	purposeZapClaim = "zap_claim"
 )
 

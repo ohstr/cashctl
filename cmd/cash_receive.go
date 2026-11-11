@@ -14,6 +14,7 @@ import (
 	"github.com/ohstr/nmilat/nipcash"
 	"github.com/spf13/cobra"
 
+	"github.com/ohstr/cashctl/internal/credential"
 	"github.com/ohstr/cashctl/internal/dial"
 	"github.com/ohstr/cashctl/internal/ledger"
 	"github.com/ohstr/cashctl/internal/output"
@@ -33,7 +34,7 @@ func newCashReceiveCmd() *cobra.Command {
 	cmd.Flags().String("zap-event", "", "the Cash Zap (kind 9522) a zap bill came with: a file, - for stdin, or the JSON")
 	cmd.Flags().Bool("find-zap", false, "find a zap bill's Cash Zap on --relay (never on the bill's own relay hints)")
 	cmd.Flags().StringSlice("relay", nil, "a relay to look for the Cash Zap on (with --find-zap)")
-	cmd.Flags().String("as", "", "the connection-key credential that claims a Cash Zap to a connection key")
+	cmd.Flags().String("as", "", "credential to claim this token under — e.g. --as connection-key:<privkey>,<platform>,<external-id>,<attestation-file> for a token addressed to an IA-attested Web Identity (or to claim a Cash Zap to a connection key)")
 	cmd.Flags().Bool("trust-minter", false, "check a zap whose minter you don't trust yet with its Hub (its network can't be verified)")
 	return cmd
 }
@@ -188,6 +189,15 @@ func runCashReceive(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
+	// A slice addressed to an IA-attested Web Identity (connection key), claimed
+	// with its connection-key credential. CheckClaim can't confirm it — a
+	// connection-key holder can't read cash_status (NIP-CASH SG-1), so the Hub
+	// answers NOT_FOUND — so it is taken delivery of by claiming it in place
+	// instead, exactly the Cash-Zap connection-key path (receiveConnectionKeyToken).
+	if as := asCredentialValue(cmd); !isCash && strings.HasPrefix(as, "connection-key:") {
+		return receiveConnectionKeyToken(cmd, input, tok)
+	}
+
 	l, err := ledger.Load()
 	if err != nil {
 		return output.RuntimeError(cmd, err)
@@ -286,6 +296,138 @@ func runCashReceive(cmd *cobra.Command, args []string) error {
 		// --json contract (only the human-mode wording/identifiers changed).
 		output.PrintJSON(map[string]any{"entry": finalEntry, "secured": protected.json(), "network": network, "test_network": testNet})
 	}
+	return nil
+}
+
+// receiveConnectionKeyToken takes delivery of a slice addressed to an IA-attested
+// Web Identity (connection key). Its holder cannot read cash_status (NIP-CASH
+// SG-1), so receive's usual CheckClaim comes back NOT_FOUND; the slice is claimed
+// in place instead — a full cash_transfer to the local pubkey, signed with the
+// connection key and its kind-35522 attestation, placed through the call engine
+// (written ahead, looked up when a reply is lost). This is the Cash-Zap
+// connection-key path (NIP-CZ rule 9), here for a plain token. After a successful
+// claim the slice is held under the local identity and redeems normally.
+func receiveConnectionKeyToken(cmd *cobra.Command, input string, tok nipcash.Token) error {
+	jsonMode, _ := cmd.Flags().GetBool("json")
+	as := asCredentialValue(cmd)
+	cred, err := credential.ParseCash(as)
+	if err != nil {
+		return output.InvalidInputError(cmd, output.RedactSecretInput(as), err)
+	}
+	mine, err := localPubKeyHex(cmd)
+	if err != nil {
+		return output.RuntimeError(cmd, fmt.Errorf("a claimed slice moves to your local identity, which isn't set up: %w", err))
+	}
+	// The amount a connection-key holder can't read from cash_status comes from the
+	// token's own signed mint provenance (the whole-bill attested amount) — the
+	// client-side equivalent of the zap event's `amount` the Cash-Zap path uses. It
+	// is held to the same ceiling + signed-provenance cross-check receive applies
+	// elsewhere (validateClaimedAmount), and bound into the claim's full-transfer
+	// proof as CurrentAmount: without it there is no amount to claim against.
+	minter := minterPubkeyFromToken(tok)
+	if minter == nil || tok.AttestedAmountMillis == nil {
+		return output.InvalidInputError(cmd, input, errors.New(
+			"this slice is addressed to a connection key but carries no verifiable signed amount — cashctl can't take delivery of it without the mint-signed amount to claim against"))
+	}
+	amount := *tok.AttestedAmountMillis
+	if err := validateClaimedAmount(cmd, tok, amount, minter); err != nil {
+		return err
+	}
+
+	l, err := ledger.Load()
+	if err != nil {
+		return output.RuntimeError(cmd, err)
+	}
+	if held, ok := l.FindByToken(input); ok && ledger.Live(held.Status) {
+		return output.ConflictError(cmd, input, ledger.ErrAlreadyHeld)
+	}
+
+	printCashBill(jsonMode, tok, false)
+
+	// The claim is a call: its bill is written down first, not held until the Hub
+	// answers. The connection-key binding is recorded so a lost-reply settle (and,
+	// until the claim completes, resolveCredential) recognises it; a successful
+	// claim then clears it (claimedByLocalKey), leaving the slice held locally.
+	entry := ledger.Entry{
+		Token: input, WalletPubkey: tok.WalletPubkey, Secret: tok.Secret, RelayURLs: tok.RelayURLs,
+		IdentityRequired: ptrTo(true), AmountMillis: &amount, Verified: true, MinterPubkey: minter,
+	}
+	if att, aErr := credential.ConnectionKeyAttestation(as); aErr == nil {
+		entry.ConnectionKeyPlatform, entry.IAPubkey, entry.AttestationEventID = string(att.Platform), att.PubKey, att.ID
+	}
+	if parts := strings.SplitN(strings.TrimPrefix(as, "connection-key:"), ",", 4); len(parts) >= 3 {
+		entry.ConnectionKeyExternalID = parts[2]
+	}
+	added, err := l.Add(entry)
+	if err != nil {
+		if errors.Is(err, ledger.ErrAlreadyHeld) {
+			return output.ConflictError(cmd, input, err)
+		}
+		return output.RuntimeError(cmd, err)
+	}
+	_ = l.SetStatus(added.ID, ledger.StatusZapClaiming)
+	if err := l.Save(); err != nil {
+		return output.RuntimeError(cmd, err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	var claimErr error
+	_ = WithSpinner(jsonMode, "Claiming the slice with its Hub...", func() error {
+		claimErr = claimConnectionKeyToken(ctx, cmd, l, added, amount, cred, mine)
+		return nil
+	})
+	if claimErr != nil {
+		var ce *output.CLIError
+		if errors.As(claimErr, &ce) && ce.Code == output.CodeIndeterminate {
+			// Lost reply: the call stays open (exit 8) and the bill stays
+			// zap_claiming until the settle engine resolves it — don't reset it.
+			return claimErr
+		}
+		if e, ok := l.Find(added.ID); ok && e.Status == ledger.StatusZapClaiming {
+			_ = l.SetStatus(e.ID, ledger.StatusNotReceived)
+			_ = l.Save()
+		}
+		return claimErr
+	}
+
+	l.AppendHistory("receive", fmt.Sprintf("received %s addressed to a connection key", output.FormatAmount(int64(amount)))) //nolint:gosec // amounts bounded above
+	if err := l.Save(); err != nil {
+		return output.RuntimeError(cmd, err)
+	}
+
+	final := added
+	if e, ok := l.Find(added.ID); ok {
+		final = e
+	}
+	network, testNet := noteBillNetwork(jsonMode, input)
+	if jsonMode {
+		output.PrintJSON(map[string]any{"received": true, "entry": final, "network": network, "test_network": testNet})
+		return nil
+	}
+	output.Printf("Received %s.\n", output.FormatAmount(int64(amount))) //nolint:gosec // amounts bounded above
+	output.Println("It's now held under your local identity; redeem or transfer it as usual.")
+	return nil
+}
+
+// claimConnectionKeyToken is receiveConnectionKeyToken's rule-9-style claim: a
+// full in-place cash_transfer of the slice to the local pubkey, signed with the
+// connection key, placed through the call engine and recorded with the same
+// in-place logic the Cash-Zap claim uses (applyZapClaimResult — an in-place move
+// holds the bill under the local key).
+func claimConnectionKeyToken(ctx context.Context, cmd *cobra.Command, l *ledger.Ledger, e *ledger.Entry, amount uint64, cred nipcash.Credential, mine string) error {
+	caller, err := dialCallerFn(ctx, e.Token)
+	if err != nil {
+		return err
+	}
+	defer caller.Close()
+	spec := callSpec{Purpose: purposeZapClaim, SourceEntryIDs: []string{e.ID}, AuthorizerKind: ledger.AuthAsCredential, TargetCredential: e.Token}
+	res, call, err := placeTransfer(ctx, cmd, l, caller, spec, nipcash.CashTransferParams{Credential: cred, To: nipcash.Pubkey(mine), CurrentAmount: amount})
+	if err != nil {
+		return err
+	}
+	applyZapClaimResult(l, e, amount, res)
+	closeCall(l, call, ledger.CallDone, "")
 	return nil
 }
 

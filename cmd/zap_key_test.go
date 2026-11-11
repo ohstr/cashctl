@@ -92,6 +92,68 @@ func TestReceiveZap_ConnectionKeyClaim(t *testing.T) {
 	}
 }
 
+// CASHCTL-0013: a plain cash slice (not a zap) addressed to a connection key is
+// taken delivery of with --as connection-key: by claiming it in place to the
+// local pubkey — a full cash_transfer signed with the connection key, the same
+// mechanism as a connection-key zap. CheckClaim is never on this path (its holder
+// can't read cash_status). After the claim the bill is held under the local key,
+// no longer connection-key-bound, and the amount comes from the token's signed
+// mint provenance.
+func TestRunCashReceive_ConnectionKeyTokenClaim(t *testing.T) {
+	newZapFixture(t) // sets up the appdir + the local identity the claim moves value to
+	userPriv, userPub := testmint.Key(t)
+	iaPriv, iaPub := testmint.Key(t)
+	ck, err := nipIC.ConnectionKeyFromAttested("discord", "482910")
+	if err != nil {
+		t.Fatal(err)
+	}
+	att, err := nipIC.NewAttestation(nipIC.AttestationParams{PrivateKey: iaPriv, ConnectionKey: ck, UserPubkey: userPub,
+		Platform: "discord", AuthType: "test", ExpirationDays: 30,
+		Evidence: nipIC.Evidence{Platform: "discord", UserID: "482910", Username: "u", VerifiedAt: time.Now().Unix()}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = iaPub
+	b, _ := json.Marshal(att)
+	file := filepath.Join(t.TempDir(), "att.json")
+	if err := os.WriteFile(file, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cred := "connection-key:" + userPriv + ",discord,482910," + file
+
+	minterPriv, _ := testmint.Key(t)
+	amount := uint64(7000)
+	token := testmint.Bill(t, nipcash.Token{IdentityRequired: ptrTo(true), AttestedAmountMillis: &amount}, minterPriv)
+
+	hooks := installFakeCaller(t)
+	var sent nipcash.CashTransferParams
+	hooks.transfer = func(_ *ledger.Entry, p nipcash.CashTransferParams) (*nipcash.CashTransferResult, error) {
+		sent = p
+		return &nipcash.CashTransferResult{AmountMillis: amount}, nil
+	}
+
+	c := zapCmd(newCashReceiveCmd(), map[string]string{"as": cred})
+	var runErr error
+	out, _ := captureStreams(t, func() { runErr = runCashReceive(c, []string{token}) })
+	if runErr != nil {
+		t.Fatalf("receive: %v\n%s", runErr, out)
+	}
+	if sent.SplitAmount != nil || sent.CurrentAmount != amount {
+		t.Errorf("not a full in-place transfer: %+v", sent)
+	}
+	l, _ := ledger.Load()
+	held := l.Held()
+	if len(held) != 1 || held[0].ConnectionKeyPlatform != "" || held[0].IdentityRequired == nil || !*held[0].IdentityRequired ||
+		held[0].AmountMillis == nil || *held[0].AmountMillis != amount || held[0].ZapEvent != "" {
+		t.Fatalf("not held under the local key: %+v", held)
+	}
+	for _, c := range l.Calls {
+		if c.Purpose != purposeZapClaim || c.State != ledger.CallDone {
+			t.Errorf("call %s/%s", c.Purpose, c.State)
+		}
+	}
+}
+
 // A claim the Hub answers with a split (not in place) is not a valid zap, but
 // the bill it returned is kept as an ordinary held bill and the call is done
 // (Z-1); a refusal leaves nothing held; a lost reply stays open (exit 8) and is
