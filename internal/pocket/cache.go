@@ -252,7 +252,7 @@ func (c *Cache) Balance() (map[string]uint64, error) {
 // flagged for a cash_status re-check.
 func (c *Cache) Entries() (entries []nipCP.Entry, conflicts []string, err error) {
 	rows, err := c.db.Query(`
-SELECT w, rev, state, rumor_created_at, rumor_id, amount, chain,
+SELECT w, rev, state, is_call, rumor_created_at, rumor_id, amount, chain,
        identity_type, identity_value, identity_ia, expires_at, mint, source,
        cash, checked_at, wrap_id, wrap_key, conflict
 FROM entries ORDER BY w`)
@@ -264,15 +264,22 @@ FROM entries ORDER BY w`)
 		var (
 			e        nipCP.Entry
 			state    string
+			isCall   bool
 			expires  sql.NullInt64
 			conflict bool
 		)
-		if err := rows.Scan(&e.W, &e.Rev, &state, &e.RumorCreatedAt, &e.RumorID, &e.Amount, &e.Chain,
+		if err := rows.Scan(&e.W, &e.Rev, &state, &isCall, &e.RumorCreatedAt, &e.RumorID, &e.Amount, &e.Chain,
 			&e.Identity.Type, &e.Identity.Value, &e.Identity.IA, &expires, &e.Mint, &e.Source,
 			&e.Cash, &e.CheckedAt, &e.WrapID, &e.WrapKey, &conflict); err != nil {
 			return nil, nil, err
 		}
 		e.State = nipCP.State(state)
+		// A call entry's W is its request_id (NIP-CP); restore RequestID so
+		// IsCall() holds on read-back (the richer pending params live in the
+		// sealed wrap, re-Opened on demand).
+		if isCall {
+			e.RequestID = e.W
+		}
 		if expires.Valid {
 			v := expires.Int64
 			e.ExpiresAt = &v
