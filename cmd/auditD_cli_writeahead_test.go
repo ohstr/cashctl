@@ -23,12 +23,9 @@ import (
 
 // auditDSeedTwoHeldCash puts two held cash-mode entries in a fresh ledger and
 // returns it plus their IDs, in the order Add assigned them.
-func auditDSeedTwoHeldCash(t *testing.T) (*ledger.Ledger, []string) {
+func auditDSeedTwoHeldCash(t *testing.T) (ledger.Store, []string) {
 	t.Helper()
-	l, err := ledger.Load()
-	if err != nil {
-		t.Fatalf("ledger.Load() error = %v", err)
-	}
+	l := testLoad(t)
 	for _, tok := range []string{"lokicash1wa-a", "lokicash1wa-b"} {
 		amt := uint64(1000)
 		if _, addErr := l.Add(ledger.Entry{
@@ -42,7 +39,8 @@ func auditDSeedTwoHeldCash(t *testing.T) (*ledger.Ledger, []string) {
 	if err := l.Save(); err != nil {
 		t.Fatalf("l.Save() error = %v", err)
 	}
-	return l, []string{l.Entries[0].ID, l.Entries[1].ID}
+	ents := l.AllEntries()
+	return l, []string{ents[0].ID, ents[1].ID}
 }
 
 // inFlight is what a fresh process finds while a call is at the Hub.
@@ -52,12 +50,9 @@ type inFlight struct {
 
 func snapshotInFlight(t *testing.T) inFlight {
 	t.Helper()
-	fresh, err := ledger.Load()
-	if err != nil {
-		t.Fatalf("in-flight ledger.Load() error = %v", err)
-	}
+	fresh := testLoad(t)
 	var open []ledger.Call
-	for _, c := range fresh.Calls {
+	for _, c := range fresh.AllCalls() {
 		if c.Open() {
 			open = append(open, c)
 		}
@@ -127,7 +122,7 @@ func TestWriteAhead_EveryCallSiteWritesItsCallFirst(t *testing.T) {
 		var seen inFlight
 		withMoveFn(t, func(*ledger.Entry, nipcash.Credential, nipcash.Target) (*nipcash.CashTransferResult, error) {
 			seen = snapshotInFlight(t)
-			fresh, _ := ledger.Load()
+			fresh := testLoad(t)
 			if e, _ := fresh.Find(ids[0]); e.PendingThrowawayKey != priv {
 				t.Error("the merge key was not on disk while the move was at the Hub")
 			}
@@ -170,9 +165,9 @@ func TestWriteAhead_EveryCallSiteWritesItsCallFirst(t *testing.T) {
 // requireClosed checks that the one call written is final and keeps no secret.
 func requireClosed(t *testing.T, state string) {
 	t.Helper()
-	fresh, _ := ledger.Load()
-	if len(fresh.Calls) != 1 || fresh.Calls[0].State != state || len(fresh.Calls[0].Secrets) != 0 || fresh.Calls[0].AuthorizerSecret != "" {
-		t.Errorf("after the call: %+v; want one %s call with its secrets wiped", fresh.Calls, state)
+	calls := testLoad(t).AllCalls()
+	if len(calls) != 1 || calls[0].State != state || len(calls[0].Secrets) != 0 || calls[0].AuthorizerSecret != "" {
+		t.Errorf("after the call: %+v; want one %s call with its secrets wiped", calls, state)
 	}
 }
 
@@ -193,8 +188,8 @@ func TestWriteAhead_AFailedWriteSendsNothing(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "not placed") || output.AsCLIError(err).Code != output.CodeInternal {
 		t.Fatalf("err %v; want internal, not placed", err)
 	}
-	if fresh, _ := ledger.Load(); len(fresh.Calls) != 0 {
-		t.Errorf("%d calls left on disk, want none", len(fresh.Calls))
+	if calls := testLoad(t).AllCalls(); len(calls) != 0 {
+		t.Errorf("%d calls left on disk, want none", len(calls))
 	}
 }
 

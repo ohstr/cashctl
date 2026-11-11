@@ -430,17 +430,17 @@ func init() { placementWaitEnabled = false }
 // fakeAsReplacement does what nmilat's send path does before writing a
 // re-placement ahead: the call names the call it replaces and its attempt.
 func fakeAsReplacement(j nipcashclient.Journal, pc nipcash.PendingCall) nipcash.PendingCall {
-	var l *ledger.Ledger
+	var st ledger.Store
 	switch jj := j.(type) {
 	case *ledgerJournal:
-		l = jj.l.(*ledger.Ledger)
+		st = jj.l
 	case *withdrawJournal:
-		l = jj.l.(*ledger.Ledger)
+		st = jj.l
 	}
-	if l == nil || pc.DerivedFrom != "" {
+	if st == nil || pc.DerivedFrom != "" {
 		return pc
 	}
-	for _, c := range l.Calls {
+	for _, c := range st.AllCalls() {
 		if d, err := nipcash.DerivedRequestID(c.RequestID); err == nil && d == pc.RequestID {
 			pc.DerivedFrom, pc.Attempt = c.RequestID, c.Attempt+1
 			break
