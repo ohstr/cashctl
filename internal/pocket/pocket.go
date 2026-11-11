@@ -108,9 +108,18 @@ func Open(ctx context.Context, dir, userPriv, chain string) (*Pocket, error) {
 // ledger's per-call read. The pocket.db event store is opened separately, only by
 // the NIP-CP projection/sync/serve (later phases), never on the ledger path.
 func OpenLedgerOnly(dir, userPriv string) (*Pocket, error) {
-	userPub, err := utils.GetPublicKey(userPriv)
-	if err != nil {
-		return nil, fmt.Errorf("pocket: user key: %w", err)
+	// A keyless wallet (no identity configured yet) has nothing sealed: the cache
+	// is empty, so no blob is ever opened and no key is needed. userPub stays ""
+	// (used only to open sealed blobs, of which there are none). loadLedger over a
+	// non-empty cache with no key fails closed on the first openEntry — the key
+	// loss/SPOF case, not this fresh-wallet path.
+	var userPub string
+	if userPriv != "" {
+		var err error
+		userPub, err = utils.GetPublicKey(userPriv)
+		if err != nil {
+			return nil, fmt.Errorf("pocket: user key: %w", err)
+		}
 	}
 	cache, err := OpenCache(filepath.Join(dir, "pocket-cache.db"))
 	if err != nil {
