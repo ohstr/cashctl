@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/ohstr/nmilat/nip01"
+	"github.com/ohstr/nmilat/nipCZ"
 	"github.com/ohstr/nmilat/nipcash"
 	"github.com/ohstr/nmilat/utils"
 	"github.com/spf13/cobra"
@@ -206,6 +207,62 @@ func TestReceiveZap_NonLokiRefused(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "loki") {
 		t.Fatalf("receiveZap(satscash) error = %q, want it to mention loki-only", err.Error())
+	}
+}
+
+// A profile (no-event) Cash Zap carries a plain, non-zap-signed bill (token
+// scheme != zap-v1): there is no zap signature to verify. Receiving it with
+// --zap-event must fall through to a plain-bill claim, NOT fail the zap-signature
+// path with "names no target event" (confirmed live, CC-24). An event-target zap
+// (a zap-signed bill) still goes through receiveZap — covered by the other tests.
+func TestReceiveZap_ProfileZapViaFlagFallsBackToPlainBill(t *testing.T) {
+	f := newZapFixture(t) // local identity (me) + appdir
+	senderPriv, _ := testmint.Key(t)
+	amt := uint64(50000)
+	// A plain (scheme-1, non-zap-signed), cash-mode loki bill.
+	bill := testmint.Bill(t, nipcash.Token{
+		HRP: "lokicash", WalletPubkey: strings.Repeat("ab", 32), Secret: strings.Repeat("cd", 32),
+		RelayURLs: []string{"wss://hub.example"}, IdentityRequired: ptrTo(false), AttestedAmountMillis: &amt,
+	}, f.minterPriv)
+	tok, err := nipcash.Decode(bill)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tok.Scheme == nipcash.SchemeZapV1 {
+		t.Fatal("test bill must be a plain, non-zap-signed bill")
+	}
+	// A kind-9522 with NO e/a target (a profile zap) carrying that plain bill.
+	ev, err := nip01.NewSignedEvent(9522, "gm", senderPriv,
+		[]string{"p", f.me}, []string{"amount", "50000"}, []string{"chain", "flokicoin"},
+		[]string{"cash", bill}, []string{"w", tok.WalletPubkey})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Sanity: it parses, and it has no zap-target (the thing receiveZap's rule 9
+	// would choke on with ErrNoTarget).
+	z, zErr := nipCZ.ParseCashZap(ev)
+	if zErr != nil {
+		t.Fatalf("profile 9522 should parse: %v", zErr)
+	}
+	if _, tErr := nipCZ.ZapContextFromEvent(z); tErr == nil {
+		t.Fatal("test 9522 unexpectedly has a target")
+	}
+	path := filepath.Join(t.TempDir(), "profile-zap.json")
+	raw, _ := json.Marshal(ev)
+	_ = os.WriteFile(path, raw, 0o600)
+
+	stdout, err := runReceiveZap(t, []string{bill}, map[string]string{"zap-event": path})
+	if err != nil {
+		if strings.Contains(err.Error(), "no target event") {
+			t.Fatalf("profile zap via --zap-event wrongly hit the zap-signature path: %v", err)
+		}
+		t.Fatalf("profile zap fell through but errored: %v", err)
+	}
+	// It fell through to the plain receive: a cash-mode bill with no embedded
+	// secret short-circuits to received=false under --json (no network), proving
+	// the plain path ran rather than receiveZap's rule 9.
+	if !strings.Contains(stdout, `"received": false`) && !strings.Contains(stdout, `"received":false`) {
+		t.Errorf("want the plain no-secret short-circuit; stdout=%s", stdout)
 	}
 }
 
