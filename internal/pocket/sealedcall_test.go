@@ -23,6 +23,57 @@ func testPub(t *testing.T) string {
 	return pub
 }
 
+// TestSealedOrderWithdrawalRoundTrips proves ledger.Order and ledger.Withdrawal
+// (both funds-bearing, both json:"-" secret fields + an AcceptedRelays slice gob
+// loses empty-vs-nil on) seal/open byte-identical across nil / empty / non-empty
+// slices, and leak no cleartext secret — the same encrypt-at-rest + fail-closed
+// read-back guarantee the entry/call sealing has (risk 17 / finding #16).
+func TestSealedOrderWithdrawalRoundTrips(t *testing.T) {
+	priv, pub := testPriv, testPub(t)
+	const secret = "order-notify-and-quote-secret-do-not-leak"
+
+	for _, relays := range [][]string{nil, {}, {"wss://a.example", "wss://b.example"}} {
+		o := ledger.Order{
+			OrderID: "ord-0001", CallID: "call-0001", Notify: secret, Payment: "lightning",
+			AmountMillis: 7000, RecipientKind: "pubkey", Recipient: "recip", HubIdentity: "hub",
+			Chain: "flokicoin", Network: "regtest", ConnVerified: true, State: ledger.OrderPlacing,
+			SawProgress: true, PayBy: 1760000300, OrderJSON: `{"order":"` + secret + `"}`,
+			AcceptedRelays: relays, CreatedAt: 1760000000,
+		}
+		sc, err := sealOrder(o, priv, pub)
+		if err != nil {
+			t.Fatalf("sealOrder(relays=%v): %v", relays, err)
+		}
+		if strings.Contains(sc, secret) {
+			t.Fatalf("sealed order leaks cleartext secret (relays=%v)", relays)
+		}
+		if got, err := openOrder(sc, priv, pub); err != nil {
+			t.Fatalf("openOrder: %v", err)
+		} else if !reflect.DeepEqual(got, o) {
+			t.Fatalf("order round-trip mismatch (relays=%v):\n got  %+v\n want %+v", relays, got, o)
+		}
+
+		w := ledger.Withdrawal{
+			WithdrawalID: "wd-0001", CallID: "call-0002", SourceEntryID: "tok-aaaa",
+			WalletPubkey: "aaaa", HubIdentity: "hub", Address: "flc1qaddr", QuoteJSON: secret,
+			QuoteID: "q1", AmountMillis: 6000, PayoutMillis: 5900, Notify: secret,
+			AcceptedRelays: relays, State: "placing", QuoteExpiredSeen: false, ReceiptInvalidSeen: 0,
+		}
+		sw, err := sealWithdrawal(w, priv, pub)
+		if err != nil {
+			t.Fatalf("sealWithdrawal(relays=%v): %v", relays, err)
+		}
+		if strings.Contains(sw, secret) {
+			t.Fatalf("sealed withdrawal leaks cleartext secret (relays=%v)", relays)
+		}
+		if got, err := openWithdrawal(sw, priv, pub); err != nil {
+			t.Fatalf("openWithdrawal: %v", err)
+		} else if !reflect.DeepEqual(got, w) {
+			t.Fatalf("withdrawal round-trip mismatch (relays=%v):\n got  %+v\n want %+v", relays, got, w)
+		}
+	}
+}
+
 // TestSealedRoundTrips proves the faithful seal/open helpers (1) round-trip a
 // ledger.Call / ledger.Entry / ledger.Handoff byte-identical and (2) leak no
 // cleartext secret into the sealed blob (the plan's risk 17 — encrypt-at-rest).

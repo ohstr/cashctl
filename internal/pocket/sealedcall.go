@@ -141,6 +141,71 @@ func openHandoff(sealed, priv, pub string) (ledger.Handoff, error) {
 	return h, nil
 }
 
+// orderPtrs / withdrawalPtrs are the overlay for ledger.Order/Withdrawal. Neither
+// has pointer fields, but both carry an AcceptedRelays []string, and gob collapses
+// an empty non-nil slice to nil on decode — so the slice is carried in the JSON
+// overlay (which preserves nil vs [] vs non-empty) and re-applied after gob-decode,
+// the same nil-vs-zero fix the entry/call overlays make. The seal→open DeepEqual
+// read-back fails loudly if any other field does not round-trip.
+type orderPtrs struct {
+	AcceptedRelays []string `json:"accepted_relays"`
+}
+type withdrawalPtrs struct {
+	AcceptedRelays []string `json:"accepted_relays"`
+}
+
+// sealOrder serializes and encrypts-to-self one ledger.Order (a NIP-CO order
+// placed from here). Funds-bearing (its mint is collected against it), so stored
+// encrypted at rest like calls/entries, byte-identical on reload.
+func sealOrder(o ledger.Order, priv, pub string) (string, error) {
+	return seal("order", o, orderPtrs{o.AcceptedRelays}, priv, pub, func(s string) (any, error) { return openOrder(s, priv, pub) })
+}
+
+// openOrder decrypts and deserializes one ledger.Order.
+func openOrder(sealed, priv, pub string) (ledger.Order, error) {
+	var o ledger.Order
+	if err := unseal(sealed, priv, pub, &o, func(raw json.RawMessage) error {
+		if len(raw) == 0 {
+			return nil
+		}
+		var p orderPtrs
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return err
+		}
+		o.AcceptedRelays = p.AcceptedRelays
+		return nil
+	}); err != nil {
+		return ledger.Order{}, fmt.Errorf("pocket: open order: %w", err)
+	}
+	return o, nil
+}
+
+// sealWithdrawal serializes and encrypts-to-self one ledger.Withdrawal (an
+// on-chain payout placed from here — funds-bearing, so encrypted at rest and
+// byte-identical on reload).
+func sealWithdrawal(w ledger.Withdrawal, priv, pub string) (string, error) {
+	return seal("withdrawal", w, withdrawalPtrs{w.AcceptedRelays}, priv, pub, func(s string) (any, error) { return openWithdrawal(s, priv, pub) })
+}
+
+// openWithdrawal decrypts and deserializes one ledger.Withdrawal.
+func openWithdrawal(sealed, priv, pub string) (ledger.Withdrawal, error) {
+	var w ledger.Withdrawal
+	if err := unseal(sealed, priv, pub, &w, func(raw json.RawMessage) error {
+		if len(raw) == 0 {
+			return nil
+		}
+		var p withdrawalPtrs
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return err
+		}
+		w.AcceptedRelays = p.AcceptedRelays
+		return nil
+	}); err != nil {
+		return ledger.Withdrawal{}, fmt.Errorf("pocket: open withdrawal: %w", err)
+	}
+	return w, nil
+}
+
 // seal gob-encodes v + its pointer overlay, encrypts-to-self, and read-back
 // verifies (seal→open reflect.DeepEqual) so any field that does not round-trip
 // fails loudly here rather than silently corrupting funds state later. reopen
