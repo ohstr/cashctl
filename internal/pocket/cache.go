@@ -3,6 +3,7 @@ package pocket
 import (
 	"database/sql"
 	"fmt"
+	"strconv"
 
 	_ "modernc.org/sqlite" // pure-Go sqlite driver, as internal/store uses
 
@@ -135,7 +136,19 @@ func (c *Cache) Fold(e nipCP.Entry) (changed bool, err error) {
 		return false, err
 	}
 	defer tx.Rollback()
+	changed, err = foldTx(tx, e)
+	if err != nil {
+		return false, err
+	}
+	return changed, tx.Commit()
+}
 
+// foldTx applies one decoded entry within tx (the fold core, shared by Fold and
+// the atomic Rebuild). An unrecognised state is skipped by the caller.
+func foldTx(tx *sql.Tx, e nipCP.Entry) (changed bool, err error) {
+	if !e.Recognised() {
+		return false, nil
+	}
 	var (
 		curRev       uint64
 		curState     string
@@ -149,7 +162,7 @@ func (c *Cache) Fold(e nipCP.Entry) (changed bool, err error) {
 		if err := upsertEntry(tx, e, false); err != nil {
 			return false, err
 		}
-		return true, tx.Commit()
+		return true, nil
 	case nil:
 		// fall through
 	default:
@@ -165,7 +178,7 @@ func (c *Cache) Fold(e nipCP.Entry) (changed bool, err error) {
 		if err := upsertEntry(tx, e, false); err != nil {
 			return false, err
 		}
-		return true, tx.Commit()
+		return true, nil
 	case ek.rev == ck.rev:
 		// Two distinct rumors at the winning rev is a conflict (re-check with
 		// cash_status). The same rumor id again is not.
@@ -174,18 +187,18 @@ func (c *Cache) Fold(e nipCP.Entry) (changed bool, err error) {
 			if err := upsertEntry(tx, e, conflict); err != nil {
 				return false, err
 			}
-			return true, tx.Commit()
+			return true, nil
 		}
 		if conflict != curConflict {
 			if _, err := tx.Exec(`UPDATE entries SET conflict = ? WHERE w = ?`, conflict, e.W); err != nil {
 				return false, err
 			}
-			return true, tx.Commit()
+			return true, nil
 		}
-		return false, tx.Commit()
+		return false, nil
 	default:
 		// Lower rev: e loses, nothing changes.
-		return false, tx.Commit()
+		return false, nil
 	}
 }
 
@@ -273,8 +286,11 @@ FROM entries ORDER BY w`)
 }
 
 // Rebuild drops the decoded projection and re-folds all entries from scratch
-// (e.g. after a schema bump, or to recover a corrupt cache). Because the fold is
-// order-independent, the result equals the incrementally-maintained cache.
+// (e.g. after a schema bump, or to recover a corrupt cache). It is ATOMIC — the
+// delete and every fold run in one transaction — so a crash mid-rebuild leaves
+// the previous projection intact rather than an empty cache that nothing would
+// auto-recover. Because the fold is order-independent, the result equals the
+// incrementally-maintained cache.
 func (c *Cache) Rebuild(all []nipCP.Entry) error {
 	tx, err := c.db.Begin()
 	if err != nil {
@@ -284,13 +300,59 @@ func (c *Cache) Rebuild(all []nipCP.Entry) error {
 	if _, err := tx.Exec(`DELETE FROM entries`); err != nil {
 		return err
 	}
-	if err := tx.Commit(); err != nil {
-		return err
-	}
 	for _, e := range all {
-		if _, err := c.Fold(e); err != nil {
+		if _, err := foldTx(tx, e); err != nil {
 			return err
 		}
 	}
-	return nil
+	return tx.Commit()
+}
+
+// SchemaVersion is the decoded cache's stored schema version (0 if unset).
+func (c *Cache) SchemaVersion() (int, error) {
+	v, err := c.metaGet("schema_version")
+	if err != nil || v == "" {
+		return 0, err
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return 0, fmt.Errorf("pocket: schema_version %q: %w", v, err)
+	}
+	return n, nil
+}
+
+func (c *Cache) setSchemaVersion(v int) error { return c.metaSet("schema_version", strconv.Itoa(v)) }
+
+// State returns the resolved state of w (and whether w is known). The settle
+// driver reads it before applying a reply so a call is reconciled exactly once:
+// once its pending entry is done, State reports done and the apply is skipped.
+func (c *Cache) State(w string) (state string, known bool, err error) {
+	err = c.db.QueryRow(`SELECT state FROM entries WHERE w = ?`, w).Scan(&state)
+	switch err {
+	case sql.ErrNoRows:
+		return "", false, nil
+	case nil:
+		return state, true, nil
+	default:
+		return "", false, fmt.Errorf("pocket: state %s: %w", w, err)
+	}
+}
+
+// OpenCalls lists the w (request_id) of every still-open pending call (a call
+// entry in state pending). The settle driver works through these.
+func (c *Cache) OpenCalls() ([]string, error) {
+	rows, err := c.db.Query(`SELECT w FROM entries WHERE is_call = 1 AND state = ?`, string(nipCP.StatePending))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var w string
+		if err := rows.Scan(&w); err != nil {
+			return nil, err
+		}
+		out = append(out, w)
+	}
+	return out, rows.Err()
 }
