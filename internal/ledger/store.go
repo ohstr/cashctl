@@ -41,6 +41,16 @@ type Store interface {
 	OpenCallFor(entryID string) (*Call, bool)
 	RemoveCall(callID string) bool
 
+	// Derived-id gate: the cross-process re-placement lock (NIP-CASH §Lost
+	// Replies / NIP-CP §Writing derived id). InsertDerived's primary key is the
+	// lock — of two processes re-placing one call, only one inserts (the other
+	// gets ErrDerivedRecorded). Behind the seam today they wrap the package funcs;
+	// a pocket Store keeps them in its own derived_ids.
+	InsertDerived(requestID, parent string, deadline *int64, keepUntil int64) error
+	RemoveDerived(requestID string) error
+	DerivedParent(requestID string) (string, error)
+	DerivedRecorded(requestID string) (bool, error)
+
 	// Staged order/withdrawal bookkeeping.
 	StageOrder(o Order)
 	DropStagedOrders()
@@ -62,3 +72,15 @@ func (l *Ledger) AllEntries() []Entry         { return l.Entries }
 func (l *Ledger) AllCalls() []Call            { return l.Calls }
 func (l *Ledger) AllHandoffs() []Handoff      { return l.Handoffs }
 func (l *Ledger) AllHistory() []HistoryEntry  { return l.History }
+
+// Derived-id gate — the concrete ledger wraps the package-level funcs (which key
+// off the shared cashctl.db derived_ids table), so routing the journal through
+// the Store seam is zero-behaviour-change for the old ledger. (An unqualified
+// call inside a method resolves to the package func, not the method — no
+// recursion.)
+func (l *Ledger) InsertDerived(requestID, parent string, deadline *int64, keepUntil int64) error {
+	return InsertDerived(requestID, parent, deadline, keepUntil)
+}
+func (l *Ledger) RemoveDerived(requestID string) error        { return RemoveDerived(requestID) }
+func (l *Ledger) DerivedParent(requestID string) (string, error) { return DerivedParent(requestID) }
+func (l *Ledger) DerivedRecorded(requestID string) (bool, error) { return DerivedRecorded(requestID) }

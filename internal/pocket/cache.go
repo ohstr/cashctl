@@ -53,8 +53,10 @@ CREATE INDEX IF NOT EXISTS idx_entries_chain_state ON entries(chain, state);
 CREATE INDEX IF NOT EXISTS idx_entries_expires     ON entries(expires_at);
 
 CREATE TABLE IF NOT EXISTS derived_ids (
-  id         TEXT PRIMARY KEY,
-  keep_until INTEGER NOT NULL
+  id                 TEXT PRIMARY KEY,
+  parent_request_id  TEXT NOT NULL DEFAULT '',
+  deadline           INTEGER,
+  keep_until         INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS meta (

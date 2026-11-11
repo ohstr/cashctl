@@ -2,6 +2,8 @@ package pocket
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -374,6 +376,56 @@ func (s *LedgerStore) OpenCallFor(entryID string) (*ledger.Call, bool) {
 	// re-Opened pending wrap's source list. Returning "none" is safe (never a
 	// wrong call); no command uses the pocket store until stage 3.
 	return nil, false
+}
+
+// ---- derived-id gate (cross-process re-placement lock) over pocket-cache.db's
+// derived_ids table (stage 3a-i). INSERT OR IGNORE + RowsAffected is the lock and
+// is driver-agnostic: a second insert of the same id affects no row, which is the
+// "already recorded" answer the old ledger gives via ErrDerivedRecorded. These are
+// LOCAL_ONLY precious state (the plan's risk 19), never in the synced store. ----
+
+func (s *LedgerStore) InsertDerived(requestID, parent string, deadline *int64, keepUntil int64) error {
+	var d any
+	if deadline != nil {
+		d = *deadline
+	}
+	res, err := s.p.Cache.db.Exec(
+		`INSERT OR IGNORE INTO derived_ids(id, parent_request_id, deadline, keep_until) VALUES(?,?,?,?)`,
+		requestID, parent, d, keepUntil)
+	if err != nil {
+		return fmt.Errorf("pocket ledgerstore: insert derived %s: %w", requestID, err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ledger.ErrDerivedRecorded // already recorded: another run placed it
+	}
+	return nil
+}
+
+func (s *LedgerStore) RemoveDerived(requestID string) error {
+	_, err := s.p.Cache.db.Exec(`DELETE FROM derived_ids WHERE id = ?`, requestID)
+	return err
+}
+
+func (s *LedgerStore) DerivedParent(requestID string) (string, error) {
+	var parent string
+	err := s.p.Cache.db.QueryRow(`SELECT parent_request_id FROM derived_ids WHERE id = ?`, requestID).Scan(&parent)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return parent, err
+}
+
+func (s *LedgerStore) DerivedRecorded(requestID string) (bool, error) {
+	var one int
+	err := s.p.Cache.db.QueryRow(`SELECT 1 FROM derived_ids WHERE id = ?`, requestID).Scan(&one)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return false, nil
+	case err != nil:
+		return false, fmt.Errorf("pocket ledgerstore: derived recorded %s: %w", requestID, err)
+	default:
+		return true, nil
+	}
 }
 
 // ---- funds-mutating methods the event-sourced pocket expresses differently:

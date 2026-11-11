@@ -121,7 +121,7 @@ func (j *ledgerJournal) WriteAhead(ctx context.Context, calls []nipcash.PendingC
 		if pc.DerivedFrom == "" {
 			// A re-placement written once, through the send path: its parent is
 			// the one Replace recorded with the derived id.
-			if parent, err := ledger.DerivedParent(pc.RequestID); err == nil && parent != "" {
+			if parent, err := j.l.DerivedParent(pc.RequestID); err == nil && parent != "" {
 				pc.DerivedFrom = parent
 				if p, ok := j.l.FindCall(ledger.CallIDFor(parent)); ok && pc.Attempt <= p.Attempt {
 					pc.Attempt = p.Attempt + 1
@@ -183,7 +183,7 @@ func (j *ledgerJournal) WriteAhead(ctx context.Context, calls []nipcash.PendingC
 
 // RecordDerived records a derived id placed from here.
 func (j *ledgerJournal) RecordDerived(_ context.Context, id string, keepUntil int64) error {
-	if err := ledger.InsertDerived(id, "", nil, keepUntil); err != nil {
+	if err := j.l.InsertDerived(id, "", nil, keepUntil); err != nil {
 		return err
 	}
 	j.derived = append(j.derived, id)
@@ -194,7 +194,7 @@ func (j *ledgerJournal) RecordDerived(_ context.Context, id string, keepUntil in
 // (nipcash/client.DerivedParentRecorder): the derived call's row then names
 // its parent even when it is written once, through the send path.
 func (j *ledgerJournal) RecordDerivedFrom(_ context.Context, id, parent string, keepUntil int64) error {
-	if err := ledger.InsertDerived(id, parent, nil, keepUntil); err != nil {
+	if err := j.l.InsertDerived(id, parent, nil, keepUntil); err != nil {
 		return err
 	}
 	j.derived = append(j.derived, id)
@@ -205,7 +205,7 @@ var _ nipcashclient.DerivedParentRecorder = (*ledgerJournal)(nil)
 
 // DerivedPlaced reports a derived id recorded here.
 func (j *ledgerJournal) DerivedPlaced(_ context.Context, id string) (bool, error) {
-	return ledger.DerivedRecorded(id)
+	return j.l.DerivedRecorded(id)
 }
 
 // call is the one call this journal wrote, or nil.

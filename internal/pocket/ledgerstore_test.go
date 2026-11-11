@@ -2,6 +2,7 @@ package pocket
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/ohstr/nmilat/nipCP"
@@ -227,4 +228,39 @@ func mustPanic(t *testing.T, name string, fn func()) {
 		}
 	}()
 	fn()
+}
+
+// TestLedgerStoreDerivedIDGate exercises the derived-id cross-process lock over
+// pocket-cache.db (stage 3a-i): a first insert records the id, a second returns
+// ErrDerivedRecorded, the parent and recorded? queries answer, and RemoveDerived
+// frees it to be placed again.
+func TestLedgerStoreDerivedIDGate(t *testing.T) {
+	s := openStore(t)
+	const id, parent = "derived-1", "parent-1"
+
+	if ok, err := s.DerivedRecorded(id); err != nil || ok {
+		t.Fatalf("DerivedRecorded before insert = %v,%v want false,nil", ok, err)
+	}
+	if err := s.InsertDerived(id, parent, nil, 999); err != nil {
+		t.Fatalf("first InsertDerived = %v, want nil", err)
+	}
+	// The lock: a second insert of the same id must report already-recorded.
+	if err := s.InsertDerived(id, parent, nil, 999); !errors.Is(err, ledger.ErrDerivedRecorded) {
+		t.Fatalf("second InsertDerived = %v, want ErrDerivedRecorded", err)
+	}
+	if ok, err := s.DerivedRecorded(id); err != nil || !ok {
+		t.Fatalf("DerivedRecorded after insert = %v,%v want true,nil", ok, err)
+	}
+	if got, err := s.DerivedParent(id); err != nil || got != parent {
+		t.Fatalf("DerivedParent = %q,%v want %q,nil", got, err, parent)
+	}
+	if got, err := s.DerivedParent("absent"); err != nil || got != "" {
+		t.Fatalf("DerivedParent(absent) = %q,%v want \"\",nil", got, err)
+	}
+	if err := s.RemoveDerived(id); err != nil {
+		t.Fatalf("RemoveDerived = %v, want nil", err)
+	}
+	if ok, _ := s.DerivedRecorded(id); ok {
+		t.Fatal("DerivedRecorded after remove = true, want false (freed to re-place)")
+	}
 }

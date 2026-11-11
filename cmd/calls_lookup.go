@@ -528,7 +528,7 @@ func replaceCallConfirmed(cmd *cobra.Command, l ledger.Store, c *ledger.Call, co
 			l.RemoveCall(derivedID)
 		}
 		for _, id := range j.derived {
-			_ = ledger.RemoveDerived(id)
+			_ = l.RemoveDerived(id)
 		}
 		parent.Detail = "re-placement not sent: " + output.Sanitize(fmt.Sprint(sendErr))
 		_ = l.Save()
