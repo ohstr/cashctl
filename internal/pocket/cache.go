@@ -7,6 +7,7 @@ import (
 
 	_ "modernc.org/sqlite" // pure-Go sqlite driver, as internal/store uses
 
+	"github.com/ohstr/cashctl/internal/ledger"
 	"github.com/ohstr/nmilat/nipCP"
 )
 
@@ -534,39 +535,91 @@ type SealedHandoff struct {
 	Sealed string
 }
 
+// StoreVersion is the whole-store optimistic-concurrency token. PersistLedger
+// bumps it on every successful save; OpenLedgerStore captures it at load and
+// passes it back, so a save whose caller loaded an older version (another cashctl
+// process wrote in between) is refused with ledger.ErrConcurrentUpdate instead of
+// clobbering it. 0 (default/absent) is a fresh store.
+func (c *Cache) StoreVersion() (int64, error) {
+	v, err := c.metaGet("store_version")
+	if err != nil || v == "" {
+		return 0, err
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("pocket: store_version %q: %w", v, err)
+	}
+	return n, nil
+}
+
 // PersistLedger writes the full faithful ledger state (entries_full, pending_calls,
 // handoffs) in ONE transaction — matching the old cashctl.db ledger's atomic
 // whole-table Save, so a crash mid-save leaves the previous state intact rather
 // than a half-written mix (e.g. a source marked spent with its pending call not
 // yet durable). It is a full replace of the current state: delete-all then insert
-// the caller's current rows, atomically. (Single-process: concurrent cashctl
-// processes would need the old ledger's per-row version tokens — a later concern,
-// noted; the common case is one process.)
-func (c *Cache) PersistLedger(entries []SealedEntry, calls []SealedCall, handoffs []SealedHandoff, now int64) error {
+// the caller's current rows, atomically.
+//
+// Multi-process concurrency (the plan's #14 — adversarial-confirmed): the delete-all
+// is guarded by an optimistic-concurrency compare-and-set on store_version, read
+// INSIDE the tx so check-and-bump is atomic. If another cashctl process wrote since
+// this store loaded (disk version != expectedVersion), the save is refused with
+// ledger.ErrConcurrentUpdate and NOTHING is overwritten — closing the stranding
+// bug where a stale process's blind delete erased another's written-ahead call.
+// A whole-store counter is coarser than the old ledger's per-call version but
+// strictly stronger: ANY concurrent write is caught, so it subsumes both the old
+// per-call CAS and refuseForeignOpenCall (R-CP-10) in one guard. Returns the new
+// store version on success.
+func (c *Cache) PersistLedger(entries []SealedEntry, calls []SealedCall, handoffs []SealedHandoff, now, expectedVersion int64) (int64, error) {
 	tx, err := c.db.Begin()
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer tx.Rollback()
+
+	var cur int64
+	var curStr string
+	switch err := tx.QueryRow(`SELECT value FROM meta WHERE key = 'store_version'`).Scan(&curStr); err {
+	case sql.ErrNoRows:
+		cur = 0
+	case nil:
+		if cur, err = strconv.ParseInt(curStr, 10, 64); err != nil {
+			return 0, fmt.Errorf("pocket: store_version %q: %w", curStr, err)
+		}
+	default:
+		return 0, err
+	}
+	if cur != expectedVersion {
+		return 0, fmt.Errorf("%w (pocket store at v%d, this command loaded v%d)", ledger.ErrConcurrentUpdate, cur, expectedVersion)
+	}
+
 	for _, t := range []string{"entries_full", "pending_calls", "handoffs"} {
 		if _, err := tx.Exec(`DELETE FROM ` + t); err != nil {
-			return err
+			return 0, err
 		}
 	}
 	for _, e := range entries {
 		if _, err := tx.Exec(`INSERT INTO entries_full(id, w, sealed, updated_at) VALUES(?,?,?,?)`, e.ID, e.W, e.Sealed, now); err != nil {
-			return err
+			return 0, err
 		}
 	}
 	for _, cl := range calls {
 		if _, err := tx.Exec(`INSERT INTO pending_calls(request_id, sealed, updated_at) VALUES(?,?,?)`, cl.RequestID, cl.Sealed, now); err != nil {
-			return err
+			return 0, err
 		}
 	}
 	for _, h := range handoffs {
 		if _, err := tx.Exec(`INSERT INTO handoffs(id, sealed, updated_at) VALUES(?,?,?)`, h.ID, h.Sealed, now); err != nil {
-			return err
+			return 0, err
 		}
 	}
-	return tx.Commit()
+
+	newV := expectedVersion + 1
+	if _, err := tx.Exec(`INSERT INTO meta(key, value) VALUES('store_version', ?)
+		ON CONFLICT(key) DO UPDATE SET value = excluded.value`, strconv.FormatInt(newV, 10)); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return newV, nil
 }

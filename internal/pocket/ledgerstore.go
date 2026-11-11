@@ -39,6 +39,11 @@ type LedgerStore struct {
 	*ledger.Ledger
 	p   *Pocket
 	ctx context.Context
+	// version is the store_version this store loaded at (optimistic concurrency,
+	// #14). Save passes it to PersistLedger's compare-and-set and advances it on
+	// success, so a concurrent process that wrote in between is refused rather than
+	// clobbered.
+	version int64
 }
 
 var _ ledger.Store = (*LedgerStore)(nil)
@@ -61,7 +66,12 @@ func OpenLedgerStore(ctx context.Context, dir, userPriv, chain string) (*LedgerS
 		p.Close()
 		return nil, err
 	}
-	return &LedgerStore{Ledger: l, p: p, ctx: ctx}, nil
+	version, err := p.Cache.StoreVersion()
+	if err != nil {
+		p.Close()
+		return nil, err
+	}
+	return &LedgerStore{Ledger: l, p: p, ctx: ctx, version: version}, nil
 }
 
 // Close releases the underlying pocket (the bbolt single-writer lock + the
@@ -183,7 +193,12 @@ func (s *LedgerStore) Save() error {
 		handoffs = append(handoffs, SealedHandoff{ID: s.Handoffs[i].ID, Sealed: blob})
 	}
 
-	return s.p.Cache.PersistLedger(entries, calls, handoffs, now)
+	newVersion, err := s.p.Cache.PersistLedger(entries, calls, handoffs, now, s.version)
+	if err != nil {
+		return err
+	}
+	s.version = newVersion
+	return nil
 }
 
 // ---- derived-id gate (cross-process re-placement lock) over pocket-cache.db's
