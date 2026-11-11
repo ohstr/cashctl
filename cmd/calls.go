@@ -167,7 +167,7 @@ func (j *ledgerJournal) WriteAhead(ctx context.Context, calls []nipcash.PendingC
 	}
 	for _, id := range append(slices.Clone(written), rewritten...) {
 		c, _ := j.l.FindCall(id)
-		if err := ledger.VerifyWritten(*c); err != nil {
+		if err := j.l.VerifyWritten(*c); err != nil {
 			return undo(err)
 		}
 	}

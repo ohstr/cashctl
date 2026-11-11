@@ -235,3 +235,25 @@ func (s *LedgerStore) DerivedRecorded(requestID string) (bool, error) {
 		return true, nil
 	}
 }
+
+// VerifyWritten is the store-aware write-ahead durability read-back: re-read the
+// call FRESH from the sealed pending_calls table (a true on-disk read, not the
+// in-memory buffer) and apply the identical compare the cashctl.db path does
+// (ledger.VerifyCallReadBack). The guarantee a bill-creating call is durable in
+// pocket-cache.db before it is sent — the pocket equivalent of
+// ledger.VerifyWritten's fresh-connection read.
+func (s *LedgerStore) VerifyWritten(want ledger.Call) error {
+	sealed, err := s.p.Cache.SealedCalls()
+	if err != nil {
+		return err
+	}
+	blob, ok := sealed[want.RequestID]
+	if !ok {
+		return fmt.Errorf("ledger: call %s was not written", want.CallID)
+	}
+	got, err := openCall(blob, s.p.userPriv, s.p.userPub)
+	if err != nil {
+		return err
+	}
+	return ledger.VerifyCallReadBack(got, want)
+}

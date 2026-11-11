@@ -41,6 +41,13 @@ type Store interface {
 	OpenCallFor(entryID string) (*Call, bool)
 	RemoveCall(callID string) bool
 
+	// VerifyWritten is the write-ahead durability read-back: re-read the call
+	// from the store ON A FRESH READ and confirm it landed (every column +
+	// secret commitments). The guarantee a bill-creating call is durable before
+	// it is sent. The *Ledger reads cashctl.db; the pocket Store re-reads its
+	// sealed pending_calls — both apply ledger.VerifyCallReadBack.
+	VerifyWritten(want Call) error
+
 	// Derived-id gate: the cross-process re-placement lock (NIP-CASH §Lost
 	// Replies / NIP-CP §Writing derived id). InsertDerived's primary key is the
 	// lock — of two processes re-placing one call, only one inserts (the other
@@ -73,14 +80,19 @@ var _ Store = (*Ledger)(nil)
 // release. (The pocket-backed Store releases its bbolt file lock here.)
 func (l *Ledger) Close() error { return nil }
 
+// VerifyWritten reads the call back from cashctl.db on a fresh connection and
+// applies the durability compare — the existing package-level behaviour, now
+// also reachable through the Store seam so cmd can call it store-agnostically.
+func (l *Ledger) VerifyWritten(want Call) error { return VerifyWritten(want) }
+
 // AllEntries/AllCalls/AllHandoffs/AllHistory expose the container's slices as
 // read-only accessors (the cmd layer reads the fields directly today; behind the
 // Store seam it calls these). They return the backing slices as-is — the cmd
 // layer only reads them — so this is a zero-behaviour-change wrapper.
-func (l *Ledger) AllEntries() []Entry         { return l.Entries }
-func (l *Ledger) AllCalls() []Call            { return l.Calls }
-func (l *Ledger) AllHandoffs() []Handoff      { return l.Handoffs }
-func (l *Ledger) AllHistory() []HistoryEntry  { return l.History }
+func (l *Ledger) AllEntries() []Entry        { return l.Entries }
+func (l *Ledger) AllCalls() []Call           { return l.Calls }
+func (l *Ledger) AllHandoffs() []Handoff     { return l.Handoffs }
+func (l *Ledger) AllHistory() []HistoryEntry { return l.History }
 
 // Derived-id gate — the concrete ledger wraps the package-level funcs (which key
 // off the shared cashctl.db derived_ids table), so routing the journal through
@@ -90,6 +102,6 @@ func (l *Ledger) AllHistory() []HistoryEntry  { return l.History }
 func (l *Ledger) InsertDerived(requestID, parent string, deadline *int64, keepUntil int64) error {
 	return InsertDerived(requestID, parent, deadline, keepUntil)
 }
-func (l *Ledger) RemoveDerived(requestID string) error        { return RemoveDerived(requestID) }
+func (l *Ledger) RemoveDerived(requestID string) error           { return RemoveDerived(requestID) }
 func (l *Ledger) DerivedParent(requestID string) (string, error) { return DerivedParent(requestID) }
 func (l *Ledger) DerivedRecorded(requestID string) (bool, error) { return DerivedRecorded(requestID) }
