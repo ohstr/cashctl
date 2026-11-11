@@ -232,3 +232,85 @@ func TestLedgerStoreDerivedIDGate(t *testing.T) {
 		t.Fatal("DerivedRecorded after remove = true, want false (freed to re-place)")
 	}
 }
+
+// TestLedgerStoreOrdersWithdrawals covers the order/withdraw family methods over
+// the sealed tables: standalone Put, Find/ForCall/list, Delete, and the staged
+// flush in Save — exercised on the pocket store (toggle-on path).
+func TestLedgerStoreOrdersWithdrawals(t *testing.T) {
+	priv, _ := testKey(t)
+	dir := t.TempDir()
+	ctx := context.Background()
+
+	s, err := OpenLedgerStore(ctx, dir, priv, "flokicoin")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	o1 := ledger.Order{OrderID: "ord-1", CallID: "call-1", State: ledger.OrderPlacing, AmountMillis: 5000, Notify: "secret-notify-1", OrderJSON: `{"k":"v"}`, AcceptedRelays: []string{"wss://r"}}
+	if err := s.PutOrder(o1); err != nil {
+		t.Fatalf("PutOrder: %v", err)
+	}
+	got, ok, err := s.FindOrder("ord-1")
+	if err != nil || !ok {
+		t.Fatalf("FindOrder: ok=%v err=%v", ok, err)
+	}
+	if got.CallID != "call-1" || got.AmountMillis != 5000 || got.Notify != "secret-notify-1" {
+		t.Fatalf("FindOrder mismatch: %+v", got)
+	}
+	byCall, ok, _ := s.OrderForCall("call-1")
+	if !ok || byCall.OrderID != "ord-1" {
+		t.Fatalf("OrderForCall: ok=%v id=%q", ok, byCall.OrderID)
+	}
+
+	// Staged order flushes on Save.
+	s.StageOrder(ledger.Order{OrderID: "ord-2", CallID: "call-2", State: ledger.OrderPlacing, AmountMillis: 1})
+	if err := s.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	s.Close()
+	s2, err := OpenLedgerStore(ctx, dir, priv, "flokicoin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	orders, err := s2.Orders()
+	if err != nil || len(orders) != 2 {
+		t.Fatalf("Orders after staged flush: n=%d err=%v", len(orders), err)
+	}
+	if err := s2.DeleteOrder("ord-1"); err != nil {
+		t.Fatalf("DeleteOrder: %v", err)
+	}
+	if _, ok, _ := s2.FindOrder("ord-1"); ok {
+		t.Fatal("DeleteOrder: order still found")
+	}
+
+	// Withdrawals: standalone + staged.
+	w1 := ledger.Withdrawal{WithdrawalID: "wd-1", CallID: "call-3", State: ledger.WithdrawSending, AmountMillis: 3000, Notify: "secret-wd", Address: "addr1"}
+	if err := s2.PutWithdrawal(w1); err != nil {
+		t.Fatalf("PutWithdrawal: %v", err)
+	}
+	gw, ok, _ := s2.FindWithdrawal("wd-1")
+	if !ok || gw.Address != "addr1" || gw.Notify != "secret-wd" {
+		t.Fatalf("FindWithdrawal mismatch: ok=%v %+v", ok, gw)
+	}
+	bycall, ok, _ := s2.WithdrawalForCall("call-3")
+	if !ok || bycall.WithdrawalID != "wd-1" {
+		t.Fatalf("WithdrawalForCall: ok=%v", ok)
+	}
+	s2.StageWithdrawal(ledger.Withdrawal{WithdrawalID: "wd-2", CallID: "call-4", State: ledger.WithdrawSending})
+	if err := s2.Save(); err != nil {
+		t.Fatalf("Save (withdraw staged): %v", err)
+	}
+	ws, err := s2.Withdrawals()
+	if err != nil || len(ws) != 2 {
+		t.Fatalf("Withdrawals after staged flush: n=%d err=%v", len(ws), err)
+	}
+	s2.Close()
+
+	// No cleartext secret at rest.
+	data, _ := os.ReadFile(dir + "/pocket-cache.db")
+	for _, secret := range []string{"secret-notify-1", "secret-wd"} {
+		if bytes.Contains(data, []byte(secret)) {
+			t.Fatalf("cleartext secret %q on disk", secret)
+		}
+	}
+}

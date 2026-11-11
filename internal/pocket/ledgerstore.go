@@ -193,12 +193,130 @@ func (s *LedgerStore) Save() error {
 		handoffs = append(handoffs, SealedHandoff{ID: s.Handoffs[i].ID, Sealed: blob})
 	}
 
-	newVersion, err := s.p.Cache.PersistLedger(entries, calls, handoffs, now, s.version)
+	// Staged orders/withdrawals (StageOrder/StageWithdrawal) are flushed in the SAME
+	// PersistLedger tx as the calls, so an order/withdrawal and the call that places
+	// it are durable together (the old ledger wrote them in one tx; ledger.go:732).
+	stagedOrders := make([]SealedOrderRow, 0, len(s.Ledger.StagedOrders()))
+	for _, o := range s.Ledger.StagedOrders() {
+		blob, err := sealOrder(o, priv, pub)
+		if err != nil {
+			return err
+		}
+		stagedOrders = append(stagedOrders, SealedOrderRow{OrderID: o.OrderID, CallID: o.CallID, Sealed: blob})
+	}
+	stagedWithdrawals := make([]SealedWithdrawalRow, 0, len(s.Ledger.StagedWithdrawals()))
+	for _, w := range s.Ledger.StagedWithdrawals() {
+		blob, err := sealWithdrawal(w, priv, pub)
+		if err != nil {
+			return err
+		}
+		stagedWithdrawals = append(stagedWithdrawals, SealedWithdrawalRow{WithdrawalID: w.WithdrawalID, CallID: w.CallID, Sealed: blob})
+	}
+
+	newVersion, err := s.p.Cache.PersistLedger(entries, calls, handoffs, stagedOrders, stagedWithdrawals, now, s.version)
 	if err != nil {
 		return err
 	}
 	s.version = newVersion
+	// Staged are now durable; clear them (as the old ledger clears after its tx).
+	s.Ledger.DropStagedOrders()
+	s.Ledger.DropStagedWithdrawals()
 	return nil
+}
+
+// ---- orders / withdrawals (a separate lazily-loaded funds collection, read &
+// written on demand over the sealed orders_full/withdrawals_full tables). These
+// OVERRIDE the embedded *ledger.Ledger's cashctl.db-backed methods. The staged
+// path (StageOrder/StageWithdrawal) is promoted from the embed and flushed in
+// Save (above). encrypt-to-self: the secret fields live inside the sealed blob. ----
+
+func (s *LedgerStore) PutOrder(o ledger.Order) error {
+	if o.CreatedAt == 0 {
+		o.CreatedAt = time.Now().Unix()
+	}
+	blob, err := sealOrder(o, s.p.userPriv, s.p.userPub)
+	if err != nil {
+		return err
+	}
+	return s.p.Cache.PutSealedOrder(o.OrderID, o.CallID, blob, o.CreatedAt, time.Now().Unix())
+}
+
+func (s *LedgerStore) openOrderRow(r SealedOrderRow, ok bool, err error) (ledger.Order, bool, error) {
+	if err != nil || !ok {
+		return ledger.Order{}, ok, err
+	}
+	o, err := openOrder(r.Sealed, s.p.userPriv, s.p.userPub)
+	return o, err == nil, err
+}
+
+func (s *LedgerStore) FindOrder(id string) (ledger.Order, bool, error) {
+	r, ok, err := s.p.Cache.SealedOrderByID(id)
+	return s.openOrderRow(r, ok, err)
+}
+
+func (s *LedgerStore) OrderForCall(callID string) (ledger.Order, bool, error) {
+	r, ok, err := s.p.Cache.SealedOrderByCall(callID)
+	return s.openOrderRow(r, ok, err)
+}
+
+func (s *LedgerStore) Orders() ([]ledger.Order, error) {
+	rows, err := s.p.Cache.SealedOrders()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ledger.Order, 0, len(rows))
+	for _, r := range rows {
+		o, err := openOrder(r.Sealed, s.p.userPriv, s.p.userPub)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, o)
+	}
+	return out, nil
+}
+
+func (s *LedgerStore) DeleteOrder(id string) error { return s.p.Cache.DeleteSealedOrder(id) }
+
+func (s *LedgerStore) PutWithdrawal(w ledger.Withdrawal) error {
+	blob, err := sealWithdrawal(w, s.p.userPriv, s.p.userPub)
+	if err != nil {
+		return err
+	}
+	return s.p.Cache.PutSealedWithdrawal(w.WithdrawalID, w.CallID, blob, time.Now().Unix())
+}
+
+func (s *LedgerStore) openWithdrawalRow(r SealedWithdrawalRow, ok bool, err error) (ledger.Withdrawal, bool, error) {
+	if err != nil || !ok {
+		return ledger.Withdrawal{}, ok, err
+	}
+	w, err := openWithdrawal(r.Sealed, s.p.userPriv, s.p.userPub)
+	return w, err == nil, err
+}
+
+func (s *LedgerStore) FindWithdrawal(id string) (ledger.Withdrawal, bool, error) {
+	r, ok, err := s.p.Cache.SealedWithdrawalByID(id)
+	return s.openWithdrawalRow(r, ok, err)
+}
+
+func (s *LedgerStore) WithdrawalForCall(callID string) (ledger.Withdrawal, bool, error) {
+	r, ok, err := s.p.Cache.SealedWithdrawalByCall(callID)
+	return s.openWithdrawalRow(r, ok, err)
+}
+
+func (s *LedgerStore) Withdrawals() ([]ledger.Withdrawal, error) {
+	rows, err := s.p.Cache.SealedWithdrawals()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ledger.Withdrawal, 0, len(rows))
+	for _, r := range rows {
+		w, err := openWithdrawal(r.Sealed, s.p.userPriv, s.p.userPub)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, w)
+	}
+	return out, nil
 }
 
 // ---- derived-id gate (cross-process re-placement lock) over pocket-cache.db's

@@ -14,7 +14,7 @@ import (
 // cacheSchemaVersion is bumped whenever the decoded-cache schema changes; a
 // mismatch forces a rebuild from pocket.db (the cache is derived, never
 // authoritative). See the plan's risk 15 (forward-compat).
-const cacheSchemaVersion = 1
+const cacheSchemaVersion = 2
 
 // Cache is the decoded state cache (pocket-cache.db): a relational projection of
 // the resolved pocket, for zero-latency reads (indexed balance/entries) and
@@ -98,6 +98,30 @@ CREATE TABLE IF NOT EXISTS entries_full (
   sealed     TEXT NOT NULL,
   updated_at INTEGER NOT NULL
 );
+
+-- orders_full / withdrawals_full hold the FAITHFUL ledger.Order / ledger.Withdrawal
+-- (NIP-44-sealed, encrypt-to-self — Notify/OrderJSON/QuoteJSON secrets never cleartext,
+-- risk 17), a separate lazily-loaded collection (NOT part of PersistLedger's
+-- entry/call snapshot). order_id/call_id are handles (not secrets) kept as indexed
+-- columns so FindOrder/OrderForCall are indexed; the secret fields live in sealed.
+-- Per-row sealed CRUD (standalone PutOrder) + a Save staged-flush mirror the old
+-- ledger's dual write-path. cashctl-private precious state (risk 19).
+CREATE TABLE IF NOT EXISTS orders_full (
+  order_id   TEXT PRIMARY KEY,
+  call_id    TEXT NOT NULL DEFAULT '',
+  sealed     TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_orders_full_call ON orders_full(call_id);
+
+CREATE TABLE IF NOT EXISTS withdrawals_full (
+  withdrawal_id TEXT PRIMARY KEY,
+  call_id       TEXT NOT NULL DEFAULT '',
+  sealed        TEXT NOT NULL,
+  updated_at    INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_withdrawals_full_call ON withdrawals_full(call_id);
 `
 
 // OpenCache opens (creating if absent) the decoded cache at path.
@@ -523,6 +547,111 @@ func (c *Cache) SealedEntries() (map[string]string, error) {
 	return out, rows.Err()
 }
 
+// ---- sealed orders / withdrawals (cashctl-private funds records, encrypt-to-self) ----
+
+// SealedOrderRow / SealedWithdrawalRow are the stored handle+ciphertext of one
+// ledger.Order / ledger.Withdrawal. The handles (order/call/withdrawal ids) are
+// not secrets; the Order/Withdrawal's secret fields live inside Sealed.
+type SealedOrderRow struct{ OrderID, CallID, Sealed string }
+type SealedWithdrawalRow struct{ WithdrawalID, CallID, Sealed string }
+
+// PutSealedOrder upserts a sealed order; created_at is preserved on conflict.
+func (c *Cache) PutSealedOrder(orderID, callID, sealed string, createdAt, updatedAt int64) error {
+	_, err := c.db.Exec(`
+INSERT INTO orders_full(order_id, call_id, sealed, created_at, updated_at) VALUES(?,?,?,?,?)
+ON CONFLICT(order_id) DO UPDATE SET call_id=excluded.call_id, sealed=excluded.sealed, updated_at=excluded.updated_at`,
+		orderID, callID, sealed, createdAt, updatedAt)
+	return err
+}
+
+// DeleteSealedOrder removes an order by id.
+func (c *Cache) DeleteSealedOrder(orderID string) error {
+	_, err := c.db.Exec(`DELETE FROM orders_full WHERE order_id = ?`, orderID)
+	return err
+}
+
+// SealedOrders returns every sealed order, oldest first (created_at, rowid).
+func (c *Cache) SealedOrders() ([]SealedOrderRow, error) {
+	return scanSealedOrders(c.db.Query(`SELECT order_id, call_id, sealed FROM orders_full ORDER BY created_at, rowid`))
+}
+
+// SealedOrderByID / SealedOrderByCall look one up; ok=false on no row.
+func (c *Cache) SealedOrderByID(orderID string) (SealedOrderRow, bool, error) {
+	return oneSealedOrder(c.db.Query(`SELECT order_id, call_id, sealed FROM orders_full WHERE order_id = ?`, orderID))
+}
+func (c *Cache) SealedOrderByCall(callID string) (SealedOrderRow, bool, error) {
+	return oneSealedOrder(c.db.Query(`SELECT order_id, call_id, sealed FROM orders_full WHERE call_id = ?`, callID))
+}
+
+func scanSealedOrders(rows *sql.Rows, qerr error) ([]SealedOrderRow, error) {
+	if qerr != nil {
+		return nil, qerr
+	}
+	defer rows.Close()
+	out := []SealedOrderRow{}
+	for rows.Next() {
+		var r SealedOrderRow
+		if err := rows.Scan(&r.OrderID, &r.CallID, &r.Sealed); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+func oneSealedOrder(rows *sql.Rows, qerr error) (SealedOrderRow, bool, error) {
+	all, err := scanSealedOrders(rows, qerr)
+	if err != nil || len(all) == 0 {
+		return SealedOrderRow{}, false, err
+	}
+	return all[0], true, nil
+}
+
+// PutSealedWithdrawal upserts a sealed withdrawal.
+func (c *Cache) PutSealedWithdrawal(withdrawalID, callID, sealed string, updatedAt int64) error {
+	_, err := c.db.Exec(`
+INSERT INTO withdrawals_full(withdrawal_id, call_id, sealed, updated_at) VALUES(?,?,?,?)
+ON CONFLICT(withdrawal_id) DO UPDATE SET call_id=excluded.call_id, sealed=excluded.sealed, updated_at=excluded.updated_at`,
+		withdrawalID, callID, sealed, updatedAt)
+	return err
+}
+
+// SealedWithdrawals returns every sealed withdrawal, oldest first (rowid).
+func (c *Cache) SealedWithdrawals() ([]SealedWithdrawalRow, error) {
+	return scanSealedWithdrawals(c.db.Query(`SELECT withdrawal_id, call_id, sealed FROM withdrawals_full ORDER BY rowid`))
+}
+
+func (c *Cache) SealedWithdrawalByID(withdrawalID string) (SealedWithdrawalRow, bool, error) {
+	return oneSealedWithdrawal(c.db.Query(`SELECT withdrawal_id, call_id, sealed FROM withdrawals_full WHERE withdrawal_id = ?`, withdrawalID))
+}
+func (c *Cache) SealedWithdrawalByCall(callID string) (SealedWithdrawalRow, bool, error) {
+	return oneSealedWithdrawal(c.db.Query(`SELECT withdrawal_id, call_id, sealed FROM withdrawals_full WHERE call_id = ?`, callID))
+}
+
+func scanSealedWithdrawals(rows *sql.Rows, qerr error) ([]SealedWithdrawalRow, error) {
+	if qerr != nil {
+		return nil, qerr
+	}
+	defer rows.Close()
+	out := []SealedWithdrawalRow{}
+	for rows.Next() {
+		var r SealedWithdrawalRow
+		if err := rows.Scan(&r.WithdrawalID, &r.CallID, &r.Sealed); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+func oneSealedWithdrawal(rows *sql.Rows, qerr error) (SealedWithdrawalRow, bool, error) {
+	all, err := scanSealedWithdrawals(rows, qerr)
+	if err != nil || len(all) == 0 {
+		return SealedWithdrawalRow{}, false, err
+	}
+	return all[0], true, nil
+}
+
 // ---- atomic faithful-ledger persist (the A' Save backend) ----
 
 // SealedEntry/SealedCall/SealedHandoff are the already-sealed rows PersistLedger
@@ -569,7 +698,7 @@ func (c *Cache) StoreVersion() (int64, error) {
 // strictly stronger: ANY concurrent write is caught, so it subsumes both the old
 // per-call CAS and refuseForeignOpenCall (R-CP-10) in one guard. Returns the new
 // store version on success.
-func (c *Cache) PersistLedger(entries []SealedEntry, calls []SealedCall, handoffs []SealedHandoff, now, expectedVersion int64) (int64, error) {
+func (c *Cache) PersistLedger(entries []SealedEntry, calls []SealedCall, handoffs []SealedHandoff, stagedOrders []SealedOrderRow, stagedWithdrawals []SealedWithdrawalRow, now, expectedVersion int64) (int64, error) {
 	tx, err := c.db.Begin()
 	if err != nil {
 		return 0, err
@@ -609,6 +738,23 @@ func (c *Cache) PersistLedger(entries []SealedEntry, calls []SealedCall, handoff
 	}
 	for _, h := range handoffs {
 		if _, err := tx.Exec(`INSERT INTO handoffs(id, sealed, updated_at) VALUES(?,?,?)`, h.ID, h.Sealed, now); err != nil {
+			return 0, err
+		}
+	}
+	// Orders/withdrawals are a SEPARATE collection (not the delete-all snapshot):
+	// staged ones are UPSERTed in this same tx so an order/withdrawal and the call
+	// that places it land atomically (mirrors the old ledger's ledger.go:732).
+	for _, o := range stagedOrders {
+		if _, err := tx.Exec(`INSERT INTO orders_full(order_id, call_id, sealed, created_at, updated_at) VALUES(?,?,?,?,?)
+			ON CONFLICT(order_id) DO UPDATE SET call_id=excluded.call_id, sealed=excluded.sealed, updated_at=excluded.updated_at`,
+			o.OrderID, o.CallID, o.Sealed, now, now); err != nil {
+			return 0, err
+		}
+	}
+	for _, w := range stagedWithdrawals {
+		if _, err := tx.Exec(`INSERT INTO withdrawals_full(withdrawal_id, call_id, sealed, updated_at) VALUES(?,?,?,?)
+			ON CONFLICT(withdrawal_id) DO UPDATE SET call_id=excluded.call_id, sealed=excluded.sealed, updated_at=excluded.updated_at`,
+			w.WithdrawalID, w.CallID, w.Sealed, now); err != nil {
 			return 0, err
 		}
 	}

@@ -94,6 +94,22 @@ func (l *Ledger) DropStagedOrders() { l.stagedOrders = nil }
 // DropStagedWithdrawals forgets withdrawals staged and not yet saved.
 func (l *Ledger) DropStagedWithdrawals() { l.stagedWithdrawals = nil }
 
+// StagedOrders / StagedWithdrawals expose the not-yet-saved staged slices so an
+// alternative Store backing (the pocket) can flush them in its own Save (the old
+// cashctl.db ledger flushes them in ledger.Save's transaction). Read-only.
+func (l *Ledger) StagedOrders() []Order           { return l.stagedOrders }
+func (l *Ledger) StagedWithdrawals() []Withdrawal { return l.stagedWithdrawals }
+
+// --- ledger.Store seam methods: the concrete ledger routes to its package funcs
+// (cashctl.db). The identifiers below resolve to the package-level funcs, not the
+// methods (no receiver in scope), so there is no recursion. ---
+
+func (l *Ledger) PutOrder(o Order) error                       { return PutOrder(o) }
+func (l *Ledger) FindOrder(id string) (Order, bool, error)     { return FindOrder(id) }
+func (l *Ledger) OrderForCall(cid string) (Order, bool, error) { return OrderForCall(cid) }
+func (l *Ledger) Orders() ([]Order, error)                     { return Orders() }
+func (l *Ledger) DeleteOrder(id string) error                  { return DeleteOrder(id) }
+
 // DeleteOrder removes an order row.
 func DeleteOrder(id string) error {
 	return store.WithBusyRetry(func() error {

@@ -64,6 +64,20 @@ type Store interface {
 	StageWithdrawal(w Withdrawal)
 	DropStagedWithdrawals()
 
+	// Orders (NIP-CO) — a separate lazily-loaded funds collection, read/written on
+	// demand (not part of the in-memory entry/call snapshot).
+	PutOrder(o Order) error
+	FindOrder(id string) (Order, bool, error)
+	OrderForCall(callID string) (Order, bool, error)
+	Orders() ([]Order, error)
+	DeleteOrder(id string) error
+
+	// Withdrawals (cash_withdraw).
+	PutWithdrawal(w Withdrawal) error
+	FindWithdrawal(id string) (Withdrawal, bool, error)
+	WithdrawalForCall(callID string) (Withdrawal, bool, error)
+	Withdrawals() ([]Withdrawal, error)
+
 	// Persist.
 	Save() error
 
