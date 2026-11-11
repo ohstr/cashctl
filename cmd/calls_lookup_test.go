@@ -18,7 +18,7 @@ import (
 
 // lostProtect is a ledger whose protect of tok-a reached the Hub and lost its
 // reply: one open call, with the new secret written ahead.
-func lostProtect(t *testing.T) (*ledger.Ledger, string, *ledger.Call, *fakeBillHub) {
+func lostProtect(t *testing.T) (ledger.Store, string, *ledger.Call, *fakeBillHub) {
 	t.Helper()
 	h := newFakeBillHub(t)
 	l, ids := protectLedger(t, h)
@@ -53,18 +53,13 @@ func withLookup(t *testing.T, fn func(c *ledger.Call) (nipcashclient.LookupOutco
 	return &n
 }
 
+// settleNow runs settle on the store under test and returns a *ledger.Ledger
+// snapshot of the resulting state (inspect-only — see ledgerView). Toggle-off
+// that's the cashctl.db ledger; toggle-on it's the pocket's post-settle state.
 func settleNow(t *testing.T) *ledger.Ledger {
 	t.Helper()
-	l, err := ledger.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	settleCalls(testCmdWithFlags(true, true), l, settleOptions{})
-	fresh, err := ledger.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	return fresh
+	settleCalls(testCmdWithFlags(true, true), testLoad(t), settleOptions{})
+	return ledgerView(testLoad(t))
 }
 
 // T-14: a lookup answered done applies the result the Hub kept and closes the
@@ -119,7 +114,7 @@ func TestSettle_UnknownReplacesUnderTheDerivedID(t *testing.T) {
 // not applied with that code: never re-placed.
 func TestSettle_UnknownAfterACodeClosesItNotApplied(t *testing.T) {
 	_, _, c, h := lostProtect(t)
-	l, _ := ledger.Load()
+	l := testLoad(t)
 	call, _ := l.FindCall(c.CallID)
 	call.FirstError = "RESTRICTED"
 	_ = l.Save()
@@ -194,7 +189,7 @@ func TestSettle_NeverReplacesTwice(t *testing.T) {
 	t.Run("derived recorded", func(t *testing.T) {
 		_, _, c, h := lostProtect(t)
 		derived, _ := nipcash.DerivedRequestID(c.RequestID)
-		if err := ledger.InsertDerived(derived, c.RequestID, nil, time.Now().Unix()+3600); err != nil {
+		if err := testLoad(t).InsertDerived(derived, c.RequestID, nil, time.Now().Unix()+3600); err != nil {
 			t.Fatal(err)
 		}
 		withLookup(t, func(*ledger.Call) (nipcashclient.LookupOutcome, error) {
@@ -283,7 +278,7 @@ func TestRunWalletProtect_SettlesALandedReKeyFirst(t *testing.T) {
 	if h.moveCount() != 1 {
 		t.Errorf("%d moves; the landed re-key needs no new one", h.moveCount())
 	}
-	l, _ := ledger.Load()
+	l := testLoad(t)
 	e, _ := l.Find(id)
 	if got, _ := l.FindCall(c.CallID); got.State != ledger.CallDone || e.CashProtection != ledger.CashProtected {
 		t.Errorf("call %s, entry protection %q; want done and protected", got.State, e.CashProtection)
@@ -320,7 +315,7 @@ func TestSettle_ConsolidateDoneWithATombstone(t *testing.T) {
 	if _, _, err := doCashConsolidate(&cobra.Command{}, l, []string{"dial-a"}, sources, ids, testTarget(), true); output.AsCLIError(err).Code != output.CodeIndeterminate {
 		t.Fatalf("err %v, want indeterminate", err)
 	}
-	l, _ = ledger.Load()
+	l = testLoad(t)
 	c, open := l.OpenCallFor(ids[0])
 	if !open {
 		t.Fatal("no open consolidate")
@@ -335,8 +330,8 @@ func TestSettle_ConsolidateDoneWithATombstone(t *testing.T) {
 	if err := l.Save(); err != nil {
 		t.Fatal(err)
 	}
-	fresh, _ := ledger.Load()
-	for _, e := range fresh.Entries {
+	fresh := testLoad(t)
+	for _, e := range fresh.AllEntries() {
 		if e.Token == "" {
 			t.Errorf("an entry with an empty token was recorded: %+v", e)
 		}
@@ -344,8 +339,8 @@ func TestSettle_ConsolidateDoneWithATombstone(t *testing.T) {
 	if len(fresh.Held()) != 0 {
 		t.Errorf("held after the merged bill's tombstone: %+v", fresh.Held())
 	}
-	if len(fresh.Handoffs) != 0 {
-		t.Errorf("handoffs %+v, want none", fresh.Handoffs)
+	if len(fresh.AllHandoffs()) != 0 {
+		t.Errorf("handoffs %+v, want none", fresh.AllHandoffs())
 	}
 }
 

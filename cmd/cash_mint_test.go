@@ -112,6 +112,10 @@ func setUpCashHub(t *testing.T) (*fakeCashHub, string) {
 	t.Helper()
 	appdir.SetOverride(t.TempDir())
 	t.Cleanup(func() { appdir.SetOverride("") })
+	// Toggle-on, the command opens the pocket encrypt-to-self via its local
+	// identity (loadStore→localPrivKey); configure it so mint tests that don't
+	// seed via testLoad still find one (no-op toggle-off / if already set).
+	ensurePocketIdentity(t)
 	priv, xonly := testmint.Key(t)
 	f := &fakeCashHub{t: t, hubPriv: priv, hubXOnly: xonly, network: "mainnet"}
 	prev := dialCashHubFn
@@ -145,12 +149,9 @@ func runMint(t *testing.T, hub string, flags map[string]string) (string, error) 
 
 func mintCalls(t *testing.T) []ledger.Call {
 	t.Helper()
-	l, err := ledger.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
+	l := testLoad(t)
 	var out []ledger.Call
-	for _, c := range l.Calls {
+	for _, c := range l.AllCalls() {
 		if c.Method == nipcash.MethodMintCash {
 			out = append(out, c)
 		}
@@ -183,9 +184,9 @@ func TestCashMint_ToCashHandsOutANote(t *testing.T) {
 		calls[0].AuthorizerKind != ledger.AuthCashHubClient {
 		t.Fatalf("calls %+v, want one done mint without secrets", calls)
 	}
-	l, _ := ledger.Load()
-	if len(l.Handoffs) != 1 || l.Handoffs[0].Kind != ledger.HandoffCashNote {
-		t.Errorf("handoffs %+v", l.Handoffs)
+	l := testLoad(t)
+	if len(l.AllHandoffs()) != 1 || l.AllHandoffs()[0].Kind != ledger.HandoffCashNote {
+		t.Errorf("handoffs %+v", l.AllHandoffs())
 	}
 }
 
@@ -242,11 +243,11 @@ func TestCashMint_OutcomesAndReplace(t *testing.T) {
 	if output.ExitCode(err) != 8 || ce.Call["method"] != nipcash.MethodMintCash {
 		t.Fatalf("lost reply: %v", err)
 	}
-	l, _ := ledger.Load()
+	l := testLoad(t)
 	var open *ledger.Call
-	for i := range l.Calls {
-		if l.Calls[i].Open() {
-			open = &l.Calls[i]
+	for _, c := range l.AllCalls() {
+		if c.Open() {
+			open, _ = l.FindCall(c.CallID) // the mutable backing pointer
 		}
 	}
 	if open == nil || len(open.Secrets) != 1 {
@@ -294,7 +295,7 @@ func TestCashMint_OutcomesAndReplace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("settle --replace: %v", err)
 	}
-	l, _ = ledger.Load()
+	l = testLoad(t)
 	parent, _ := l.FindCall(open.CallID)
 	if parent.State != ledger.CallReplaced {
 		t.Errorf("parent %s/%s, want replaced", parent.State, parent.Detail)
@@ -313,8 +314,8 @@ func TestCashMint_LookupDoneApplies(t *testing.T) {
 		return &nipcashclient.IndeterminateError{Call: pc, Cause: errors.New("no reply")}
 	}
 	_, _ = runMint(t, hub, nil)
-	l, _ := ledger.Load()
-	c := &l.Calls[0]
+	l := testLoad(t)
+	c, _ := l.FindCall(l.AllCalls()[0].CallID)
 	c.Deadline = time.Now().Unix() - 1
 	_ = l.Save()
 	f.lookup = func(_ nipcash.PendingCall, p nipcash.MintCashParams) (nipcashclient.LookupOutcome, error) {
@@ -322,8 +323,8 @@ func TestCashMint_LookupDoneApplies(t *testing.T) {
 	}
 	l = settleNow(t)
 	c, _ = l.FindCall(c.CallID)
-	if c.State != ledger.CallDone || len(l.Handoffs) != 1 {
-		t.Errorf("call %s/%s handoffs %d, want done with the note handed out", c.State, c.Detail, len(l.Handoffs))
+	if c.State != ledger.CallDone || len(l.AllHandoffs()) != 1 {
+		t.Errorf("call %s/%s handoffs %d, want done with the note handed out", c.State, c.Detail, len(l.AllHandoffs()))
 	}
 }
 

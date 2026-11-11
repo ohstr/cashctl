@@ -361,13 +361,10 @@ func testTarget() nipcash.Target {
 
 // consolidateFixture is an on-disk ledger holding two identity-bound bills and
 // the sources that spend them.
-func consolidateFixture(t *testing.T) (*ledger.Ledger, []string, []nipcash.Source) {
+func consolidateFixture(t *testing.T) (ledger.Store, []string, []nipcash.Source) {
 	t.Helper()
 	auditDTempLedger(t)
-	l, err := ledger.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
+	l := testLoad(t)
 	var ids []string
 	var sources []nipcash.Source
 	for _, name := range []string{"dial-a", "dial-b"} {
@@ -816,10 +813,7 @@ func TestConsolidateInRounds_SplitsOverTheHubsCap(t *testing.T) {
 	if _, err := identity.GenerateAndSaveLocal(); err != nil {
 		t.Fatalf("GenerateAndSaveLocal: %v", err)
 	}
-	l, err := ledger.Load()
-	if err != nil {
-		t.Fatalf("ledger.Load: %v", err)
-	}
+	l := testLoad(t)
 	var tokens, ids []string
 	var sources []nipcash.Source
 	for i := range 5 {
@@ -896,10 +890,7 @@ func TestDoCashConsolidate_CashTargetResultIsLabelledProtected(t *testing.T) {
 	if err := l.Save(); err != nil {
 		t.Fatal(err)
 	}
-	fresh, err := ledger.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
+	fresh := testLoad(t)
 	merged, ok := fresh.FindByToken("lokicash1merged")
 	if !ok {
 		t.Fatal("the merged cash note was not saved")
@@ -934,10 +925,7 @@ func TestDoCashConsolidate_TombstoneSpendsOnlyTheFirstSource(t *testing.T) {
 	if output.AsCLIError(err).Code != output.CodeSpent {
 		t.Fatalf("err %v, want spent", err)
 	}
-	fresh, err := ledger.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
+	fresh := testLoad(t)
 	for i, id := range ids {
 		got, _ := fresh.Find(id)
 		want := ledger.StatusHeld
@@ -972,10 +960,7 @@ func TestDoCashConsolidate_TombstoneAfterAFailedDialSpendsTheDialledSource(t *te
 	if first != hexWallet("dial-b") {
 		t.Fatalf("wire sources[0] = %s, want dial-b's wallet", first)
 	}
-	fresh, err := ledger.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
+	fresh := testLoad(t)
 	for i, want := range []string{ledger.StatusHeld, ledger.StatusSpent} {
 		if got, _ := fresh.Find(ids[i]); got.Status != want {
 			t.Errorf("source %d status %q, want %q", i, got.Status, want)
@@ -996,10 +981,7 @@ func TestDoCashConsolidate_TombstoneForANonLedgerFirstSourceMarksNothing(t *test
 	if output.AsCLIError(err).Code != output.CodeSpent {
 		t.Fatalf("err %v, want spent", err)
 	}
-	fresh, err := ledger.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
+	fresh := testLoad(t)
 	for i, id := range ids {
 		if got, _ := fresh.Find(id); got.Status != ledger.StatusHeld {
 			t.Errorf("source %d status %q, want held", i, got.Status)
@@ -1027,7 +1009,7 @@ func TestConsolidate_InterimRoundKeepsItsKeyForTheLookup(t *testing.T) {
 	if _, _, err := doCashConsolidate(&cobra.Command{}, l, []string{"dial-a"}, sources, ids, nipcash.Pubkey(pub), true); output.AsCLIError(err).Code != output.CodeIndeterminate {
 		t.Fatalf("err %v, want indeterminate", err)
 	}
-	l, _ = ledger.Load()
+	l = testLoad(t)
 	c, open := l.OpenCallFor(ids[0])
 	if !open || callSecretOf(c, ledger.RoleInterimKey) != priv {
 		t.Fatalf("open call %+v: want the merge key kept with it", c)
@@ -1040,8 +1022,8 @@ func TestConsolidate_InterimRoundKeepsItsKeyForTheLookup(t *testing.T) {
 	if !ok || merged.ThrowawayKey != priv || merged.Status != ledger.StatusHeld {
 		t.Errorf("merged bill %+v (%v): want held under the merge key", merged, ok)
 	}
-	if len(l.Handoffs) != 0 {
-		t.Errorf("handoffs %+v: the wallet's own merged bill was filed as a gift", l.Handoffs)
+	if len(l.AllHandoffs()) != 0 {
+		t.Errorf("handoffs %+v: the wallet's own merged bill was filed as a gift", l.AllHandoffs())
 	}
 }
 

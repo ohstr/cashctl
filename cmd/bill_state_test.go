@@ -512,7 +512,7 @@ func TestApplyRedeemResults_NotFoundIsReclaimed(t *testing.T) {
 func TestSettle_TransferNotFoundIsReclaimed(t *testing.T) {
 	for _, as := range []bool{false, true} {
 		_, id, c, _ := lostProtect(t)
-		l, _ := ledger.Load()
+		l := testLoad(t)
 		call, _ := l.FindCall(c.CallID)
 		call.FirstError = "NOT_FOUND"
 		if as {

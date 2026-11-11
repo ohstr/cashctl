@@ -77,7 +77,7 @@ func TestWithdraw_ReplacementIsTheSameWithdrawalUnderTheDerivedID(t *testing.T) 
 func TestWithdraw_ReplacementCapAndDerivedAlreadyPlaced(t *testing.T) {
 	t.Run("at the cap", func(t *testing.T) {
 		f, c, _ := lostWithdrawal(t, false)
-		l, _ := ledger.Load()
+		l := testLoad(t)
 		parent, _ := l.FindCall(c.CallID)
 		parent.Attempt = nipcashclient.MaxReplaceAttempts
 		_ = l.Save()

@@ -304,7 +304,7 @@ func TestReceiveZap_ConnectionKeyClaimShortInPlace(t *testing.T) {
 	if err != nil || !strings.Contains(out, "not_a_valid_zap") {
 		t.Fatalf("short claim: %v %s", err, out)
 	}
-	l, _ := ledger.Load()
+	l := testLoad(t)
 	if held := l.Held(); len(held) != 1 || *held[0].AmountMillis != 15000 || held[0].ConnectionKeyPlatform != "" {
 		t.Fatalf("held %+v", held)
 	}
@@ -321,9 +321,10 @@ func openZapClaim(t *testing.T) *keyZapFixture {
 	if _, err := runReceiveZap(t, []string{f.keyRaw}, map[string]string{"trust-minter": "true", "as": f.as}); output.ExitCode(err) != 8 {
 		t.Fatalf("lost reply: %v", err)
 	}
-	l, _ := ledger.Load()
-	for i := range l.Calls {
-		l.Calls[i].Deadline = time.Now().Unix() - 1
+	l := testLoad(t)
+	for _, c := range l.AllCalls() {
+		call, _ := l.FindCall(c.CallID)
+		call.Deadline = time.Now().Unix() - 1
 	}
 	_ = l.Save()
 	t.Setenv(asCredentialEnv, f.as)
@@ -361,16 +362,17 @@ func TestSettleZapClaim_SplitKeepsTheBill(t *testing.T) {
 // zap can be received again.
 func TestSettleZapClaim_RefusedFreesTheZap(t *testing.T) {
 	f := openZapClaim(t)
-	l, _ := ledger.Load()
-	for i := range l.Calls {
-		l.Calls[i].FirstError = "RESTRICTED"
+	l := testLoad(t)
+	for _, c := range l.AllCalls() {
+		call, _ := l.FindCall(c.CallID)
+		call.FirstError = "RESTRICTED"
 	}
 	_ = l.Save()
 	withLookup(t, func(*ledger.Call) (nipcashclient.LookupOutcome, error) {
 		return nipcashclient.LookupOutcome{Status: nipcash.LookupUnknown}, nil
 	})
 	l = settleNow(t)
-	for _, e := range l.Entries {
+	for _, e := range l.AllEntries() {
 		if e.Status == ledger.StatusZapClaiming {
 			t.Fatalf("entry %s still zap_claiming after the claim closed", e.ID)
 		}

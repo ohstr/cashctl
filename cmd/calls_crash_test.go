@@ -42,14 +42,11 @@ func crashAt(t *testing.T, point string, fn func()) (crashed bool) {
 // openCallDue reloads the ledger and makes its one open call due.
 func openCallDue(t *testing.T) *ledger.Call {
 	t.Helper()
-	l, err := ledger.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
+	l := testLoad(t)
 	var open *ledger.Call
-	for i := range l.Calls {
-		if l.Calls[i].Open() {
-			open = &l.Calls[i]
+	for _, c := range l.AllCalls() {
+		if c.Open() {
+			open, _ = l.FindCall(c.CallID) // the mutable backing pointer
 		}
 	}
 	if open == nil {
@@ -104,7 +101,7 @@ func TestCrashMatrix_Protect(t *testing.T) {
 			if h.moveCount() != 1 {
 				t.Errorf("%d moves, want exactly one at the Hub", h.moveCount())
 			}
-			for _, call := range fresh.Calls {
+			for _, call := range fresh.AllCalls() {
 				if call.Open() {
 					t.Errorf("call %s still open (%s/%s)", call.CallID, call.State, call.Detail)
 				}
@@ -140,8 +137,8 @@ func TestCrashMatrix_Mint(t *testing.T) {
 			l := settleNow(t)
 			got, _ := l.FindCall(c.CallID)
 			switch {
-			case tc.committed && (got.State != ledger.CallDone || len(l.Handoffs) != 1):
-				t.Errorf("committed mint: %s/%s, %d handoffs; want done and handed out", got.State, got.Detail, len(l.Handoffs))
+			case tc.committed && (got.State != ledger.CallDone || len(l.AllHandoffs()) != 1):
+				t.Errorf("committed mint: %s/%s, %d handoffs; want done and handed out", got.State, got.Detail, len(l.AllHandoffs()))
 			case !tc.committed && (got.State != ledger.CallStuck || got.Detail != "confirm_replace"):
 				t.Errorf("unsent mint: %s/%s, want stuck/confirm_replace (never re-placed on its own)", got.State, got.Detail)
 			}

@@ -190,7 +190,7 @@ func TestWithdraw_InvalidReceiptIsBoundedThenSurfaced(t *testing.T) {
 		}
 		return nipcashclient.LookupOutcome{Malformed: true}, nil, nil
 	}
-	l, _ := ledger.Load()
+	l := testLoad(t)
 	c, _ := l.FindCall(ledger.CallIDFor(f.sent[0].RequestID))
 	c.Deadline = time.Now().Unix() - 1
 	_ = l.Save()
@@ -216,7 +216,7 @@ func TestWithdraw_InvalidReceiptIsBoundedThenSurfaced(t *testing.T) {
 		t.Errorf("looked up %d times within the hour", lookups)
 	}
 	// An hour on, a valid answer is taken and the count starts again.
-	l, _ = ledger.Load()
+	l = testLoad(t)
 	c, _ = l.FindCall(c.CallID)
 	past := time.Now().Unix() - 1
 	c.RetryAfter = &past

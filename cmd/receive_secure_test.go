@@ -114,14 +114,11 @@ func TestPrintProtectHints_SilentInJSONMode(t *testing.T) {
 
 // protectLedger is a fresh on-disk ledger holding one still-shared cash note,
 // tok-a (secret sa, 1000), registered on h. Returns the ledger and its id.
-func protectLedger(t *testing.T, h *fakeBillHub, tokens ...string) (*ledger.Ledger, []string) {
+func protectLedger(t *testing.T, h *fakeBillHub, tokens ...string) (ledger.Store, []string) {
 	t.Helper()
 	appdir.SetOverride(t.TempDir())
 	t.Cleanup(func() { appdir.SetOverride("") })
-	l, err := ledger.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
+	l := testLoad(t)
 	if len(tokens) == 0 {
 		tokens = []string{"tok-a"}
 	}
@@ -142,12 +139,9 @@ func protectLedger(t *testing.T, h *fakeBillHub, tokens ...string) (*ledger.Ledg
 	return l, ids
 }
 
-func reload(t *testing.T, id string) (*ledger.Ledger, *ledger.Entry) {
+func reload(t *testing.T, id string) (ledger.Store, *ledger.Entry) {
 	t.Helper()
-	l, err := ledger.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
+	l := testLoad(t)
 	e, ok := l.Find(id)
 	if !ok {
 		t.Fatalf("%s missing after reload", id)
