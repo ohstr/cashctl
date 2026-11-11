@@ -868,7 +868,7 @@ func TestRedeem_RefusesABillWithAnOpenCall(t *testing.T) {
 		t.Fatalf("redeem of a bill with an open call: %v, want a conflict refusal", err)
 	}
 
-	fresh, _ := ledger.Load()
+	fresh := testLoad(t)
 	got, err := resolveHeldTokensForRedeem(redeemCmdWithTokens(true, true, nil, true), fresh)
 	if err != nil {
 		t.Fatal(err)

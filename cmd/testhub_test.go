@@ -220,6 +220,15 @@ func failSaves(t *testing.T) (restore func()) {
 			t.Fatalf("failSaves: store.Path: %v", err)
 		}
 		cachePath := filepath.Join(filepath.Dir(dbPath), "pocket-cache.db")
+		// entries_full/pending_calls/handoffs are created by OpenCache; a test may
+		// arm failSaves before any command has opened the cache, so ensure the
+		// schema exists first (same ordering trap failOrderWrites hit) rather than
+		// opening a raw, empty db where those tables would not exist.
+		if c, err := pocket.OpenCache(cachePath); err != nil {
+			t.Fatalf("failSaves: ensure cache schema: %v", err)
+		} else {
+			_ = c.Close()
+		}
 		openDB = func() (*sql.DB, error) { return sql.Open("sqlite", cachePath) }
 		tables = []string{"entries_full", "pending_calls", "handoffs"}
 	}

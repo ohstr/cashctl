@@ -15,7 +15,6 @@ import (
 
 	"github.com/ohstr/cashctl/internal/config"
 	"github.com/ohstr/cashctl/internal/identity"
-	"github.com/ohstr/cashctl/internal/ledger"
 	"github.com/ohstr/cashctl/internal/output"
 	"github.com/ohstr/cashctl/testsupport/testmint"
 )
@@ -119,11 +118,14 @@ func (f *signalFixture) usedYesterday(t *testing.T) {
 		t.Fatalf("open: %v", err)
 	}
 	oc, _ := nipCO.DecodeOrderConnection(f.conn)
-	orders, _ := ledger.Orders()
+	// Read+update the order and its call through the store the command uses
+	// (pocket under CASHCTL_POCKET, else cashctl.db) — the open command above
+	// placed them into that same store.
+	l := testLoad(t)
+	orders, _ := l.Orders()
 	o := orders[0]
 	o.CreatedAt = time.Now().Unix() - 2*86400
-	_ = ledger.PutOrder(o)
-	l, _ := ledger.Load()
+	_ = l.PutOrder(o)
 	c, _ := l.FindCall(o.CallID)
 	c.Target = oc.Pubkey
 	_ = l.Save()
