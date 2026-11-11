@@ -59,9 +59,9 @@ func (s *LedgerStore) Close() { s.p.Close() }
 // were random and per-row; the pocket is keyed by w, so a deterministic handle
 // from w gives the cmd layer the same shape with a stable value.
 func ledgerID(w string) string {
-	if len(w) >= 4 {
-		return "tok-" + w[:4]
-	}
+	// Full w: a bill's local handle must be collision-free, since Find(id)
+	// targets one specific bill. A 4-hex prefix is only 16 bits — two distinct
+	// bills would collide and Find could return the wrong one (a funds bug).
 	return "tok-" + w
 }
 
@@ -100,6 +100,21 @@ func stateFromStatus(status string) nipCP.State {
 	}
 }
 
+// provenanceVerified reports whether a bill's token carries Hub-signed
+// provenance (a recoverable minter) — the old ledger's "Verified". A fresh/
+// remainder or zap bill without it stays unverified until a Hub check confirms
+// it, so Verified is NOT assumed true merely because the wrap was stored. (The
+// spending family may refine this to cmd's returnedBillCheck semantics, which
+// internal/pocket cannot call without an import cycle.)
+func provenanceVerified(token string) bool {
+	tok, err := nipcash.Decode(token)
+	if err != nil {
+		return false
+	}
+	_, ok := nipcash.VerifyProvenance(tok)
+	return ok
+}
+
 // toLedgerEntry maps a resolved pocket (held-bill) entry to the ledger.Entry DTO.
 // Token-derived fields (the NWC secret, relay hints, identity-required) are
 // recovered by decoding the token, exactly as the old ledger treats them (cached
@@ -115,7 +130,7 @@ func (s *LedgerStore) toLedgerEntry(e nipCP.Entry) ledger.Entry {
 		AmountMillis: &amt,
 		Status:       statusFromState(e.State),
 		ExpiresAt:    e.ExpiresAt,
-		Verified:     true, // a resolved pocket entry came from a real, stored wrap
+		Verified:     provenanceVerified(e.Cash),
 	}
 	if e.Mint != "" {
 		m := e.Mint

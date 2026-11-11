@@ -120,8 +120,11 @@ func TestLedgerStoreToLedgerEntry(t *testing.T) {
 	if le.MinterPubkey == nil || *le.MinterPubkey != mint {
 		t.Errorf("minter = %v", le.MinterPubkey)
 	}
-	if !le.Verified {
-		t.Error("a resolved pocket entry should map Verified=true")
+	// Verified now follows the token's Hub-signed provenance (finding fix), not
+	// an unconditional true. This synthetic token carries none, so it maps
+	// unverified — a fresh/remainder bill must not be reported as Hub-confirmed.
+	if le.Verified {
+		t.Error("an unverifiable token must map Verified=false, not an assumed true")
 	}
 }
 
