@@ -59,10 +59,19 @@ type Store interface {
 
 	// Persist.
 	Save() error
+
+	// Close releases any resources the store holds. The old *Ledger holds none
+	// (no-op); the pocket-backed Store holds a bbolt single-writer lock, so a
+	// command MUST Close it (defer) or the next command's open deadlocks.
+	Close() error
 }
 
 // The concrete ledger satisfies the seam unchanged.
 var _ Store = (*Ledger)(nil)
+
+// Close is a no-op for the in-memory/cashctl.db ledger — it holds no lock to
+// release. (The pocket-backed Store releases its bbolt file lock here.)
+func (l *Ledger) Close() error { return nil }
 
 // AllEntries/AllCalls/AllHandoffs/AllHistory expose the container's slices as
 // read-only accessors (the cmd layer reads the fields directly today; behind the

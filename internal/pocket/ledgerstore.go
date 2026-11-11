@@ -60,8 +60,9 @@ func OpenLedgerStore(ctx context.Context, dir, userPriv, chain string) (*LedgerS
 	return &LedgerStore{Ledger: l, p: p, ctx: ctx}, nil
 }
 
-// Close releases the underlying pocket (the bbolt lock + the cache).
-func (s *LedgerStore) Close() { s.p.Close() }
+// Close releases the underlying pocket (the bbolt single-writer lock + the
+// cache) — a command MUST defer this so the next command can open the store.
+func (s *LedgerStore) Close() error { s.p.Close(); return nil }
 
 // loadLedger reconstructs the in-memory *ledger.Ledger from the faithful sealed
 // tables (byte-identical: ids, linkage, and the cashctl-only fields the NIP-CP

@@ -22,7 +22,7 @@ func openStore(t *testing.T) *LedgerStore {
 	if err != nil {
 		t.Fatalf("open ledgerstore: %v", err)
 	}
-	t.Cleanup(s.Close)
+	t.Cleanup(func() { _ = s.Close() })
 	return s
 }
 
@@ -85,7 +85,7 @@ func TestLedgerStoreReloadByteIdentical(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	t.Cleanup(s2.Close)
+	t.Cleanup(func() { _ = s2.Close() })
 
 	if len(s2.Entries) != 1 {
 		t.Fatalf("reloaded %d entries, want 1", len(s2.Entries))
