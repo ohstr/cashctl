@@ -471,3 +471,51 @@ func fakeAsReplacement(j nipcashclient.Journal, pc nipcash.PendingCall) nipcash.
 	}
 	return pc
 }
+
+// failOrderWrites injects a failing trigger on the orders table of the store
+// under test (cashctl.db `orders` toggle-off; pocket-cache.db `orders_full`
+// toggle-on), so the order-row write-atomicity tests exercise the real store.
+// ops are the write kinds to block (INSERT and/or UPDATE).
+func failOrderWrites(t *testing.T, ops ...string) (restore func()) {
+	t.Helper()
+	openDB := store.Open
+	table := "orders"
+	if os.Getenv(pocketToggleEnv) != "" {
+		dbPath, err := store.Path()
+		if err != nil {
+			t.Fatalf("failOrderWrites: store.Path: %v", err)
+		}
+		cachePath := filepath.Join(filepath.Dir(dbPath), "pocket-cache.db")
+		openDB = func() (*sql.DB, error) { return sql.Open("sqlite", cachePath) }
+		table = "orders_full"
+	}
+	exec := func(stmts ...string) {
+		db, err := openDB()
+		if err != nil {
+			t.Fatalf("failOrderWrites: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+		for _, s := range stmts {
+			if _, err := db.Exec(s); err != nil {
+				t.Fatalf("failOrderWrites: %s: %v", s, err)
+			}
+		}
+	}
+	var create, drop []string
+	for _, op := range ops {
+		name := "fail_order_" + strings.ToLower(op)
+		create = append(create, `CREATE TRIGGER `+name+` BEFORE `+op+` ON `+table+` BEGIN SELECT RAISE(ABORT, 'injected'); END`)
+		drop = append(drop, `DROP TRIGGER IF EXISTS `+name)
+	}
+	exec(create...)
+	done := false
+	restore = func() {
+		if done {
+			return
+		}
+		done = true
+		exec(drop...)
+	}
+	t.Cleanup(restore)
+	return restore
+}

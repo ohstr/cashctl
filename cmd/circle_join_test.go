@@ -126,6 +126,7 @@ func setUpCircleHub(t *testing.T, f *fakeCircleHub) {
 	t.Helper()
 	appdir.SetOverride(t.TempDir())
 	t.Cleanup(func() { appdir.SetOverride("") })
+	ensurePocketIdentity(t)
 	t.Setenv(asCredentialEnv, "pubkey:"+testMemberPriv)
 	f.t = t
 	if f.info == nil {

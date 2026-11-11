@@ -29,7 +29,7 @@ func sendQueued(t *testing.T) (*fakeWithdrawHub, string, ledger.Withdrawal) {
 	if err != nil {
 		t.Fatalf("send: %v", err)
 	}
-	w, _, _ := ledger.FindWithdrawal(doc["withdrawal"].(string))
+	w, _, _ := testLoad(t).FindWithdrawal(doc["withdrawal"].(string))
 	return f, entryID, w
 }
 
@@ -50,7 +50,7 @@ func lookupAnswers(f *fakeWithdrawHub, w ledger.Withdrawal, states ...nipcash.Pa
 
 func dueNow(t *testing.T, callID string) {
 	t.Helper()
-	l, _ := ledger.Load()
+	l := testLoad(t)
 	c, _ := l.FindCall(callID)
 	c.RetryAfter = nil
 	c.Deadline = time.Now().Unix() - 1
@@ -64,17 +64,17 @@ func TestWithdraw_FinalRewrite(t *testing.T) {
 	addr := w.Address
 	lookupAnswers(f, w, nipcash.PayoutFinal)
 	dueNow(t, w.CallID)
-	l, _ := ledger.Load()
+	l := testLoad(t)
 	c, _ := l.FindCall(w.CallID)
 	summary, got := settleWithdrawOne(withdrawCmd(&cobra.Command{}, nil), l, c, "")
 	if !strings.Contains(summary, "Received at "+addr) || got.ReceivedAt != addr {
 		t.Errorf("summary %q", summary)
 	}
-	w, _, _ = ledger.FindWithdrawal(w.WithdrawalID)
+	w, _, _ = l.FindWithdrawal(w.WithdrawalID)
 	if w.Address != "" || w.QuoteJSON != "" || strings.Contains(w.PayoutJSON, "23188") || strings.Contains(w.PayoutJSON, addr) {
 		t.Errorf("final row keeps %+v", w)
 	}
-	l, _ = ledger.Load()
+	l = testLoad(t)
 	e, _ := l.Find(entryID)
 	c, _ = l.FindCall(w.CallID)
 	if e.CashSecret != "" || c.AuthorizerSecret != "" || c.TargetCredential != "" || len(c.Secrets) != 0 {
@@ -210,7 +210,7 @@ func TestWithdraw_QuoteExpired(t *testing.T) {
 	if ce := output.AsCLIError(err); ce == nil || output.ExitCode(err) != 7 || ce.Detail != "quote_expired" {
 		t.Fatalf("non-interactive: %v", err)
 	}
-	ws, _ := ledger.Withdrawals()
+	ws, _ := testLoad(t).Withdrawals()
 	if len(ws) != 1 || !ws[0].QuoteExpiredSeen || ws[0].State != ledger.WithdrawNotApplied {
 		t.Errorf("withdrawal %+v", ws)
 	}
@@ -232,15 +232,16 @@ func TestWithdraw_NoAutomaticReplaceAfterQuoteExpired(t *testing.T) {
 		return nil, &nipcashclient.IndeterminateError{Call: pc, Cause: errors.New("no reply")}
 	}
 	_, _ = runWithdrawSend(t, nil, map[string]string{"quote": handle, "yes": "true"})
-	ws, _ := ledger.Withdrawals()
+	l := testLoad(t)
+	ws, _ := l.Withdrawals()
 	w := ws[0]
 	w.QuoteExpiredSeen = true
-	_ = ledger.PutWithdrawal(w)
+	_ = l.PutWithdrawal(w)
 	dueNow(t, w.CallID)
 	f.lookup = func(nipcash.PendingCall) (nipcashclient.LookupOutcome, *nipcash.Payout, error) {
 		return nipcashclient.LookupOutcome{Status: nipcash.LookupUnknown}, nil, nil
 	}
-	l := settleNow(t)
+	l = settleNow(t)
 	c, _ := l.FindCall(w.CallID)
 	if c.State != ledger.CallStuck || c.Detail != "quote_expired" || len(f.sent) != 1 {
 		t.Errorf("call %s/%s, sent %d", c.State, c.Detail, len(f.sent))
@@ -260,13 +261,13 @@ func TestWithdraw_RecoveredFromWithdrawRequestID(t *testing.T) {
 	c := withdrawCmd(newCashStatusCmd(), nil)
 	c.SetArgs(nil)
 	captureStreams(t, func() { _ = c.Execute() })
-	l, _ := ledger.Load()
+	l := testLoad(t)
 	e, _ := l.Find(entryID)
 	call, ok := l.FindCall(ledger.CallIDFor(rid))
 	if e.Status != ledger.StatusWithdrawn || !ok || call.DeviceID != ledger.DeviceRecovered {
 		t.Fatalf("entry %s, call %+v", e.Status, call)
 	}
-	w, _, _ := ledger.WithdrawalForCall(call.CallID)
+	w, _, _ := l.WithdrawalForCall(call.CallID)
 	if !w.Recovered {
 		t.Fatal("not marked recovered")
 	}
@@ -276,7 +277,7 @@ func TestWithdraw_RecoveredFromWithdrawRequestID(t *testing.T) {
 		return nipcashclient.LookupOutcome{Status: nipcash.LookupDone}, f.payout(nipcash.PayoutQueued, q), nil
 	}
 	settleWithdrawCall(withdrawCmd(&cobra.Command{}, nil), l, call, "")
-	w, _, _ = ledger.FindWithdrawal(w.WithdrawalID)
+	w, _, _ = l.FindWithdrawal(w.WithdrawalID)
 	if w.State != "queued" || w.PayoutMillis != 19258 || w.Address != testAddress {
 		t.Errorf("recovered withdrawal %+v", w)
 	}
@@ -359,7 +360,7 @@ func TestImportRemint_RecoveredCashNoteIsNotHeld(t *testing.T) {
 	wallet := testmint.Hex32(t)
 	tok := testmint.Bill(t, nipcash.Token{HRP: "lokicash", WalletPubkey: wallet, Secret: testmint.Hex32(t),
 		RelayURLs: []string{"wss://hub.example"}, IdentityRequired: ptrTo(false)}, f.hubPriv)
-	l, _ := ledger.Load()
+	l := testLoad(t)
 	w := &ledger.Withdrawal{WithdrawalID: "wd-1", SourceEntryID: entryID, HubIdentity: f.hubXOnly, AmountMillis: 21000}
 	p := &nipcash.Payout{State: nipcash.PayoutCancelled, NewWalletPubkey: wallet, NewWalletToken: nipcash.TokenOrTombstone{Token: tok}}
 	id, err := importRemint(l, &ledger.Call{}, w, p)
@@ -390,7 +391,7 @@ func TestWithdraw_QuoteInvalidIsLikeExpired(t *testing.T) {
 	if output.ExitCode(err) != 7 {
 		t.Fatalf("quote_invalid: %v, want the quote refused (exit 7)", err)
 	}
-	ws, _ := ledger.Withdrawals()
+	ws, _ := testLoad(t).Withdrawals()
 	if len(ws) != 1 || !ws[0].QuoteExpiredSeen || ws[0].State != ledger.WithdrawNotApplied {
 		t.Errorf("withdrawal %+v", ws)
 	}
@@ -422,7 +423,7 @@ func TestWithdraw_CodedRefusalIsSettledInTheSameRun(t *testing.T) {
 			if ce := output.AsCLIError(err); ce == nil || output.ExitCode(err) == 8 || ce.Detail != tc.detail {
 				t.Fatalf("err %v: want a final refusal with detail %q, not exit 8", err, tc.detail)
 			}
-			ws, _ := ledger.Withdrawals()
+			ws, _ := testLoad(t).Withdrawals()
 			if looked != 1 || len(ws) != 1 || ws[0].State != ledger.WithdrawNotApplied {
 				t.Errorf("looked up %d, withdrawals %+v", looked, ws)
 			}
@@ -435,14 +436,14 @@ func TestWithdraw_CodedRefusalIsSettledInTheSameRun(t *testing.T) {
 // sent": its row is rebuilt and the payout followed.
 func TestWithdraw_RecoveredCallIsNeverReadAsNotSent(t *testing.T) {
 	_, entryID := setUpWithdraw(t)
-	l, _ := ledger.Load()
+	l := testLoad(t)
 	e, _ := l.Find(entryID)
 	rid, _ := nipcash.NewRequestID()
 	w, err := recoverWithdrawal(withdrawCmd(newCashStatusCmd(), nil), l, e, rid)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, ok, _ := ledger.WithdrawalForCall(w.CallID); !ok || !got.Recovered {
+	if got, ok, _ := l.WithdrawalForCall(w.CallID); !ok || !got.Recovered {
 		t.Fatalf("row %+v (%v): want it written with the call", got, ok)
 	}
 	db, err := store.Open()
@@ -453,7 +454,7 @@ func TestWithdraw_RecoveredCallIsNeverReadAsNotSent(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = db.Close()
-	l, _ = ledger.Load()
+	l = testLoad(t)
 	c, _ := l.FindCall(w.CallID)
 	summary, got := settleWithdrawOne(withdrawCmd(newCashStatusCmd(), nil), l, c, "this-device")
 	c, _ = l.FindCall(w.CallID)
@@ -467,16 +468,16 @@ func TestWithdraw_RecoveredCallIsNeverReadAsNotSent(t *testing.T) {
 // (remint_gone with the tombstone's reason), never silently.
 func TestApplyPayout_RemintGoneIsShown(t *testing.T) {
 	_, entryID, w := sendQueued(t)
-	l, _ := ledger.Load()
+	l := testLoad(t)
 	c, _ := l.FindCall(w.CallID)
 	p := &nipcash.Payout{State: nipcash.PayoutCancelled, PayoutMillis: w.PayoutMillis, Address: w.Address,
 		NewWalletToken: nipcash.TokenOrTombstone{Tombstone: &nipcash.Tombstone{Status: nipcash.StatusSpent, Reason: "redeemed"}}}
 	if err := applyPayout(withdrawCmd(newCashStatusCmd(), nil), l, c, &w, p); err != nil {
 		t.Fatal(err)
 	}
-	l, _ = ledger.Load()
+	l = testLoad(t)
 	c, _ = l.FindCall(w.CallID)
-	got, _, _ := ledger.FindWithdrawal(w.WithdrawalID)
+	got, _, _ := l.FindWithdrawal(w.WithdrawalID)
 	v := withdrawalView(got)
 	if c.State != ledger.CallDone || got.RemintEntryID != "" || v[reasonRemintGone] != true || v["remint_gone_reason"] != "redeemed" {
 		t.Errorf("call %s, withdrawal %+v, view %v", c.State, got, v)

@@ -24,14 +24,14 @@ func lostWithdrawal(t *testing.T, reused bool) (*fakeWithdrawHub, *ledger.Call, 
 	if _, err := runWithdrawSend(t, nil, map[string]string{"quote": handle, "yes": "true"}); output.ExitCode(err) != 8 {
 		t.Fatalf("lost reply: %v", err)
 	}
-	l, _ := ledger.Load()
+	l := testLoad(t)
 	c, _ := l.FindCall(ledger.CallIDFor(f.sent[0].RequestID))
 	c.Deadline, c.SawReused = time.Now().Unix()-1, reused
 	_ = l.Save()
 	f.lookup = func(nipcash.PendingCall) (nipcashclient.LookupOutcome, *nipcash.Payout, error) {
 		return nipcashclient.LookupOutcome{Status: nipcash.LookupUnknown}, nil, nil
 	}
-	w, _, _ := ledger.WithdrawalForCall(c.CallID)
+	w, _, _ := l.WithdrawalForCall(c.CallID)
 	return f, c, w
 }
 
@@ -62,11 +62,11 @@ func TestWithdraw_ReplacementIsTheSameWithdrawalUnderTheDerivedID(t *testing.T) 
 	if again.Quote != first.Quote || again.Notify != first.Notify || remintSecretOf(again) == "" || remintSecretOf(again) != remintSecretOf(first) {
 		t.Errorf("the re-placement changed the quote, notify or re-mint secret")
 	}
-	w2, ok, _ := ledger.FindWithdrawal(w.WithdrawalID)
+	w2, ok, _ := testLoad(t).FindWithdrawal(w.WithdrawalID)
 	if !ok || w2.QuoteID != w.QuoteID || w2.Notify != w.Notify || w2.Address != w.Address {
 		t.Errorf("withdrawal after re-placement %+v", w2)
 	}
-	l, _ := ledger.Load()
+	l := testLoad(t)
 	if parent, _ := l.FindCall(c.CallID); parent.State != ledger.CallReplaced {
 		t.Errorf("parent %s/%s, want replaced", parent.State, parent.Detail)
 	}
@@ -90,7 +90,7 @@ func TestWithdraw_ReplacementCapAndDerivedAlreadyPlaced(t *testing.T) {
 	t.Run("one below the cap", func(t *testing.T) {
 		f, c, _ := lostWithdrawal(t, false)
 		f.answer = nil
-		l, _ := ledger.Load()
+		l := testLoad(t)
 		parent, _ := l.FindCall(c.CallID)
 		parent.Attempt = nipcashclient.MaxReplaceAttempts - 1
 		_ = l.Save()
@@ -102,7 +102,7 @@ func TestWithdraw_ReplacementCapAndDerivedAlreadyPlaced(t *testing.T) {
 	t.Run("derived id already placed", func(t *testing.T) {
 		f, c, _ := lostWithdrawal(t, false)
 		derived, _ := nipcash.DerivedRequestID(c.RequestID)
-		l, _ := ledger.Load()
+		l := testLoad(t)
 		if _, err := l.AddCall(ledger.Call{RequestID: derived, Method: nipcash.MethodCashWithdraw, State: ledger.CallLookup,
 			DeviceID: c.DeviceID, Deadline: time.Now().Unix() + 600, Replaces: c.RequestID, Attempt: 1}); err != nil {
 			t.Fatal(err)

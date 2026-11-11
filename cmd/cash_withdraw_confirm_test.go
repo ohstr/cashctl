@@ -29,7 +29,7 @@ func interactive(t *testing.T, fee bool) *int {
 // markOwn records the bill as made by this device's own call.
 func markOwn(t *testing.T, entryID string) {
 	t.Helper()
-	l, _ := ledger.Load()
+	l := testLoad(t)
 	e, _ := l.Find(entryID)
 	e.CreatedByCall = "c-own"
 	if err := l.Save(); err != nil {
@@ -63,9 +63,9 @@ func TestWithdraw_FeeAboveAQuarterAsksTwice(t *testing.T) {
 				t.Errorf("asked %d, sent %d; want %d, %d", *asked, len(f.sent), c.wantAsked, c.wantSent)
 			}
 			if c.wantSent == 0 {
-				l, _ := ledger.Load()
-				if len(l.Calls) != 0 {
-					t.Errorf("a declined send wrote %d call(s)", len(l.Calls))
+				l := testLoad(t)
+				if len(l.AllCalls()) != 0 {
+					t.Errorf("a declined send wrote %d call(s)", len(l.AllCalls()))
 				}
 			}
 		})
@@ -102,7 +102,7 @@ func TestWithdraw_PrivacyWarning(t *testing.T) {
 	t.Run("a zap bill made here", func(t *testing.T) {
 		_, entryID := setUpWithdraw(t)
 		markOwn(t, entryID)
-		l, _ := ledger.Load()
+		l := testLoad(t)
 		e, _ := l.Find(entryID)
 		e.ZapEvent = `{"kind":9522}`
 		_ = l.Save()
@@ -142,7 +142,7 @@ func TestWithdraw_ScreenHoldsUntilAndLightningLine(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			f, entryID := setUpWithdraw(t)
 			if c.net > 0 {
-				l, _ := ledger.Load()
+				l := testLoad(t)
 				e, _ := l.Find(entryID)
 				commit, err := nipcash.CashCommitment(e.CashSecret)
 				if err != nil {
@@ -197,7 +197,7 @@ func TestWithdraw_InvalidReceiptIsBoundedThenSurfaced(t *testing.T) {
 
 	l = settleNow(t)
 	c, _ = l.FindCall(c.CallID)
-	w, _, _ := ledger.WithdrawalForCall(c.CallID)
+	w, _, _ := testLoad(t).WithdrawalForCall(c.CallID)
 	if lookups != 1 || c.State != ledger.CallStuck || c.Detail != reasonReceiptInvalid || c.RetryAfter == nil || *c.RetryAfter < time.Now().Unix()+3500 {
 		t.Fatalf("after two answers without a receipt: lookups %d, call %s/%s retry %v", lookups, c.State, c.Detail, c.RetryAfter)
 	}
@@ -225,7 +225,7 @@ func TestWithdraw_InvalidReceiptIsBoundedThenSurfaced(t *testing.T) {
 	valid = f.payout(nipcash.PayoutQueued, q)
 	l = settleNow(t)
 	c, _ = l.FindCall(c.CallID)
-	w, _, _ = ledger.WithdrawalForCall(c.CallID)
+	w, _, _ = testLoad(t).WithdrawalForCall(c.CallID)
 	if lookups != 2 || c.State != ledger.CallOpenWithdraw || w.ReceiptInvalidSeen != 0 || w.State != string(nipcash.PayoutQueued) {
 		t.Errorf("a valid answer: lookups %d, call %s, withdrawal %s seen %d", lookups, c.State, w.State, w.ReceiptInvalidSeen)
 	}
@@ -239,9 +239,9 @@ func TestWithdraw_OneInvalidReceiptIsAskedAgain(t *testing.T) {
 		return nil, &nipcashclient.IndeterminateError{Call: pc, Cause: nipcash.ErrReceiptInvalid}
 	}
 	_, _ = runWithdrawSend(t, nil, map[string]string{"quote": handle, "yes": "true"})
-	l, _ := ledger.Load()
+	l := testLoad(t)
 	c, _ := l.FindCall(ledger.CallIDFor(f.sent[0].RequestID))
-	w, _, _ := ledger.WithdrawalForCall(c.CallID)
+	w, _, _ := l.WithdrawalForCall(c.CallID)
 	if c.State == ledger.CallStuck || w.ReceiptInvalidSeen != 1 || withdrawalText(w) == receiptInvalidText {
 		t.Errorf("after one: call %s, seen %d, text %q", c.State, w.ReceiptInvalidSeen, withdrawalText(w))
 	}

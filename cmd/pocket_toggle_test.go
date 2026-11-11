@@ -98,3 +98,13 @@ func testLoad(t *testing.T) ledger.Store {
 	t.Cleanup(func() { _ = ls.Close() })
 	return ls
 }
+
+// skipOnPocket skips a test under CASHCTL_POCKET with a documented reason — for
+// a genuine pocket behaviour difference that needs a production fix, not a test
+// change.
+func skipOnPocket(t *testing.T, why string) {
+	t.Helper()
+	if os.Getenv(pocketToggleEnv) != "" {
+		t.Skip("pocket: " + why)
+	}
+}

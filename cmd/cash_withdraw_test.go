@@ -205,7 +205,7 @@ func TestWithdraw_QuoteThenSend(t *testing.T) {
 	if doc["state"] != "queued" || len(f.sent) != 1 {
 		t.Fatalf("send %v", doc)
 	}
-	l, _ := ledger.Load()
+	l := testLoad(t)
 	e, _ := l.Find(entryID)
 	if e.Status != ledger.StatusWithdrawn {
 		t.Errorf("source %s, want withdrawn", e.Status)
@@ -215,7 +215,7 @@ func TestWithdraw_QuoteThenSend(t *testing.T) {
 		t.Errorf("call %s, remint kept %v", c.State, callSecretOf(c, ledger.RoleRemint) != "")
 	}
 	raw, _ := json.Marshal(doc)
-	w, _, _ := ledger.FindWithdrawal(doc["withdrawal"].(string))
+	w, _, _ := l.FindWithdrawal(doc["withdrawal"].(string))
 	if strings.Contains(string(raw), w.Notify) {
 		t.Error("notify was printed")
 	}
@@ -252,7 +252,7 @@ func TestWithdraw_LocalRefusals(t *testing.T) {
 	if ce := output.AsCLIError(err); ce == nil || ce.Reason != reasonAddressInvalid {
 		t.Errorf("mixed case: %v", err)
 	}
-	l, _ := ledger.Load()
+	l := testLoad(t)
 	e, _ := l.Find(entryID)
 	e.CashProtection = ledger.CashShared
 	_ = l.Save()
@@ -278,14 +278,14 @@ func TestWithdraw_FollowToFinalAndCancelled(t *testing.T) {
 			if _, err := runWithdrawSend(t, nil, map[string]string{"quote": handle, "yes": "true"}); output.ExitCode(err) != 8 {
 				t.Fatalf("lost reply: %v", err)
 			}
-			l, _ := ledger.Load()
+			l := testLoad(t)
 			if e, _ := l.Find(entryID); e.Status != ledger.StatusHeld {
 				t.Fatal("the bill was spent before any answer")
 			}
 			c, _ := l.FindCall(ledger.CallIDFor(f.sent[0].RequestID))
 			c.Deadline = time.Now().Unix() - 1
 			_ = l.Save()
-			w, _, _ := ledger.WithdrawalForCall(c.CallID)
+			w, _, _ := l.WithdrawalForCall(c.CallID)
 			q, _ := nipcash.ParseWithdrawQuote(w.QuoteJSON)
 			p := f.payout(end, q)
 			if end == nipcash.PayoutCancelled {
@@ -301,7 +301,7 @@ func TestWithdraw_FollowToFinalAndCancelled(t *testing.T) {
 			}
 			l = settleNow(t)
 			c, _ = l.FindCall(c.CallID)
-			w, _, _ = ledger.FindWithdrawal(w.WithdrawalID)
+			w, _, _ = testLoad(t).FindWithdrawal(w.WithdrawalID)
 			if c.State != ledger.CallDone || w.FinishedAt == 0 || w.State != string(end) {
 				t.Fatalf("call %s/%s, withdrawal %+v", c.State, c.Detail, w)
 			}
@@ -324,9 +324,10 @@ func TestWithdraw_CancelNotDue(t *testing.T) {
 	handle := runWithdrawQuote(t)["quote"].(string)
 	doc, _ := runWithdrawSend(t, nil, map[string]string{"quote": handle, "yes": "true"})
 	id := doc["withdrawal"].(string)
-	w, _, _ := ledger.FindWithdrawal(id)
+	l := testLoad(t)
+	w, _, _ := l.FindWithdrawal(id)
 	w.State = string(nipcash.PayoutBroadcast)
-	_ = ledger.PutWithdrawal(w)
+	_ = l.PutWithdrawal(w)
 	f.cancel = func() (*nipcash.Payout, error) { t.Fatal("a cancel was sent"); return nil, nil }
 	c := withdrawCmd(newCashWithdrawCancelCmd(), map[string]string{"yes": "true"})
 	var err error
@@ -345,14 +346,14 @@ func TestSettleClose_RefusesWithdrawalAndNeedsYes(t *testing.T) {
 	if _, err := runWithdrawSend(t, nil, map[string]string{"quote": handle, "yes": "true"}); err != nil {
 		t.Fatal(err)
 	}
-	l, _ := ledger.Load()
+	l := testLoad(t)
 	c, _ := l.FindCall(ledger.CallIDFor(f.sent[0].RequestID))
 	var err error
 	captureStreams(t, func() { err = closeCallByUser(testCmdWithFlags(true, true), l, c.CallID, "dev", true) })
 	if output.ExitCode(err) != 2 || !strings.Contains(err.Error(), "cash withdraw show") {
 		t.Fatalf("close of an open withdrawal: %v", err)
 	}
-	l, _ = ledger.Load()
+	l = testLoad(t)
 	c, _ = l.FindCall(c.CallID)
 	if c.State != ledger.CallOpenWithdraw || callSecretOf(c, ledger.RoleRemint) == "" {
 		t.Fatalf("withdrawal call changed: %s, remint kept %v", c.State, callSecretOf(c, ledger.RoleRemint) != "")
@@ -367,7 +368,7 @@ func TestSettleClose_RefusesWithdrawalAndNeedsYes(t *testing.T) {
 	if err := l.Save(); err != nil {
 		t.Fatal(err)
 	}
-	l, _ = ledger.Load()
+	l = testLoad(t)
 	captureStreams(t, func() { err = closeCallByUser(testCmdWithFlags(true, false), l, c2.CallID, "dev", true) })
 	if output.ExitCode(err) != 2 {
 		t.Fatalf("--close under --json without --yes: %v", err)
@@ -382,7 +383,7 @@ func TestSettleClose_RefusesWithdrawalAndNeedsYes(t *testing.T) {
 // the two writes) never went out: settle closes it and frees the bill.
 func TestWithdraw_CallWithoutRowIsNotSent(t *testing.T) {
 	_, entryID := setUpWithdraw(t)
-	l, _ := ledger.Load()
+	l := testLoad(t)
 	device, _ := deviceIDFn()
 	c, err := l.AddCall(ledger.Call{RequestID: strings.Repeat("cd", 32), Method: nipcash.MethodCashWithdraw,
 		State: ledger.CallLookup, DeviceID: device, Deadline: time.Now().Unix() - 1, SourceEntryIDs: []string{entryID}})
@@ -413,7 +414,7 @@ func TestWithdraw_RefusedReplacementEndsRow(t *testing.T) {
 	if _, err := runWithdrawSend(t, nil, map[string]string{"quote": handle, "yes": "true"}); output.ExitCode(err) != 8 {
 		t.Fatalf("lost reply: %v", err)
 	}
-	l, _ := ledger.Load()
+	l := testLoad(t)
 	c, _ := l.FindCall(ledger.CallIDFor(f.sent[0].RequestID))
 	c.Deadline = time.Now().Unix() - 1
 	_ = l.Save()
@@ -429,7 +430,7 @@ func TestWithdraw_RefusedReplacementEndsRow(t *testing.T) {
 		t.Fatalf("sent %d, want a re-placement; parent %s/%s", len(f.sent), pc.State, pc.Detail)
 	}
 	child, _ := l.FindCall(ledger.CallIDFor(f.sent[1].RequestID))
-	w, ok, _ := ledger.WithdrawalForCall(child.CallID)
+	w, ok, _ := testLoad(t).WithdrawalForCall(child.CallID)
 	if child.State != ledger.CallNotApplied || !ok || w.State != ledger.WithdrawNotApplied || w.FinishedAt == 0 {
 		t.Errorf("child %s, withdrawal %+v", child.State, w)
 	}
@@ -449,11 +450,11 @@ func TestWithdraw_TombstoneIsBillGone(t *testing.T) {
 	if _, err := runWithdrawSend(t, nil, map[string]string{"quote": handle, "yes": "true"}); output.ExitCode(err) != 10 {
 		t.Fatalf("tombstone: %v", err)
 	}
-	l, _ := ledger.Load()
+	l := testLoad(t)
 	if e, _ := l.Find(entryID); e.Status == ledger.StatusHeld {
 		t.Error("the bill is still held")
 	}
-	w, ok, _ := ledger.WithdrawalForCall(ledger.CallIDFor(f.sent[0].RequestID))
+	w, ok, _ := l.WithdrawalForCall(ledger.CallIDFor(f.sent[0].RequestID))
 	if !ok || w.State != ledger.WithdrawBillGone || strings.Contains(withdrawalText(w), "still yours") {
 		t.Errorf("withdrawal %s: %q", w.State, withdrawalText(w))
 	}
@@ -463,7 +464,7 @@ func TestWithdraw_TombstoneIsBillGone(t *testing.T) {
 // named or picked.
 func TestWithdraw_RefusesARedeemingBill(t *testing.T) {
 	_, entryID := setUpWithdraw(t)
-	l, _ := ledger.Load()
+	l := testLoad(t)
 	e, _ := l.Find(entryID)
 	e.Status = ledger.StatusRedeeming
 	_ = l.Save()
@@ -493,11 +494,11 @@ func TestWithdraw_TombstoneWithAWithdrawalIsRecovered(t *testing.T) {
 	if _, err := runWithdrawSend(t, nil, map[string]string{"quote": handle, "yes": "true"}); output.ExitCode(err) != 10 {
 		t.Fatalf("tombstone: %v", err)
 	}
-	l, _ := ledger.Load()
+	l := testLoad(t)
 	if e, _ := l.Find(entryID); e.Status != ledger.StatusWithdrawn {
 		t.Errorf("bill %s, want withdrawn", e.Status)
 	}
-	if w, ok, _ := ledger.WithdrawalForCall(ledger.CallIDFor(rid)); !ok || !w.Recovered {
+	if w, ok, _ := l.WithdrawalForCall(ledger.CallIDFor(rid)); !ok || !w.Recovered {
 		t.Errorf("the other copy's withdrawal was not recovered: %+v (%v)", w, ok)
 	}
 }
@@ -511,7 +512,7 @@ func TestWithdraw_ReplacementTombstoneFollowsTheOtherCopy(t *testing.T) {
 		return nil, &nipcashclient.IndeterminateError{Call: pc, Cause: errors.New("no reply")}
 	}
 	_, _ = runWithdrawSend(t, nil, map[string]string{"quote": handle, "yes": "true"})
-	l, _ := ledger.Load()
+	l := testLoad(t)
 	c, _ := l.FindCall(ledger.CallIDFor(f.sent[0].RequestID))
 	c.Deadline = time.Now().Unix() - 1
 	_ = l.Save()
@@ -530,7 +531,7 @@ func TestWithdraw_ReplacementTombstoneFollowsTheOtherCopy(t *testing.T) {
 	if !ok || rc.DeviceID != ledger.DeviceRecovered {
 		t.Fatalf("recovered call %+v (%v): want the other copy's withdrawal followed", rc, ok)
 	}
-	if w, ok, _ := ledger.WithdrawalForCall(rc.CallID); !ok || !w.Recovered {
+	if w, ok, _ := testLoad(t).WithdrawalForCall(rc.CallID); !ok || !w.Recovered {
 		t.Errorf("recovered row %+v (%v)", w, ok)
 	}
 }
@@ -540,7 +541,7 @@ func TestWithdraw_ReplacementTombstoneFollowsTheOtherCopy(t *testing.T) {
 // then can be.
 func TestWithdraw_RefusesAMidMergeBill(t *testing.T) {
 	_, entryID := setUpWithdraw(t)
-	l, _ := ledger.Load()
+	l := testLoad(t)
 	e, _ := l.Find(entryID)
 	priv, _, _ := newThrowawayKey()
 	e.PendingThrowawayKey = priv
@@ -571,7 +572,7 @@ func TestWithdraw_LostReplyIsReplacedAutomatically(t *testing.T) {
 		if _, err := runWithdrawSend(t, nil, map[string]string{"quote": handle, "yes": "true"}); output.ExitCode(err) != 8 {
 			t.Fatalf("lost reply: %v", err)
 		}
-		l, _ := ledger.Load()
+		l := testLoad(t)
 		c, _ := l.FindCall(ledger.CallIDFor(f.sent[0].RequestID))
 		c.Deadline, c.SawReused = time.Now().Unix()-1, reused
 		_ = l.Save()
