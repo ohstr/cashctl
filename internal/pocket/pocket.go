@@ -28,6 +28,7 @@ type Pocket struct {
 	Journal *Journal
 
 	userPriv string
+	userPub  string
 	relays   []string
 }
 
@@ -67,7 +68,8 @@ func (j *Journal) WriteAhead(ctx context.Context, calls []nipcash.PendingCall) e
 // predates this build, the decoded projection is rebuilt from the event store
 // (the cache is derived, never authoritative — the plan's risk 15).
 func Open(ctx context.Context, dir, userPriv, chain string) (*Pocket, error) {
-	if _, err := utils.GetPublicKey(userPriv); err != nil {
+	userPub, err := utils.GetPublicKey(userPriv)
+	if err != nil {
 		return nil, fmt.Errorf("pocket: user key: %w", err)
 	}
 	store, err := OpenStore(filepath.Join(dir, "pocket.db"))
@@ -86,6 +88,7 @@ func Open(ctx context.Context, dir, userPriv, chain string) (*Pocket, error) {
 		Cache:    cache,
 		Journal:  &Journal{PocketJournal: pj, cache: cache},
 		userPriv: userPriv,
+		userPub:  userPub,
 		relays:   relays,
 	}
 	if err := p.rebuildIfStale(ctx); err != nil {

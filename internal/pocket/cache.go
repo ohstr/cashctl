@@ -521,3 +521,52 @@ func (c *Cache) SealedEntries() (map[string]string, error) {
 	}
 	return out, rows.Err()
 }
+
+// ---- atomic faithful-ledger persist (the A' Save backend) ----
+
+// SealedEntry/SealedCall/SealedHandoff are the already-sealed rows PersistLedger
+// writes — the caller seals the ledger.Entry/Call/Handoff (sealedcall.go), this
+// just stores the ciphertext.
+type SealedEntry struct{ ID, W, Sealed string }
+type SealedCall struct{ RequestID, Sealed string }
+type SealedHandoff struct {
+	ID     int64
+	Sealed string
+}
+
+// PersistLedger writes the full faithful ledger state (entries_full, pending_calls,
+// handoffs) in ONE transaction — matching the old cashctl.db ledger's atomic
+// whole-table Save, so a crash mid-save leaves the previous state intact rather
+// than a half-written mix (e.g. a source marked spent with its pending call not
+// yet durable). It is a full replace of the current state: delete-all then insert
+// the caller's current rows, atomically. (Single-process: concurrent cashctl
+// processes would need the old ledger's per-row version tokens — a later concern,
+// noted; the common case is one process.)
+func (c *Cache) PersistLedger(entries []SealedEntry, calls []SealedCall, handoffs []SealedHandoff, now int64) error {
+	tx, err := c.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, t := range []string{"entries_full", "pending_calls", "handoffs"} {
+		if _, err := tx.Exec(`DELETE FROM ` + t); err != nil {
+			return err
+		}
+	}
+	for _, e := range entries {
+		if _, err := tx.Exec(`INSERT INTO entries_full(id, w, sealed, updated_at) VALUES(?,?,?,?)`, e.ID, e.W, e.Sealed, now); err != nil {
+			return err
+		}
+	}
+	for _, cl := range calls {
+		if _, err := tx.Exec(`INSERT INTO pending_calls(request_id, sealed, updated_at) VALUES(?,?,?)`, cl.RequestID, cl.Sealed, now); err != nil {
+			return err
+		}
+	}
+	for _, h := range handoffs {
+		if _, err := tx.Exec(`INSERT INTO handoffs(id, sealed, updated_at) VALUES(?,?,?)`, h.ID, h.Sealed, now); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
