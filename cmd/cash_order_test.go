@@ -148,6 +148,7 @@ func setUpOrderHub(t *testing.T) (*fakeOrderHub, string) {
 	t.Helper()
 	appdir.SetOverride(t.TempDir())
 	t.Cleanup(func() { appdir.SetOverride("") })
+	ensurePocketIdentity(t)
 	priv, xonly := testmint.Key(t)
 	f := &fakeOrderHub{t: t, hubPriv: priv, hubXOnly: xonly, terms: nipCO.Terms{
 		Lightning: &nipCO.KindTerms{MinMillis: 1000, MaxMillis: 1_000_000_000, FeeBase: 1000, Window: 600}}}

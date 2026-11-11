@@ -123,13 +123,14 @@ func setUpWithdraw(t *testing.T) (*fakeWithdrawHub, string) {
 	t.Helper()
 	appdir.SetOverride(t.TempDir())
 	t.Cleanup(func() { appdir.SetOverride("") })
+	ensurePocketIdentity(t)
 	priv, xonly := testmint.Key(t)
 	wallet := testmint.Hex32(t)
 	tok := testmint.Bill(t, nipcash.Token{HRP: "lokicash", WalletPubkey: wallet, Secret: testmint.Hex32(t),
 		RelayURLs: []string{"wss://hub.example"}, IdentityRequired: ptrTo(false)}, priv)
 	minter, _ := utils.GetPublicKey(priv)
 	minter = "02" + minter
-	l, _ := ledger.Load()
+	l := testLoad(t)
 	e, err := l.Add(ledger.Entry{Token: tok, WalletPubkey: wallet, AmountMillis: ptrTo(uint64(21000)), Verified: true,
 		MinterPubkey: &minter, IdentityRequired: ptrTo(false), CashSecret: testmint.Hex32(t), CashProtection: ledger.CashProtected})
 	if err != nil {
