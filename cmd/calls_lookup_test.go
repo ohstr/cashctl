@@ -162,9 +162,15 @@ func TestSettle_WaitExpiredUnansweredForeign(t *testing.T) {
 		if got, _ := l.FindCall(c.CallID); !got.Open() || got.State == ledger.CallStuck {
 			t.Errorf("an unanswered lookup within the window: %+v", got)
 		}
-		call, _ := l.FindCall(c.CallID)
-		call.Deadline = time.Now().Unix() - call.SentH - 10
-		_ = l.Save()
+		// Push the deadline past: mutate+Save must go through a WRITABLE store
+		// (settleNow returns an inspect-only snapshot whose Save targets
+		// cashctl.db, not the pocket — see ledgerView).
+		w := testLoad(t)
+		wc, _ := w.FindCall(c.CallID)
+		wc.Deadline = time.Now().Unix() - wc.SentH - 10
+		if err := w.Save(); err != nil {
+			t.Fatal(err)
+		}
 		if got, _ := settleNow(t).FindCall(c.CallID); got.State != ledger.CallStuck || got.Detail != "lookup_unanswered" {
 			t.Errorf("unanswered past deadline + H: %+v; want stuck lookup_unanswered", got)
 		}
