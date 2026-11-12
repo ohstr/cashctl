@@ -189,11 +189,12 @@ func TestServeAttack_NonOwnerPullsNothing(t *testing.T) {
 	if ids, closed := anon.req("a", map[string]any{"kinds": []int{1059}}); len(ids) != 0 || !strings.HasPrefix(closed, "auth-required:") {
 		t.Fatalf("FINDING: un-authed REQ for 1059 not auth-gated: ids=%v closed=%q", ids, closed)
 	}
-	// Un-authed kind-LESS REQ: not auth-required (names no gated kind) but the
-	// per-event gate still withholds the owner's wraps — the store holds only
-	// 1059s, all p-tagged to the owner, so nothing comes back.
-	if ids, closed := anon.req("b", map[string]any{"#p": []string{ownerPub}}); closed != "" || len(ids) != 0 {
-		t.Fatalf("FINDING: un-authed kind-less REQ leaked wraps: ids=%v closed=%q", ids, closed)
+	// Un-authed kind-LESS REQ: now also auth-required — the serve sets
+	// Limitation.AuthRequired (review fix), so an anonymous connection cannot REQ at
+	// all (nor EVENT-publish), tightening the prior behaviour where a kind-less probe
+	// got an empty-but-open response.
+	if ids, closed := anon.req("b", map[string]any{"#p": []string{ownerPub}}); len(ids) != 0 || !strings.HasPrefix(closed, "auth-required:") {
+		t.Fatalf("FINDING: un-authed kind-less REQ not auth-gated (AuthRequired): ids=%v closed=%q", ids, closed)
 	}
 
 	// Foreign key, authenticated as ITSELF: it clears NIP-42 but is named in no
@@ -289,6 +290,53 @@ func TestServeAttack_InjectedWrapIsInert(t *testing.T) {
 	}
 	if n := len(opened); n > 1 {
 		t.Fatalf("FINDING: the injected 1059 opened as a user entry (%d entries) — OpenAll must discard a foreign-sealed wrap", n)
+	}
+}
+
+// TestServeAttack_WritesRejected proves the serve's WRITE surface is closed (review
+// fix — pocket.db poisoning / DoS, Medium on --public). The serve is network
+// read-only: the owner populates pocket.db LOCALLY via Project and remote devices
+// only PULL, so no client ever legitimately writes. Two guards, each a TRUE-NEGATIVE
+// (fails if the guard were dropped):
+//   - an UNauthenticated client cannot publish any event (Limitation.AuthRequired);
+//   - an AUTHenticated FOREIGN client cannot publish a kind-1059 wrap
+//     (WithRelayAuthoredKinds(1059): gift-wraps are ephemeral-signed, never
+//     relay-self-authored, and the serve holds no self key, so every 1059 EVENT is
+//     refused).
+// Positive control: the owner can still AUTH and pull its own wrap — the gates do not
+// break the sync path.
+func TestServeAttack_WritesRejected(t *testing.T) {
+	url, ownerPub := startServe(t)
+	const attackerPriv = "2222222222222222222222222222222222222222222222222222222222222222"
+
+	// 1) Unauthenticated publish of a plain event → rejected (AuthRequired), so an
+	// anonymous LAN host cannot bloat pocket.db.
+	anonEv, err := nip01.NewSignedEvent(1, "spam", attackerPriv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	anon := dialServe(t, url)
+	if ok, reason := anon.publish(anonEv); ok {
+		t.Fatalf("FINDING: an UN-authenticated client published into the serve (poisoning/DoS): reason=%q", reason)
+	}
+
+	// 2) Authenticated FOREIGN client publishing a kind-1059 → rejected
+	// (WithRelayAuthoredKinds(1059)). No 1059 EVENT write is ever legitimate.
+	injected, err := nip01.NewSignedEvent(1059, "foreign wrap", attackerPriv, []string{"p", ownerPub})
+	if err != nil {
+		t.Fatal(err)
+	}
+	att := dialServe(t, url)
+	att.auth(t, attackerPriv)
+	if ok, reason := att.publish(injected); ok {
+		t.Fatalf("FINDING: an authed foreign client published a kind-1059 into the serve (injection/poisoning): reason=%q", reason)
+	}
+
+	// Positive control: the owner can still AUTH and pull its own wrap.
+	me := dialServe(t, url)
+	me.auth(t, testPocketKey)
+	if ids, closed := me.req("a", map[string]any{"kinds": []int{1059}, "#p": []string{ownerPub}}); closed != "" || len(ids) != 1 {
+		t.Fatalf("the owner could not pull its own wrap after the write-gate fix: ids=%v closed=%q", ids, closed)
 	}
 }
 

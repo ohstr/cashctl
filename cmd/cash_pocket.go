@@ -436,8 +436,30 @@ func pocketServeHandler(ctx context.Context, p *pocket.Pocket, held []ledger.Ent
 	}
 	// URL must equal what clients dial: NIP-42's ValidateAuthEvent does an exact
 	// relay-tag match, and without it AUTH (and the 1059 recipient-only gate) fails.
-	meta := &nip11.Metadata{URL: relayURL, Name: "cashctl-pocket", Description: "a personal Cash Pocket relay (NIP-CP)"}
-	handler := relay.NewSessionHandler(p.Store.EventStore(), meta, nil, relay.WithRecipientOnlyKinds(1059))
+	// Limitation.AuthRequired is the session's live gate (s.limitation == &meta.Limitation):
+	// require NIP-42 AUTH before any REQ or EVENT. Serve is network READ-ONLY — the
+	// owner's device populates pocket.db LOCALLY via Project and remote devices only
+	// PULL, so no client ever legitimately writes; this blocks an anonymous LAN host
+	// from publishing events that would accumulate unbounded in pocket.db (review
+	// finding — poisoning/DoS, Medium on --public).
+	meta := &nip11.Metadata{
+		URL:         relayURL,
+		Name:        "cashctl-pocket",
+		Description: "a personal Cash Pocket relay (NIP-CP)",
+		Limitation:  nip11.Limitation{AuthRequired: true},
+	}
+	handler := relay.NewSessionHandler(p.Store.EventStore(), meta, nil,
+		// Reads: a 1059 is delivered ONLY to a connection NIP-42-authed as a pubkey in
+		// its p tags (the owner).
+		relay.WithRecipientOnlyKinds(1059),
+		// Writes: refuse kind-1059 EVENTs entirely. Gift-wraps are ephemeral-key
+		// signed (never relay-self-authored) and the serve has no self key, so
+		// WithRelayAuthoredKinds(1059) rejects every 1059 publish — closing the
+		// foreign-wrap injection the owner would otherwise re-pull and re-discard on
+		// every sync. Injected wraps were already inert (OpenAll discards a
+		// foreign-sealed wrap); this stops them being stored and re-processed.
+		relay.WithRelayAuthoredKinds(1059),
+	)
 	handler.VerificationWorker.Start(1)
 	return handler, nil
 }
