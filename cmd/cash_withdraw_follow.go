@@ -198,7 +198,7 @@ func showWithdrawals(cmd *cobra.Command, ids []string, local bool) error {
 	if err != nil {
 		return output.RuntimeError(cmd, err)
 	}
-	defer l.Close()
+	defer func() { _ = l.Close() }()
 	all, err := l.Withdrawals()
 	if err != nil {
 		return output.RuntimeError(cmd, err)
@@ -289,7 +289,7 @@ func runCashWithdrawCancel(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return output.RuntimeError(cmd, err)
 	}
-	defer l.Close()
+	defer func() { _ = l.Close() }()
 	w, ok, err := l.FindWithdrawal(args[0])
 	if err != nil || !ok {
 		return output.NotFoundError(cmd, args[0], fmt.Errorf("no withdrawal %q", args[0]))

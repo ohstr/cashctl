@@ -61,19 +61,19 @@ func TestLedgerStoreConcurrentSaveRefused(t *testing.T) {
 	if err := a.Save(); err != nil {
 		t.Fatalf("a save: %v", err)
 	}
-	a.Close()
+	_ = a.Close()
 
 	// B and C both open now — both load the SAME current store_version.
 	b, err := OpenLedgerStore(ctx, dir, priv, "flokicoin")
 	if err != nil {
 		t.Fatalf("open b: %v", err)
 	}
-	defer b.Close()
+	defer func() { _ = b.Close() }()
 	c, err := OpenLedgerStore(ctx, dir, priv, "flokicoin")
 	if err != nil {
 		t.Fatalf("open c: %v", err)
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 
 	// B writes-ahead a new call and saves → succeeds (it loaded the current version).
 	bRID := addBillAndCall(t, b, 2000)
@@ -93,7 +93,7 @@ func TestLedgerStoreConcurrentSaveRefused(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	defer d.Close()
+	defer func() { _ = d.Close() }()
 	if _, ok := d.FindCall(ledger.CallIDFor(aRID)); !ok {
 		t.Fatal("A's write-ahead call was lost")
 	}
@@ -124,14 +124,14 @@ func TestLedgerStoreSequentialSavesAdvanceVersion(t *testing.T) {
 	if err := s.Save(); err != nil {
 		t.Fatalf("second save on same store: %v", err)
 	}
-	s.Close()
+	_ = s.Close()
 
 	// A later command (fresh open) loads the current version and can still save.
 	s2, err := OpenLedgerStore(ctx, dir, priv, "flokicoin")
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	defer s2.Close()
+	defer func() { _ = s2.Close() }()
 	_ = addBillAndCall(t, s2, 3000)
 	if err := s2.Save(); err != nil {
 		t.Fatalf("save after reopen: %v", err)

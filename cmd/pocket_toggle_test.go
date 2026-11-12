@@ -103,13 +103,3 @@ func testLoad(t *testing.T) ledger.Store {
 // (e.g. holding/checking a bill with no local identity) is inapplicable to the
 // pocket, which seals state to the identity, so only the toggle-off half runs.
 func onPocket() bool { return usePocket() }
-
-// skipOnPocket skips a test under CASHCTL_POCKET with a documented reason — for
-// a genuine pocket behaviour difference that needs a production fix, not a test
-// change.
-func skipOnPocket(t *testing.T, why string) {
-	t.Helper()
-	if usePocket() {
-		t.Skip("pocket: " + why)
-	}
-}

@@ -128,7 +128,7 @@ func showOrders(cmd *cobra.Command, ids []string, local bool) error {
 	if err != nil {
 		return output.RuntimeError(cmd, err)
 	}
-	defer l.Close()
+	defer func() { _ = l.Close() }()
 	all, err := l.Orders()
 	if err != nil {
 		return output.RuntimeError(cmd, err)
@@ -249,7 +249,7 @@ func watchOrder(cmd *cobra.Command, id string, timeout time.Duration) error {
 	if err != nil {
 		return output.RuntimeError(cmd, err)
 	}
-	defer l.Close()
+	defer func() { _ = l.Close() }()
 	o, ok, err := l.FindOrder(id)
 	if err != nil {
 		return output.RuntimeError(cmd, err)
@@ -331,7 +331,7 @@ func mustCall(cmd *cobra.Command, id string) (*ledger.Call, bool) {
 	if err != nil {
 		return nil, false
 	}
-	defer l.Close()
+	defer func() { _ = l.Close() }()
 	return l.FindCall(id)
 }
 

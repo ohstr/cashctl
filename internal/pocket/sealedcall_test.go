@@ -148,7 +148,7 @@ func TestCacheSealedCRUD(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 
 	if err := c.PutSealedCall("req-1", "sealedblobA", 100); err != nil {
 		t.Fatal(err)

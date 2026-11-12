@@ -48,7 +48,7 @@ func watchWithdrawal(cmd *cobra.Command, id string, timeout time.Duration) error
 	if err != nil {
 		return output.RuntimeError(cmd, err)
 	}
-	defer l.Close()
+	defer func() { _ = l.Close() }()
 	w, ok, err := l.FindWithdrawal(id)
 	if err != nil {
 		return output.RuntimeError(cmd, err)

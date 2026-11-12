@@ -152,11 +152,11 @@ func OpenCache(path string) (*Cache, error) {
 		return nil, fmt.Errorf("pocket: open cache %s: %w", path, err)
 	}
 	if _, err := db.Exec(cacheDDL); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("pocket: cache schema: %w", err)
 	}
 	if _, err := db.Exec(`INSERT OR IGNORE INTO meta(key, value) VALUES('schema_version', ?)`, cacheSchemaVersion); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("pocket: cache schema_version: %w", err)
 	}
 	return &Cache{db: db}, nil
@@ -189,15 +189,6 @@ func (a key) beatsSameRev(b key) bool {
 	return a.id < b.id
 }
 
-// wins reports whether a is the resolution winner over b: a higher rev always
-// wins; at equal rev, beatsSameRev decides.
-func (a key) wins(b key) bool {
-	if a.rev != b.rev {
-		return a.rev > b.rev
-	}
-	return a.beatsSameRev(b)
-}
-
 func keyOf(e nipCP.Entry) key {
 	return key{rev: e.Rev, final: e.State.Final(), createdAt: e.RumorCreatedAt, id: e.RumorID}
 }
@@ -217,7 +208,7 @@ func (c *Cache) Fold(e nipCP.Entry) (changed bool, err error) {
 	if err != nil {
 		return false, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	changed, err = foldTx(tx, e)
 	if err != nil {
 		return false, err
@@ -316,7 +307,7 @@ func (c *Cache) Balance() (map[string]uint64, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	out := map[string]uint64{}
 	for rows.Next() {
 		var chain string
@@ -341,7 +332,7 @@ FROM entries ORDER BY w`)
 	if err != nil {
 		return nil, nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var (
 			e        nipCP.Entry
@@ -385,7 +376,7 @@ func (c *Cache) Rebuild(all []nipCP.Entry) error {
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	if _, err := tx.Exec(`DELETE FROM entries`); err != nil {
 		return err
 	}
@@ -434,7 +425,7 @@ func (c *Cache) OpenCalls() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []string
 	for rows.Next() {
 		var w string
@@ -444,21 +435,6 @@ func (c *Cache) OpenCalls() ([]string, error) {
 		out = append(out, w)
 	}
 	return out, rows.Err()
-}
-
-// currentRev returns the resolved rev of w (and whether w is known) — what the
-// A' Save reads to write a changed bill at the next rev (so the fold supersedes
-// the prior one by rev rather than flagging a same-rev conflict).
-func (c *Cache) currentRev(w string) (rev uint64, known bool, err error) {
-	err = c.db.QueryRow(`SELECT rev FROM entries WHERE w = ?`, w).Scan(&rev)
-	switch err {
-	case sql.ErrNoRows:
-		return 0, false, nil
-	case nil:
-		return rev, true, nil
-	default:
-		return 0, false, fmt.Errorf("pocket: rev %s: %w", w, err)
-	}
 }
 
 // ---- sealed pending_calls (cashctl's in-flight calls, encrypt-to-self) ----
@@ -484,7 +460,7 @@ func (c *Cache) SealedCalls() (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	out := map[string]string{}
 	for rows.Next() {
 		var id, sealed string
@@ -520,7 +496,7 @@ func (c *Cache) SealedHandoffs() (map[int64]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	out := map[int64]string{}
 	for rows.Next() {
 		var id int64
@@ -570,7 +546,7 @@ func (c *Cache) SealedEntries() (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	out := map[string]string{}
 	for rows.Next() {
 		var id, sealed string
@@ -622,7 +598,7 @@ func scanSealedOrders(rows *sql.Rows, qerr error) ([]SealedOrderRow, error) {
 	if qerr != nil {
 		return nil, qerr
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	out := []SealedOrderRow{}
 	for rows.Next() {
 		var r SealedOrderRow
@@ -667,7 +643,7 @@ func scanSealedWithdrawals(rows *sql.Rows, qerr error) ([]SealedWithdrawalRow, e
 	if qerr != nil {
 		return nil, qerr
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	out := []SealedWithdrawalRow{}
 	for rows.Next() {
 		var r SealedWithdrawalRow
@@ -738,7 +714,7 @@ func (c *Cache) PersistLedger(entries []SealedEntry, calls []SealedCall, handoff
 	if err != nil {
 		return 0, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	var cur int64
 	var curStr string

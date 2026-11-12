@@ -98,7 +98,7 @@ func (j *Journal) WriteAhead(ctx context.Context, calls []nipcash.PendingCall) e
 		return err
 	}
 	for _, pc := range calls {
-		if e, ok := j.PocketJournal.Written(pc.RequestID); ok {
+		if e, ok := j.Written(pc.RequestID); ok {
 			_, _ = j.cache.Fold(e) // best-effort; store is authoritative
 		}
 	}
@@ -188,7 +188,7 @@ func (p *Pocket) Close() {
 		p.Store.Close()
 	}
 	if p.Cache != nil {
-		p.Cache.Close()
+		_ = p.Cache.Close()
 	}
 }
 

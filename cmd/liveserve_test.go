@@ -59,7 +59,7 @@ func TestLiveServeForXClient(t *testing.T) {
 	defer handler.VerificationWorker.Stop()
 	srv := &http.Server{Handler: handler}
 	go func() { _ = srv.Serve(ln) }()
-	defer srv.Close()
+	defer func() { _ = srv.Close() }()
 
 	if err := os.WriteFile(urlFile, []byte(url), 0o600); err != nil {
 		t.Fatal(err)

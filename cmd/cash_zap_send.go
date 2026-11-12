@@ -240,7 +240,7 @@ func runCashZapSend(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return output.RuntimeError(cmd, err)
 	}
-	defer l.Close()
+	defer func() { _ = l.Close() }()
 	if err := settleBeforeSpend(cmd, l); err != nil {
 		return err
 	}

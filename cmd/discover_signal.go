@@ -298,7 +298,7 @@ func usedOffer(cmd *cobra.Command, l *listing.Listing) (used bool, last int64) {
 	if err != nil {
 		return
 	}
-	defer ld.Close()
+	defer func() { _ = ld.Close() }()
 	orders, _ := ld.Orders()
 	for _, o := range orders {
 		if o.HubIdentity != l.NodeIdentity {

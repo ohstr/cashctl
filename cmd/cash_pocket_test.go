@@ -115,7 +115,7 @@ func TestCashPocketSync_SpendableAfterPull(t *testing.T) {
 	if err != nil {
 		t.Fatalf("B ledger open: %v", err)
 	}
-	defer lsB.Close()
+	defer func() { _ = lsB.Close() }()
 	var found *ledger.Entry
 	for _, e := range lsB.Held() {
 		if e.WalletPubkey == w {
@@ -334,7 +334,7 @@ func TestCashPocketExportImport(t *testing.T) {
 	if err != nil {
 		t.Fatalf("B ledger open: %v", err)
 	}
-	defer lsB.Close()
+	defer func() { _ = lsB.Close() }()
 	var sealedTotal uint64
 	found := false
 	for _, e := range lsB.Held() {
@@ -436,7 +436,7 @@ func TestCashPocketServe_OwnerSyncsOffItAndNonOwnerRefused(t *testing.T) {
 	defer handler.VerificationWorker.Stop()
 	srv := &http.Server{Handler: handler}
 	go func() { _ = srv.Serve(ln) }()
-	defer srv.Close()
+	defer func() { _ = srv.Close() }()
 
 	// B (same key, fresh dir) ALSO holds its own bill, so its sync PUBLISHES to A's
 	// write-gated serve. The serve refuses every 1059 EVENT write (WithRelayAuthoredKinds),
@@ -464,7 +464,7 @@ func TestCashPocketServe_OwnerSyncsOffItAndNonOwnerRefused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer lsB.Close()
+	defer func() { _ = lsB.Close() }()
 	if _, ok := lsB.FindByToken(held.Token); !ok {
 		t.Fatalf("served bill (w=%s) not in B's sealed ledger — not spendable", w)
 	}

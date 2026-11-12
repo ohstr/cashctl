@@ -127,7 +127,7 @@ pending_joins and pending_merge.`,
 			device, _ := deviceIDFn()
 			var recovered []string
 			if l, err := loadStore(cmd); err == nil {
-				defer l.Close()
+				defer func() { _ = l.Close() }()
 				if ws, err := l.Withdrawals(); err == nil {
 					for _, w := range ws {
 						if w.Recovered && w.FinishedAt == 0 {

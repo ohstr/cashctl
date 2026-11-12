@@ -90,18 +90,18 @@ func (s *LedgerStore) ZapEventFor(token string) (string, error) {
 		return "", nil
 	}
 	best := -1
-	for i := range s.Ledger.Entries {
-		if s.Ledger.Entries[i].WalletPubkey != w {
+	for i := range s.Entries {
+		if s.Entries[i].WalletPubkey != w {
 			continue
 		}
-		if best < 0 || zapRowBetter(s.Ledger.Entries[i], i, s.Ledger.Entries[best], best) {
+		if best < 0 || zapRowBetter(s.Entries[i], i, s.Entries[best], best) {
 			best = i
 		}
 	}
 	if best < 0 {
 		return "", nil
 	}
-	return s.Ledger.Entries[best].ZapEvent, nil
+	return s.Entries[best].ZapEvent, nil
 }
 
 // zapRowBetter reports whether entry a (at slice index ai) outranks b (bi) under
@@ -245,16 +245,16 @@ func (s *LedgerStore) Save() error {
 	// Staged orders/withdrawals (StageOrder/StageWithdrawal) are flushed in the SAME
 	// PersistLedger tx as the calls, so an order/withdrawal and the call that places
 	// it are durable together (the old ledger wrote them in one tx; ledger.go:732).
-	stagedOrders := make([]SealedOrderRow, 0, len(s.Ledger.StagedOrders()))
-	for _, o := range s.Ledger.StagedOrders() {
+	stagedOrders := make([]SealedOrderRow, 0, len(s.StagedOrders()))
+	for _, o := range s.StagedOrders() {
 		blob, err := sealOrder(o, priv, pub)
 		if err != nil {
 			return err
 		}
 		stagedOrders = append(stagedOrders, SealedOrderRow{OrderID: o.OrderID, CallID: o.CallID, Sealed: blob})
 	}
-	stagedWithdrawals := make([]SealedWithdrawalRow, 0, len(s.Ledger.StagedWithdrawals()))
-	for _, w := range s.Ledger.StagedWithdrawals() {
+	stagedWithdrawals := make([]SealedWithdrawalRow, 0, len(s.StagedWithdrawals()))
+	for _, w := range s.StagedWithdrawals() {
 		blob, err := sealWithdrawal(w, priv, pub)
 		if err != nil {
 			return err
@@ -279,8 +279,8 @@ func (s *LedgerStore) Save() error {
 	}
 	s.version = newVersion
 	// Staged are now durable; clear them (as the old ledger clears after its tx).
-	s.Ledger.DropStagedOrders()
-	s.Ledger.DropStagedWithdrawals()
+	s.DropStagedOrders()
+	s.DropStagedWithdrawals()
 	return nil
 }
 

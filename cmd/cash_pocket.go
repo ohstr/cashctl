@@ -78,7 +78,7 @@ func runCashPocketBalance(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return output.RuntimeError(cmd, err)
 	}
-	defer st.Close()
+	defer func() { _ = st.Close() }()
 	bal := map[string]uint64{}
 	for _, e := range st.Held() {
 		pe, ok := pocket.DisplayEntry(e)
@@ -135,7 +135,7 @@ func runCashPocketEntries(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return output.RuntimeError(cmd, err)
 	}
-	defer st.Close()
+	defer func() { _ = st.Close() }()
 	var entries []nipCP.Entry
 	for _, e := range st.Held() {
 		if pe, ok := pocket.DisplayEntry(e); ok {

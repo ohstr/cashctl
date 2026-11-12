@@ -298,7 +298,7 @@ func TestLedgerStoreReloadByteIdentical(t *testing.T) {
 	if err := s.Save(); err != nil {
 		t.Fatalf("save: %v", err)
 	}
-	s.Close()
+	_ = s.Close()
 
 	// Reopen the same dir: the in-memory ledger must come back identical.
 	s2, err := OpenLedgerStore(ctx, dir, priv, "flokicoin")
@@ -429,7 +429,7 @@ func TestLedgerStoreOrdersWithdrawals(t *testing.T) {
 	if err := s.Save(); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
-	s.Close()
+	_ = s.Close()
 	s2, err := OpenLedgerStore(ctx, dir, priv, "flokicoin")
 	if err != nil {
 		t.Fatal(err)
@@ -466,7 +466,7 @@ func TestLedgerStoreOrdersWithdrawals(t *testing.T) {
 	if err != nil || len(ws) != 2 {
 		t.Fatalf("Withdrawals after staged flush: n=%d err=%v", len(ws), err)
 	}
-	s2.Close()
+	_ = s2.Close()
 
 	// No cleartext secret at rest.
 	data, _ := os.ReadFile(dir + "/pocket-cache.db")

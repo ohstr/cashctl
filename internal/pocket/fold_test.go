@@ -69,7 +69,7 @@ func openTestCache(t *testing.T) *Cache {
 	if err != nil {
 		t.Fatalf("OpenCache: %v", err)
 	}
-	t.Cleanup(func() { c.Close() })
+	t.Cleanup(func() { _ = c.Close() })
 	return c
 }
 
