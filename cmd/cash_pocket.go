@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -86,21 +87,32 @@ func runCashPocketBalance(cmd *cobra.Command, _ []string) error {
 		}
 		bal[pe.Chain] += pe.Amount
 	}
+	// Deterministic chain order (a map range is unordered; a stable order matches
+	// `cash consolidate`'s sortedHubKeys so repeated runs/agents see the same output).
+	chains := make([]string, 0, len(bal))
+	for chain := range bal {
+		chains = append(chains, chain)
+	}
+	sort.Strings(chains)
+
 	jsonMode, _ := cmd.Flags().GetBool("json")
 	if jsonMode {
-		out := map[string]uint64{}
-		for chain, amt := range bal {
-			out[chain] = amt
+		// Wrapped, labeled object (matching `cash pocket entries` and `wallet
+		// balance`): a named key, and every amount carries the _millis unit suffix —
+		// not a bare `{chain: amount}` map whose values have no stated unit or key.
+		rows := make([]map[string]any, 0, len(chains))
+		for _, chain := range chains {
+			rows = append(rows, map[string]any{"chain": chain, "amount_millis": bal[chain]})
 		}
-		output.PrintJSON(out)
+		output.PrintJSON(map[string]any{"balances": rows})
 		return nil
 	}
 	if len(bal) == 0 {
 		output.Println("Pocket is empty.")
 		return nil
 	}
-	for chain, amt := range bal {
-		output.Printf("%s: %s\n", chain, output.FormatAmount(int64(amt)))
+	for _, chain := range chains {
+		output.Printf("%s: %s\n", chain, output.FormatAmount(int64(bal[chain])))
 	}
 	return nil
 }
@@ -136,7 +148,7 @@ func runCashPocketEntries(cmd *cobra.Command, _ []string) error {
 		for _, e := range entries {
 			rows = append(rows, pocketEntryJSON(e))
 		}
-		output.PrintJSON(map[string]any{"entries": rows, "conflicts": []string{}})
+		output.PrintJSON(map[string]any{"entries": rows})
 		return nil
 	}
 	if len(entries) == 0 {
@@ -412,8 +424,15 @@ func runCashPocketServe(cmd *cobra.Command, _ []string) error {
 	}
 	defer handler.VerificationWorker.Stop()
 
-	output.Printf("Serving the pocket at %s — sync a second device with: cashctl cash pocket sync --relay %s\n", url, url)
-	output.Printf("(serves kind-1059 only to the owner key; Ctrl-C to stop)\n")
+	// Emit a machine-readable readiness line BEFORE blocking, so an agent/supervisor
+	// has a parseable "listening at X" signal (stdout stays JSON-only under --json)
+	// rather than scraping human prose. The command then blocks until signalled.
+	if jsonMode, _ := cmd.Flags().GetBool("json"); jsonMode {
+		output.PrintJSON(map[string]any{"listening": url, "relay": url, "public": public})
+	} else {
+		output.Printf("Serving the pocket at %s — sync a second device with: cashctl cash pocket sync --relay %s\n", url, url)
+		output.Printf("(serves kind-1059 only to the owner key; Ctrl-C to stop)\n")
+	}
 	// Blocks until the process is signalled; the bbolt pocket.db is held open for
 	// the serve's lifetime, so don't run `cash pocket sync`/`export` on this same
 	// device meanwhile (they open pocket.db too — single-writer).
