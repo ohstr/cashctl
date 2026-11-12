@@ -303,6 +303,7 @@ func TestServeAttack_InjectedWrapIsInert(t *testing.T) {
 //     (WithRelayAuthoredKinds(1059): gift-wraps are ephemeral-signed, never
 //     relay-self-authored, and the serve holds no self key, so every 1059 EVENT is
 //     refused).
+//
 // Positive control: the owner can still AUTH and pull its own wrap — the gates do not
 // break the sync path.
 func TestServeAttack_WritesRejected(t *testing.T) {
