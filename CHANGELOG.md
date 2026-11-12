@@ -13,6 +13,13 @@
   bundles), `sync` (opt-in, the only command that contacts a relay) and `serve` (be your
   own relay). ([#170](https://github.com/ohstr/cashctl/pull/170))
 
+### Fixed
+
+- Fixes `cashctl receive` of a token addressed to an IA-attested Web Identity
+  (a `connection_key`, e.g. an `x` handle) failing with NOT_FOUND: such a token is
+  now claimed by an in-place transfer to the local pubkey (mirroring the Cash Zap
+  connection-key path), so it is held and redeemable. (39d2758)
+
 ### Security
 
 - Builds with go 1.26.11, fixing a `net/http` standard-library vulnerability
