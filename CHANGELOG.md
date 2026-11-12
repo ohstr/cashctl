@@ -13,6 +13,11 @@
   bundles), `sync` (opt-in, the only command that contacts a relay) and `serve` (be your
   own relay). ([#170](https://github.com/ohstr/cashctl/pull/170))
 
+### Security
+
+- Builds with go 1.26.11, fixing a `net/http` standard-library vulnerability
+  (GO-2026-6859). ([#170](https://github.com/ohstr/cashctl/pull/170))
+
 ## [0.7.0-rc.13]
 
 ### Changed
