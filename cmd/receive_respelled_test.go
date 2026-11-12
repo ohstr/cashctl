@@ -41,12 +41,10 @@ func countingRelay(t *testing.T) (string, *atomic.Int32) {
 func TestReceive_ABillHeldUnderAnotherSpellingIsAConflictBeforeAnyDial(t *testing.T) {
 	appdir.SetOverride(t.TempDir())
 	t.Cleanup(func() { appdir.SetOverride("") })
+	ensurePocketIdentity(t) // the pocket seals held bills to the local identity
 	relay, dialled := countingRelay(t)
 	bill := testmint.Bill(t, nipcash.Token{RelayURLs: []string{relay}}, "")
-	l, err := ledger.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
+	l := testLoad(t)
 	if _, err := l.Add(ledger.Entry{Token: bill}); err != nil {
 		t.Fatal(err)
 	}
@@ -76,18 +74,20 @@ func TestReceive_ABillHeldUnderAnotherSpellingIsAConflictBeforeAnyDial(t *testin
 
 	// Another bill on the same relay is checked with its Hub as usual; the
 	// check needs an identity, and the relay is dialled only when it runs.
-	if _, err := identity.GenerateAndSaveLocal(); err != nil {
-		t.Fatal(err)
+	if _, err := identity.Load(); err != nil {
+		if _, err := identity.GenerateAndSaveLocal(); err != nil {
+			t.Fatal(err)
+		}
 	}
 	other := testmint.Bill(t, nipcash.Token{RelayURLs: []string{relay}}, "")
-	err = receive(other)
+	err := receive(other)
 	if output.ExitCode(err) == 5 {
 		t.Fatalf("a different bill was refused as already held: %v", err)
 	}
 	if dialled.Load() == 0 {
 		t.Error("a different bill was never checked with its Hub")
 	}
-	after, _ := ledger.Load()
+	after := ledgerView(testLoad(t))
 	if n := len(after.Held()); n != 1 {
 		t.Errorf("held = %d, want 1 (the unchecked bill is not saved)", n)
 	}

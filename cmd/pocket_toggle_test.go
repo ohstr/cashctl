@@ -99,6 +99,11 @@ func testLoad(t *testing.T) ledger.Store {
 	return ls
 }
 
+// onPocket reports whether the pocket toggle is on — for a test whose premise
+// (e.g. holding/checking a bill with no local identity) is inapplicable to the
+// pocket, which seals state to the identity, so only the toggle-off half runs.
+func onPocket() bool { return os.Getenv(pocketToggleEnv) != "" }
+
 // skipOnPocket skips a test under CASHCTL_POCKET with a documented reason — for
 // a genuine pocket behaviour difference that needs a production fix, not a test
 // change.

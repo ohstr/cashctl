@@ -34,8 +34,15 @@ func newSignalFixture(t *testing.T, withIdentity bool) *signalFixture {
 	t.Helper()
 	f := &signalFixture{listingFixture: newListingFixture(t), onlyOn: map[string]string{}}
 	if withIdentity {
-		if _, err := identity.GenerateAndSaveLocal(); err != nil {
-			t.Fatal(err)
+		// Toggle-on, newListingFixture→setUpOrderHub already configured the
+		// pocket's local identity (ensurePocketIdentity); GenerateAndSaveLocal
+		// would then clash with ErrAlreadyConfigured. Use the existing identity
+		// if one is already set (self is resolved dynamically below), else
+		// generate — identical behaviour toggle-off, where none exists yet.
+		if _, err := identity.Load(); err != nil {
+			if _, err := identity.GenerateAndSaveLocal(); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
 	prevFetch, prevPub, prevDelay := fetchEventsFn, publishEventFn, randomDelay
@@ -138,11 +145,15 @@ func (f *signalFixture) usedYesterday(t *testing.T) {
 // this session; it is queued with a delay and published by publish-due.
 func TestDiscover_RecommendQueueAndPublish(t *testing.T) {
 	f := newSignalFixture(t, false)
-	if _, err := runSignal(t, newDiscoverRecommendCmd(), []string{offerHandle(f.addr)}, map[string]string{"yes": "true"}); output.AsCLIError(err) == nil || output.AsCLIError(err).Reason != reasonIdentityRequired {
-		t.Fatalf("no identity: %v", err)
+	if !onPocket() { // toggle-on, the order-hub fixture already configured an identity, so the no-identity path can't be exercised here
+		if _, err := runSignal(t, newDiscoverRecommendCmd(), []string{offerHandle(f.addr)}, map[string]string{"yes": "true"}); output.AsCLIError(err) == nil || output.AsCLIError(err).Reason != reasonIdentityRequired {
+			t.Fatalf("no identity: %v", err)
+		}
 	}
-	if _, err := identity.GenerateAndSaveLocal(); err != nil {
-		t.Fatal(err)
+	if _, err := identity.Load(); err != nil {
+		if _, err := identity.GenerateAndSaveLocal(); err != nil {
+			t.Fatal(err)
+		}
 	}
 	_, err := runSignal(t, newDiscoverRecommendCmd(), []string{offerHandle(f.addr)}, map[string]string{"yes": "true"})
 	if ce := output.AsCLIError(err); ce == nil || ce.Reason != reasonRecommendNotAllowed {
