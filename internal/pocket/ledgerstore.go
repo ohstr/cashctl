@@ -166,10 +166,19 @@ func loadLedger(p *Pocket) (*ledger.Ledger, error) {
 	}
 	sort.Slice(handoffs, func(i, j int) bool { return handoffs[i].ID < handoffs[j].ID })
 
+	// History (cashctl wallet history) is display-only: load it best-effort so a
+	// decode hiccup never fails the funds load. Empty log → no row → nil History.
+	var history []ledger.HistoryEntry
+	if blob, ok, herr := p.Cache.SealedHistory(); herr == nil && ok {
+		if h, oerr := openHistoryLogFB(blob, priv, pub, fbPriv, fbPub); oerr == nil {
+			history = h
+		}
+	}
+
 	// A directly-constructed &Ledger{} (the pattern every unit test uses) has nil
 	// diff-tracking maps; its methods tolerate that, and its own Save() — which
 	// would diff against those maps — is never called (LedgerStore.Save overrides).
-	return &ledger.Ledger{Entries: entries, Calls: calls, Handoffs: handoffs}, nil
+	return &ledger.Ledger{Entries: entries, Calls: calls, Handoffs: handoffs, History: history}, nil
 }
 
 // Save persists the embedded in-memory ledger to the pocket — the one new
@@ -253,7 +262,18 @@ func (s *LedgerStore) Save() error {
 		stagedWithdrawals = append(stagedWithdrawals, SealedWithdrawalRow{WithdrawalID: w.WithdrawalID, CallID: w.CallID, Sealed: blob})
 	}
 
-	newVersion, err := s.p.Cache.PersistLedger(entries, calls, handoffs, stagedOrders, stagedWithdrawals, now, s.version)
+	// The action log is snapshotted as one sealed blob; an empty log seals nothing
+	// (sealHistoryLog can't round-trip an empty slice) and writes no row.
+	historyBlob := ""
+	if len(s.History) > 0 {
+		b, herr := sealHistoryLog(s.History, priv, pub)
+		if herr != nil {
+			return herr
+		}
+		historyBlob = b
+	}
+
+	newVersion, err := s.p.Cache.PersistLedger(entries, calls, handoffs, stagedOrders, stagedWithdrawals, historyBlob, now, s.version)
 	if err != nil {
 		return err
 	}

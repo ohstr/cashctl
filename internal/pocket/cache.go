@@ -85,6 +85,18 @@ CREATE TABLE IF NOT EXISTS handoffs (
   updated_at INTEGER NOT NULL
 );
 
+-- history_log holds cashctl's local action log (ledger.HistoryEntry) as ONE
+-- NIP-44-sealed blob (single row, id=0), the pocket equivalent of the old
+-- cashctl.db history table. Display-only (cashctl wallet history) — sealed so
+-- amounts/counterparties are not cleartext at rest, but no funds logic reads it, so
+-- its load is best-effort (a decode failure skips history rather than failing the
+-- whole ledger load). Written in the PersistLedger snapshot like the others.
+CREATE TABLE IF NOT EXISTS history_log (
+  id         INTEGER PRIMARY KEY CHECK (id = 0),
+  sealed     TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
 -- entries_full holds the FAITHFUL ledger.Entry (NIP-44-sealed), keyed by the
 -- cashctl-assigned entry id. The pure-NIP-CP held-token 9525 in pocket.db is the
 -- interop/sync copy; this is cmd's source of truth so the in-memory ledger
@@ -521,6 +533,20 @@ func (c *Cache) SealedHandoffs() (map[int64]string, error) {
 	return out, rows.Err()
 }
 
+// SealedHistory returns the sealed action-log blob (ok=false when the log is empty,
+// i.e. no row was written). The single row is keyed id=0.
+func (c *Cache) SealedHistory() (sealed string, ok bool, err error) {
+	row := c.db.QueryRow(`SELECT sealed FROM history_log WHERE id = 0`)
+	switch err := row.Scan(&sealed); err {
+	case sql.ErrNoRows:
+		return "", false, nil
+	case nil:
+		return sealed, true, nil
+	default:
+		return "", false, err
+	}
+}
+
 // ---- faithful sealed ledger.Entry (cmd's source of truth, encrypt-to-self) ----
 
 // PutSealedEntry upserts the NIP-44-sealed faithful ledger.Entry by its id.
@@ -707,7 +733,7 @@ func (c *Cache) StoreVersion() (int64, error) {
 // strictly stronger: ANY concurrent write is caught, so it subsumes both the old
 // per-call CAS and refuseForeignOpenCall (R-CP-10) in one guard. Returns the new
 // store version on success.
-func (c *Cache) PersistLedger(entries []SealedEntry, calls []SealedCall, handoffs []SealedHandoff, stagedOrders []SealedOrderRow, stagedWithdrawals []SealedWithdrawalRow, now, expectedVersion int64) (int64, error) {
+func (c *Cache) PersistLedger(entries []SealedEntry, calls []SealedCall, handoffs []SealedHandoff, stagedOrders []SealedOrderRow, stagedWithdrawals []SealedWithdrawalRow, historyBlob string, now, expectedVersion int64) (int64, error) {
 	tx, err := c.db.Begin()
 	if err != nil {
 		return 0, err
@@ -747,6 +773,16 @@ func (c *Cache) PersistLedger(entries []SealedEntry, calls []SealedCall, handoff
 	}
 	for _, h := range handoffs {
 		if _, err := tx.Exec(`INSERT INTO handoffs(id, sealed, updated_at) VALUES(?,?,?)`, h.ID, h.Sealed, now); err != nil {
+			return 0, err
+		}
+	}
+	// history_log is a single sealed blob (id=0), snapshotted like the above; an
+	// empty log writes no row (an empty slice is not sealable — see sealHistoryLog).
+	if _, err := tx.Exec(`DELETE FROM history_log`); err != nil {
+		return 0, err
+	}
+	if historyBlob != "" {
+		if _, err := tx.Exec(`INSERT INTO history_log(id, sealed, updated_at) VALUES(0, ?, ?)`, historyBlob, now); err != nil {
 			return 0, err
 		}
 	}

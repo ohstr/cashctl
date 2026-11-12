@@ -160,6 +160,42 @@ func TestLedgerStoreKeylessThenInitNoBrick(t *testing.T) {
 	}
 }
 
+// TestLedgerStoreHistoryPersists proves the action log survives a reload under the
+// pocket (review finding: History was dropped — `cashctl wallet history` came back
+// empty by default even after activity, while CASHCTL_POCKET=0 showed it). Append
+// then Save then a fresh open must reload the log; empty logs write no row.
+func TestLedgerStoreHistoryPersists(t *testing.T) {
+	priv, _ := testKey(t)
+	dir := t.TempDir()
+	ctx := context.Background()
+
+	s, err := OpenLedgerStore(ctx, dir, priv, "flokicoin")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	s.AppendHistory("zap", "zapped 50 to alice")
+	s.AppendHistory("mint", "minted 500")
+	if err := s.Save(); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	reopen, err := OpenLedgerStore(ctx, dir, priv, "flokicoin")
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	t.Cleanup(func() { _ = reopen.Close() })
+	h := reopen.AllHistory()
+	if len(h) != 2 {
+		t.Fatalf("reload has %d history lines, want 2 (action log dropped under the pocket)", len(h))
+	}
+	if h[0].Action != "zap" || h[0].Detail != "zapped 50 to alice" || h[1].Action != "mint" {
+		t.Fatalf("history not reloaded faithfully: %+v", h)
+	}
+}
+
 // TestLedgerStoreReloadByteIdentical is the A' core: the embedded in-memory
 // ledger.Ledger is mutated through its real methods (Add/AddCall/AddHandoff),
 // Save persists it to the NIP-44-sealed faithful tables, and a reopen

@@ -206,6 +206,42 @@ func openWithdrawal(sealed, priv, pub string) (ledger.Withdrawal, error) {
 	return w, nil
 }
 
+// historyPtrs is the (empty) overlay for the history log: ledger.HistoryEntry is
+// all scalar strings (At/Action/Detail), so it has no pointer/slice fields that gob
+// round-trips lossily — the seal→open DeepEqual still guards against any future
+// field that would.
+type historyPtrs struct{}
+
+// sealHistoryLog seals the WHOLE action log as one blob (a single row), the pocket
+// equivalent of the old ledger's append-only history table. It is display-only state
+// (cashctl wallet history) — no secret, no funds logic reads it — but it is sealed
+// like everything else so amounts/counterparties are not cleartext at rest. The
+// caller must not seal an EMPTY slice (gob collapses []→nil, failing the read-back);
+// Save writes no history row when the log is empty.
+func sealHistoryLog(h []ledger.HistoryEntry, priv, pub string) (string, error) {
+	return seal("history", h, historyPtrs{}, priv, pub, func(s string) (any, error) { return openHistoryLog(s, priv, pub) })
+}
+
+// openHistoryLog decrypts and deserializes the whole action log.
+func openHistoryLog(sealed, priv, pub string) ([]ledger.HistoryEntry, error) {
+	var h []ledger.HistoryEntry
+	if err := unseal(sealed, priv, pub, &h, func(raw json.RawMessage) error { return nil }); err != nil {
+		return nil, fmt.Errorf("pocket: open history: %w", err)
+	}
+	return h, nil
+}
+
+// openHistoryLogFB tries the primary key, then the device fallback (keyless→init).
+func openHistoryLogFB(sealed, priv, pub, fbPriv, fbPub string) ([]ledger.HistoryEntry, error) {
+	h, err := openHistoryLog(sealed, priv, pub)
+	if err != nil && fbPriv != "" {
+		if h2, err2 := openHistoryLog(sealed, fbPriv, fbPub); err2 == nil {
+			return h2, nil
+		}
+	}
+	return h, err
+}
+
 // openEntryFB / openCallFB / openHandoffFB / openOrderFB / openWithdrawalFB try the
 // primary key, then (when fbPriv is set) an at-rest device fallback key. This keeps
 // blobs sealed before `cashctl init` readable once the pocket opens under the
