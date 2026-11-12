@@ -3,13 +3,45 @@ package pocket
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/ohstr/nmilat/nipCP"
 	"github.com/ohstr/nmilat/nipcash"
 	"github.com/ohstr/nmilat/nipcash/client"
 	"github.com/ohstr/nmilat/utils"
 )
+
+// DeviceKeyFile is the at-rest device-key filename beside the pocket. It seals the
+// identity-less cash paths (bearer notes, connection-key bills) when no NIP-CASH
+// identity is configured. cmd/pocket_store.go writes it; deviceFallback reads it.
+const DeviceKeyFile = "pocket.devkey"
+
+// deviceFallback returns the at-rest device key beside the pocket as a fallback
+// DECRYPTION key, but only when it differs from userPriv. It is the key the keyless
+// cash paths sealed under before an identity was configured; after `cashctl init`
+// the pocket opens under the identity key, so without this fallback a single
+// device-key-sealed blob would fail loadLedger and brick the whole wallet. Returns
+// "","" when there is no device key, it is malformed, or it equals userPriv (the
+// still-keyless case, where every blob already opens under userPriv). Funds-safe: it
+// only ADDS a decryption attempt under a key this wallet holds on disk, and the next
+// Save re-seals every blob under userPriv (automatic device-key adoption).
+func deviceFallback(dir, userPriv string) (priv, pub string) {
+	b, err := os.ReadFile(filepath.Join(dir, DeviceKeyFile))
+	if err != nil {
+		return "", ""
+	}
+	k := strings.TrimSpace(string(b))
+	if len(k) != 64 || k == userPriv {
+		return "", ""
+	}
+	p, err := utils.GetPublicKey(k)
+	if err != nil {
+		return "", ""
+	}
+	return k, p
+}
 
 // localRelay is the single, in-process event store. nipCP.Store/Sync need a relay
 // name to iterate; the Store adapter ignores it (there is one local store, no
@@ -35,6 +67,12 @@ type Pocket struct {
 	userPriv string
 	userPub  string
 	relays   []string
+
+	// fallbackPriv/fallbackPub is an at-rest device key that opens blobs sealed
+	// before an identity was configured (the keyless → `cashctl init` case). "" when
+	// absent or equal to userPriv. See deviceFallback; used by the dual-open helpers.
+	fallbackPriv string
+	fallbackPub  string
 }
 
 // Journal is cashctl's client.Journal: nmilat's PocketJournal (the write-ahead
@@ -133,7 +171,8 @@ func OpenLedgerOnly(dir, userPriv string) (*Pocket, error) {
 	// Store/Journal are nil: the ledger path uses only the cache. Close() and the
 	// LedgerStore tolerate a nil Store (the rebuild-from-store path, which needs
 	// pocket.db, is not reachable on the ledger path).
-	return &Pocket{Cache: cache, userPriv: userPriv, userPub: userPub}, nil
+	fbPriv, fbPub := deviceFallback(dir, userPriv)
+	return &Pocket{Cache: cache, userPriv: userPriv, userPub: userPub, fallbackPriv: fbPriv, fallbackPub: fbPub}, nil
 }
 
 // Close releases the event store (bbolt file lock) and the cache. Store is nil on

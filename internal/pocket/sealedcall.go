@@ -206,6 +206,63 @@ func openWithdrawal(sealed, priv, pub string) (ledger.Withdrawal, error) {
 	return w, nil
 }
 
+// openEntryFB / openCallFB / openHandoffFB / openOrderFB / openWithdrawalFB try the
+// primary key, then (when fbPriv is set) an at-rest device fallback key. This keeps
+// blobs sealed before `cashctl init` readable once the pocket opens under the
+// identity key — the keyless→init brick fix — without a migration step; the next
+// Save re-seals them under the primary key (adoption). Funds-safe: it only ADDS a
+// decryption attempt under a key the wallet holds, and returns the PRIMARY error
+// when both fail so a genuine corruption/key-loss still surfaces loudly.
+func openEntryFB(sealed, priv, pub, fbPriv, fbPub string) (ledger.Entry, error) {
+	e, err := openEntry(sealed, priv, pub)
+	if err != nil && fbPriv != "" {
+		if e2, err2 := openEntry(sealed, fbPriv, fbPub); err2 == nil {
+			return e2, nil
+		}
+	}
+	return e, err
+}
+
+func openCallFB(sealed, priv, pub, fbPriv, fbPub string) (ledger.Call, error) {
+	c, err := openCall(sealed, priv, pub)
+	if err != nil && fbPriv != "" {
+		if c2, err2 := openCall(sealed, fbPriv, fbPub); err2 == nil {
+			return c2, nil
+		}
+	}
+	return c, err
+}
+
+func openHandoffFB(sealed, priv, pub, fbPriv, fbPub string) (ledger.Handoff, error) {
+	h, err := openHandoff(sealed, priv, pub)
+	if err != nil && fbPriv != "" {
+		if h2, err2 := openHandoff(sealed, fbPriv, fbPub); err2 == nil {
+			return h2, nil
+		}
+	}
+	return h, err
+}
+
+func openOrderFB(sealed, priv, pub, fbPriv, fbPub string) (ledger.Order, error) {
+	o, err := openOrder(sealed, priv, pub)
+	if err != nil && fbPriv != "" {
+		if o2, err2 := openOrder(sealed, fbPriv, fbPub); err2 == nil {
+			return o2, nil
+		}
+	}
+	return o, err
+}
+
+func openWithdrawalFB(sealed, priv, pub, fbPriv, fbPub string) (ledger.Withdrawal, error) {
+	w, err := openWithdrawal(sealed, priv, pub)
+	if err != nil && fbPriv != "" {
+		if w2, err2 := openWithdrawal(sealed, fbPriv, fbPub); err2 == nil {
+			return w2, nil
+		}
+	}
+	return w, err
+}
+
 // seal gob-encodes v + its pointer overlay, encrypts-to-self, and read-back
 // verifies (seal→open reflect.DeepEqual) so any field that does not round-trip
 // fails loudly here rather than silently corrupting funds state later. reopen

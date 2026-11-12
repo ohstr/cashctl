@@ -84,6 +84,82 @@ func TestLedgerStoreNestedOpenNoDeadlock(t *testing.T) {
 	}
 }
 
+// TestLedgerStoreKeylessThenInitNoBrick reproduces the keyless → `cashctl init`
+// transition that previously BRICKED the wallet (review finding, HIGH): the
+// identity-less cash paths (bearer notes, connection-key bills) seal held bills
+// under the per-wallet device key; once an identity is configured the pocket opens
+// under the identity key, and a single device-key-sealed blob made loadLedger fail —
+// stranding ALL value and blocking every store-opening command.
+//
+// The fix: the pocket reads the device key beside it as a FALLBACK decryption key
+// (deviceFallback → openEntryFB/...), so device-key-sealed blobs stay readable under
+// the identity key (no brick), and the next Save re-seals every blob under the
+// identity key (automatic adoption) so the wallet no longer depends on the device
+// key afterwards. This is the round-trip the prior tests never exercised.
+func TestLedgerStoreKeylessThenInitNoBrick(t *testing.T) {
+	devPriv, _ := testKey(t)
+	idPriv, _ := testKey(t) // a DIFFERENT key — the identity `cashctl init` creates
+	dir := t.TempDir()
+	ctx := context.Background()
+
+	// 1) Keyless phase: a device key beside the pocket seals a held bill under it.
+	if err := os.WriteFile(filepath.Join(dir, DeviceKeyFile), []byte(devPriv), 0o600); err != nil {
+		t.Fatalf("write devkey: %v", err)
+	}
+	keyless, err := OpenLedgerStore(ctx, dir, devPriv, "flokicoin")
+	if err != nil {
+		t.Fatalf("open keyless: %v", err)
+	}
+	amt := uint64(40000)
+	tok := testmint.Bill(t, nipcash.Token{HRP: "lokicash", AttestedAmountMillis: &amt}, "")
+	w, err := billform.WalletPubkey(tok)
+	if err != nil {
+		t.Fatalf("wallet pubkey: %v", err)
+	}
+	if _, err := keyless.Add(ledger.Entry{Token: tok, WalletPubkey: w, IdentityPubkey: w, AmountMillis: &amt, Status: ledger.StatusHeld}); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	if err := keyless.Save(); err != nil {
+		t.Fatalf("save keyless: %v", err)
+	}
+	if err := keyless.Close(); err != nil {
+		t.Fatalf("close keyless: %v", err)
+	}
+
+	// 2) `cashctl init` configured an identity: the pocket now opens under idPriv.
+	// Before the fix this returned a decrypt error (whole-wallet brick); the device
+	// key fallback must keep the bill readable.
+	afterInit, err := OpenLedgerStore(ctx, dir, idPriv, "flokicoin")
+	if err != nil {
+		t.Fatalf("open after init BRICKED (device-key fallback regression): %v", err)
+	}
+	if got := len(afterInit.Held()); got != 1 {
+		t.Fatalf("after init sees %d held, want 1 (device-key-sealed bill unreadable)", got)
+	}
+	// 3) Save re-seals every blob under the identity key (adoption).
+	if err := afterInit.Save(); err != nil {
+		t.Fatalf("save (adopt): %v", err)
+	}
+	if err := afterInit.Close(); err != nil {
+		t.Fatalf("close after init: %v", err)
+	}
+
+	// 4) Adoption complete: delete the device key entirely. The bill must still load
+	// under the identity key alone — proving Save re-sealed it (not still relying on
+	// the device key).
+	if err := os.Remove(filepath.Join(dir, DeviceKeyFile)); err != nil {
+		t.Fatalf("remove devkey: %v", err)
+	}
+	adopted, err := OpenLedgerStore(ctx, dir, idPriv, "flokicoin")
+	if err != nil {
+		t.Fatalf("open after adoption (bill not re-sealed under identity key?): %v", err)
+	}
+	t.Cleanup(func() { _ = adopted.Close() })
+	if got := len(adopted.Held()); got != 1 {
+		t.Fatalf("after adoption sees %d held, want 1 (Save did not re-seal under identity key)", got)
+	}
+}
+
 // TestLedgerStoreReloadByteIdentical is the A' core: the embedded in-memory
 // ledger.Ledger is mutated through its real methods (Add/AddCall/AddHandoff),
 // Save persists it to the NIP-44-sealed faithful tables, and a reopen

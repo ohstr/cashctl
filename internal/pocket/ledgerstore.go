@@ -122,6 +122,7 @@ func zapRowBetter(a ledger.Entry, ai int, b ledger.Entry, bi int) bool {
 // 9525 cannot carry). Order is deterministic (sorted by id) so a reload is stable.
 func loadLedger(p *Pocket) (*ledger.Ledger, error) {
 	priv, pub := p.userPriv, p.userPub
+	fbPriv, fbPub := p.fallbackPriv, p.fallbackPub
 
 	sealedEntries, err := p.Cache.SealedEntries()
 	if err != nil {
@@ -129,7 +130,7 @@ func loadLedger(p *Pocket) (*ledger.Ledger, error) {
 	}
 	entries := make([]ledger.Entry, 0, len(sealedEntries))
 	for _, blob := range sealedEntries {
-		e, err := openEntry(blob, priv, pub)
+		e, err := openEntryFB(blob, priv, pub, fbPriv, fbPub)
 		if err != nil {
 			return nil, err
 		}
@@ -143,7 +144,7 @@ func loadLedger(p *Pocket) (*ledger.Ledger, error) {
 	}
 	calls := make([]ledger.Call, 0, len(sealedCalls))
 	for _, blob := range sealedCalls {
-		c, err := openCall(blob, priv, pub)
+		c, err := openCallFB(blob, priv, pub, fbPriv, fbPub)
 		if err != nil {
 			return nil, err
 		}
@@ -157,7 +158,7 @@ func loadLedger(p *Pocket) (*ledger.Ledger, error) {
 	}
 	handoffs := make([]ledger.Handoff, 0, len(sealedHandoffs))
 	for _, blob := range sealedHandoffs {
-		h, err := openHandoff(blob, priv, pub)
+		h, err := openHandoffFB(blob, priv, pub, fbPriv, fbPub)
 		if err != nil {
 			return nil, err
 		}
@@ -284,7 +285,7 @@ func (s *LedgerStore) openOrderRow(r SealedOrderRow, ok bool, err error) (ledger
 	if err != nil || !ok {
 		return ledger.Order{}, ok, err
 	}
-	o, err := openOrder(r.Sealed, s.p.userPriv, s.p.userPub)
+	o, err := openOrderFB(r.Sealed, s.p.userPriv, s.p.userPub, s.p.fallbackPriv, s.p.fallbackPub)
 	return o, err == nil, err
 }
 
@@ -305,7 +306,7 @@ func (s *LedgerStore) Orders() ([]ledger.Order, error) {
 	}
 	out := make([]ledger.Order, 0, len(rows))
 	for _, r := range rows {
-		o, err := openOrder(r.Sealed, s.p.userPriv, s.p.userPub)
+		o, err := openOrderFB(r.Sealed, s.p.userPriv, s.p.userPub, s.p.fallbackPriv, s.p.fallbackPub)
 		if err != nil {
 			return nil, err
 		}
@@ -328,7 +329,7 @@ func (s *LedgerStore) openWithdrawalRow(r SealedWithdrawalRow, ok bool, err erro
 	if err != nil || !ok {
 		return ledger.Withdrawal{}, ok, err
 	}
-	w, err := openWithdrawal(r.Sealed, s.p.userPriv, s.p.userPub)
+	w, err := openWithdrawalFB(r.Sealed, s.p.userPriv, s.p.userPub, s.p.fallbackPriv, s.p.fallbackPub)
 	return w, err == nil, err
 }
 
@@ -349,7 +350,7 @@ func (s *LedgerStore) Withdrawals() ([]ledger.Withdrawal, error) {
 	}
 	out := make([]ledger.Withdrawal, 0, len(rows))
 	for _, r := range rows {
-		w, err := openWithdrawal(r.Sealed, s.p.userPriv, s.p.userPub)
+		w, err := openWithdrawalFB(r.Sealed, s.p.userPriv, s.p.userPub, s.p.fallbackPriv, s.p.fallbackPub)
 		if err != nil {
 			return nil, err
 		}
@@ -423,7 +424,7 @@ func (s *LedgerStore) VerifyWritten(want ledger.Call) error {
 	if !ok {
 		return fmt.Errorf("ledger: call %s was not written", want.CallID)
 	}
-	got, err := openCall(blob, s.p.userPriv, s.p.userPub)
+	got, err := openCallFB(blob, s.p.userPriv, s.p.userPub, s.p.fallbackPriv, s.p.fallbackPub)
 	if err != nil {
 		return err
 	}
