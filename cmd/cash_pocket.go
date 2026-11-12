@@ -196,6 +196,7 @@ Off by default — nothing contacts a relay unless this command is run.`,
 type pocketSyncResult struct {
 	Published int   `json:"published"`
 	Imported  int   `json:"imported"`
+	Spendable int   `json:"spendable"`
 	Cursor    int64 `json:"cursor"`
 }
 
@@ -247,7 +248,7 @@ func runCashPocketSync(cmd *cobra.Command, _ []string) error {
 		output.PrintJSON(res)
 		return nil
 	}
-	output.Printf("Synced: published %d, imported %d.\n", res.Published, res.Imported)
+	output.Printf("Synced: published %d, imported %d (%d now spendable).\n", res.Published, res.Imported, res.Spendable)
 	return nil
 }
 
@@ -312,6 +313,15 @@ func syncPocket(ctx context.Context, p *pocket.Pocket, held []ledger.Entry, priv
 		}
 		res.Imported++
 	}
+
+	// 4b. Reverse-project pulled HELD bills into the authoritative sealed ledger so
+	// the money commands can SPEND them, not just show them (the cache fold above is
+	// display-only). Idempotent — dedup by wallet pubkey; foreign/spent are skipped.
+	spendable, err := p.ImportHeld(ctx, synced.Entries)
+	if err != nil {
+		return res, err
+	}
+	res.Spendable = spendable
 
 	// 5. Advance the cursor.
 	if err := p.Cache.SetSyncCursor(now); err != nil {

@@ -53,12 +53,97 @@ func (f *fakeRelays) Query(_ context.Context, _ string, flt nip01.SubscriptionFi
 // heldBill mints a fresh held-bill ledger.Entry via testmint.
 func heldBill(t *testing.T, amt uint64) (ledger.Entry, string) {
 	t.Helper()
+	// A pubkey-bound bill is addressed to the USER's identity key (the key that
+	// signs for it) — not the wallet pubkey. The pocket is encrypt-to-self to that
+	// same key, so a synced bill bound to it is the user's own + spendable.
+	userPub, err := utils.GetPublicKey(testPocketKey)
+	if err != nil {
+		t.Fatalf("pub: %v", err)
+	}
 	tok := testmint.Bill(t, nipcash.Token{HRP: "lokicash", AttestedAmountMillis: &amt}, "")
 	w, err := billform.WalletPubkey(tok)
 	if err != nil {
 		t.Fatalf("wallet pubkey: %v", err)
 	}
-	return ledger.Entry{Token: tok, WalletPubkey: w, IdentityPubkey: w, AmountMillis: &amt, Status: ledger.StatusHeld}, w
+	return ledger.Entry{Token: tok, WalletPubkey: w, IdentityPubkey: userPub, AmountMillis: &amt, Status: ledger.StatusHeld}, w
+}
+
+// TestCashPocketSync_SpendableAfterPull — the P5 completion: a bill synced A→B
+// must land in B's AUTHORITATIVE sealed ledger (Held()), not just the decoded
+// cache, so the money commands can spend it. Also asserts the import is idempotent.
+func TestCashPocketSync_SpendableAfterPull(t *testing.T) {
+	priv := testPocketKey
+	userPub, err := utils.GetPublicKey(priv)
+	if err != nil {
+		t.Fatalf("pub: %v", err)
+	}
+	ctx := context.Background()
+	relay := newFakeRelays()
+	amt := uint64(7000)
+	held, w := heldBill(t, amt)
+
+	// A: mint locally + sync (publish to the relay).
+	pA, err := pocket.Open(ctx, t.TempDir(), priv, "flokicoin")
+	if err != nil {
+		t.Fatalf("open A: %v", err)
+	}
+	if _, err := syncPocket(ctx, pA, []ledger.Entry{held}, priv, userPub, relay, []string{"r1"}, 1); err != nil {
+		t.Fatalf("A sync: %v", err)
+	}
+	pA.Close()
+
+	// B: same key, fresh pocket dir, pull.
+	bdir := t.TempDir()
+	pB, err := pocket.Open(ctx, bdir, priv, "flokicoin")
+	if err != nil {
+		t.Fatalf("open B: %v", err)
+	}
+	resB, err := syncPocket(ctx, pB, nil, priv, userPub, relay, []string{"r1"}, 2)
+	if err != nil {
+		t.Fatalf("B sync: %v", err)
+	}
+	pB.Close()
+	if resB.Spendable < 1 {
+		t.Fatalf("B spendable = %d, want >= 1 (synced bill must be made spendable)", resB.Spendable)
+	}
+
+	// B's AUTHORITATIVE sealed ledger must hold the bill, bound to the user's key.
+	lsB, err := pocket.OpenLedgerStore(ctx, bdir, priv, ledger.LokiHRP)
+	if err != nil {
+		t.Fatalf("B ledger open: %v", err)
+	}
+	defer lsB.Close()
+	var found *ledger.Entry
+	for _, e := range lsB.Held() {
+		if e.WalletPubkey == w {
+			ee := e
+			found = &ee
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("B's sealed ledger (Held) has no bill for w=%s — not spendable", w)
+	}
+	if found.Token != held.Token {
+		t.Errorf("token = %q, want %q", found.Token, held.Token)
+	}
+	if found.IdentityPubkey != userPub {
+		t.Errorf("identity = %q, want user %q (must be spendable by the user's key)", found.IdentityPubkey, userPub)
+	}
+
+	// Idempotent: a re-sync adds no duplicate to the sealed ledger.
+	pB2, err := pocket.Open(ctx, bdir, priv, "flokicoin")
+	if err != nil {
+		t.Fatalf("reopen B: %v", err)
+	}
+	res2, err := syncPocket(ctx, pB2, nil, priv, userPub, relay, []string{"r1"}, 3)
+	if err != nil {
+		t.Fatalf("B re-sync: %v", err)
+	}
+	pB2.Close()
+	if res2.Spendable != 0 {
+		t.Errorf("re-sync spendable = %d, want 0 (import must be idempotent)", res2.Spendable)
+	}
 }
 
 func entryFor(t *testing.T, p *pocket.Pocket, w string) (nipCP.Entry, bool) {
