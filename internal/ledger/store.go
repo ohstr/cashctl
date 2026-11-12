@@ -78,6 +78,12 @@ type Store interface {
 	WithdrawalForCall(callID string) (Withdrawal, bool, error)
 	Withdrawals() ([]Withdrawal, error)
 
+	// ZapEventFor is the Cash Zap (kind-9522) stored with the held zap bill a
+	// token spells, "" when none — needed to dial a zap bill (its provenance is
+	// checked against the Cash Zap it was received with). The *Ledger reads
+	// cashctl.db; the pocket Store reads the held entry's sealed zap_event.
+	ZapEventFor(token string) (string, error)
+
 	// Persist.
 	Save() error
 
@@ -119,3 +125,8 @@ func (l *Ledger) InsertDerived(requestID, parent string, deadline *int64, keepUn
 func (l *Ledger) RemoveDerived(requestID string) error           { return RemoveDerived(requestID) }
 func (l *Ledger) DerivedParent(requestID string) (string, error) { return DerivedParent(requestID) }
 func (l *Ledger) DerivedRecorded(requestID string) (bool, error) { return DerivedRecorded(requestID) }
+
+// ZapEventFor wraps the package-level func (cashctl.db read), now reachable
+// through the Store seam so the dial path reads a held zap bill's Cash Zap
+// store-agnostically.
+func (l *Ledger) ZapEventFor(token string) (string, error) { return ZapEventFor(token) }

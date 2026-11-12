@@ -8,6 +8,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/ohstr/cashctl/internal/billform"
 	"github.com/ohstr/cashctl/internal/ledger"
 )
 
@@ -77,6 +78,44 @@ func OpenLedgerStore(ctx context.Context, dir, userPriv, chain string) (*LedgerS
 // Close releases the underlying pocket (the bbolt single-writer lock + the
 // cache) — a command MUST defer this so the next command can open the store.
 func (s *LedgerStore) Close() error { s.p.Close(); return nil }
+
+// ZapEventFor returns the Cash Zap (kind-9522) stored with the held bill a token
+// spells, "" when none — the pocket equivalent of the package-level
+// ledger.ZapEventFor, read over the embedded ledger's faithful entries instead of
+// cashctl.db. It picks the same row that func's ORDER BY would: a live
+// (held/redeeming/zap_claiming) row first, then a non-duplicate, then the latest.
+func (s *LedgerStore) ZapEventFor(token string) (string, error) {
+	w, err := billform.WalletPubkey(token)
+	if err != nil {
+		return "", nil
+	}
+	best := -1
+	for i := range s.Ledger.Entries {
+		if s.Ledger.Entries[i].WalletPubkey != w {
+			continue
+		}
+		if best < 0 || zapRowBetter(s.Ledger.Entries[i], i, s.Ledger.Entries[best], best) {
+			best = i
+		}
+	}
+	if best < 0 {
+		return "", nil
+	}
+	return s.Ledger.Entries[best].ZapEvent, nil
+}
+
+// zapRowBetter reports whether entry a (at slice index ai) outranks b (bi) under
+// ledger.ZapEventFor's order: a live status first, then a non-duplicate, then the
+// latest row (higher slice index ≈ higher rowid).
+func zapRowBetter(a ledger.Entry, ai int, b ledger.Entry, bi int) bool {
+	if al, bl := ledger.Live(a.Status), ledger.Live(b.Status); al != bl {
+		return al
+	}
+	if ad, bd := a.Status == ledger.StatusDuplicate, b.Status == ledger.StatusDuplicate; ad != bd {
+		return !ad
+	}
+	return ai > bi
+}
 
 // loadLedger reconstructs the in-memory *ledger.Ledger from the faithful sealed
 // tables (byte-identical: ids, linkage, and the cashctl-only fields the NIP-CP

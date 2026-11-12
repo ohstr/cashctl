@@ -52,5 +52,34 @@ func loadStore(cmd *cobra.Command) (ledger.Store, error) {
 		}
 		return nil, err
 	}
+	dialPocketPriv = priv
 	return pocket.OpenLedgerStore(context.Background(), dir, priv, ledger.LokiHRP)
+}
+
+// dialPocketPriv is the pocket identity key loadStore resolved, reused by the
+// dial path's zap-event read (heldZapContext → zapEventFor), which has no cmd to
+// resolve it again. Safe as package state: cashctl runs one command per process,
+// and loadStore runs before any dial. "" for a keyless wallet (which holds no zap
+// bill to dial).
+var dialPocketPriv string
+
+// zapEventFor reads the Cash Zap (kind-9522) stored with a held zap bill from
+// whichever store the toggle selects. The dial path has no cmd/store, so — like
+// ledger.ZapEventFor — this is self-contained: default reads cashctl.db; the
+// pocket opens a short-lived store with the key loadStore already resolved (no
+// re-prompt), reads, and closes it. Used by heldZapContext (cmd/dial.go).
+func zapEventFor(token string) (string, error) {
+	if os.Getenv(pocketToggleEnv) == "" {
+		return ledger.ZapEventFor(token)
+	}
+	dbPath, err := store.Path()
+	if err != nil {
+		return "", err
+	}
+	s, err := pocket.OpenLedgerStore(context.Background(), filepath.Dir(dbPath), dialPocketPriv, ledger.LokiHRP)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = s.Close() }()
+	return s.ZapEventFor(token)
 }

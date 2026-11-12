@@ -180,10 +180,8 @@ func TestReceiveZap_ApprovalThenRule9(t *testing.T) {
 	if len(held) != 1 || held[0].ZapEvent == "" || held[0].AmountMillis == nil || *held[0].AmountMillis != 21000 {
 		t.Fatalf("held %+v", held)
 	}
-	if !onPocket() { // heldZapContext→ledger.ZapEventFor reads cashctl.db directly, not the seam — a production routing gap, reported separately
-		if zc, err := heldZapContext(held[0].Token); err != nil || zc.Recipient != f.me {
-			t.Errorf("the held zap bill can't be dialled: %v", err)
-		}
+	if zc, err := heldZapContext(held[0].Token); err != nil || zc.Recipient != f.me {
+		t.Errorf("the held zap bill can't be dialled: %v", err)
 	}
 }
 
