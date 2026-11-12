@@ -145,7 +145,7 @@ func runCashMint(cmd *cobra.Command, args []string) error {
 		return output.RuntimeError(cmd, errors.New("this Hub does not offer cash_lookup, so a lost reply could never be recovered; cashctl won't mint on it. Nothing was sent"))
 	}
 
-	l, err := ledger.Load()
+	l, err := loadStore(cmd)
 	if err != nil {
 		return output.RuntimeError(cmd, err)
 	}
@@ -218,7 +218,7 @@ type mintOutcome struct {
 // the local identity, else a hand-off (a cash note, or a gift to another
 // identity). The token must be the wallet the Hub names and carry the Hub
 // identity's mint signature.
-func applyMintResult(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, res *nipcash.MintCashResult) (mintOutcome, error) {
+func applyMintResult(cmd *cobra.Command, l ledger.Store, c *ledger.Call, res *nipcash.MintCashResult) (mintOutcome, error) {
 	if res == nil || res.CashToken == "" {
 		if res != nil && res.TokenTombstone != nil {
 			return mintOutcome{Summary: "the bill it made is already spent"}, nil
@@ -320,7 +320,7 @@ func mintParams(c *ledger.Call) (nipcash.MintCashParams, error) {
 }
 
 // applyMintLookup applies a mint a lookup says happened.
-func applyMintLookup(cmd *cobra.Command, l *ledger.Ledger, c *ledger.Call, raw json.RawMessage) (string, error) {
+func applyMintLookup(cmd *cobra.Command, l ledger.Store, c *ledger.Call, raw json.RawMessage) (string, error) {
 	p, err := mintParams(c)
 	if err != nil {
 		return "", err

@@ -222,7 +222,7 @@ func runCashConsolidate(cmd *cobra.Command, args []string) error {
 	toFlag, _ := cmd.Flags().GetString("to")
 	yesFlag, _ := cmd.Flags().GetBool("yes")
 
-	l, err := ledger.Load()
+	l, err := loadStore(cmd)
 	if err != nil {
 		return output.RuntimeError(cmd, err)
 	}
@@ -306,7 +306,7 @@ func runCashConsolidate(cmd *cobra.Command, args []string) error {
 // A decline is likewise this group's own call to make (both fields nil,
 // reachable only outside --json/--yes — see Confirm) and does not cancel the
 // rest.
-func consolidateGroups(cmd *cobra.Command, l *ledger.Ledger, chosen [][]ledger.Entry, toFlag string, jsonMode, yesFlag bool) []consolidateOutcome {
+func consolidateGroups(cmd *cobra.Command, l ledger.Store, chosen [][]ledger.Entry, toFlag string, jsonMode, yesFlag bool) []consolidateOutcome {
 	outcomes := make([]consolidateOutcome, 0, len(chosen))
 	for _, group := range chosen {
 		ids := make([]string, len(group))
@@ -351,7 +351,7 @@ func isCrossHubDeclineClassified(err error) bool {
 
 // withSourceHubs adds to the Hub's "same Cash Hub" refusal which Hub each named
 // source is on, so the selection can be split without looking them up.
-func withSourceHubs(err error, l *ledger.Ledger, ids []string) error {
+func withSourceHubs(err error, l ledger.Store, ids []string) error {
 	ce := output.AsCLIError(err)
 	if ce == nil || ce.Err == nil {
 		return err
@@ -425,7 +425,7 @@ func firstOutcomeError(outcomes []consolidateOutcome) error {
 // (cash_transfer.go) — printing "Cancelled." itself so a caller loading
 // several groups doesn't need to special-case which one(s) a human
 // declined.
-func consolidateItems(cmd *cobra.Command, l *ledger.Ledger, items []string, toFlag string, jsonMode, yesFlag bool) (*consolidateResult, error) {
+func consolidateItems(cmd *cobra.Command, l ledger.Store, items []string, toFlag string, jsonMode, yesFlag bool) (*consolidateResult, error) {
 	var sources []nipcash.Source
 	// sourceTokens is parallel to sources: one raw token string per source,
 	// whichever produced it (a local entry's own token, or the verbose
@@ -823,7 +823,7 @@ func sharedMinter(entries []ledger.Entry) *string {
 
 // sharedMinterOfIDs is sharedMinter over the ledger entries named by ids;
 // nil if any id isn't found.
-func sharedMinterOfIDs(l *ledger.Ledger, ids []string) *string {
+func sharedMinterOfIDs(l ledger.Store, ids []string) *string {
 	entries := make([]ledger.Entry, 0, len(ids))
 	for _, id := range ids {
 		e, ok := l.Find(id)
@@ -920,7 +920,7 @@ func decodeCashTokenForConsolidate(token string) (string, error) {
 // out so cash selection's auto-consolidate step (cash_transfer.go, see
 // docs/ux-review.md Part 2) can build the same shape from a group of
 // entries it already knows are all local.
-func sourceFromEntry(cmd *cobra.Command, l *ledger.Ledger, e *ledger.Entry) (nipcash.Source, error) {
+func sourceFromEntry(cmd *cobra.Command, l ledger.Store, e *ledger.Entry) (nipcash.Source, error) {
 	cred, err := resolveCredential(cmd, e)
 	if err != nil {
 		return nipcash.Source{}, err
@@ -944,7 +944,7 @@ func sourceFromEntry(cmd *cobra.Command, l *ledger.Ledger, e *ledger.Entry) (nip
 // returns the new merged entry; the caller Saves. dialCandidates are the
 // sources' own tokens: the call is dialled through the first that can be
 // reached, and that source becomes sources[0], the call's target.
-func doCashConsolidate(cmd *cobra.Command, l *ledger.Ledger, dialCandidates []string, sources []nipcash.Source, localIDs []string, target nipcash.Target, isSelfTarget bool) (newEntry *ledger.Entry, expiresAt *int64, err error) {
+func doCashConsolidate(cmd *cobra.Command, l ledger.Store, dialCandidates []string, sources []nipcash.Source, localIDs []string, target nipcash.Target, isSelfTarget bool) (newEntry *ledger.Entry, expiresAt *int64, err error) {
 	if len(dialCandidates) == 0 {
 		// Not reachable through runCashConsolidate today — sources and
 		// dialCandidates are always built in lockstep — but falling through the
@@ -1027,7 +1027,7 @@ func doCashConsolidate(cmd *cobra.Command, l *ledger.Ledger, dialCandidates []st
 // interimKey, when set, is the private key intermediate tokens go to instead of
 // the local identity (a merge of cash notes, which needs no identity); each such
 // token then records it as its ThrowawayKey.
-func consolidateInRounds(cmd *cobra.Command, l *ledger.Ledger, sourceTokens []string, sources []nipcash.Source, sourceIDs []string, target nipcash.Target, isSelfTarget bool, maxSources int, interimKey string) (*ledger.Entry, *int64, error) {
+func consolidateInRounds(cmd *cobra.Command, l ledger.Store, sourceTokens []string, sources []nipcash.Source, sourceIDs []string, target nipcash.Target, isSelfTarget bool, maxSources int, interimKey string) (*ledger.Entry, *int64, error) {
 	maxSources = max(maxSources, 2)
 	for len(sources) > maxSources {
 		var myPub string
@@ -1116,7 +1116,7 @@ var hubConsolidateCapFn = hubConsolidateCap
 // attemptCashConsolidate places one cash_consolidate dialled through dialToken,
 // as a call written ahead. The call's target is sources[0] (NIP-CASH
 // §Consolidating Tokens), so the dialled bill's source goes first.
-func attemptCashConsolidate(cmd *cobra.Command, l *ledger.Ledger, dialToken string, sources []nipcash.Source, localIDs []string, target nipcash.Target) (*nipcash.CashConsolidateResult, *ledger.Call, error) {
+func attemptCashConsolidate(cmd *cobra.Command, l ledger.Store, dialToken string, sources []nipcash.Source, localIDs []string, target nipcash.Target) (*nipcash.CashConsolidateResult, *ledger.Call, error) {
 	if len(sources) == 0 {
 		return nil, nil, output.RuntimeError(cmd, errors.New("attemptCashConsolidate: no sources"))
 	}
@@ -1138,11 +1138,11 @@ func attemptCashConsolidate(cmd *cobra.Command, l *ledger.Ledger, dialToken stri
 
 // mergeKeyFor is the merge key in the ledger whose pubkey is target (an interim
 // round's target), or "".
-func mergeKeyFor(l *ledger.Ledger, target nipcash.Target) string {
+func mergeKeyFor(l ledger.Store, target nipcash.Target) string {
 	if !nipcash.IsPubkeyTarget(target) {
 		return ""
 	}
-	for _, e := range l.Entries {
+	for _, e := range l.AllEntries() {
 		for _, k := range []string{e.ThrowawayKey, e.PendingThrowawayKey} {
 			if k != "" && nipcash.Pubkey(pubOf(k)) == target {
 				return k
@@ -1153,7 +1153,7 @@ func mergeKeyFor(l *ledger.Ledger, target nipcash.Target) string {
 }
 
 // dialledFirst puts the source whose wallet is dialToken's first.
-func dialledFirst(l *ledger.Ledger, sources []nipcash.Source, dialToken string) []nipcash.Source {
+func dialledFirst(l ledger.Store, sources []nipcash.Source, dialToken string) []nipcash.Source {
 	wallet := ""
 	if e, ok := l.FindByToken(dialToken); ok {
 		wallet = e.WalletPubkey
@@ -1170,7 +1170,7 @@ func dialledFirst(l *ledger.Ledger, sources []nipcash.Source, dialToken string) 
 }
 
 // firstSourceEntry is the held entry for wallet among ids, or nil.
-func firstSourceEntry(l *ledger.Ledger, ids []string, wallet string) *ledger.Entry {
+func firstSourceEntry(l ledger.Store, ids []string, wallet string) *ledger.Entry {
 	for _, id := range ids {
 		if e, ok := l.Find(id); ok && e.WalletPubkey == wallet {
 			return e

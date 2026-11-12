@@ -107,6 +107,15 @@ func GenerateAndSaveLocal() (npub string, err error) {
 	return id.Npub, nil
 }
 
+// SaveLocalKey stores an existing raw private key as cashctl's local identity
+// (SourceLocal), the same way GenerateAndSaveLocal stores a freshly-generated
+// one — for importing a known key rather than generating. ErrAlreadyConfigured
+// if an identity already exists. As with any SourceLocal key, cashctl.db then
+// holds a plaintext privkey and relies on store.Open's 0600 handling.
+func SaveLocalKey(privHex string) error {
+	return claim(&Stored{Source: SourceLocal, PrivHex: privHex})
+}
+
 // claim stores s as cashctl's identity ONLY if none exists yet, atomically
 // (a single INSERT ... WHERE NOT EXISTS under SQLite's write lock),
 // returning ErrAlreadyConfigured when it lost. It used to replace the

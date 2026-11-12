@@ -71,7 +71,7 @@ func stateForTombstone(t *nipcash.Tombstone) string {
 // markFinal writes a definitive answer's state on an entry still held and
 // saves. A final state is never overwritten, and nothing else is ever
 // written from a timeout.
-func markFinal(l *ledger.Ledger, entry *ledger.Entry, state string) {
+func markFinal(l ledger.Store, entry *ledger.Entry, state string) {
 	if l == nil || entry == nil || state == "" || entry.Status != ledger.StatusHeld {
 		return
 	}
@@ -109,14 +109,14 @@ func goneErrorf(cmd *cobra.Command, id, state string, err error) error {
 // About a Destroyed Bill), so `wallet balance` and `redeem --all` stop offering
 // it, and returns its error. Only ever called on a tombstone: silence proves
 // nothing (NIP-CASH: a client MUST NOT report a bill spent on a timeout alone).
-func recordGone(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entry, t *nipcash.Tombstone) error {
+func recordGone(cmd *cobra.Command, l ledger.Store, entry *ledger.Entry, t *nipcash.Tombstone) error {
 	state := stateForTombstone(t)
 	markFinal(l, entry, state)
 	return goneError(cmd, entry.ID, state)
 }
 
 // markGone is recordGone without the error, for a read that succeeded.
-func markGone(l *ledger.Ledger, entry *ledger.Entry, t *nipcash.Tombstone) {
+func markGone(l ledger.Store, entry *ledger.Entry, t *nipcash.Tombstone) {
 	markFinal(l, entry, stateForTombstone(t))
 }
 
@@ -124,7 +124,7 @@ func markGone(l *ledger.Ledger, entry *ledger.Entry, t *nipcash.Tombstone) {
 // for a proof by the entry's own key or cash secret, the status_unreadable
 // refusal for a connection key (nothing written, SG-1), and ok=false for any
 // other proof, whose caller keeps its own error.
-func recordNotFound(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entry, proof string) (error, bool) {
+func recordNotFound(cmd *cobra.Command, l ledger.Store, entry *ledger.Entry, proof string) (error, bool) {
 	if state := stateForResult(billAnswer{NotFound: true, Proof: proof}); state != "" {
 		markFinal(l, entry, state)
 		return goneError(cmd, entry.ID, state), true
@@ -200,7 +200,7 @@ func proofOfCall(c *ledger.Call, entry *ledger.Entry) string {
 // authorized by the entry's own key or cash secret. A consolidate's NOT_FOUND
 // does not say which source it is about, so it writes nothing.
 // It returns the state written, "" for none; the caller saves.
-func markRefusedNotFound(l *ledger.Ledger, c *ledger.Call, code string) string {
+func markRefusedNotFound(l ledger.Store, c *ledger.Call, code string) string {
 	if code != "NOT_FOUND" || c.Method != nipcash.MethodCashTransfer || len(c.SourceEntryIDs) != 1 {
 		return ""
 	}

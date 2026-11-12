@@ -213,7 +213,7 @@ func TestMarkRefusedNotFound_OverrideDoesNotReclaimLiveSlice(t *testing.T) {
 // addressed to — the entry's own identity key, reclaimed (R-CP-RECLAIM). mk may
 // override IdentityPubkey (or short-circuit the addressee check entirely with a
 // cash secret, connection key or --as) for cases that must not reclaim.
-func statusLedger(t *testing.T, mk ...func(*ledger.Entry)) (*ledger.Ledger, []string) {
+func statusLedger(t *testing.T, mk ...func(*ledger.Entry)) (ledger.Store, []string) {
 	t.Helper()
 	appdir.SetOverride(t.TempDir())
 	t.Cleanup(func() { appdir.SetOverride("") })
@@ -229,10 +229,11 @@ func statusLedger(t *testing.T, mk ...func(*ledger.Entry)) (*ledger.Ledger, []st
 	if err != nil {
 		t.Fatal(err)
 	}
-	l, err := ledger.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
+	// Seed into the store under test (pocket under CASHCTL_POCKET, else cashctl.db)
+	// so the inspect + the command the caller drives share one store. statusLedger
+	// already configured an identity above, so testLoad's ensurePocketIdentity is a
+	// no-op and its pocketPriv resolves that same key (seed + command agree).
+	l := testLoad(t)
 	var ids []string
 	for i, f := range mk {
 		amt := uint64(1000 * (i + 1))
@@ -268,10 +269,7 @@ func hubNotFoundErr(cmd *cobra.Command) error {
 
 func savedStatus(t *testing.T, id string) string {
 	t.Helper()
-	l, err := ledger.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
+	l := testLoad(t)
 	e, ok := l.Find(id)
 	if !ok {
 		t.Fatalf("entry %s gone", id)
@@ -281,10 +279,7 @@ func savedStatus(t *testing.T, id string) string {
 
 func heldTotal(t *testing.T) int64 {
 	t.Helper()
-	l, err := ledger.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
+	l := testLoad(t)
 	_, total, _ := summarizeHeldTokens(l.Held(), time.Now().Unix())
 	return total
 }
@@ -512,7 +507,7 @@ func TestApplyRedeemResults_NotFoundIsReclaimed(t *testing.T) {
 func TestSettle_TransferNotFoundIsReclaimed(t *testing.T) {
 	for _, as := range []bool{false, true} {
 		_, id, c, _ := lostProtect(t)
-		l, _ := ledger.Load()
+		l := testLoad(t)
 		call, _ := l.FindCall(c.CallID)
 		call.FirstError = "NOT_FOUND"
 		if as {

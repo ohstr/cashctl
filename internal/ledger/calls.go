@@ -240,6 +240,16 @@ func VerifyWritten(want Call) error {
 	if err != nil {
 		return err
 	}
+	return VerifyCallReadBack(got, want)
+}
+
+// VerifyCallReadBack is the write-ahead durability compare: it recomputes each
+// secret's commitment from the stored secret and compares every column but
+// updated_at. Exported so a store-aware read-back (the pocket LedgerStore, which
+// re-reads the sealed call from pocket-cache.db rather than cashctl.db) applies
+// the identical check — the durability guarantee is the fresh on-disk read plus
+// this compare, independent of which store holds the call.
+func VerifyCallReadBack(got, want Call) error {
 	for _, s := range got.Secrets {
 		commitment, err := commitmentOf(s.Secret)
 		if err != nil || commitment != s.Commitment {

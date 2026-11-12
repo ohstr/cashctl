@@ -48,10 +48,11 @@ func TestWalletHistory_MasksUnclaimedSecretsUnlessAsked(t *testing.T) {
 	orig := checkHandoffFn
 	checkHandoffFn = func(string) string { return "" } // the Hub gave no answer: nothing changes
 	t.Cleanup(func() { checkHandoffFn = orig })
+	ensurePocketIdentity(t) // the pocket seals handoffs to the local identity; the command opens it under that key
 
 	tok := handoffToken(t)
 	secret := strings.Repeat("ee", 32)
-	l, _ := ledger.Load()
+	l := testLoad(t)
 	recordHandoff(l, tok+"#"+secret, tok, 5000, "cash")
 	if err := l.Save(); err != nil {
 		t.Fatal(err)

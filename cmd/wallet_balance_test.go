@@ -181,10 +181,8 @@ func TestRunWalletBalanceFrom_HeldTokenStillReportsAmount(t *testing.T) {
 	appdir.SetOverride(tmp)
 	t.Cleanup(func() { appdir.SetOverride("") })
 
-	l, err := ledger.Load()
-	if err != nil {
-		t.Fatalf("ledger.Load() error = %v", err)
-	}
+	ensurePocketIdentity(t)
+	l := testLoad(t)
 	amount := uint64(7000)
 	entry, err := l.Add(ledger.Entry{Token: "lokicash1heldbalance", AmountMillis: &amount})
 	if err != nil {

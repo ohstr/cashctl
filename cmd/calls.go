@@ -87,7 +87,7 @@ var dialCallerFn = func(ctx context.Context, token string) (billCaller, error) {
 // about to send becomes a pending_calls row, saved with the ledger's other
 // changes and read back before nmilat may publish.
 type ledgerJournal struct {
-	l       *ledger.Ledger
+	l       ledger.Store
 	spec    callSpec
 	callIDs []string
 	// derived is every derived id this journal recorded (a re-placement).
@@ -121,7 +121,7 @@ func (j *ledgerJournal) WriteAhead(ctx context.Context, calls []nipcash.PendingC
 		if pc.DerivedFrom == "" {
 			// A re-placement written once, through the send path: its parent is
 			// the one Replace recorded with the derived id.
-			if parent, err := ledger.DerivedParent(pc.RequestID); err == nil && parent != "" {
+			if parent, err := j.l.DerivedParent(pc.RequestID); err == nil && parent != "" {
 				pc.DerivedFrom = parent
 				if p, ok := j.l.FindCall(ledger.CallIDFor(parent)); ok && pc.Attempt <= p.Attempt {
 					pc.Attempt = p.Attempt + 1
@@ -167,7 +167,7 @@ func (j *ledgerJournal) WriteAhead(ctx context.Context, calls []nipcash.PendingC
 	}
 	for _, id := range append(slices.Clone(written), rewritten...) {
 		c, _ := j.l.FindCall(id)
-		if err := ledger.VerifyWritten(*c); err != nil {
+		if err := j.l.VerifyWritten(*c); err != nil {
 			return undo(err)
 		}
 	}
@@ -183,7 +183,7 @@ func (j *ledgerJournal) WriteAhead(ctx context.Context, calls []nipcash.PendingC
 
 // RecordDerived records a derived id placed from here.
 func (j *ledgerJournal) RecordDerived(_ context.Context, id string, keepUntil int64) error {
-	if err := ledger.InsertDerived(id, "", nil, keepUntil); err != nil {
+	if err := j.l.InsertDerived(id, "", nil, keepUntil); err != nil {
 		return err
 	}
 	j.derived = append(j.derived, id)
@@ -194,7 +194,7 @@ func (j *ledgerJournal) RecordDerived(_ context.Context, id string, keepUntil in
 // (nipcash/client.DerivedParentRecorder): the derived call's row then names
 // its parent even when it is written once, through the send path.
 func (j *ledgerJournal) RecordDerivedFrom(_ context.Context, id, parent string, keepUntil int64) error {
-	if err := ledger.InsertDerived(id, parent, nil, keepUntil); err != nil {
+	if err := j.l.InsertDerived(id, parent, nil, keepUntil); err != nil {
 		return err
 	}
 	j.derived = append(j.derived, id)
@@ -205,7 +205,7 @@ var _ nipcashclient.DerivedParentRecorder = (*ledgerJournal)(nil)
 
 // DerivedPlaced reports a derived id recorded here.
 func (j *ledgerJournal) DerivedPlaced(_ context.Context, id string) (bool, error) {
-	return ledger.DerivedRecorded(id)
+	return j.l.DerivedRecorded(id)
 }
 
 // call is the one call this journal wrote, or nil.
@@ -250,7 +250,7 @@ func errOpenCall(cmd *cobra.Command, c *ledger.Call, entryID string) error {
 
 // refuseOpenCalls is the guard before any call: a source with an open call is
 // refused (the B4 invariant, kept by the ledger rather than by entry fields).
-func refuseOpenCalls(cmd *cobra.Command, l *ledger.Ledger, entryIDs []string) error {
+func refuseOpenCalls(cmd *cobra.Command, l ledger.Store, entryIDs []string) error {
 	for _, id := range entryIDs {
 		if c, ok := l.OpenCallFor(id); ok {
 			return errOpenCall(cmd, c, id)
@@ -263,7 +263,7 @@ func refuseOpenCalls(cmd *cobra.Command, l *ledger.Ledger, entryIDs []string) er
 // (redeem_in_flight) and a merge key still waiting to be confirmed on the
 // bill: such a key may be all that spends it, so nothing may replace or clear
 // it.
-func refuseLocked(cmd *cobra.Command, l *ledger.Ledger, entryIDs []string) error {
+func refuseLocked(cmd *cobra.Command, l ledger.Store, entryIDs []string) error {
 	for _, id := range entryIDs {
 		if e, ok := l.Find(id); ok && e.Status == ledger.StatusRedeeming {
 			return errRedeemInFlight(cmd, id)
@@ -284,7 +284,7 @@ func refuseLocked(cmd *cobra.Command, l *ledger.Ledger, entryIDs []string) error
 
 // locked reports a held bill no new call may spend: an open call names it, or
 // a merge key on it is not confirmed yet.
-func locked(l *ledger.Ledger, e *ledger.Entry) bool {
+func locked(l ledger.Store, e *ledger.Entry) bool {
 	if e.PendingThrowawayKey != "" {
 		return true
 	}
@@ -294,7 +294,7 @@ func locked(l *ledger.Ledger, e *ledger.Entry) bool {
 
 // unlockedHeld is l.Held() without the bills an automatic pick must skip
 // (locked): they stay the user's, but are spoken for until their call ends.
-func unlockedHeld(l *ledger.Ledger) []ledger.Entry {
+func unlockedHeld(l ledger.Store) []ledger.Entry {
 	var out []ledger.Entry
 	for _, e := range l.Held() {
 		if !locked(l, &e) {
@@ -307,7 +307,7 @@ func unlockedHeld(l *ledger.Ledger) []ledger.Entry {
 // pickableHeld is what an automatic pick chooses from: the held bills no open
 // call speaks for. With nothing held it is not_found; with every held bill
 // locked, the first one's refusal.
-func pickableHeld(cmd *cobra.Command, l *ledger.Ledger) ([]ledger.Entry, error) {
+func pickableHeld(cmd *cobra.Command, l ledger.Store) ([]ledger.Entry, error) {
 	all := l.Held()
 	if len(all) == 0 {
 		return nil, output.NotFoundError(cmd, "", fmt.Errorf("you have no held cash tokens — receive one first with `cashctl receive <token>`"))
@@ -323,7 +323,7 @@ func pickableHeld(cmd *cobra.Command, l *ledger.Ledger) ([]ledger.Entry, error) 
 // copied into an entry or a hand-off by the caller, so they and the call's
 // authorizing secrets are wiped. The caller's Save persists it with the
 // entries it changed, in one transaction.
-func closeCall(l *ledger.Ledger, c *ledger.Call, state, detail string) {
+func closeCall(l ledger.Store, c *ledger.Call, state, detail string) {
 	if c == nil {
 		return
 	}
@@ -339,11 +339,11 @@ func closeCall(l *ledger.Ledger, c *ledger.Call, state, detail string) {
 // call that closed without placing (never sent, refused, or a re-placement
 // that went nowhere): nothing can be paid or minted for it, so it must not
 // stay `placing` behind a closed call (R2-C2).
-func stageNotPlacedOrder(l *ledger.Ledger, c *ledger.Call) {
+func stageNotPlacedOrder(l ledger.Store, c *ledger.Call) {
 	if l == nil || c.Method != nipcash.MethodCashOrder {
 		return
 	}
-	o, ok, err := ledger.OrderForCall(c.CallID)
+	o, ok, err := l.OrderForCall(c.CallID)
 	if err != nil || !ok || o.FinishedAt != 0 || o.State != ledger.OrderPlacing {
 		return
 	}
@@ -357,7 +357,7 @@ const detailNotSent = "not_sent"
 
 // closeNotSent closes a call written ahead that never reached the Hub: kept as
 // a record, final, with its secrets wiped.
-func closeNotSent(l *ledger.Ledger, c *ledger.Call) {
+func closeNotSent(l ledger.Store, c *ledger.Call) {
 	if c == nil {
 		return
 	}
@@ -376,7 +376,7 @@ func sentNothing(err error) bool {
 // placeErr turns a placed call's failure into its outcome on the ledger and the
 // user's error. j is the journal it was placed with (it knows whether a call
 // was written); verb names the action; ids are the source entries.
-func placeErr(cmd *cobra.Command, l *ledger.Ledger, j *ledgerJournal, err error, verb string, ids ...string) error {
+func placeErr(cmd *cobra.Command, l ledger.Store, j *ledgerJournal, err error, verb string, ids ...string) error {
 	billID := ""
 	if len(ids) > 0 {
 		billID = ids[0]
@@ -388,7 +388,7 @@ func placeErr(cmd *cobra.Command, l *ledger.Ledger, j *ledgerJournal, err error,
 // explicitly: billID is the ledger entry of the item's bill (a consolidate's
 // wire sources[0], which need not be ids[0]), or "" when that bill is not in
 // the ledger, so a tombstone marks nothing spent.
-func placeErrFor(cmd *cobra.Command, l *ledger.Ledger, j *ledgerJournal, err error, verb, billID string, ids ...string) error {
+func placeErrFor(cmd *cobra.Command, l ledger.Store, j *ledgerJournal, err error, verb, billID string, ids ...string) error {
 	c := j.call()
 	input := ""
 	if len(ids) == 1 {
@@ -451,13 +451,13 @@ func placeErrFor(cmd *cobra.Command, l *ledger.Ledger, j *ledgerJournal, err err
 		}
 		c.SawReused = c.SawReused || indeterminate.Call.SawReused
 		_ = l.Save()
-		return callIndeterminateError(cmd, input, c, verb, err)
+		return callIndeterminateError(cmd, l, input, c, verb, err)
 	case c != nil:
 		// Written ahead and the outcome is not one of the above: never assume
 		// it failed. It stays open and is looked up.
 		c.State, c.Detail, c.UpdatedAt = ledger.CallLookup, "no answer", time.Now().Unix()
 		_ = l.Save()
-		return callIndeterminateError(cmd, input, c, verb, err)
+		return callIndeterminateError(cmd, l, input, c, verb, err)
 	}
 	// No call was written: nothing can have reached the Hub.
 	var notSent *notSentError
@@ -469,14 +469,14 @@ func placeErrFor(cmd *cobra.Command, l *ledger.Ledger, j *ledgerJournal, err err
 
 // callIndeterminateError is exit 8 for a call whose outcome is unknown: it
 // stays open, and the bill it spends is not used again until it is settled.
-func callIndeterminateError(cmd *cobra.Command, input string, c *ledger.Call, verb string, cause error) error {
+func callIndeterminateError(cmd *cobra.Command, l ledger.Store, input string, c *ledger.Call, verb string, cause error) error {
 	answered := "gave no answer"
 	if c.FirstError != "" {
 		answered = "answered " + c.FirstError + ", which does not say whether it was applied"
 	}
 	device, _ := deviceIDFn()
 	call := map[string]any{"call": c.CallID, "method": c.Method, "state": c.State, "detail": c.Detail,
-		"deadline": c.Deadline, "settle_after": c.Deadline + 1, "next_step": nextStep(c, device)}
+		"deadline": c.Deadline, "settle_after": c.Deadline + 1, "next_step": nextStep(l, c, device)}
 	return output.WithCall(output.IndeterminateError(cmd, input, fmt.Errorf(
 		"the Hub %s to this %s (call %s), so whether it moved is unknown. "+
 			"Nothing is resent: `cashctl cash settle` asks the Hub what happened, and every money command does before this bill is used again: %w",
@@ -486,7 +486,7 @@ func callIndeterminateError(cmd *cobra.Command, input string, c *ledger.Call, ve
 // placeTransfer places one cash_transfer on caller, written ahead under spec,
 // after the open-call guard. On success the caller applies the result and
 // closes the returned call before its own Save.
-func placeTransfer(ctx context.Context, cmd *cobra.Command, l *ledger.Ledger, caller billCaller, spec callSpec, p nipcash.CashTransferParams) (*nipcash.CashTransferResult, *ledger.Call, error) {
+func placeTransfer(ctx context.Context, cmd *cobra.Command, l ledger.Store, caller billCaller, spec callSpec, p nipcash.CashTransferParams) (*nipcash.CashTransferResult, *ledger.Call, error) {
 	if err := refuseOpenCalls(cmd, l, spec.SourceEntryIDs); err != nil {
 		return nil, nil, err
 	}
@@ -516,7 +516,7 @@ func placeTransfer(ctx context.Context, cmd *cobra.Command, l *ledger.Ledger, ca
 }
 
 // placeConsolidate is placeTransfer for cash_consolidate.
-func placeConsolidate(ctx context.Context, cmd *cobra.Command, l *ledger.Ledger, caller billCaller, spec callSpec, p nipcash.CashConsolidateParams) (*nipcash.CashConsolidateResult, *ledger.Call, error) {
+func placeConsolidate(ctx context.Context, cmd *cobra.Command, l ledger.Store, caller billCaller, spec callSpec, p nipcash.CashConsolidateParams) (*nipcash.CashConsolidateResult, *ledger.Call, error) {
 	if err := refuseOpenCalls(cmd, l, spec.SourceEntryIDs); err != nil {
 		return nil, nil, err
 	}

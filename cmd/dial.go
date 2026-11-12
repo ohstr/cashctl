@@ -14,7 +14,6 @@ import (
 	nipcashclient "github.com/ohstr/nmilat/nipcash/client"
 	relayclient "github.com/ohstr/nmilat/relay/client"
 
-	"github.com/ohstr/cashctl/internal/ledger"
 	"github.com/ohstr/cashctl/internal/output"
 )
 
@@ -177,7 +176,7 @@ func noteBillNetwork(jsonMode bool, token string) (string, bool) {
 // heldZapContext is the zap context of a held zap bill, from the Cash Zap it
 // was received with; errNeedsZapEvent without one.
 func heldZapContext(token string) (nipcash.ZapContext, error) {
-	raw, err := ledger.ZapEventFor(token)
+	raw, err := zapEventFor(token)
 	if err != nil || raw == "" {
 		return nipcash.ZapContext{}, errNeedsZapEvent
 	}

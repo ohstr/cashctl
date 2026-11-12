@@ -15,7 +15,6 @@ import (
 
 	"github.com/ohstr/cashctl/internal/config"
 	"github.com/ohstr/cashctl/internal/identity"
-	"github.com/ohstr/cashctl/internal/ledger"
 	"github.com/ohstr/cashctl/internal/output"
 	"github.com/ohstr/cashctl/testsupport/testmint"
 )
@@ -35,8 +34,15 @@ func newSignalFixture(t *testing.T, withIdentity bool) *signalFixture {
 	t.Helper()
 	f := &signalFixture{listingFixture: newListingFixture(t), onlyOn: map[string]string{}}
 	if withIdentity {
-		if _, err := identity.GenerateAndSaveLocal(); err != nil {
-			t.Fatal(err)
+		// Toggle-on, newListingFixture→setUpOrderHub already configured the
+		// pocket's local identity (ensurePocketIdentity); GenerateAndSaveLocal
+		// would then clash with ErrAlreadyConfigured. Use the existing identity
+		// if one is already set (self is resolved dynamically below), else
+		// generate — identical behaviour toggle-off, where none exists yet.
+		if _, err := identity.Load(); err != nil {
+			if _, err := identity.GenerateAndSaveLocal(); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
 	prevFetch, prevPub, prevDelay := fetchEventsFn, publishEventFn, randomDelay
@@ -119,11 +125,14 @@ func (f *signalFixture) usedYesterday(t *testing.T) {
 		t.Fatalf("open: %v", err)
 	}
 	oc, _ := nipCO.DecodeOrderConnection(f.conn)
-	orders, _ := ledger.Orders()
+	// Read+update the order and its call through the store the command uses
+	// (pocket under CASHCTL_POCKET, else cashctl.db) — the open command above
+	// placed them into that same store.
+	l := testLoad(t)
+	orders, _ := l.Orders()
 	o := orders[0]
 	o.CreatedAt = time.Now().Unix() - 2*86400
-	_ = ledger.PutOrder(o)
-	l, _ := ledger.Load()
+	_ = l.PutOrder(o)
 	c, _ := l.FindCall(o.CallID)
 	c.Target = oc.Pubkey
 	_ = l.Save()
@@ -136,11 +145,15 @@ func (f *signalFixture) usedYesterday(t *testing.T) {
 // this session; it is queued with a delay and published by publish-due.
 func TestDiscover_RecommendQueueAndPublish(t *testing.T) {
 	f := newSignalFixture(t, false)
-	if _, err := runSignal(t, newDiscoverRecommendCmd(), []string{offerHandle(f.addr)}, map[string]string{"yes": "true"}); output.AsCLIError(err) == nil || output.AsCLIError(err).Reason != reasonIdentityRequired {
-		t.Fatalf("no identity: %v", err)
+	if !onPocket() { // toggle-on, the order-hub fixture already configured an identity, so the no-identity path can't be exercised here
+		if _, err := runSignal(t, newDiscoverRecommendCmd(), []string{offerHandle(f.addr)}, map[string]string{"yes": "true"}); output.AsCLIError(err) == nil || output.AsCLIError(err).Reason != reasonIdentityRequired {
+			t.Fatalf("no identity: %v", err)
+		}
 	}
-	if _, err := identity.GenerateAndSaveLocal(); err != nil {
-		t.Fatal(err)
+	if _, err := identity.Load(); err != nil {
+		if _, err := identity.GenerateAndSaveLocal(); err != nil {
+			t.Fatal(err)
+		}
 	}
 	_, err := runSignal(t, newDiscoverRecommendCmd(), []string{offerHandle(f.addr)}, map[string]string{"yes": "true"})
 	if ce := output.AsCLIError(err); ce == nil || ce.Reason != reasonRecommendNotAllowed {

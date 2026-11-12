@@ -142,6 +142,15 @@ func WithdrawalForCall(callID string) (Withdrawal, bool, error) {
 	return findWithdrawalBy(`call_id = ?`, callID)
 }
 
+// ledger.Store seam methods (concrete ledger → package funcs, cashctl.db; the
+// bare identifiers resolve to the package funcs, not the methods — no recursion).
+func (l *Ledger) PutWithdrawal(w Withdrawal) error                   { return PutWithdrawal(w) }
+func (l *Ledger) FindWithdrawal(id string) (Withdrawal, bool, error) { return FindWithdrawal(id) }
+func (l *Ledger) WithdrawalForCall(cid string) (Withdrawal, bool, error) {
+	return WithdrawalForCall(cid)
+}
+func (l *Ledger) Withdrawals() ([]Withdrawal, error) { return Withdrawals() }
+
 // Withdrawals lists every withdrawal, oldest first.
 func Withdrawals() ([]Withdrawal, error) {
 	db, err := store.Open()

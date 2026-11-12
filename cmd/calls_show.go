@@ -33,9 +33,9 @@ type openCallSecret struct {
 
 // openCalls is every open call in the ledger, with whether it was placed from
 // this wallet file ("this") or a copy of it ("other").
-func openCalls(l *ledger.Ledger, device string) []openCall {
+func openCalls(l ledger.Store, device string) []openCall {
 	var out []openCall
-	for _, c := range l.Calls {
+	for _, c := range l.AllCalls() {
 		if !c.Open() {
 			continue
 		}
@@ -55,7 +55,7 @@ func openCalls(l *ledger.Ledger, device string) []openCall {
 
 // printOpenCalls is openCalls in text, on stdout after the rest of `wallet
 // show`.
-func printOpenCalls(l *ledger.Ledger, device string) {
+func printOpenCalls(l ledger.Store, device string) {
 	calls := openCalls(l, device)
 	if len(calls) == 0 {
 		return

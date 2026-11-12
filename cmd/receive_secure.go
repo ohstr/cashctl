@@ -94,7 +94,7 @@ func isWrongSecretCode(code string) bool { return code == "UNAUTHORIZED" }
 // surface and the entry that should now be treated as "the" result of
 // this receive (the same entry for rekeyed/declined/failed/not_applicable,
 // a new one for consolidated).
-func protectCashReceipt(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entry, isCash bool) (protectedStatus, *ledger.Entry) {
+func protectCashReceipt(cmd *cobra.Command, l ledger.Store, entry *ledger.Entry, isCash bool) (protectedStatus, *ledger.Entry) {
 	jsonMode, _ := cmd.Flags().GetBool("json")
 	if !isCash {
 		return protectedStatus{Status: "not_applicable"}, entry
@@ -125,7 +125,7 @@ func protectCashReceipt(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entr
 // call_secrets row) before anything is sent, so a kill or a lost answer never
 // costs it: the call stays open, the bill is not used again until the Hub says
 // what happened, and `wallet show` lists the new code meanwhile.
-func protectRekeyOnly(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entry, jsonMode bool) (protectedStatus, *ledger.Entry) {
+func protectRekeyOnly(cmd *cobra.Command, l ledger.Store, entry *ledger.Entry, jsonMode bool) (protectedStatus, *ledger.Entry) {
 	if _, open := l.OpenCallFor(entry.ID); open {
 		printProtectUnresolved(jsonMode, entry.ID)
 		return protectedStatus{Status: "failed", Error: errUnresolvedRekey(entry.ID).Error(), Unresolved: true}, entry

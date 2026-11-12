@@ -357,14 +357,14 @@ func TestMergeThenSend_ExactSumConsolidatesStraightToTheRecipient(t *testing.T) 
 
 // keyBillLedger is a fresh on-disk ledger holding one bill left on a throwaway
 // key by a merge, registered on h. Returns the ledger, its id and the key.
-func keyBillLedger(t *testing.T, h *fakeBillHub) (*ledger.Ledger, string, string) {
+func keyBillLedger(t *testing.T, h *fakeBillHub) (ledger.Store, string, string) {
 	t.Helper()
 	appdir.SetOverride(t.TempDir())
 	t.Cleanup(func() { appdir.SetOverride("") })
-	l, err := ledger.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
+	// testLoad (not ledger.Load) so the seed lands in the SAME store the command
+	// under test uses: toggle-on that is the pocket, and failSaves (which injects
+	// on the pocket) then catches the final save so the bearer-note recovery fires.
+	l := testLoad(t)
 	priv, _, _ := newThrowawayKey()
 	e, err := l.Add(ledger.Entry{Token: "tok-k", WalletPubkey: "pk-k", AmountMillis: ptrTo(uint64(1000)),
 		IdentityRequired: ptrTo(true), ThrowawayKey: priv})

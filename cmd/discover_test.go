@@ -16,7 +16,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/ohstr/cashctl/internal/config"
-	"github.com/ohstr/cashctl/internal/ledger"
 	"github.com/ohstr/cashctl/internal/output"
 	"github.com/ohstr/cashctl/testsupport/testmint"
 )
@@ -176,7 +175,7 @@ func TestDiscover_OpenPlacesTheOrder(t *testing.T) {
 	if doc["state"] != "open" || len(f.orders.placed) != 1 {
 		t.Errorf("open: %v, placed %d", doc, len(f.orders.placed))
 	}
-	if orders, _ := ledger.Orders(); len(orders) != 1 {
+	if orders, _ := testLoad(t).Orders(); len(orders) != 1 {
 		t.Errorf("orders %v", orders)
 	}
 	f.info.Network = "regtest"

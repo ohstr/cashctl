@@ -1,6 +1,6 @@
 module github.com/ohstr/cashctl
 
-go 1.26.10
+go 1.26.11
 
 require (
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.0
@@ -28,6 +28,7 @@ require (
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/rs/zerolog v1.34.0 // indirect
+	go.etcd.io/bbolt v1.5.0 // indirect
 	golang.org/x/net v0.60.0 // indirect
 	golang.org/x/sys v0.48.0 // indirect
 	modernc.org/libc v1.75.6 // indirect

@@ -43,7 +43,7 @@ func TestPlacement_CodedRefusalWaitsAndClosesWithItsCode(t *testing.T) {
 	if len(*waited) != 1 || (*waited)[0] > maxPlacementWait || *n != 1 {
 		t.Errorf("waited %v, %d lookups; want one wait to the deadline and one lookup", *waited, *n)
 	}
-	fresh, _ := ledger.Load()
+	fresh := testLoad(t)
 	if _, open := fresh.OpenCallFor(ids[0]); open {
 		t.Error("the refused call is still open, locking its bills")
 	}
@@ -65,7 +65,7 @@ func TestPlacement_LostReplyLookedUpDoneApplies(t *testing.T) {
 	if st.PendingSecretUnresolved || st.Status != "rekeyed" {
 		t.Fatalf("protect: %+v; want it finished in the same run", st)
 	}
-	fresh, _ := ledger.Load()
+	fresh := testLoad(t)
 	got, _ := fresh.Find(ids[0])
 	if got.CashProtection != ledger.CashProtected {
 		t.Errorf("entry %+v, want protected", got)

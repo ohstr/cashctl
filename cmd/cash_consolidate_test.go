@@ -361,13 +361,10 @@ func testTarget() nipcash.Target {
 
 // consolidateFixture is an on-disk ledger holding two identity-bound bills and
 // the sources that spend them.
-func consolidateFixture(t *testing.T) (*ledger.Ledger, []string, []nipcash.Source) {
+func consolidateFixture(t *testing.T) (ledger.Store, []string, []nipcash.Source) {
 	t.Helper()
 	auditDTempLedger(t)
-	l, err := ledger.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
+	l := testLoad(t)
 	var ids []string
 	var sources []nipcash.Source
 	for _, name := range []string{"dial-a", "dial-b"} {
@@ -553,7 +550,7 @@ func TestSharedMinterOfIDs(t *testing.T) {
 // Hub, group 3 never attempted, and nothing printed but group 2's error. The
 // newly minted token from group 1 was never named anywhere.
 
-func withFakeConsolidateItems(t *testing.T, fn func(cmd *cobra.Command, l *ledger.Ledger, items []string, toFlag string, jsonMode, yesFlag bool) (*consolidateResult, error)) {
+func withFakeConsolidateItems(t *testing.T, fn func(cmd *cobra.Command, l ledger.Store, items []string, toFlag string, jsonMode, yesFlag bool) (*consolidateResult, error)) {
 	t.Helper()
 	orig := consolidateItemsFn
 	consolidateItemsFn = fn
@@ -578,7 +575,7 @@ func twoGroups() [][]ledger.Entry {
 
 func TestConsolidateGroups_FailureInOneGroupDoesNotStopTheNext(t *testing.T) {
 	var attempted []string
-	withFakeConsolidateItems(t, func(_ *cobra.Command, _ *ledger.Ledger, items []string, _ string, _, _ bool) (*consolidateResult, error) {
+	withFakeConsolidateItems(t, func(_ *cobra.Command, _ ledger.Store, items []string, _ string, _, _ bool) (*consolidateResult, error) {
 		attempted = append(attempted, items[0])
 		if items[0] == "tok-a1" {
 			return nil, errors.New("hub said no")
@@ -617,7 +614,7 @@ func TestConsolidateGroups_FailureInOneGroupDoesNotStopTheNext(t *testing.T) {
 // money-losing case stated directly: group 1 merges, group 2 fails, and group 1's
 // new token must still reach the output. Before the fix it was silently dropped.
 func TestConsolidateGroups_SucceededGroupIsStillReportedAfterALaterFailure(t *testing.T) {
-	withFakeConsolidateItems(t, func(_ *cobra.Command, _ *ledger.Ledger, items []string, _ string, _, _ bool) (*consolidateResult, error) {
+	withFakeConsolidateItems(t, func(_ *cobra.Command, _ ledger.Store, items []string, _ string, _, _ bool) (*consolidateResult, error) {
 		if items[0] == "tok-b1" {
 			return nil, errors.New("relay went away")
 		}
@@ -643,7 +640,7 @@ func TestConsolidateGroups_SucceededGroupIsStillReportedAfterALaterFailure(t *te
 // reported as failed (which would imply something went wrong and invite a retry)
 // and must not be reported as ok (which would imply a merge happened).
 func TestConsolidateGroups_DeclineIsNeitherSuccessNorFailure(t *testing.T) {
-	withFakeConsolidateItems(t, func(_ *cobra.Command, _ *ledger.Ledger, items []string, _ string, _, _ bool) (*consolidateResult, error) {
+	withFakeConsolidateItems(t, func(_ *cobra.Command, _ ledger.Store, items []string, _ string, _, _ bool) (*consolidateResult, error) {
 		if items[0] == "tok-a1" {
 			return nil, nil // declined
 		}
@@ -751,7 +748,7 @@ func TestConsolidateGroups_ExplainsACrossHubRefusal(t *testing.T) {
 	orig := consolidateItemsFn
 	defer func() { consolidateItemsFn = orig }()
 
-	consolidateItemsFn = func(cmd *cobra.Command, l *ledger.Ledger, ids []string, toFlag string, jsonMode, yesFlag bool) (*consolidateResult, error) {
+	consolidateItemsFn = func(cmd *cobra.Command, l ledger.Store, ids []string, toFlag string, jsonMode, yesFlag bool) (*consolidateResult, error) {
 		return nil, output.NWCErrorForCashToken(cmd, &relayclient.WalletError{
 			Method:  "cash_consolidate",
 			Code:    "BAD_REQUEST",
@@ -785,7 +782,7 @@ func TestConsolidateGroups_LeavesOtherFailuresAlone(t *testing.T) {
 	orig := consolidateItemsFn
 	defer func() { consolidateItemsFn = orig }()
 
-	consolidateItemsFn = func(cmd *cobra.Command, l *ledger.Ledger, ids []string, toFlag string, jsonMode, yesFlag bool) (*consolidateResult, error) {
+	consolidateItemsFn = func(cmd *cobra.Command, l ledger.Store, ids []string, toFlag string, jsonMode, yesFlag bool) (*consolidateResult, error) {
 		return nil, output.NWCErrorForCashToken(cmd, &relayclient.WalletError{
 			Method:  "cash_consolidate",
 			Code:    "NOT_FOUND",
@@ -816,10 +813,7 @@ func TestConsolidateInRounds_SplitsOverTheHubsCap(t *testing.T) {
 	if _, err := identity.GenerateAndSaveLocal(); err != nil {
 		t.Fatalf("GenerateAndSaveLocal: %v", err)
 	}
-	l, err := ledger.Load()
-	if err != nil {
-		t.Fatalf("ledger.Load: %v", err)
-	}
+	l := testLoad(t)
 	var tokens, ids []string
 	var sources []nipcash.Source
 	for i := range 5 {
@@ -896,10 +890,7 @@ func TestDoCashConsolidate_CashTargetResultIsLabelledProtected(t *testing.T) {
 	if err := l.Save(); err != nil {
 		t.Fatal(err)
 	}
-	fresh, err := ledger.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
+	fresh := testLoad(t)
 	merged, ok := fresh.FindByToken("lokicash1merged")
 	if !ok {
 		t.Fatal("the merged cash note was not saved")
@@ -934,10 +925,7 @@ func TestDoCashConsolidate_TombstoneSpendsOnlyTheFirstSource(t *testing.T) {
 	if output.AsCLIError(err).Code != output.CodeSpent {
 		t.Fatalf("err %v, want spent", err)
 	}
-	fresh, err := ledger.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
+	fresh := testLoad(t)
 	for i, id := range ids {
 		got, _ := fresh.Find(id)
 		want := ledger.StatusHeld
@@ -972,10 +960,7 @@ func TestDoCashConsolidate_TombstoneAfterAFailedDialSpendsTheDialledSource(t *te
 	if first != hexWallet("dial-b") {
 		t.Fatalf("wire sources[0] = %s, want dial-b's wallet", first)
 	}
-	fresh, err := ledger.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
+	fresh := testLoad(t)
 	for i, want := range []string{ledger.StatusHeld, ledger.StatusSpent} {
 		if got, _ := fresh.Find(ids[i]); got.Status != want {
 			t.Errorf("source %d status %q, want %q", i, got.Status, want)
@@ -996,10 +981,7 @@ func TestDoCashConsolidate_TombstoneForANonLedgerFirstSourceMarksNothing(t *test
 	if output.AsCLIError(err).Code != output.CodeSpent {
 		t.Fatalf("err %v, want spent", err)
 	}
-	fresh, err := ledger.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
+	fresh := testLoad(t)
 	for i, id := range ids {
 		if got, _ := fresh.Find(id); got.Status != ledger.StatusHeld {
 			t.Errorf("source %d status %q, want held", i, got.Status)
@@ -1027,7 +1009,7 @@ func TestConsolidate_InterimRoundKeepsItsKeyForTheLookup(t *testing.T) {
 	if _, _, err := doCashConsolidate(&cobra.Command{}, l, []string{"dial-a"}, sources, ids, nipcash.Pubkey(pub), true); output.AsCLIError(err).Code != output.CodeIndeterminate {
 		t.Fatalf("err %v, want indeterminate", err)
 	}
-	l, _ = ledger.Load()
+	l = testLoad(t)
 	c, open := l.OpenCallFor(ids[0])
 	if !open || callSecretOf(c, ledger.RoleInterimKey) != priv {
 		t.Fatalf("open call %+v: want the merge key kept with it", c)
@@ -1040,8 +1022,8 @@ func TestConsolidate_InterimRoundKeepsItsKeyForTheLookup(t *testing.T) {
 	if !ok || merged.ThrowawayKey != priv || merged.Status != ledger.StatusHeld {
 		t.Errorf("merged bill %+v (%v): want held under the merge key", merged, ok)
 	}
-	if len(l.Handoffs) != 0 {
-		t.Errorf("handoffs %+v: the wallet's own merged bill was filed as a gift", l.Handoffs)
+	if len(l.AllHandoffs()) != 0 {
+		t.Errorf("handoffs %+v: the wallet's own merged bill was filed as a gift", l.AllHandoffs())
 	}
 }
 

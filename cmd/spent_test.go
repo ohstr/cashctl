@@ -19,10 +19,7 @@ import (
 func TestRecordSpent_MarksAHeldEntryAndDropsItFromHeld(t *testing.T) {
 	appdir.SetOverride(t.TempDir())
 	t.Cleanup(func() { appdir.SetOverride("") })
-	l, err := ledger.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
+	l := testLoad(t)
 	amt := uint64(1000)
 	e, err := l.Add(ledger.Entry{Token: "tok", WalletPubkey: "pub", AmountMillis: &amt})
 	if err != nil {
@@ -32,7 +29,7 @@ func TestRecordSpent_MarksAHeldEntryAndDropsItFromHeld(t *testing.T) {
 	if ce := output.AsCLIError(err); ce.Code != output.CodeSpent {
 		t.Errorf("code = %q, want spent", ce.Code)
 	}
-	fresh, _ := ledger.Load()
+	fresh := testLoad(t)
 	if got, _ := fresh.Find(e.ID); got.Status != ledger.StatusSpent {
 		t.Errorf("saved status = %q, want spent", got.Status)
 	}
@@ -118,10 +115,7 @@ func TestRunCashStatus_AFreshTombstoneIsSpentOnTheFirstCall(t *testing.T) {
 	for _, jsonMode := range []bool{true, false} {
 		appdir.SetOverride(t.TempDir())
 		t.Cleanup(func() { appdir.SetOverride("") })
-		l, err := ledger.Load()
-		if err != nil {
-			t.Fatal(err)
-		}
+		l := testLoad(t)
 		amt := uint64(1000)
 		e, err := l.Add(ledger.Entry{Token: "tok", WalletPubkey: "pub", AmountMillis: &amt})
 		if err != nil {
@@ -146,7 +140,7 @@ func TestRunCashStatus_AFreshTombstoneIsSpentOnTheFirstCall(t *testing.T) {
 		if strings.TrimSpace(stdout) != "" {
 			t.Errorf("json=%v: stdout = %q, want empty", jsonMode, stdout)
 		}
-		fresh, _ := ledger.Load()
+		fresh := testLoad(t)
 		if got, _ := fresh.Find(e.ID); got.Status != ledger.StatusSpent {
 			t.Errorf("json=%v: saved status = %q, want spent", jsonMode, got.Status)
 		}
@@ -158,10 +152,7 @@ func TestRunCashStatus_AFreshTombstoneIsSpentOnTheFirstCall(t *testing.T) {
 func TestRunCashStatus_ATombstoneAmongSeveralStaysARow(t *testing.T) {
 	appdir.SetOverride(t.TempDir())
 	t.Cleanup(func() { appdir.SetOverride("") })
-	l, err := ledger.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
+	l := testLoad(t)
 	amt := uint64(1000)
 	spent, _ := l.Add(ledger.Entry{Token: "tok-a", WalletPubkey: "pub-a", AmountMillis: &amt})
 	if _, err := l.Add(ledger.Entry{Token: "tok-b", WalletPubkey: "pub-b", AmountMillis: &amt}); err != nil {

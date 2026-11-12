@@ -293,9 +293,13 @@ func newOutboxID() string {
 // usedOffer reports whether this device used the offer (an order answered at
 // least once, or a join done, over its connection at its node, from a verified
 // string), and when it last ordered from or joined that node.
-func usedOffer(l *listing.Listing) (used bool, last int64) {
-	orders, _ := ledger.Orders()
-	ld, _ := ledger.Load()
+func usedOffer(cmd *cobra.Command, l *listing.Listing) (used bool, last int64) {
+	ld, err := loadStore(cmd)
+	if err != nil {
+		return
+	}
+	defer func() { _ = ld.Close() }()
+	orders, _ := ld.Orders()
 	for _, o := range orders {
 		if o.HubIdentity != l.NodeIdentity {
 			continue
@@ -400,7 +404,7 @@ func runDiscoverRecommend(cmd *cobra.Command, args []string) error {
 	}
 	now := time.Now().Unix()
 	for _, l := range ls {
-		used, last := usedOffer(l)
+		used, last := usedOffer(cmd, l)
 		if !listing.RecommendAllowed(used, last, processStart, now) {
 			msg := "only an offer you used (an order answered, or a join made, over a confirmed string) can be recommended"
 			if used {

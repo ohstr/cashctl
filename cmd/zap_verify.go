@@ -382,7 +382,7 @@ func receiveZap(cmd *cobra.Command, ev *nip01.Event, raw string) error {
 		}
 		approved = true
 	}
-	l, err := ledger.Load()
+	l, err := loadStore(cmd)
 	if err != nil {
 		return output.RuntimeError(cmd, err)
 	}
@@ -502,7 +502,7 @@ func receiveZap(cmd *cobra.Command, ev *nip01.Event, raw string) error {
 // of the zap bill to the local pubkey, signed with the connection key, placed
 // through the call engine (written ahead, looked up when lost), and checked
 // to be exactly that (nipCZ.CheckInPlaceTransfer).
-func claimZap(ctx context.Context, cmd *cobra.Command, l *ledger.Ledger, e *ledger.Entry, z *nipCZ.CashZap, cred nipcash.Credential, mine string) error {
+func claimZap(ctx context.Context, cmd *cobra.Command, l ledger.Store, e *ledger.Entry, z *nipCZ.CashZap, cred nipcash.Credential, mine string) error {
 	caller, err := dialCallerFn(ctx, z.Cash)
 	if err != nil {
 		return err
@@ -533,7 +533,7 @@ func (e *zapClaimNotValidError) Error() string { return "not a valid zap: " + e.
 // Hub's amount; a spin-off is kept as an ordinary held bill (provenance
 // checked), with any remainder still on the connection key. notZap is empty
 // only for an exact in-place move of zapAmount.
-func applyZapClaimResult(l *ledger.Ledger, e *ledger.Entry, zapAmount uint64, res *nipcash.CashTransferResult) (summary, notZap string) {
+func applyZapClaimResult(l ledger.Store, e *ledger.Entry, zapAmount uint64, res *nipcash.CashTransferResult) (summary, notZap string) {
 	amount := res.AmountMillis
 	// Bound both Hub-reported figures before either reaches the ledger or
 	// FormatAmount: the claim's cash_transfer has already happened, so a figure past

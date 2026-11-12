@@ -57,7 +57,7 @@ func runCashSettle(cmd *cobra.Command, _ []string) error {
 	wait, _ := cmd.Flags().GetBool("wait")
 	closeID, _ := cmd.Flags().GetString("close")
 	replaceID, _ := cmd.Flags().GetString("replace")
-	l, err := ledger.Load()
+	l, err := loadStore(cmd)
 	if err != nil {
 		return output.RuntimeError(cmd, err)
 	}
@@ -91,9 +91,9 @@ func runCashSettle(cmd *cobra.Command, _ []string) error {
 }
 
 // nextDue is when the earliest open call becomes worth asking about again.
-func nextDue(l *ledger.Ledger) (time.Time, bool) {
+func nextDue(l ledger.Store) (time.Time, bool) {
 	var next int64
-	for _, c := range l.Calls {
+	for _, c := range l.AllCalls() {
 		if !c.Open() || c.State == ledger.CallExpired || c.State == ledger.CallStuck || c.State == ledger.CallOpenOrder {
 			continue
 		}
@@ -125,10 +125,10 @@ type settleRow struct {
 	Recovery     string   `json:"recovery,omitempty"`
 }
 
-func rowOf(c ledger.Call, device, summary string) settleRow {
+func rowOf(l ledger.Store, c ledger.Call, device, summary string) settleRow {
 	r := settleRow{Call: c.CallID, Method: c.Method, Purpose: c.Purpose, State: c.State, Detail: c.Detail,
 		Deadline: c.Deadline, RetryAfter: c.RetryAfter, TokenIDs: output.NonNil(c.SourceEntryIDs),
-		AmountMillis: c.AmountMillis, Device: "other", NextStep: nextStep(&c, device), Summary: summary}
+		AmountMillis: c.AmountMillis, Device: "other", NextStep: nextStep(l, &c, device), Summary: summary}
 	if c.DeviceID == device {
 		r.Device = "this"
 	}
@@ -152,21 +152,21 @@ func callRecovery(c *ledger.Call) string {
 
 // reportSettle prints every call looked at and every call still open, and exits
 // 8 while anything placed from this file is still open.
-func reportSettle(cmd *cobra.Command, l *ledger.Ledger, settled []settledCall, joins []joinSettleRow, joinsOpen bool, redeems []redeemingSettle, redeemsOpen bool, device string, jsonMode bool) error {
+func reportSettle(cmd *cobra.Command, l ledger.Store, settled []settledCall, joins []joinSettleRow, joinsOpen bool, redeems []redeemingSettle, redeemsOpen bool, device string, jsonMode bool) error {
 	rows := map[string]settleRow{}
 	var order []string
 	for _, s := range settled {
 		if _, seen := rows[s.Call.CallID]; !seen {
 			order = append(order, s.Call.CallID)
 		}
-		rows[s.Call.CallID] = rowOf(s.Call, device, s.Summary)
+		rows[s.Call.CallID] = rowOf(l, s.Call, device, s.Summary)
 	}
 	stillOpen := false
-	for _, c := range l.Calls {
+	for _, c := range l.AllCalls() {
 		if c.Open() {
 			if _, seen := rows[c.CallID]; !seen {
 				order = append(order, c.CallID)
-				rows[c.CallID] = rowOf(c, device, "")
+				rows[c.CallID] = rowOf(l, c, device, "")
 			}
 			// An open order is answered: it waits for its payment, not for
 			// cash settle.
@@ -228,11 +228,11 @@ func reportSettle(cmd *cobra.Command, l *ledger.Ledger, settled []settledCall, j
 // withdrawal (its payout is followed, and a cancelled payout is re-minted to
 // its remint secret) and an answered order (later bills are fetched with its
 // buyer key). Those are followed by their own commands.
-func refuseUserClose(cmd *cobra.Command, c *ledger.Call) error {
+func refuseUserClose(cmd *cobra.Command, l ledger.Store, c *ledger.Call) error {
 	switch {
 	case c.Method == nipcash.MethodCashWithdraw && (c.State == ledger.CallOpenWithdraw || callSecretOf(c, ledger.RoleRemint) != ""):
 		next := "`cashctl cash withdraw settle`"
-		if w, ok, _ := ledger.WithdrawalForCall(c.CallID); ok {
+		if w, ok, _ := l.WithdrawalForCall(c.CallID); ok {
 			next = fmt.Sprintf("`cashctl cash withdraw show %s` (or `cash withdraw cancel %s`)", w.WithdrawalID, w.WithdrawalID)
 		}
 		return output.UsageError(cmd, fmt.Errorf("call %s is a withdrawal: its payout and re-mint code are still needed, so it can't be closed here — follow it with %s", c.CallID, next))
@@ -242,7 +242,7 @@ func refuseUserClose(cmd *cobra.Command, c *ledger.Call) error {
 	return nil
 }
 
-func closeCallByUser(cmd *cobra.Command, l *ledger.Ledger, id, device string, jsonMode bool) error {
+func closeCallByUser(cmd *cobra.Command, l ledger.Store, id, device string, jsonMode bool) error {
 	c, ok := l.FindCall(id)
 	if !ok {
 		return output.NotFoundError(cmd, id, fmt.Errorf("no call %q", id))
@@ -250,7 +250,7 @@ func closeCallByUser(cmd *cobra.Command, l *ledger.Ledger, id, device string, js
 	if !c.Open() {
 		return output.ConflictError(cmd, id, fmt.Errorf("call %s is already %s", id, c.State))
 	}
-	if err := refuseUserClose(cmd, c); err != nil {
+	if err := refuseUserClose(cmd, l, c); err != nil {
 		return err
 	}
 	if yes, _ := cmd.Flags().GetBool("yes"); jsonMode && !yes {
@@ -266,7 +266,7 @@ func closeCallByUser(cmd *cobra.Command, l *ledger.Ledger, id, device string, js
 	if err := l.Save(); err != nil {
 		return output.RuntimeError(cmd, err)
 	}
-	row := rowOf(*c, device, "closed")
+	row := rowOf(l, *c, device, "closed")
 	row.Recovery = recovery
 	if jsonMode {
 		output.PrintJSON(map[string]any{"calls": []settleRow{row}, "joins": []joinSettleRow{}})
@@ -282,7 +282,7 @@ func closeCallByUser(cmd *cobra.Command, l *ledger.Ledger, id, device string, js
 // replaceMintByUser re-places a mint the Hub said it never saw, under its
 // derived id, after the user asked for it (`cash settle --replace`): a mint is
 // never placed again on cashctl's own initiative.
-func replaceMintByUser(cmd *cobra.Command, l *ledger.Ledger, id, device string, jsonMode bool) error {
+func replaceMintByUser(cmd *cobra.Command, l ledger.Store, id, device string, jsonMode bool) error {
 	c, ok := l.FindCall(id)
 	if !ok {
 		return output.NotFoundError(cmd, id, fmt.Errorf("no call %q", id))
@@ -309,7 +309,7 @@ func replaceMintByUser(cmd *cobra.Command, l *ledger.Ledger, id, device string, 
 	summary := replaceCallConfirmed(cmd, l, c, true)
 	_ = l.Save()
 	c, _ = l.FindCall(id)
-	row := rowOf(*c, device, summary)
+	row := rowOf(l, *c, device, summary)
 	if jsonMode {
 		output.PrintJSON(map[string]any{"calls": []settleRow{row}, "joins": []joinSettleRow{}})
 		return nil

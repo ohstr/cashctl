@@ -3,19 +3,24 @@ package cmd
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	_ "modernc.org/sqlite" // sqlite driver for the pocket-cache.db fail-injection
 
 	"github.com/ohstr/nmilat/nipcash"
 	nipcashclient "github.com/ohstr/nmilat/nipcash/client"
 	relayclient "github.com/ohstr/nmilat/relay/client"
 
 	"github.com/ohstr/cashctl/internal/ledger"
+	"github.com/ohstr/cashctl/internal/pocket"
 	"github.com/ohstr/cashctl/internal/store"
 )
 
@@ -199,8 +204,35 @@ func (h *fakeBillHub) probe(e *ledger.Entry, cred nipcash.Credential) (uint64, b
 // test running as root ignores.
 func failSaves(t *testing.T) (restore func()) {
 	t.Helper()
+	// Store-aware: a write-ahead failure must be injected into the store the
+	// command under test actually uses. Toggle-off = the cashctl.db ledger
+	// (entries/pending_calls). Toggle-on = the pocket's faithful sealed cache
+	// (pocket-cache.db: entries_full/pending_calls/handoffs — the tables
+	// LedgerStore.Save's PersistLedger writes). Without this the trigger lands on
+	// cashctl.db while the pocket Save succeeds, so "a failed write-ahead sends
+	// nothing" would falsely fail — a harness gap, not a durability bug.
+	openDB := store.Open
+	tables := []string{"entries", "pending_calls"}
+	if usePocket() {
+		dbPath, err := store.Path()
+		if err != nil {
+			t.Fatalf("failSaves: store.Path: %v", err)
+		}
+		cachePath := filepath.Join(filepath.Dir(dbPath), "pocket-cache.db")
+		// entries_full/pending_calls/handoffs are created by OpenCache; a test may
+		// arm failSaves before any command has opened the cache, so ensure the
+		// schema exists first (same ordering trap failOrderWrites hit) rather than
+		// opening a raw, empty db where those tables would not exist.
+		if c, err := pocket.OpenCache(cachePath); err != nil {
+			t.Fatalf("failSaves: ensure cache schema: %v", err)
+		} else {
+			_ = c.Close()
+		}
+		openDB = func() (*sql.DB, error) { return sql.Open("sqlite", cachePath) }
+		tables = []string{"entries_full", "pending_calls", "handoffs"}
+	}
 	exec := func(stmts ...string) {
-		db, err := store.Open()
+		db, err := openDB()
 		if err != nil {
 			t.Fatalf("failSaves: %v", err)
 		}
@@ -212,7 +244,7 @@ func failSaves(t *testing.T) (restore func()) {
 		}
 	}
 	var create, drop []string
-	for _, table := range []string{"entries", "pending_calls"} {
+	for _, table := range tables {
 		for _, op := range []string{"UPDATE", "INSERT"} {
 			name := "fail_" + strings.ToLower(op) + "_" + table
 			create = append(create, `CREATE TRIGGER `+name+` BEFORE `+op+` ON `+table+` BEGIN SELECT RAISE(ABORT, 'injected save failure'); END`)
@@ -430,21 +462,78 @@ func init() { placementWaitEnabled = false }
 // fakeAsReplacement does what nmilat's send path does before writing a
 // re-placement ahead: the call names the call it replaces and its attempt.
 func fakeAsReplacement(j nipcashclient.Journal, pc nipcash.PendingCall) nipcash.PendingCall {
-	var l *ledger.Ledger
+	var st ledger.Store
 	switch jj := j.(type) {
 	case *ledgerJournal:
-		l = jj.l
+		st = jj.l
 	case *withdrawJournal:
-		l = jj.l
+		st = jj.l
 	}
-	if l == nil || pc.DerivedFrom != "" {
+	if st == nil || pc.DerivedFrom != "" {
 		return pc
 	}
-	for _, c := range l.Calls {
+	for _, c := range st.AllCalls() {
 		if d, err := nipcash.DerivedRequestID(c.RequestID); err == nil && d == pc.RequestID {
 			pc.DerivedFrom, pc.Attempt = c.RequestID, c.Attempt+1
 			break
 		}
 	}
 	return pc
+}
+
+// failOrderWrites injects a failing trigger on the orders table of the store
+// under test (cashctl.db `orders` toggle-off; pocket-cache.db `orders_full`
+// toggle-on), so the order-row write-atomicity tests exercise the real store.
+// ops are the write kinds to block (INSERT and/or UPDATE).
+func failOrderWrites(t *testing.T, ops ...string) (restore func()) {
+	t.Helper()
+	openDB := store.Open
+	table := "orders"
+	if usePocket() {
+		dbPath, err := store.Path()
+		if err != nil {
+			t.Fatalf("failOrderWrites: store.Path: %v", err)
+		}
+		cachePath := filepath.Join(filepath.Dir(dbPath), "pocket-cache.db")
+		// The pocket cache's tables (orders_full) are created by OpenCache; a test
+		// may inject the trigger before any command has opened the cache, so ensure
+		// the schema exists first (single DDL source) rather than opening a raw,
+		// empty db where orders_full would not exist.
+		if c, err := pocket.OpenCache(cachePath); err != nil {
+			t.Fatalf("failOrderWrites: ensure cache schema: %v", err)
+		} else {
+			_ = c.Close()
+		}
+		openDB = func() (*sql.DB, error) { return sql.Open("sqlite", cachePath) }
+		table = "orders_full"
+	}
+	exec := func(stmts ...string) {
+		db, err := openDB()
+		if err != nil {
+			t.Fatalf("failOrderWrites: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+		for _, s := range stmts {
+			if _, err := db.Exec(s); err != nil {
+				t.Fatalf("failOrderWrites: %s: %v", s, err)
+			}
+		}
+	}
+	var create, drop []string
+	for _, op := range ops {
+		name := "fail_order_" + strings.ToLower(op)
+		create = append(create, `CREATE TRIGGER `+name+` BEFORE `+op+` ON `+table+` BEGIN SELECT RAISE(ABORT, 'injected'); END`)
+		drop = append(drop, `DROP TRIGGER IF EXISTS `+name)
+	}
+	exec(create...)
+	done := false
+	restore = func() {
+		if done {
+			return
+		}
+		done = true
+		exec(drop...)
+	}
+	t.Cleanup(restore)
+	return restore
 }

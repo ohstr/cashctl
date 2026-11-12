@@ -285,7 +285,7 @@ func expiresAtFromCheck(result *nipcash.CheckClaimResult, err error) (*int64, *n
 // the same spent error (with reason expired or reclaimed) the Hub's tombstone
 // gives once the call reaches it. entry is nil for a source cashctl does not
 // hold; refused is the action not taken, past tense ("consolidated").
-func goneSourceError(cmd *cobra.Command, l *ledger.Ledger, entry *ledger.Entry, t *nipcash.Tombstone, refused string) error {
+func goneSourceError(cmd *cobra.Command, l ledger.Store, entry *ledger.Entry, t *nipcash.Tombstone, refused string) error {
 	state := stateForTombstone(t)
 	if entry == nil {
 		return goneErrorf(cmd, "", state, fmt.Errorf("%w (a token given that cashctl does not hold); nothing was %s, and your tokens are still yours", goneCause(state), refused))
@@ -357,7 +357,7 @@ func isExpiredWalletErr(err error) bool {
 // transferred onward to target. Fully handles and returns cashctl's own
 // output/exit — the caller should return whatever this returns without
 // falling through to the plain single-source path.
-func transferWithAutoConsolidate(cmd *cobra.Command, l *ledger.Ledger, group []ledger.Entry, sendAmount uint64, toValue string, target credential.ResolvedTarget) error {
+func transferWithAutoConsolidate(cmd *cobra.Command, l ledger.Store, group []ledger.Entry, sendAmount uint64, toValue string, target credential.ResolvedTarget) error {
 	if len(group) == 0 {
 		// Not reachable via runCashTransfer's own call site today —
 		// ledger.SelectForAmount's ConsolidateFirst is only ever a
@@ -582,7 +582,7 @@ func isCrossHubSourcesDecline(err error) bool {
 // call is the call that produced the result (nil for a merge that sent straight
 // to the recipient, whose call is closed already): it is closed here, in the
 // same Save as the entries and hand-off.
-func printAndSaveTransferResult(cmd *cobra.Command, l *ledger.Ledger, transferResult *nipcash.CashTransferResult, call *ledger.Call, sentAmount uint64, toValue string, target credential.ResolvedTarget, consolidatedFrom []string, remainderMode ledger.Entry, originalToken string) error {
+func printAndSaveTransferResult(cmd *cobra.Command, l ledger.Store, transferResult *nipcash.CashTransferResult, call *ledger.Call, sentAmount uint64, toValue string, target credential.ResolvedTarget, consolidatedFrom []string, remainderMode ledger.Entry, originalToken string) error {
 	jsonMode, _ := cmd.Flags().GetBool("json")
 	closeCall(l, call, ledger.CallDone, "")
 	l.AppendHistory("transfer", fmt.Sprintf("transferred %s %s", output.FormatAmount(int64(sentAmount)), historyTargetClause(toValue, target)))
@@ -884,7 +884,7 @@ func runCashTransfer(cmd *cobra.Command, args []string) error {
 		output.Notef(jsonMode, "  resolves to: %s", target.Resolved)
 	}
 
-	l, err := ledger.Load()
+	l, err := loadStore(cmd)
 	if err != nil {
 		return output.RuntimeError(cmd, err)
 	}
@@ -1072,7 +1072,7 @@ func runCashTransfer(cmd *cobra.Command, args []string) error {
 // resolveLiveEntry re-resolves id against l itself and returns the result —
 // cash selection's ledger.SelectForAmount returns a SelectionPlan.Entry
 // pointing into l.Held()'s own copy slice (Ledger.Held's own doc comment:
-// "returns copies"), not l.Entries, so a caller that treats it as live and
+// "returns copies"), not l.AllEntries(), so a caller that treats it as live and
 // later mutates a field directly (the way resolveAmount does when it
 // discovers an uncached amount) would have that write silently lost — the
 // exact bug found and fixed in resolveHeldToken for the identical shape
@@ -1082,7 +1082,7 @@ func runCashTransfer(cmd *cobra.Command, args []string) error {
 // entry with AmountMillis already known, so resolveAmount's mutating
 // branch never runs on it — but this makes that guarantee's absence
 // harmless instead of silent, for whatever calls this next.
-func resolveLiveEntry(l *ledger.Ledger, id string) (*ledger.Entry, error) {
+func resolveLiveEntry(l ledger.Store, id string) (*ledger.Entry, error) {
 	e, ok := l.Find(id)
 	if !ok {
 		return nil, fmt.Errorf("internal: cash-selected entry %q vanished from the ledger", id)
