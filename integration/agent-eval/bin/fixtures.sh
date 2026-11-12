@@ -17,7 +17,7 @@ mkdir -p "${MINT_STATE}"
 # The fixture agents the rounds mint under. A fixed list, not one recorded as
 # mint runs: mint is almost always called inside $(...), a subshell, where an
 # appended array would be lost and the fixtures never swept.
-MINT_AGENTS=(r1 r3 r4 r5 r6 r7 r8)
+MINT_AGENTS=(r1 r3 r4 r5 r6 r7 r8 r9 r10)
 # mint <round-agent> <subcommand> [args...] — --agent last so it always wins.
 mint() {
   local agent="$1" sub="$2"
@@ -270,5 +270,47 @@ reclaim_r8() {
     echo "${victim}" > "${h}/reclaimed-app-id.txt"
   fi
   echo go > fixtures/r8-go.txt
+}
+
+# agent_relay — the relay URL the agent container can reach, taken from what the
+# Hub advertises as its general relay (externally reachable, e.g.
+# ws://host:5500), not the docker-internal `relay` hostname the Hub also reports
+# in /api/info. Same source r3 reads; derived from the live stack, never
+# hardcoded.
+agent_relay() {
+  admin_api GET /api/info | jq -r '.generalRelay // empty'
+}
+
+# r9: a couple of bills to the agent's own identity, to receive into the Cash
+# Pocket, plus the reachable relay to sync the pocket to.
+prepare_r9() {
+  local h npub out amt
+  h="$(harness_dir r9-cash-pocket)"
+  npub="$(agent_npub)"
+  : > fixtures/r9-bills.txt
+  for amt in 30000 20000; do
+    out="$(mint r9 token --hub r9 --for "${npub}" --amount "${amt}")"
+    echo "${out}" | jq -r '.cash_token' >> fixtures/r9-bills.txt
+    echo "${out}" | jq -r '.hub_app_id' > "${h}/hub-app-id.txt"
+  done
+  agent_relay > fixtures/r9-relay.txt
+}
+
+# r10: a few small bills to the agent (the tokens it zaps from), a fresh
+# third-party npub to zap (produced exactly as r4's recipient), and the
+# reachable relay to publish the 9522/10522 to.
+prepare_r10() {
+  local h npub out amt
+  h="$(harness_dir r10-cash-zaps)"
+  npub="$(agent_npub)"
+  : > fixtures/r10-bills.txt
+  for amt in 12000 10000 8000 6000; do
+    out="$(mint r10 token --hub r10 --for "${npub}" --amount "${amt}")"
+    echo "${out}" | jq -r '.cash_token' >> fixtures/r10-bills.txt
+    echo "${out}" | jq -r '.hub_app_id' > "${h}/hub-app-id.txt"
+  done
+  (cd "${REPO_ROOT}" && go run ./integration/agent-eval/decode-npub --new) > "${h}/recipient.json"
+  jq -r '.npub' "${h}/recipient.json" > fixtures/r10-recipient-npub.txt
+  agent_relay > fixtures/r10-relay.txt
 }
 
