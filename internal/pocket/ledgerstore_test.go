@@ -160,6 +160,56 @@ func TestLedgerStoreKeylessThenInitNoBrick(t *testing.T) {
 	}
 }
 
+// TestOpenKeylessThenInitFallback proves the FULL Open constructor (used by
+// ImportHeld / cash pocket sync / serve) ALSO survives the keyless→`cashctl init`
+// transition — not just OpenLedgerStore (the money path). Regression for a
+// half-wired fix: deviceFallback was initially set only in OpenLedgerOnly, so a
+// bill sealed under the device key bricked loadLedger on a full-Open Pocket (sync /
+// import) after init with "invalid MAC".
+func TestOpenKeylessThenInitFallback(t *testing.T) {
+	devPriv, _ := testKey(t)
+	idPriv, _ := testKey(t)
+	dir := t.TempDir()
+	ctx := context.Background()
+
+	// Keyless: seal a held bill under the device key (the money path).
+	if err := os.WriteFile(filepath.Join(dir, DeviceKeyFile), []byte(devPriv), 0o600); err != nil {
+		t.Fatalf("write devkey: %v", err)
+	}
+	ls, err := OpenLedgerStore(ctx, dir, devPriv, "flokicoin")
+	if err != nil {
+		t.Fatalf("open keyless: %v", err)
+	}
+	amt := uint64(40000)
+	tok := testmint.Bill(t, nipcash.Token{HRP: "lokicash", AttestedAmountMillis: &amt}, "")
+	w, err := billform.WalletPubkey(tok)
+	if err != nil {
+		t.Fatalf("wallet pubkey: %v", err)
+	}
+	if _, err := ls.Add(ledger.Entry{Token: tok, WalletPubkey: w, IdentityPubkey: w, AmountMillis: &amt, Status: ledger.StatusHeld}); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	if err := ls.Save(); err != nil {
+		t.Fatalf("save keyless: %v", err)
+	}
+	_ = ls.Close()
+
+	// init: a FULL Open under the identity key must read the device-key-sealed blob
+	// via the fallback, not brick.
+	p, err := Open(ctx, dir, idPriv, "flokicoin")
+	if err != nil {
+		t.Fatalf("full Open after init: %v", err)
+	}
+	defer p.Close()
+	l, err := loadLedger(p)
+	if err != nil {
+		t.Fatalf("loadLedger on a full-Open Pocket BRICKED after init (deviceFallback not wired into Open?): %v", err)
+	}
+	if got := len(l.Held()); got != 1 {
+		t.Fatalf("full-Open loadLedger sees %d held, want 1 (device-key-sealed bill unreadable)", got)
+	}
+}
+
 // TestLedgerStoreHistoryPersists proves the action log survives a reload under the
 // pocket (review finding: History was dropped — `cashctl wallet history` came back
 // empty by default even after activity, while CASHCTL_POCKET=0 showed it). Append

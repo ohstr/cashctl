@@ -210,10 +210,11 @@ Off by default — nothing contacts a relay unless this command is run.`,
 
 // pocketSyncResult is a sync's outcome, for --json and the human summary.
 type pocketSyncResult struct {
-	Published int   `json:"published"`
-	Imported  int   `json:"imported"`
-	Spendable int   `json:"spendable"`
-	Cursor    int64 `json:"cursor"`
+	Published     int   `json:"published"`
+	PublishFailed int   `json:"publish_failed"`
+	Imported      int   `json:"imported"`
+	Spendable     int   `json:"spendable"`
+	Cursor        int64 `json:"cursor"`
 }
 
 func runCashPocketSync(cmd *cobra.Command, _ []string) error {
@@ -264,7 +265,11 @@ func runCashPocketSync(cmd *cobra.Command, _ []string) error {
 		output.PrintJSON(res)
 		return nil
 	}
-	output.Printf("Synced: published %d, imported %d (%d now spendable).\n", res.Published, res.Imported, res.Spendable)
+	msg := fmt.Sprintf("Synced: published %d, imported %d (%d now spendable).", res.Published, res.Imported, res.Spendable)
+	if res.PublishFailed > 0 {
+		msg += fmt.Sprintf(" %d publish(es) refused (e.g. a read-only serve).", res.PublishFailed)
+	}
+	output.Printf("%s\n", msg)
 	return nil
 }
 
@@ -301,8 +306,17 @@ func syncPocket(ctx context.Context, p *pocket.Pocket, held []ledger.Entry, priv
 		if !ok {
 			continue
 		}
+		// Publishing is ADDITIVE sharing (the local sealed ledger stays
+		// authoritative), and a sync's purpose is to PULL — so a publish failure must
+		// NOT abort before the pull. This is required for the peer-to-peer serve mode:
+		// `cash pocket serve` is write-gated (recipient-only, reject-1059-writes), so a
+		// device syncing OFF a serve has its publishes refused and must still pull. We
+		// count failures (surfaced in --json) rather than returning; a genuinely
+		// unreachable relay also fails the pull below, which IS fatal, so a real outage
+		// still surfaces.
 		if _, err := nipCP.Store(ctx, remote, relays, wrap); err != nil {
-			return res, err
+			res.PublishFailed++
+			continue
 		}
 		res.Published++
 	}

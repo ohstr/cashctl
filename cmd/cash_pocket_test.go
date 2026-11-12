@@ -438,19 +438,27 @@ func TestCashPocketServe_OwnerSyncsOffItAndNonOwnerRefused(t *testing.T) {
 	go func() { _ = srv.Serve(ln) }()
 	defer srv.Close()
 
-	// B (same key, fresh dir): sync off A's serve → imports the bill, spendable.
+	// B (same key, fresh dir) ALSO holds its own bill, so its sync PUBLISHES to A's
+	// write-gated serve. The serve refuses every 1059 EVENT write (WithRelayAuthoredKinds),
+	// so the publish MUST be non-fatal or B could never pull. (Passing nil held here
+	// was a false-green: with nothing to publish the write-gate was never exercised,
+	// masking the regression where a write-gated serve aborted a real device's sync.)
 	bdir := t.TempDir()
 	pB, err := pocket.Open(ctx, bdir, priv, "flokicoin")
 	if err != nil {
 		t.Fatal(err)
 	}
-	resB, err := syncPocket(ctx, pB, nil, priv, userPub, nipCP.DialRelays(priv), []string{url}, time.Now().Unix())
+	heldB, _ := heldBill(t, 7_000)
+	resB, err := syncPocket(ctx, pB, []ledger.Entry{heldB}, priv, userPub, nipCP.DialRelays(priv), []string{url}, time.Now().Unix())
 	pB.Close()
 	if err != nil {
-		t.Fatalf("B sync off the serve: %v", err)
+		t.Fatalf("B sync off the write-gated serve (publish must be non-fatal): %v", err)
+	}
+	if resB.PublishFailed < 1 {
+		t.Fatalf("B publish-failed = %d, want >=1 (B's 1059 writes to the write-gated serve must be refused non-fatally, not abort the sync)", resB.PublishFailed)
 	}
 	if resB.Imported < 1 {
-		t.Fatalf("B imported %d off the serve, want >=1", resB.Imported)
+		t.Fatalf("B imported %d off the serve, want >=1 (pull must proceed despite the refused publish)", resB.Imported)
 	}
 	lsB, err := pocket.OpenLedgerStore(ctx, bdir, priv, ledger.LokiHRP)
 	if err != nil {

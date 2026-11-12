@@ -126,13 +126,19 @@ func Open(ctx context.Context, dir, userPriv, chain string) (*Pocket, error) {
 	}
 	relays := []string{localRelay}
 	pj := &nipCP.PocketJournal{UserPriv: userPriv, Relays: relays, IO: store, Device: cache, Chain: chain}
+	// Device-key fallback (keyless→init): ImportHeld/sync/serve load the sealed
+	// ledger through a FULL Open (not OpenLedgerOnly), so they need the same fallback
+	// or a device-key-sealed blob would brick loadLedger after `cashctl init`.
+	fbPriv, fbPub := deviceFallback(dir, userPriv)
 	p := &Pocket{
-		Store:    store,
-		Cache:    cache,
-		Journal:  &Journal{PocketJournal: pj, cache: cache},
-		userPriv: userPriv,
-		userPub:  userPub,
-		relays:   relays,
+		Store:        store,
+		Cache:        cache,
+		Journal:      &Journal{PocketJournal: pj, cache: cache},
+		userPriv:     userPriv,
+		userPub:      userPub,
+		relays:       relays,
+		fallbackPriv: fbPriv,
+		fallbackPub:  fbPub,
 	}
 	if err := p.rebuildIfStale(ctx); err != nil {
 		p.Close()
