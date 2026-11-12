@@ -5,3 +5,6 @@
 /.drafts/
 /docs/private/
 /mint-state/
+# agent-eval / integration suite admin creds — never commit (holds the Hub token)
+/integration/config.local.yaml
+/config.local.yaml

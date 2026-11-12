@@ -24,7 +24,8 @@ cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source bin/lib.sh
 
 ALL_ROUNDS=(r0-bootstrap r1-cash-note r2-circle-join r3-error-contract r4-split-send
-  r5-tidy-and-secure r6-pay-and-cash-out r7-wallet-ops r8-partial-redeem)
+  r5-tidy-and-secure r6-pay-and-cash-out r7-wallet-ops r8-partial-redeem
+  r9-cash-pocket r10-cash-zaps)
 ROUNDS=("${@:-${ALL_ROUNDS[@]}}")
 EVAL_CASHCTL="${EVAL_CASHCTL:-local}"
 case "${EVAL_CASHCTL}" in local | release) ;; *)
@@ -139,6 +140,8 @@ for round in "${ROUNDS[@]}"; do
     r6-pay-and-cash-out) prepare_r6 && run_round "${round}" || echo "WARNING: [${round}] did not run cleanly" >&2 ;;
     r7-wallet-ops) prepare_r7 && run_round "${round}" || echo "WARNING: [${round}] did not run cleanly" >&2 ;;
     r8-partial-redeem) prepare_r8 && run_r8 || echo "WARNING: [${round}] did not run cleanly" >&2 ;;
+    r9-cash-pocket) prepare_r9 && run_round "${round}" || echo "WARNING: [${round}] did not run cleanly" >&2 ;;
+    r10-cash-zaps) prepare_r10 && run_round "${round}" || echo "WARNING: [${round}] did not run cleanly" >&2 ;;
     *) run_round "${round}" || echo "WARNING: [${round}] claude invocation exited non-zero" >&2 ;;
   esac
   # The call log before the verifier, not after the loop: r8's verifier reads it.
