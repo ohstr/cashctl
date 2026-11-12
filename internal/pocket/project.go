@@ -244,17 +244,42 @@ func (p *Pocket) ImportHeld(ctx context.Context, entries []nipCP.Entry) (int, er
 			have[ls.Entries[i].WalletPubkey] = true
 		}
 	}
-	// Import only the rev-resolved WINNER per wallet, never a raw pulled entry. A
-	// hostile (or stale) relay can replay the user's own superseded lower-rev `live`
-	// wrap alongside the current higher-rev `spent` one; importing raw would make
-	// the superseded bill phantom-spendable (a rev-rollback). Resolve collapses each
-	// wallet to its highest-rev state first, so a `spent` winner shadows the stale
-	// `live`. The Hub still re-arbitrates every spend; this closes the gap one layer
-	// earlier so selection never offers a bill the pocket itself knows is spent.
-	winners, _ := nipCP.Resolve(entries)
+	// Import only the rev-resolved WINNER per wallet, never a raw pulled entry — and
+	// resolve against the pulled batch UNIONED with everything this device already
+	// knows in its own pocket.db, not the batch alone. A hostile (or merely lossy)
+	// relay can return the user's superseded lower-rev `live` wrap while OMITTING the
+	// higher-rev `spent` the device synced earlier; resolving the batch in isolation
+	// would re-import that stale `live` as phantom-spendable (a rev-rollback). The
+	// union lets the device-known `spent` shadow the replayed `live`, matching what
+	// Project already does on the forward path (project read → OpenAll → Resolve). The
+	// Hub still re-arbitrates every spend; this closes the gap one layer earlier so
+	// selection never offers a bill the pocket itself knows is spent.
+	known := entries
+	if p.Store != nil {
+		if wraps, qerr := p.Store.Query(ctx, localRelay, nipCP.FullSyncFilter(p.userPub)); qerr == nil {
+			if mine, oerr := nipCP.OpenAll(wraps, p.userPriv); oerr == nil {
+				known = append(append(make([]nipCP.Entry, 0, len(entries)+len(mine)), entries...), mine...)
+			}
+		}
+	}
+	winners, _ := nipCP.Resolve(known)
+	// Import only the wallets the caller actually pulled (the batch's intent), judged
+	// against the union-resolved winner. Iterating `entries` (not all winners) keeps
+	// ImportHeld importing this sync/import's bills, while resolution sees the fuller
+	// knowledge above.
+	seen := make(map[string]bool, len(entries))
 	n := 0
-	for w := range winners {
-		le, ok := entryFromPocket(winners[w], p.userPub)
+	for i := range entries {
+		w := entries[i].W
+		if w == "" || seen[w] {
+			continue
+		}
+		seen[w] = true
+		win, ok := winners[w]
+		if !ok {
+			continue
+		}
+		le, ok := entryFromPocket(win, p.userPub)
 		if !ok || have[le.WalletPubkey] {
 			continue
 		}

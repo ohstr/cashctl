@@ -156,3 +156,57 @@ func TestAttack_SyncRollback_StaleLiveNotImportable(t *testing.T) {
 		t.Fatalf("regression: a genuine live winner was not imported (%d)", nGood)
 	}
 }
+
+// Attack 4e — REV-ROLLBACK via RELAY OMISSION: FINDING (review, MED) — FIXED.
+// Sharper than 4d: the superseding `spent` is NOT in the pulled batch at all — a
+// lossy/hostile relay returns ONLY the user's stale rev-1 `live` wrap and omits the
+// rev-2 `spent` the device synced earlier. Resolving the batch in isolation (the
+// pre-fix behaviour) could not see the spent, so the stale live imported as
+// phantom-spendable. FIX (ImportHeld): resolve the batch UNIONED with the device's
+// own pocket.db knowledge, so the known `spent` shadows the replayed `live`.
+func TestAttack_SyncRollback_DeviceKnownSpentShadowsOmittedReplay(t *testing.T) {
+	priv, userPub := testKey(t)
+	ctx := context.Background()
+
+	liveRev1, _ := heldPocketEntry(t, userPub, 1, nipCP.StateLive)
+	liveRev1.CheckedAt = 1700000000
+	spentRev2 := liveRev1
+	spentRev2.Rev = 2
+	spentRev2.State = nipCP.StateSpent
+	spentRev2.CheckedAt = 1700000001
+
+	// The device synced this bill earlier and stored BOTH revs in its OWN pocket.db;
+	// the winner it already knows is SPENT.
+	p := openPocketWithKey(t, priv)
+	if err := p.Add(ctx, liveRev1); err != nil {
+		t.Fatalf("store rev1 in pocket.db: %v", err)
+	}
+	if err := p.Add(ctx, spentRev2); err != nil {
+		t.Fatalf("store rev2 in pocket.db: %v", err)
+	}
+
+	// A later sync from a lossy/hostile relay returns ONLY the stale rev-1 live wrap.
+	// ImportHeld must resolve it against the device's own pocket.db and import NOTHING.
+	n, err := p.ImportHeld(ctx, []nipCP.Entry{liveRev1})
+	if err != nil {
+		t.Fatalf("import under omission attack: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("FINDING (relay-omission rev-rollback): a stale live the device itself knows is spent was imported as spendable (%d); ImportHeld must resolve against its own pocket.db, not the pulled batch alone", n)
+	}
+
+	// Positive control: a bill the device knows only as live still imports.
+	liveOnly, _ := heldPocketEntry(t, userPub, 1, nipCP.StateLive)
+	liveOnly.CheckedAt = 1700000000
+	pGood := openPocketWithKey(t, priv)
+	if err := pGood.Add(ctx, liveOnly); err != nil {
+		t.Fatalf("store live-only: %v", err)
+	}
+	nGood, err := pGood.ImportHeld(ctx, []nipCP.Entry{liveOnly})
+	if err != nil {
+		t.Fatalf("import live-only: %v", err)
+	}
+	if nGood != 1 {
+		t.Fatalf("regression: a genuine live bill (no known spent) was not imported (%d)", nGood)
+	}
+}
