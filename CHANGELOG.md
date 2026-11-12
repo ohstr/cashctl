@@ -7,10 +7,11 @@
 - Adds `cashctl cash zap send [amount] [recipient]`: pays a Cash Zap (NIP-CZ) from a
   held, pubkey-bound cash token, publishing a kind-9522; `cash receive --zap-event` claims
   one, falling back to a plain-bill claim for a no-event (profile) zap.
+  ([#170](https://github.com/ohstr/cashctl/pull/170))
 - Adds the Cash Pocket (NIP-CP): a local ledger of your held bills with `cash pocket`
   subcommands — `balance` (per chain), `entries`, `export`/`import` (portable gift-wrapped
   bundles), `sync` (opt-in, the only command that contacts a relay) and `serve` (be your
-  own relay).
+  own relay). ([#170](https://github.com/ohstr/cashctl/pull/170))
 
 ## [0.7.0-rc.13]
 
