@@ -15,27 +15,27 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/ohstr/cashctl/internal/chain"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )
 
 // CurrencyUnit is the unit label cashctl uses for an amount a human
 // *types* — flag/positional descriptions, --help text,
-// input-validation errors. cashctl's CLI surface is loki-only end to
+// input-validation errors. cashctl's CLI surface is single-chain end to
 // end: every amount a human types (parsed via ParseAmount) or reads
-// (rendered via FormatAmount) is loki. mloki — the actual wire/ledger
-// granularity everything is stored and computed in — never appears
-// anywhere in that surface; it's an internal implementation detail
-// ParseAmount/FormatAmount convert across at the boundary. Hardcoded for
-// now, but centralized here so a future per-deployment unit preference is
-// a one-line change instead of a hunt through every call site.
-const CurrencyUnit = "loki"
+// (rendered via FormatAmount) is in this unit. The sub-unit — the actual
+// wire/ledger granularity everything is stored and computed in — never
+// appears anywhere in that surface; it's an internal implementation detail
+// ParseAmount/FormatAmount convert across at the boundary. Sourced from the
+// native chain (chain.Native — Flokicoin's "loki" by default), so a fork
+// targeting another chain changes it in one place, not every call site.
+var CurrencyUnit = chain.Native.Unit
 
-// mlokiPerLoki is cashctl's fixed unit ratio: 1 loki == 1000 mloki (the
-// "milli" prefix is literal). The only place this ratio is spelled out —
-// ParseAmount and FormatAmount are the only things that should ever
-// multiply/divide by it.
-const mlokiPerLoki = 1000
+// mlokiPerLoki is cashctl's fixed unit ratio: 1 CurrencyUnit == 1000 sub-units
+// (the "milli" prefix is literal). ParseAmount and FormatAmount are the only
+// things that should ever multiply/divide by it. Sourced from chain.Native.
+var mlokiPerLoki = chain.Native.SubunitRatio
 
 // ParseAmount parses a human-typed loki amount — FormatAmount's inverse
 // — into whole mloki, cashctl's actual wire/ledger granularity. Accepts
@@ -51,20 +51,20 @@ func ParseAmount(s string) (uint64, error) {
 	}
 	whole, frac, hasFrac := strings.Cut(s, ".")
 	if hasFrac && (frac == "" || len(frac) > 3 || strings.Contains(frac, ".")) {
-		return 0, fmt.Errorf("%q is not a valid amount in loki — up to 3 decimal places", s)
+		return 0, fmt.Errorf("%q is not a valid amount in %s — up to 3 decimal places", s, CurrencyUnit)
 	}
 	if whole == "" {
 		whole = "0"
 	}
 	wholeLoki, err := strconv.ParseUint(whole, 10, 64)
 	if err != nil {
-		return 0, fmt.Errorf("%q is not a valid amount in loki", s)
+		return 0, fmt.Errorf("%q is not a valid amount in %s", s, CurrencyUnit)
 	}
 	var fracMloki uint64
 	if hasFrac {
 		fracMloki, err = strconv.ParseUint(frac+strings.Repeat("0", 3-len(frac)), 10, 64)
 		if err != nil {
-			return 0, fmt.Errorf("%q is not a valid amount in loki", s)
+			return 0, fmt.Errorf("%q is not a valid amount in %s", s, CurrencyUnit)
 		}
 	}
 	// Every downstream consumer of this value eventually treats it as an
@@ -104,7 +104,7 @@ func FormatAmount(mloki int64) string {
 	if neg {
 		mloki = -mloki
 	}
-	whole, frac := mloki/mlokiPerLoki, mloki%mlokiPerLoki
+	whole, frac := mloki/int64(mlokiPerLoki), mloki%int64(mlokiPerLoki)
 	s := strconv.FormatInt(whole, 10)
 	if frac != 0 {
 		s += "." + strings.TrimRight(fmt.Sprintf("%03d", frac), "0")
@@ -112,7 +112,7 @@ func FormatAmount(mloki int64) string {
 	if neg {
 		s = "-" + s
 	}
-	return s + " loki"
+	return s + " " + CurrencyUnit
 }
 
 // NonNil returns s, or an empty (non-nil) slice if s is nil. encoding/json

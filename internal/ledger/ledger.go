@@ -18,6 +18,7 @@ import (
 	"modernc.org/sqlite"
 
 	"github.com/ohstr/cashctl/internal/billform"
+	"github.com/ohstr/cashctl/internal/chain"
 	"github.com/ohstr/cashctl/internal/store"
 )
 
@@ -58,13 +59,15 @@ const (
 	StatusDuplicate = "duplicate"
 )
 
-// LokiHRP is the token HRP of a loki cash bill (lokicash1…). This ledger carries
-// no currency unit and reports every amount as loki (NIP-CP §Balance is per
-// chain), so only loki bills belong in it; a bill of any other currency
-// (satscash, …) is summed and mis-denominated into the loki total if admitted,
-// the mix cashkit's own MixedUnitsError exists to prevent. Ingest sites gate on
-// it (cmd receive, cashkitimport).
-const LokiHRP = "lokicash"
+// LokiHRP is the token HRP of a native cash bill (lokicash1… on Flokicoin, the
+// built-in default). This ledger carries no currency unit and reports every
+// amount in the native unit (NIP-CP §Balance is per chain), so only native-HRP
+// bills belong in it; a bill of any other currency (satscash, …) is summed and
+// mis-denominated into the total if admitted, the mix cashkit's own
+// MixedUnitsError exists to prevent. Ingest sites gate on it (cmd receive,
+// cashkitimport). Sourced from chain.Native so a fork targeting another chain
+// accepts its own bills with no change here.
+var LokiHRP = chain.Native.HRP
 
 // Live reports whether status keeps a bill in this ledger's hands: at most
 // one row per bill may be live.

@@ -30,7 +30,7 @@ const (
 // lokiHRP is the token HRP a loki cash bill carries; a holding of any other
 // currency is skipped rather than folded into cashctl's loki-only ledger. See
 // ledger.LokiHRP for the shared invariant.
-const lokiHRP = ledger.LokiHRP
+var lokiHRP = ledger.LokiHRP
 
 // Plan is the result of mapping a backup: the cash entries ready to Add, their
 // total, and a census of what was skipped and why.
