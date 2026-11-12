@@ -14,11 +14,16 @@ import (
 	"github.com/ohstr/cashctl/internal/store"
 )
 
-// pocketToggleEnv selects the pocket-backed ledger.Store instead of the old
-// cashctl.db ledger. It defaults OFF: until a command family is migrated
-// (stage 3 of the pocket-ledger migration, the plan's §8) nothing sets it, so
-// loadStore returns the existing ledger and behaviour is unchanged.
+// pocketToggleEnv opts OUT of the pocket-backed ledger.Store back to the old
+// cashctl.db ledger. The pocket is now the DEFAULT (the migration is complete —
+// the plan's §8); set CASHCTL_POCKET=0 to use the old ledger, kept for A/B
+// comparison and rollback until internal/store is removed. See usePocket.
 const pocketToggleEnv = "CASHCTL_POCKET"
+
+// usePocket reports whether the pocket-backed ledger.Store is in use — the
+// DEFAULT now (migration complete); CASHCTL_POCKET=0 opts back to the old
+// cashctl.db ledger.
+func usePocket() bool { return os.Getenv(pocketToggleEnv) != "0" }
 
 // loadStore returns the ledger.Store the command layer should use: the existing
 // cashctl.db ledger by default, or the pocket-backed store when the toggle is
@@ -29,7 +34,7 @@ const pocketToggleEnv = "CASHCTL_POCKET"
 // sites are untouched), so it is dead until stage 3 — which keeps the default
 // trivially unchanged.
 func loadStore(cmd *cobra.Command) (ledger.Store, error) {
-	if os.Getenv(pocketToggleEnv) == "" {
+	if !usePocket() {
 		return ledger.Load()
 	}
 	dbPath, err := store.Path()
@@ -69,7 +74,7 @@ var dialPocketPriv string
 // pocket opens a short-lived store with the key loadStore already resolved (no
 // re-prompt), reads, and closes it. Used by heldZapContext (cmd/dial.go).
 func zapEventFor(token string) (string, error) {
-	if os.Getenv(pocketToggleEnv) == "" {
+	if !usePocket() {
 		return ledger.ZapEventFor(token)
 	}
 	dbPath, err := store.Path()

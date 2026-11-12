@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -214,7 +213,7 @@ func failSaves(t *testing.T) (restore func()) {
 	// nothing" would falsely fail — a harness gap, not a durability bug.
 	openDB := store.Open
 	tables := []string{"entries", "pending_calls"}
-	if os.Getenv(pocketToggleEnv) != "" {
+	if usePocket() {
 		dbPath, err := store.Path()
 		if err != nil {
 			t.Fatalf("failSaves: store.Path: %v", err)
@@ -490,7 +489,7 @@ func failOrderWrites(t *testing.T, ops ...string) (restore func()) {
 	t.Helper()
 	openDB := store.Open
 	table := "orders"
-	if os.Getenv(pocketToggleEnv) != "" {
+	if usePocket() {
 		dbPath, err := store.Path()
 		if err != nil {
 			t.Fatalf("failOrderWrites: store.Path: %v", err)

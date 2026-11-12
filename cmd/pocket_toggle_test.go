@@ -31,7 +31,7 @@ const testPocketKey = "111111111111111111111111111111111111111111111111111111111
 // used the real local identity.
 func ensurePocketIdentity(t *testing.T) {
 	t.Helper()
-	if os.Getenv(pocketToggleEnv) == "" {
+	if !usePocket() {
 		return
 	}
 	if _, err := identity.Load(); err == nil {
@@ -79,7 +79,7 @@ func pocketPriv(t *testing.T) string {
 // repeated in-process command runs).
 func testLoad(t *testing.T) ledger.Store {
 	t.Helper()
-	if os.Getenv(pocketToggleEnv) == "" {
+	if !usePocket() {
 		l, err := ledger.Load()
 		if err != nil {
 			t.Fatalf("ledger.Load(): %v", err)
@@ -102,14 +102,14 @@ func testLoad(t *testing.T) ledger.Store {
 // onPocket reports whether the pocket toggle is on — for a test whose premise
 // (e.g. holding/checking a bill with no local identity) is inapplicable to the
 // pocket, which seals state to the identity, so only the toggle-off half runs.
-func onPocket() bool { return os.Getenv(pocketToggleEnv) != "" }
+func onPocket() bool { return usePocket() }
 
 // skipOnPocket skips a test under CASHCTL_POCKET with a documented reason — for
 // a genuine pocket behaviour difference that needs a production fix, not a test
 // change.
 func skipOnPocket(t *testing.T, why string) {
 	t.Helper()
-	if os.Getenv(pocketToggleEnv) != "" {
+	if usePocket() {
 		t.Skip("pocket: " + why)
 	}
 }
