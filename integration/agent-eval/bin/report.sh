@@ -45,7 +45,14 @@ if [ -s "${CALLS}" ] && [ -s "${RUN_DIR}/surface.json" ]; then
   jq -c 'select(.agent != "harness")' "${CALLS}" > "${RUN_DIR}/agent-calls.jsonl"
   cat > "${RUN_DIR}/waivers.json" <<'EOF'
 [{"group": "completion", "req": "ran_bare", "reason": "shell completion is not an agent task"},
- {"group": "<global>", "req": "ncli_vault_password_env", "reason": "no round uses an ncli vault"}]
+ {"group": "<global>", "req": "ncli_vault_password_env", "reason": "no round uses an ncli vault"},
+ {"group": "cash pocket serve", "req": "ran:cash pocket serve", "reason": "long-running relay daemon, cannot run to exit in an eval round"},
+ {"group": "cash pocket serve", "req": "exit_ok", "reason": "long-running relay daemon, cannot run to exit in an eval round"},
+ {"group": "cash pocket serve", "req": "exit_fail", "reason": "long-running relay daemon, cannot run to exit in an eval round"},
+ {"group": "cash pocket serve", "req": "mode_json", "reason": "long-running relay daemon, cannot run to exit in an eval round"},
+ {"group": "cash pocket serve", "req": "mode_text", "reason": "long-running relay daemon, cannot run to exit in an eval round"},
+ {"group": "cash pocket serve", "req": "flag:listen", "reason": "long-running relay daemon, cannot run to exit in an eval round"},
+ {"group": "cash pocket serve", "req": "flag:public", "reason": "long-running relay daemon, cannot run to exit in an eval round"}]
 EOF
   COVERAGE="$(python3 campaign/gate.py --surface "${RUN_DIR}/surface.json" --log "${RUN_DIR}/agent-calls.jsonl" \
     --waivers "${RUN_DIR}/waivers.json" --out "${RUN_DIR}/coverage.json" 2>&1 | grep -v '^  MISSING completion\|^  MISSING help' || true)"
