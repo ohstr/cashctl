@@ -61,11 +61,21 @@ func runCashReceive(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			return err
 		}
+		z, zErr := nipCZ.ParseCashZap(ev)
 		// The bill received is the one typed, never another the event carries.
-		if z, zErr := nipCZ.ParseCashZap(ev); zErr == nil && !strings.EqualFold(strings.TrimSpace(raw), z.Cash) {
+		if zErr == nil && !strings.EqualFold(strings.TrimSpace(raw), z.Cash) {
 			return output.InvalidInputError(cmd, "", errors.New("--zap-event names a different bill than the one given"))
 		}
-		return receiveZap(cmd, ev, evRaw)
+		// A profile (no-event) Cash Zap carries a plain, non-zap-signed bill (token
+		// scheme != zap-v1 / TLV 8 != 2): there is no zap signature to verify, so it is
+		// a plain pubkey-bound transferred bill. Only an event-target zap (a zap-signed
+		// bill) goes through receiveZap's rule-7/rule-9 verification; otherwise
+		// --zap-event wrongly failed "names no target event" on a bill that is perfectly
+		// claimable (confirmed live, CC-24). Fall through to the plain receive of the
+		// cash tag (raw == z.Cash) for the profile-zap case.
+		if zErr != nil || z.Token.Scheme == nipcash.SchemeZapV1 {
+			return receiveZap(cmd, ev, evRaw)
+		}
 	}
 	if find, _ := cmd.Flags().GetBool("find-zap"); find {
 		tok, err := nipcash.Decode(strings.TrimSpace(raw))
