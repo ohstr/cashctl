@@ -16,6 +16,11 @@ import (
 // socket). nipCP.Store's MinStored clamps to len(relays), so one suffices.
 const localRelay = "local"
 
+// LocalRelay is the in-process event-store "relay" name for callers outside this
+// package (the cash pocket commands). The Store adapter ignores it — there is one
+// local store, no socket.
+const LocalRelay = localRelay
+
 // Pocket is cashctl's local NIP-CP Cash Pocket: the canonical event store
 // (pocket.db), the decoded cache (pocket-cache.db), and a PocketJournal that
 // writes calls ahead into the store. It is offline by default — nothing listens,

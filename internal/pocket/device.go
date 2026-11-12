@@ -106,3 +106,25 @@ func (c *Cache) metaSet(key, value string) error {
 	}
 	return nil
 }
+
+// SyncCursor is the high-water mark (unix seconds) of the last opt-in `cash
+// pocket sync` — the incremental filter starts SyncOverlap (2 days, the NIP-59
+// back-dating window) before it so a wrap published with a randomized-past
+// created_at is not missed (the plan's risk 13). 0 before the first sync (⇒ full).
+func (c *Cache) SyncCursor() (int64, error) {
+	v, err := c.metaGet("sync_cursor")
+	if err != nil || v == "" {
+		return 0, err
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("pocket: sync_cursor %q: %w", v, err)
+	}
+	return n, nil
+}
+
+// SetSyncCursor records the high-water mark after a sync. It is LOCAL_ONLY cache
+// bookkeeping (never synced); losing it only costs a wider next pull.
+func (c *Cache) SetSyncCursor(v int64) error {
+	return c.metaSet("sync_cursor", strconv.FormatInt(v, 10))
+}
