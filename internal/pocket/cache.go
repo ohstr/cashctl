@@ -125,8 +125,17 @@ CREATE INDEX IF NOT EXISTS idx_withdrawals_full_call ON withdrawals_full(call_id
 `
 
 // OpenCache opens (creating if absent) the decoded cache at path.
+//
+// _txlock=immediate makes every db.Begin() issue BEGIN IMMEDIATE, so a write
+// transaction takes the RESERVED (write) lock up front instead of starting
+// DEFERRED and upgrading from SHARED on its first write. All three explicit
+// transactions here (PersistLedger, Fold, Rebuild) are writes, so without this two
+// genuinely-concurrent Saves could each hold SHARED and deadlock trying to upgrade —
+// surfacing a raw SQLITE_BUSY after busy_timeout rather than serializing. With
+// IMMEDIATE the second writer simply waits on busy_timeout(5000) and proceeds; the
+// store_version CAS still refuses a stale writer (fail-closed, no clobber).
 func OpenCache(path string) (*Cache, error) {
-	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=busy_timeout(5000)")
+	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=busy_timeout(5000)&_txlock=immediate")
 	if err != nil {
 		return nil, fmt.Errorf("pocket: open cache %s: %w", path, err)
 	}
