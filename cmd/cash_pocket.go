@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"time"
@@ -11,7 +13,9 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/ohstr/nmilat/nip01"
+	"github.com/ohstr/nmilat/nip11"
 	"github.com/ohstr/nmilat/nipCP"
+	"github.com/ohstr/nmilat/relay"
 	"github.com/ohstr/nmilat/utils"
 
 	"github.com/ohstr/cashctl/internal/ledger"
@@ -35,6 +39,7 @@ func newCashPocketCmd() *cobra.Command {
 		newCashPocketBalanceCmd(),
 		newCashPocketEntriesCmd(),
 		newCashPocketSyncCmd(),
+		newCashPocketServeCmd(),
 		newCashPocketExportCmd(),
 		newCashPocketImportCmd(),
 	)
@@ -332,6 +337,111 @@ func syncPocket(ctx context.Context, p *pocket.Pocket, held []ledger.Entry, priv
 }
 
 // ---- cash pocket export / import ---------------------------------------------
+
+func newCashPocketServeCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "serve",
+		Short: "Serve the local pocket as your own relay (opt-in; be your own relay)",
+		Long: `Fronts the local pocket.db (pure NIP-CP gift-wraps) with a NIP-01 relay
+over a WebSocket, so another device on the same identity key — or a cashkit
+wallet — can sync off YOU, peer-to-peer, with no third-party relay.
+
+It serves kind-1059 gift-wraps ONLY to a connection that authenticates
+(NIP-42) as their recipient (the owner key) — a non-owner is refused.
+
+Binds to loopback by default; --public (0.0.0.0) requires TLS / a tunnel for
+anything off-LAN and is exposed to your whole network. This is the one command
+that opens a listening socket.`,
+		Args: output.NoArgs,
+		RunE: runCashPocketServe,
+	}
+	cmd.Flags().String("listen", "127.0.0.1:7777", "address to listen on (host:port)")
+	cmd.Flags().Bool("public", false, "bind 0.0.0.0 (all interfaces) instead of loopback — exposes the pocket to your network")
+	return cmd
+}
+
+func runCashPocketServe(cmd *cobra.Command, _ []string) error {
+	priv, err := localPrivKey(cmd)
+	if err != nil {
+		return err // no identity: the pocket is encrypt-to-self; needs a key to serve
+	}
+	dir, err := pocketDir()
+	if err != nil {
+		return output.RuntimeError(cmd, err)
+	}
+	listenAddr, _ := cmd.Flags().GetString("listen")
+	public, _ := cmd.Flags().GetBool("public")
+	if public {
+		if _, port, e := net.SplitHostPort(listenAddr); e == nil {
+			listenAddr = net.JoinHostPort("0.0.0.0", port)
+		}
+		output.Notef(false, "serving on ALL interfaces (%s) — your pocket is reachable from your network; use TLS or a tunnel off-LAN.", listenAddr)
+	} else if h, _, e := net.SplitHostPort(listenAddr); e == nil && h == "0.0.0.0" {
+		return output.InvocationError(cmd, fmt.Errorf("refusing to bind 0.0.0.0 without --public (which exposes the pocket to your network)"))
+	}
+
+	ctx := context.Background()
+
+	// Held bills from the sealed ledger (cache-only, no bbolt), read before the
+	// full Pocket opens so the two bbolt opens don't overlap.
+	ls, err := pocket.OpenLedgerStore(ctx, dir, priv, ledger.LokiHRP)
+	if err != nil {
+		return output.RuntimeError(cmd, err)
+	}
+	held := ls.AllEntries()
+	_ = ls.Close()
+
+	p, err := pocket.Open(ctx, dir, priv, ledger.LokiHRP)
+	if err != nil {
+		return output.RuntimeError(cmd, err)
+	}
+	defer p.Close()
+
+	// Listen first so the handler's NIP-42 relay URL matches the address clients
+	// dial (ValidateAuthEvent requires an exact relay-tag match, else AUTH — and
+	// so the recipient-only 1059 gate — silently fails).
+	ln, err := net.Listen("tcp", listenAddr)
+	if err != nil {
+		return output.RuntimeError(cmd, fmt.Errorf("listen %s: %w", listenAddr, err))
+	}
+	url := "ws://" + ln.Addr().String()
+
+	handler, err := pocketServeHandler(ctx, p, held, url)
+	if err != nil {
+		_ = ln.Close()
+		return output.RuntimeError(cmd, err)
+	}
+	defer handler.VerificationWorker.Stop()
+
+	output.Printf("Serving the pocket at %s — sync a second device with: cashctl cash pocket sync --relay %s\n", url, url)
+	output.Printf("(serves kind-1059 only to the owner key; Ctrl-C to stop)\n")
+	// Blocks until the process is signalled; the bbolt pocket.db is held open for
+	// the serve's lifetime, so don't run `cash pocket sync`/`export` on this same
+	// device meanwhile (they open pocket.db too — single-writer).
+	srv := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second}
+	if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
+		return output.RuntimeError(cmd, err)
+	}
+	return nil
+}
+
+// pocketServeHandler projects the held bills into pocket.db (pure NIP-CP 9525s)
+// and returns a relay SessionHandler over that same event store, gated so a
+// kind-1059 wrap is served ONLY to a connection authenticated (NIP-42) as its
+// recipient (WithRecipientOnlyKinds(1059)). Factored out so a test can serve it
+// on an ephemeral listener. The caller owns the Pocket + must Stop the returned
+// handler's VerificationWorker.
+func pocketServeHandler(ctx context.Context, p *pocket.Pocket, held []ledger.Entry, relayURL string) (*relay.SessionHandler, error) {
+	if err := p.Project(ctx, held); err != nil {
+		return nil, fmt.Errorf("project held bills to pocket.db: %w", err)
+	}
+	// URL must equal what clients dial: NIP-42's ValidateAuthEvent does an exact
+	// relay-tag match, and without it AUTH (and the 1059 recipient-only gate) fails.
+	meta := &nip11.Metadata{URL: relayURL, Name: "cashctl-pocket", Description: "a personal Cash Pocket relay (NIP-CP)"}
+	handler := relay.NewSessionHandler(p.Store.EventStore(), meta, nil, relay.WithRecipientOnlyKinds(1059))
+	handler.VerificationWorker.Start(1)
+	return handler, nil
+}
 
 func newCashPocketExportCmd() *cobra.Command {
 	cmd := &cobra.Command{

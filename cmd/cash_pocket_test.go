@@ -3,7 +3,10 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"net"
+	"net/http"
 	"testing"
+	"time"
 
 	"github.com/ohstr/nmilat/nip01"
 	"github.com/ohstr/nmilat/nipCP"
@@ -321,5 +324,74 @@ func TestCashPocketExportImport(t *testing.T) {
 	}
 	if total != amt {
 		t.Errorf("imported balance = %d, want %d", total, amt)
+	}
+}
+
+// TestCashPocketServe_OwnerSyncsOffItAndNonOwnerRefused serves pocket A over a
+// loopback relay (P6) and proves: (a) B, on the SAME identity key, syncs off it
+// via a real WebSocket and the bill becomes spendable in B's sealed ledger;
+// (b) a NON-owner key is refused the kind-1059 wraps by the recipient-only AUTH.
+func TestCashPocketServe_OwnerSyncsOffItAndNonOwnerRefused(t *testing.T) {
+	priv := testPocketKey
+	userPub, err := utils.GetPublicKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	const amt = 40_000
+	held, w := heldBill(t, amt)
+
+	// A: project the held bill into pocket.db and serve it on an ephemeral port.
+	// Listen first so the handler's NIP-42 relay URL matches the dialed address.
+	pA, err := pocket.Open(ctx, t.TempDir(), priv, "flokicoin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pA.Close()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	url := "ws://" + ln.Addr().String()
+	handler, err := pocketServeHandler(ctx, pA, []ledger.Entry{held}, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer handler.VerificationWorker.Stop()
+	srv := &http.Server{Handler: handler}
+	go func() { _ = srv.Serve(ln) }()
+	defer srv.Close()
+
+	// B (same key, fresh dir): sync off A's serve → imports the bill, spendable.
+	bdir := t.TempDir()
+	pB, err := pocket.Open(ctx, bdir, priv, "flokicoin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resB, err := syncPocket(ctx, pB, nil, priv, userPub, nipCP.DialRelays(priv), []string{url}, time.Now().Unix())
+	pB.Close()
+	if err != nil {
+		t.Fatalf("B sync off the serve: %v", err)
+	}
+	if resB.Imported < 1 {
+		t.Fatalf("B imported %d off the serve, want >=1", resB.Imported)
+	}
+	lsB, err := pocket.OpenLedgerStore(ctx, bdir, priv, ledger.LokiHRP)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lsB.Close()
+	if _, ok := lsB.FindByToken(held.Token); !ok {
+		t.Fatalf("served bill (w=%s) not in B's sealed ledger — not spendable", w)
+	}
+
+	// Non-owner: a DIFFERENT key (testPocketKey is 1111…11) is refused the owner's
+	// kind-1059 wraps by the recipient-only AUTH gate.
+	const otherPriv = "2222222222222222222222222222222222222222222222222222222222222222"
+	evs, err := nipCP.DialRelays(otherPriv).Query(ctx, url, nipCP.FullSyncFilter(userPub))
+	if err == nil && len(evs) > 0 {
+		t.Errorf("non-owner got %d of the owner's 1059 wraps, want 0 (recipient-only AUTH must refuse)", len(evs))
 	}
 }

@@ -44,8 +44,13 @@ func OpenStore(path string) (*Store, error) {
 	return &Store{es: es}, nil
 }
 
+// EventStore returns the underlying nmilat/relay.EventStore (pocket.db), so
+// `cash pocket serve` can front it with a relay SessionHandler over a socket —
+// the one place the pocket is exposed, gated by WithRecipientOnlyKinds(1059).
+func (s *Store) EventStore() *relay.EventStore { return s.es }
+
 // Close releases the store's bbolt handle. It must be called before another
-// process (e.g. a future `cash pocket serve`) opens the same file: bbolt holds a
+// process (e.g. `cash pocket serve`) opens the same file: bbolt holds a
 // single-writer file lock (see the plan's risk 11).
 func (s *Store) Close() {
 	if s.es != nil {
