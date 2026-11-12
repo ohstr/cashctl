@@ -26,9 +26,9 @@ import (
 
 // newCashPocketCmd is the `cash pocket` group: inspect the local Cash Pocket
 // (NIP-CP) and, opt-in, sync it to/from relays. `balance`/`entries` read the
-// local decoded cache only (instant, no relay, no key). `sync` is the only
-// command that contacts a relay, and only when run. `export`/`import` move the
-// pocket as a portable bundle.
+// authoritative held bills from the local sealed ledger (no relay). `sync` is the
+// only command that contacts a relay, and only when run. `export`/`import` move
+// the pocket as a portable bundle.
 func newCashPocketCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "pocket",
@@ -57,36 +57,34 @@ func pocketDir() (string, error) {
 	return filepath.Dir(dbPath), nil
 }
 
-// openPocketCache opens the decoded cache (pocket-cache.db) alone — no key, no
-// relay, no bbolt. The cache holds decoded rows, so reads need no decryption.
-func openPocketCache() (*pocket.Cache, error) {
-	dir, err := pocketDir()
-	if err != nil {
-		return nil, err
-	}
-	return pocket.OpenCache(filepath.Join(dir, "pocket-cache.db"))
-}
-
 // ---- cash pocket balance ------------------------------------------------------
 
 func newCashPocketBalanceCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "balance",
-		Short: "Show the pocket balance per chain (from the local cache; no relay)",
+		Short: "Show the pocket balance per chain (held bills; no relay)",
 		Args:  output.NoArgs,
 		RunE:  runCashPocketBalance,
 	}
 }
 
 func runCashPocketBalance(cmd *cobra.Command, _ []string) error {
-	c, err := openPocketCache()
+	// Read the authoritative held bills (local + synced), not the decoded cache:
+	// the money-command Save() path persists to the sealed ledger without folding
+	// into the cache, so the cache misses locally-held bills (#20). loadStore is
+	// the pocket (default) or the old ledger (CASHCTL_POCKET=0).
+	st, err := loadStore(cmd)
 	if err != nil {
 		return output.RuntimeError(cmd, err)
 	}
-	defer c.Close()
-	bal, err := c.Balance()
-	if err != nil {
-		return output.RuntimeError(cmd, err)
+	defer st.Close()
+	bal := map[string]uint64{}
+	for _, e := range st.Held() {
+		pe, ok := pocket.DisplayEntry(e)
+		if !ok {
+			continue
+		}
+		bal[pe.Chain] += pe.Amount
 	}
 	jsonMode, _ := cmd.Flags().GetBool("json")
 	if jsonMode {
@@ -112,21 +110,25 @@ func runCashPocketBalance(cmd *cobra.Command, _ []string) error {
 func newCashPocketEntriesCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "entries",
-		Short: "List the resolved pocket entries (from the local cache; no relay)",
+		Short: "List held pocket bills (no relay)",
 		Args:  output.NoArgs,
 		RunE:  runCashPocketEntries,
 	}
 }
 
 func runCashPocketEntries(cmd *cobra.Command, _ []string) error {
-	c, err := openPocketCache()
+	// Authoritative held bills (local + synced) from the sealed ledger, not the
+	// decoded cache (which misses locally-held bills — #20).
+	st, err := loadStore(cmd)
 	if err != nil {
 		return output.RuntimeError(cmd, err)
 	}
-	defer c.Close()
-	entries, conflicts, err := c.Entries()
-	if err != nil {
-		return output.RuntimeError(cmd, err)
+	defer st.Close()
+	var entries []nipCP.Entry
+	for _, e := range st.Held() {
+		if pe, ok := pocket.DisplayEntry(e); ok {
+			entries = append(entries, pe)
+		}
 	}
 	jsonMode, _ := cmd.Flags().GetBool("json")
 	if jsonMode {
@@ -134,7 +136,7 @@ func runCashPocketEntries(cmd *cobra.Command, _ []string) error {
 		for _, e := range entries {
 			rows = append(rows, pocketEntryJSON(e))
 		}
-		output.PrintJSON(map[string]any{"entries": rows, "conflicts": conflicts})
+		output.PrintJSON(map[string]any{"entries": rows, "conflicts": []string{}})
 		return nil
 	}
 	if len(entries) == 0 {
@@ -143,9 +145,6 @@ func runCashPocketEntries(cmd *cobra.Command, _ []string) error {
 	}
 	for _, e := range entries {
 		output.Printf("%s  %s  %s  %s\n", e.W[:min(8, len(e.W))], e.State, e.Chain, output.FormatAmount(int64(e.Amount)))
-	}
-	if len(conflicts) > 0 {
-		output.Printf("(%d entr%s need a cash_status re-check)\n", len(conflicts), plural(len(conflicts)))
 	}
 	return nil
 }
@@ -571,11 +570,18 @@ func runCashPocketImport(cmd *cobra.Command, args []string) error {
 		}
 		imported++
 	}
+	// Reverse-project imported HELD bills into the authoritative sealed ledger so
+	// they are SPENDABLE, not just visible — the cache fold above is display-only.
+	// Mirrors sync's pull path (#21). Idempotent (dedup by w); foreign/spent skipped.
+	spendable, err := p.ImportHeld(ctx, entries)
+	if err != nil {
+		return output.RuntimeError(cmd, err)
+	}
 	jsonMode, _ := cmd.Flags().GetBool("json")
 	if jsonMode {
-		output.PrintJSON(map[string]any{"imported": imported})
+		output.PrintJSON(map[string]any{"imported": imported, "spendable": spendable})
 		return nil
 	}
-	output.Printf("Imported %d pocket entr%s.\n", imported, plural(imported))
+	output.Printf("Imported %d pocket entr%s (%d spendable).\n", imported, plural(imported), spendable)
 	return nil
 }

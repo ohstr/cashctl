@@ -69,6 +69,13 @@ func (p *Pocket) Project(ctx context.Context, entries []ledger.Entry) error {
 // cash-mode note) the bearer secret. No cashctl-extension tags — the universal
 // form any NIP-CP wallet reads. ok=false when it can't be projected (no wallet
 // pubkey resolvable / unknown chain).
+// DisplayEntry maps a ledger.Entry to a NIP-CP entry for read-only display
+// (cash pocket balance/entries read the authoritative sealed ledger, not the
+// decoded cache, so a locally-held bill is visible — not only synced ones). It
+// reuses the forward projection; ok is false for an entry with no projectable
+// token.
+func DisplayEntry(le ledger.Entry) (nipCP.Entry, bool) { return projectEntry(le) }
+
 func projectEntry(le ledger.Entry) (nipCP.Entry, bool) {
 	w := le.WalletPubkey
 	if w == "" {

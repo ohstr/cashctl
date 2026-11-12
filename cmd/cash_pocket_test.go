@@ -288,12 +288,13 @@ func TestCashPocketExportImport(t *testing.T) {
 		t.Fatalf("marshal: %v", err)
 	}
 
-	// Import: B loads the bundle.
-	pB, err := pocket.Open(ctx, t.TempDir(), priv, "flokicoin")
+	// Import: B loads the bundle (mirrors runCashPocketImport: publish + fold +
+	// ImportHeld reverse-projection into the sealed ledger).
+	bdir := t.TempDir()
+	pB, err := pocket.Open(ctx, bdir, priv, "flokicoin")
 	if err != nil {
 		t.Fatalf("open B: %v", err)
 	}
-	defer pB.Close()
 	var in []*nip01.Event
 	if err := json.Unmarshal(blob, &in); err != nil {
 		t.Fatalf("unmarshal: %v", err)
@@ -312,18 +313,91 @@ func TestCashPocketExportImport(t *testing.T) {
 			t.Fatalf("B fold: %v", err)
 		}
 	}
+	// #21: import must reverse-project into the authoritative sealed ledger so the
+	// bill is SPENDABLE, not just visible in the cache.
+	spendable, err := pB.ImportHeld(ctx, entries)
+	if err != nil {
+		t.Fatalf("B ImportHeld: %v", err)
+	}
+	if spendable < 1 {
+		t.Fatalf("import spendable = %d, want >= 1 (imported bill must be spendable)", spendable)
+	}
 
 	got, ok := entryFor(t, pB, w)
 	if !ok || got.Amount != amt || got.State != nipCP.StateLive {
 		t.Errorf("after export→import, B entry = {%v %s %d}, want the live %d bill", ok, got.State, got.Amount, amt)
 	}
-	bal, _ := pB.Cache.Balance()
-	var total uint64
-	for _, v := range bal {
-		total += v
+	pB.Close()
+
+	// The imported bill is in B's AUTHORITATIVE sealed ledger (Held) — spendable.
+	lsB, err := pocket.OpenLedgerStore(ctx, bdir, priv, ledger.LokiHRP)
+	if err != nil {
+		t.Fatalf("B ledger open: %v", err)
+	}
+	defer lsB.Close()
+	var sealedTotal uint64
+	found := false
+	for _, e := range lsB.Held() {
+		if e.WalletPubkey == w {
+			found = true
+		}
+		if e.AmountMillis != nil {
+			sealedTotal += *e.AmountMillis
+		}
+	}
+	if !found {
+		t.Fatalf("imported bill w=%s not in B's sealed Held() — visible but not spendable", w)
+	}
+	if sealedTotal != amt {
+		t.Errorf("imported sealed balance = %d, want %d", sealedTotal, amt)
+	}
+}
+
+// TestCashPocketEntries_LocalHeldBillVisible — #20: cash pocket balance/entries
+// read the authoritative sealed ledger (Held), so a locally-MINTED held bill
+// (which the money-command Save path persists to the sealed ledger WITHOUT
+// folding into the decoded cache) is visible — not only synced bills.
+func TestCashPocketEntries_LocalHeldBillVisible(t *testing.T) {
+	priv := testPocketKey
+	ctx := context.Background()
+	amt := uint64(7000)
+	held, w := heldBill(t, amt)
+
+	dir := t.TempDir()
+	ls, err := pocket.OpenLedgerStore(ctx, dir, priv, ledger.LokiHRP)
+	if err != nil {
+		t.Fatalf("open ledger: %v", err)
+	}
+	if _, err := ls.Add(held); err != nil {
+		t.Fatalf("add held: %v", err)
+	}
+	if err := ls.Save(); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	// This is exactly what runCashPocketBalance/Entries read (Held → DisplayEntry);
+	// the decoded cache would be empty here (Save doesn't fold local bills into it).
+	var shown, total uint64
+	seen := false
+	for _, e := range ls.Held() {
+		pe, ok := pocket.DisplayEntry(e)
+		if !ok {
+			continue
+		}
+		if pe.W == w {
+			seen = true
+		}
+		if pe.Chain == "" {
+			t.Errorf("DisplayEntry chain empty for w=%s", pe.W)
+		}
+		total += pe.Amount
+		shown++
+	}
+	if !seen {
+		t.Fatalf("locally-held bill w=%s not shown by Held→DisplayEntry (cash pocket entries would miss it)", w)
 	}
 	if total != amt {
-		t.Errorf("imported balance = %d, want %d", total, amt)
+		t.Errorf("cash pocket balance total = %d, want %d", total, amt)
 	}
 }
 
