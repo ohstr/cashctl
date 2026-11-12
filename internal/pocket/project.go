@@ -244,9 +244,17 @@ func (p *Pocket) ImportHeld(ctx context.Context, entries []nipCP.Entry) (int, er
 			have[ls.Entries[i].WalletPubkey] = true
 		}
 	}
+	// Import only the rev-resolved WINNER per wallet, never a raw pulled entry. A
+	// hostile (or stale) relay can replay the user's own superseded lower-rev `live`
+	// wrap alongside the current higher-rev `spent` one; importing raw would make
+	// the superseded bill phantom-spendable (a rev-rollback). Resolve collapses each
+	// wallet to its highest-rev state first, so a `spent` winner shadows the stale
+	// `live`. The Hub still re-arbitrates every spend; this closes the gap one layer
+	// earlier so selection never offers a bill the pocket itself knows is spent.
+	winners, _ := nipCP.Resolve(entries)
 	n := 0
-	for i := range entries {
-		le, ok := entryFromPocket(entries[i], p.userPub)
+	for w := range winners {
+		le, ok := entryFromPocket(winners[w], p.userPub)
 		if !ok || have[le.WalletPubkey] {
 			continue
 		}
